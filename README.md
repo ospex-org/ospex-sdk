@@ -1,6 +1,6 @@
 # Ospex SDK + CLI
 
-TypeScript SDK and command-line interface for the [Ospex](https://ospex.org) protocol — zero-vig peer-to-peer sports prediction on Polygon. This is M1: read-side SDK, wallet plumbing, and a reads-only CLI. Commitment submission and on-chain writes ship in M2/M3.
+TypeScript SDK and command-line interface for the [Ospex](https://ospex.org) protocol — zero-vig peer-to-peer sports prediction on Polygon. M2 ships the EIP-712 signed-commitment surface (`submit`, `match`, `approve`, `cancel`) on top of the M1 read-side. Position lifecycle (claims, payouts) is M3.
 
 This repo is a Yarn 1 workspaces monorepo with two packages:
 
@@ -16,11 +16,18 @@ yarn workspace @ospex/sdk build
 yarn workspace @ospex/cli build
 yarn workspace @ospex/cli link             # adds `ospex` to your PATH
 
+ospex init                                 # one-time: write ~/.ospex/config.json (rpcUrl required)
 ospex health                               # liveness probe
 ospex markets list --hours 168             # upcoming markets
 ospex wallet import                        # encrypt a private key into ~/.ospex/keystore.json
 ospex wallet address                       # print the keystore's address
 ospex odds watch <contestId>               # live odds stream (line-delimited JSON with --json)
+
+# M2 chain writes — require ospex init + ospex wallet import
+ospex commitments approve max              # approve PositionModule for unlimited USDC
+ospex commitments submit <contestId> <scorer> <lineTicks> upper 250 1000
+ospex commitments match <commitment-hash>  # match an existing maker commitment
+ospex commitments cancel <commitment-hash> # off-chain cancel via signed DELETE
 ```
 
 When `npm install -g @ospex/cli` is published this becomes a one-step install — for now use the workspace-link flow above.
@@ -77,21 +84,38 @@ new OspexClient({
   apiUrl: 'https://staging-api.example',  // defaults to ospex-core-api production URL
   supabaseUrl: '…',                       // optional override; otherwise lazy-fetched
   supabaseAnonKey: '…',                   // optional override; otherwise lazy-fetched
-  signer: myCustomSigner,                 // optional; reserved for M2 writes
+  signer: myCustomSigner,                 // required for any M2 write
+  rpcUrl: 'https://polygon-mainnet.g.alchemy.com/v2/<key>', // required for chain ops
+  chainId: 137,                           // 137 (mainnet) or 80002 (amoy); default 137
   timeoutMs: 10_000,
 });
 ```
 
-The CLI reads its config in this order: env var (`OSPEX_API_URL`, `OSPEX_SUPABASE_URL`, `OSPEX_SUPABASE_ANON_KEY`) > `~/.ospex/config.json` > SDK built-in defaults.
+The CLI reads its config in this order: env var (`OSPEX_API_URL`, `OSPEX_SUPABASE_URL`, `OSPEX_SUPABASE_ANON_KEY`, `OSPEX_RPC_URL`, `OSPEX_CHAIN_ID`) > `~/.ospex/config.json` > SDK built-in defaults.
 
-## CLI command reference (M1)
+### About `rpcUrl`
+
+Every chain operation (`commitments.submit`, `match`, `approve`) needs an RPC URL — the SDK uses it to read allowance and nonce floor, and to broadcast signed transactions. **Use Alchemy, Infura, or QuickNode in production.** The public Polygon RPCs (`polygon-rpc.com`, `rpc-amoy.polygon.technology`) are rate-limited and prone to drops, and `polygon-rpc.com` has been returning 401 since 2026-03 (per [`ospex-foundry-matched-pairs/docs/DEPLOYMENT.md`](../ospex-foundry-matched-pairs/docs/DEPLOYMENT.md)).
+
+There is intentionally no public-RPC default. `ospex init` requires you to enter a value.
+
+### USDC allowance target
+
+Both maker and taker must approve **`PositionModule`** (NOT MatchingModule) for USDC. MatchingModule never custodies funds — it calls `PositionModule.recordFill`, which is where the `safeTransferFrom` happens. The SDK throws `OspexAllowanceError` with the structured shortfall when allowance is short; the CLI prompts to approve and retries.
+
+## CLI command reference
 
 | Command | What it does |
 |---|---|
+| `ospex init` | Interactive setup — writes `~/.ospex/config.json` (rpcUrl, chainId, apiUrl). |
 | `ospex health` | Hits `/healthz` and prints liveness info. |
 | `ospex markets list [--sport --status --hours --limit --offset]` | Lists upcoming contests with their speculations. |
 | `ospex markets show <contestId>` | One contest with its full orderbook. |
 | `ospex commitments list [--maker --scorer --contest-id --status …]` | Lists commitments. Defaults to `open,partially_filled` and active rows. |
+| `ospex commitments approve <amount\|max>` | Approve PositionModule for USDC (M2). |
+| `ospex commitments submit <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>` | Sign + POST a commitment (M2). Prompts to approve if allowance is short. |
+| `ospex commitments match <hash> [--risk <amount>]` | Take a commitment as the taker (M2). Prompts to approve. |
+| `ospex commitments cancel <hash>` | Off-chain cancel via signed DELETE (M2). |
 | `ospex positions list <address>` | Position history for an address. |
 | `ospex positions status <address>` | Active vs. claimable categorization. |
 | `ospex leaderboard show` | Top entries on the active leaderboard. |
@@ -111,9 +135,17 @@ What 0600 actually buys you: the file is unreadable by *other* users on the host
 
 ## Roadmap
 
-- **M1 (this release)**: reads, wallet plumbing, Realtime odds. No on-chain writes.
-- **M2**: `commitments.submit` (signed via the keystore), `commitments.cancel`, contract ABIs under `packages/sdk/src/contracts/abi/`, `rpcUrl` becomes a required config for chain writes.
+- **M1**: reads, wallet plumbing, Realtime odds. No on-chain writes.
+- **M2 (this release)**: `commitments.{submit, match, approve, cancel}`, contract ABIs under `packages/sdk/src/contracts/abi/`, `rpcUrl` required for chain operations, allowance prompts in the CLI.
+- **M2.5**: on-chain `cancelCommitment` + `raiseMinNonce` (bulk cancel-by-nonce), multi-process nonce coordination helpers.
 - **M3**: Position lifecycle (claims, payouts), event-driven matches.
+- **M4**: Contest creation surface for ops tooling.
+
+## Testing & validation
+
+Unit tests run via `yarn workspace @ospex/sdk test`. The most important one is the EIP-712 hash vector test in [`tests/chain-eip712.test.ts`](./packages/sdk/tests/chain-eip712.test.ts) — it pins the SDK's typed-data declaration against the contract's `COMMITMENT_TYPEHASH` and cross-validates with ethers, so any drift in field order or types fails CI before a single bad commitment hits the wire.
+
+Integration coverage is a documented manual flow at [`docs/MANUAL_INTEGRATION_TESTING.md`](./docs/MANUAL_INTEGRATION_TESTING.md). Walk all eight sections (15-20 minutes against Polygon Amoy) before tagging a release.
 
 ## Architecture notes
 

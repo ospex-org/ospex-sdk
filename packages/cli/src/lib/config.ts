@@ -19,12 +19,17 @@ export interface CliConfigFile {
   apiUrl?: string;
   supabaseUrl?: string;
   supabaseAnonKey?: string;
+  rpcUrl?: string;
+  /** 137 (mainnet) or 80002 (amoy). */
+  chainId?: 137 | 80002;
 }
 
 export interface ResolvedCliConfig {
   apiUrl: string | undefined;
   supabaseUrl: string | undefined;
   supabaseAnonKey: string | undefined;
+  rpcUrl: string | undefined;
+  chainId: 137 | 80002 | undefined;
 }
 
 const CONFIG_FILE_NAME = 'config.json';
@@ -58,6 +63,8 @@ export async function loadConfigFile(): Promise<CliConfigFile> {
     if (typeof obj.apiUrl === 'string') out.apiUrl = obj.apiUrl;
     if (typeof obj.supabaseUrl === 'string') out.supabaseUrl = obj.supabaseUrl;
     if (typeof obj.supabaseAnonKey === 'string') out.supabaseAnonKey = obj.supabaseAnonKey;
+    if (typeof obj.rpcUrl === 'string') out.rpcUrl = obj.rpcUrl;
+    if (obj.chainId === 137 || obj.chainId === 80002) out.chainId = obj.chainId;
     return out;
   } catch (err) {
     if (isFileNotFound(err)) return {};
@@ -72,11 +79,20 @@ export async function saveConfigFile(config: CliConfigFile): Promise<void> {
 
 export async function resolveCliConfig(): Promise<ResolvedCliConfig> {
   const file = await loadConfigFile();
+  const envChainId = parseEnvChainId(process.env.OSPEX_CHAIN_ID);
   return {
     apiUrl: process.env.OSPEX_API_URL ?? file.apiUrl,
     supabaseUrl: process.env.OSPEX_SUPABASE_URL ?? file.supabaseUrl,
     supabaseAnonKey: process.env.OSPEX_SUPABASE_ANON_KEY ?? file.supabaseAnonKey,
+    rpcUrl: process.env.OSPEX_RPC_URL ?? file.rpcUrl,
+    chainId: envChainId ?? file.chainId,
   };
+}
+
+function parseEnvChainId(raw: string | undefined): 137 | 80002 | undefined {
+  if (raw === '137') return 137;
+  if (raw === '80002') return 80002;
+  return undefined;
 }
 
 export function isFileNotFound(err: unknown): boolean {

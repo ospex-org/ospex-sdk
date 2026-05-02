@@ -12,9 +12,14 @@ import { Command } from '@commander-js/extra-typings';
 import { OspexError } from '@ospex/sdk';
 
 import { healthCommand } from './commands/health.js';
+import { initCommand } from './commands/init.js';
 import { marketsListCommand } from './commands/markets/list.js';
 import { marketsShowCommand } from './commands/markets/show.js';
 import { commitmentsListCommand } from './commands/commitments/list.js';
+import { commitmentsApproveCommand } from './commands/commitments/approve.js';
+import { commitmentsSubmitCommand } from './commands/commitments/submit.js';
+import { commitmentsMatchCommand } from './commands/commitments/match.js';
+import { commitmentsCancelCommand } from './commands/commitments/cancel.js';
 import { positionsListCommand } from './commands/positions/list.js';
 import { positionsStatusCommand } from './commands/positions/status.js';
 import { leaderboardShowCommand } from './commands/leaderboard/show.js';
@@ -31,14 +36,21 @@ function makeProgram(): Command {
     .version('0.1.0');
 
   program.addCommand(healthCommand);
+  program.addCommand(initCommand);
 
   const markets = new Command('markets').description('Read protocol markets.');
   markets.addCommand(marketsListCommand);
   markets.addCommand(marketsShowCommand);
   program.addCommand(markets);
 
-  const commitments = new Command('commitments').description('Read commitments (orderbook).');
+  const commitments = new Command('commitments').description(
+    'Read or sign commitments (orderbook + EIP-712 submit/match/cancel).',
+  );
   commitments.addCommand(commitmentsListCommand);
+  commitments.addCommand(commitmentsApproveCommand);
+  commitments.addCommand(commitmentsSubmitCommand);
+  commitments.addCommand(commitmentsMatchCommand);
+  commitments.addCommand(commitmentsCancelCommand);
   program.addCommand(commitments);
 
   const positions = new Command('positions').description('Read positions for an address.');

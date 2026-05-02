@@ -11,19 +11,23 @@
  */
 
 import { createClient as createSupabaseClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { PublicClient } from 'viem';
 
 import { ApiClient } from './api/client.js';
-import { CommitmentsApi } from './api/commitments.js';
 import { ConfigApi } from './api/config.js';
 import { HealthApi } from './api/health.js';
 import { LeaderboardApi } from './api/leaderboard.js';
 import { MarketsApi } from './api/markets.js';
 import { PositionsApi } from './api/positions.js';
 import { ProtocolApi } from './api/protocol.js';
+import { createReadClient } from './chain/client.js';
+import { Commitments } from './commitments/index.js';
+import { NonceCounter } from './commitments/context.js';
+import { getAddresses, type OspexAddresses } from './contracts/addresses.js';
 import { OspexConfigError } from './errors.js';
 import { subscribeToOdds } from './realtime/odds.js';
 import type { OddsSubscribeArgs, OddsSubscribeHandlers, Subscription } from './types/odds.js';
-import type { PublicConfig } from './types/protocol.js';
+import type { ChainId, PublicConfig } from './types/protocol.js';
 import type { Signer } from './types/signer.js';
 
 export const DEFAULT_API_URL = 'https://ospex-core-api-195f635df864.herokuapp.com';
@@ -36,11 +40,28 @@ export interface OspexClientOptions {
   /** Override Supabase publishable / anon key. Otherwise lazy-fetched. */
   supabaseAnonKey?: string;
   /**
-   * Wallet for signed actions. Optional in M1 (read-side only).
-   * Reserved here so consumers can construct the client once and add
-   * a signer when M2 ships commitment submission.
+   * Wallet for signed actions. Required by every M2 write method
+   * (`commitments.submit`, `match`, `approve`, `cancel`); reads work
+   * without it. The client throws `OspexConfigError` only when a
+   * write is attempted without a signer.
    */
   signer?: Signer;
+  /**
+   * Polygon RPC URL. Required for any chain operation (`commitments`
+   * submit/match/approve, plus reads of nonce floor and allowance).
+   * Reads of off-chain state via the API don't need it.
+   *
+   * Use Alchemy / Infura / QuickNode in production. Public RPCs
+   * (`polygon-rpc.com`, `rpc-amoy.polygon.technology`) are flaky and
+   * `polygon-rpc.com` returns 401 since 2026-03 — see
+   * `ospex-foundry-matched-pairs/docs/DEPLOYMENT.md`.
+   */
+  rpcUrl?: string;
+  /**
+   * Chain id for chain operations. One client = one chain. Defaults
+   * to `137` (Polygon mainnet); set to `80002` for Amoy testnet.
+   */
+  chainId?: ChainId;
   /** Default request timeout in ms. Optional. */
   timeoutMs?: number;
   /** Override fetch (mostly for tests). */
@@ -49,7 +70,7 @@ export interface OspexClientOptions {
 
 export class OspexClient {
   readonly markets: MarketsApi;
-  readonly commitments: CommitmentsApi;
+  readonly commitments: Commitments;
   readonly positions: PositionsApi;
   readonly leaderboard: LeaderboardApi;
   readonly protocol: ProtocolApi;
@@ -61,6 +82,11 @@ export class OspexClient {
   private readonly options: OspexClientOptions;
   private supabasePromise: Promise<SupabaseClient> | undefined;
   private readonly _signer: Signer | undefined;
+  private readonly _rpcUrl: string | undefined;
+  private readonly _chainId: ChainId;
+  private _publicClient: PublicClient | undefined;
+  private readonly _addresses: OspexAddresses;
+  private readonly _nonceCounter = new NonceCounter();
 
   constructor(options: OspexClientOptions = {}) {
     this.options = options;
@@ -71,14 +97,26 @@ export class OspexClient {
     if (options.timeoutMs !== undefined) apiOptions.timeoutMs = options.timeoutMs;
     this.api = new ApiClient(apiOptions);
 
+    this._signer = options.signer;
+    this._rpcUrl = options.rpcUrl;
+    this._chainId = options.chainId ?? 137;
+    this._addresses = getAddresses(this._chainId);
+
     this.markets = new MarketsApi(this.api);
-    this.commitments = new CommitmentsApi(this.api);
     this.positions = new PositionsApi(this.api);
     this.leaderboard = new LeaderboardApi(this.api);
     this.protocol = new ProtocolApi(this.api);
     this.health = new HealthApi(this.api);
     this.configApi = new ConfigApi(this.api);
-    this._signer = options.signer;
+
+    this.commitments = new Commitments({
+      api: this.api,
+      requireSigner: () => this.signer(),
+      getChainId: () => this._chainId,
+      getAddresses: () => this._addresses,
+      requireChainClient: () => this.requirePublicClient(),
+      nonceCounter: this._nonceCounter,
+    });
   }
 
   /** True once a wallet has been attached. */
@@ -96,6 +134,32 @@ export class OspexClient {
       throw new OspexConfigError('No signer attached. Pass `signer` to the OspexClient constructor.');
     }
     return this._signer;
+  }
+
+  /** True once an `rpcUrl` has been configured. */
+  hasChain(): boolean {
+    return this._rpcUrl !== undefined;
+  }
+
+  /** Configured chain id (137 mainnet, 80002 amoy). */
+  chainId(): ChainId {
+    return this._chainId;
+  }
+
+  /**
+   * Resolve a viem PublicClient bound to the configured `rpcUrl`.
+   * Throws OspexConfigError if no rpcUrl was provided. Cached after
+   * first construction so multiple writes reuse one transport.
+   */
+  private requirePublicClient(): PublicClient {
+    if (this._publicClient) return this._publicClient;
+    if (!this._rpcUrl) {
+      throw new OspexConfigError(
+        'rpcUrl required for write operations. Pass `rpcUrl` to the OspexClient constructor or run `ospex init`.',
+      );
+    }
+    this._publicClient = createReadClient(this._rpcUrl, this._chainId);
+    return this._publicClient;
   }
 
   /**

@@ -15,6 +15,8 @@ export {
   OspexConfigError,
   OspexValidationError,
   OspexSigningError,
+  OspexAllowanceError,
+  OspexChainError,
 } from './errors.js';
 export type { OspexErrorCode } from './errors.js';
 

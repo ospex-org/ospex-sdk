@@ -40,14 +40,29 @@ const SESSION_TTL_MS = 15 * 60 * 1000;
 export interface GetClientOptions {
   /** When true, ensures a Signer is attached (unlocking via session or prompt). */
   requiresSigner?: boolean;
+  /**
+   * When true, ensures `rpcUrl` is configured. The error message points
+   * the user at `ospex init` so they don't have to dig through the
+   * config file. Required for any commitments write (`submit`, `match`,
+   * `approve`, `cancel`).
+   */
+  requiresChain?: boolean;
 }
 
 export async function getClient(options: GetClientOptions = {}): Promise<OspexClient> {
   const config = await resolveCliConfig();
+  if (options.requiresChain && !config.rpcUrl) {
+    throw new Error(
+      'No rpcUrl configured. Run `ospex init` to set one (Alchemy / Infura / QuickNode strongly recommended over public RPCs).',
+    );
+  }
+
   const clientOptions: Record<string, unknown> = {};
   if (config.apiUrl !== undefined) clientOptions.apiUrl = config.apiUrl;
   if (config.supabaseUrl !== undefined) clientOptions.supabaseUrl = config.supabaseUrl;
   if (config.supabaseAnonKey !== undefined) clientOptions.supabaseAnonKey = config.supabaseAnonKey;
+  if (config.rpcUrl !== undefined) clientOptions.rpcUrl = config.rpcUrl;
+  if (config.chainId !== undefined) clientOptions.chainId = config.chainId;
 
   if (options.requiresSigner) {
     clientOptions.signer = await loadSigner();

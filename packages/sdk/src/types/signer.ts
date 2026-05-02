@@ -20,7 +20,12 @@ export interface SignTypedDataArgs {
     verifyingContract?: Hex;
     salt?: Hex;
   };
-  types: Record<string, TypedDataField[]>;
+  /**
+   * Accepted as `readonly TypedDataField[]` so callers can pass an
+   * `as const` literal without a cast (viem requires `as const` for
+   * type inference). Mutable arrays still satisfy this constraint.
+   */
+  types: Record<string, readonly TypedDataField[]>;
   primaryType: string;
   message: Record<string, unknown>;
 }

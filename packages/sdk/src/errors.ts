@@ -8,7 +8,9 @@ export type OspexErrorCode =
   | 'API_ERROR'
   | 'CONFIG_ERROR'
   | 'VALIDATION_ERROR'
-  | 'SIGNING_ERROR';
+  | 'SIGNING_ERROR'
+  | 'ALLOWANCE_INSUFFICIENT'
+  | 'CHAIN_ERROR';
 
 export class OspexError extends Error {
   readonly code: OspexErrorCode;
@@ -81,5 +83,68 @@ export class OspexSigningError extends OspexError {
   constructor(message: string, options?: { cause?: unknown }) {
     super('SIGNING_ERROR', message, options);
     this.name = 'OspexSigningError';
+  }
+}
+
+/**
+ * The wallet's ERC-20 allowance for a given spender is below what the
+ * pending action requires. Carries the structured detail so the caller
+ * can decide what to do (e.g. CLI prompts for an `approve` tx; an agent
+ * may queue one automatically). The SDK never auto-approves.
+ *
+ * For Ospex commitments, `spender` is always `PositionModule` (NOT
+ * MatchingModule — the most common new-integrator confusion).
+ */
+export class OspexAllowanceError extends OspexError {
+  readonly required: bigint;
+  readonly current: bigint;
+  readonly spender: string;
+  readonly token: string;
+
+  constructor(
+    message: string,
+    init: {
+      required: bigint;
+      current: bigint;
+      spender: string;
+      token: string;
+      cause?: unknown;
+    },
+  ) {
+    super(
+      'ALLOWANCE_INSUFFICIENT',
+      message,
+      init.cause !== undefined ? { cause: init.cause } : undefined,
+    );
+    this.name = 'OspexAllowanceError';
+    this.required = init.required;
+    this.current = init.current;
+    this.spender = init.spender;
+    this.token = init.token;
+  }
+}
+
+/**
+ * On-chain interaction failed — either an RPC transport error, a
+ * contract revert, or a transaction that reverted on inclusion. Carries
+ * an optional `revertReason` string when the SDK could decode one;
+ * raw bytes are always available via `cause`.
+ */
+export class OspexChainError extends OspexError {
+  readonly revertReason: string | undefined;
+  readonly txHash: string | undefined;
+
+  constructor(
+    message: string,
+    init?: { revertReason?: string; txHash?: string; cause?: unknown },
+  ) {
+    super(
+      'CHAIN_ERROR',
+      message,
+      init?.cause !== undefined ? { cause: init.cause } : undefined,
+    );
+    this.name = 'OspexChainError';
+    this.revertReason = init?.revertReason;
+    this.txHash = init?.txHash;
   }
 }
