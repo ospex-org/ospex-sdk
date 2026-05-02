@@ -105,7 +105,9 @@ Every command supports `--json` for machine-readable output.
 
 ## Wallet security
 
-`ospex wallet unlock` writes the decrypted private key to `~/.ospex/session` (plain JSON, mode 0600, 15-minute TTL). OS-keychain integration is out of scope for v1 — the file lives inside your user-profile directory, but a sufficiently privileged process on the same machine could read it. If you don't want the cache, run write commands without `unlock`: each one prompts for the passphrase inline and never persists the decrypted key.
+`ospex wallet unlock` writes the decrypted private key to `~/.ospex/session` (plain JSON, mode 0600, 15-minute TTL) inside `~/.ospex` (mode 0700). Both are written atomically and the modes are reasserted on overwrite — they do not silently inherit weaker permissions from a pre-existing file.
+
+What 0600 actually buys you: the file is unreadable by *other* users on the host. **Any process running as the same user can still read it while the session is unlocked.** OS-keychain integration (DPAPI on Windows, Keychain on macOS, libsecret on Linux) is the right answer for higher assurance and is out of scope for v1. If you don't want the cache, run write commands without `unlock`: each one prompts for the passphrase inline and never persists the decrypted key.
 
 ## Roadmap
 

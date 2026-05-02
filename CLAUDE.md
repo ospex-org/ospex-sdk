@@ -49,7 +49,9 @@ node packages/cli/dist/index.js <command>    # run CLI without linking
 
 ## CLI session-cache trade-off
 
-`ospex wallet unlock` writes the decrypted private key to `~/.ospex/session` plain JSON, mode 0600, 15-minute expiry. OS-keychain integration (DPAPI / Keychain / libsecret) is out of scope for v1. If higher assurance is needed, run write commands without `wallet unlock` — each one prompts for the passphrase inline and never writes the decrypted key to disk. Documented in `packages/cli/src/lib/client.ts`.
+`ospex wallet unlock` writes the decrypted private key to `~/.ospex/session` plain JSON, mode 0600, 15-minute expiry. The parent dir is mode 0700. Both are written atomically via `lib/secure-fs.ts` (temp + rename + defensive chmod) so overwriting an existing path tightens the mode rather than inheriting it.
+
+0600 keeps the file unreadable by other users on the host but does not protect against any process running as the same user. OS-keychain integration (DPAPI / Keychain / libsecret) is the higher-assurance option and is out of scope for v1. If that matters for the use case at hand, run write commands without `wallet unlock` — each one prompts for the passphrase inline and never writes the decrypted key to disk. Documented in `packages/cli/src/lib/client.ts`.
 
 ## What's deferred
 

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { KeystoreSigner } from '@ospex/sdk/signers/keystore';
 import { getKeystorePath, getOspexHome, isFileNotFound } from '../../lib/config.js';
 import { promptHidden, promptPassphraseConfirmed } from '../../lib/prompt.js';
+import { secureMkdirP, secureWriteFile } from '../../lib/secure-fs.js';
 
 const optionsSchema = z.object({
   force: z.boolean().optional(),
@@ -42,8 +43,8 @@ export const walletImportCommand = new Command('import')
     const passphrase = await promptPassphraseConfirmed();
 
     const json = await KeystoreSigner.encrypt(privateKey as `0x${string}`, passphrase);
-    await fs.mkdir(getOspexHome(), { recursive: true });
-    await fs.writeFile(file, json + '\n', { mode: 0o600 });
+    await secureMkdirP(getOspexHome());
+    await secureWriteFile(file, json + '\n');
 
     const signer = await KeystoreSigner.unlock(json, passphrase);
     const address = await signer.getAddress();

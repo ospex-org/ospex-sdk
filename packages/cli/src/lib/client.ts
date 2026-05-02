@@ -8,21 +8,32 @@
  * we cache the *decrypted* private key in `~/.ospex/session` plain
  * JSON, with file mode 0600 on POSIX, expiry 15 minutes from write.
  *
- * Why plain on disk: an OS-keychain integration (DPAPI on Windows,
- * Keychain on macOS, libsecret on Linux) is the right answer but
- * cross-platform glue is heavyweight for a v1. We documented the
- * tradeoff in the README and rely on the user-profile directory's
- * ACL plus 0600 permissions to limit exposure. If a higher-assurance
- * model is required, run write commands without `wallet unlock` —
- * each one prompts for the passphrase inline and never writes the
- * decrypted key to disk.
+ * 0600 keeps the file unreadable by *other* users on the host, but
+ * does NOT defend against any process running as the same user — that
+ * threat surface is unavoidable without an OS-keychain integration
+ * (DPAPI on Windows, Keychain on macOS, libsecret on Linux), which is
+ * out of scope for v1. If higher assurance is required, run write
+ * commands without `wallet unlock` — each one prompts for the
+ * passphrase inline and never writes the decrypted key to disk.
+ *
+ * Both the file and its parent directory are written via secure-fs.ts
+ * (atomic temp + rename + defensive chmod) so an existing-file
+ * overwrite tightens permissions back to 0600 / 0700 instead of
+ * inheriting the prior mode.
  */
 
 import { promises as fs } from 'node:fs';
 import { OspexClient, type Signer } from '@ospex/sdk';
 import { KeystoreSigner } from '@ospex/sdk/signers/keystore';
-import { getKeystorePath, getSessionPath, isFileNotFound, resolveCliConfig } from './config.js';
+import {
+  getKeystorePath,
+  getOspexHome,
+  getSessionPath,
+  isFileNotFound,
+  resolveCliConfig,
+} from './config.js';
 import { promptHidden } from './prompt.js';
+import { secureMkdirP, secureWriteFile } from './secure-fs.js';
 
 const SESSION_TTL_MS = 15 * 60 * 1000;
 
@@ -93,14 +104,13 @@ export async function readSession(): Promise<SessionFile | undefined> {
 }
 
 export async function writeSession(address: string, privateKey: string): Promise<void> {
-  const file = getSessionPath();
-  await fs.mkdir(getOspexDir(), { recursive: true });
+  await secureMkdirP(getOspexHome());
   const body: SessionFile = {
     address,
     privateKey,
     expiresAt: Date.now() + SESSION_TTL_MS,
   };
-  await fs.writeFile(file, JSON.stringify(body) + '\n', { mode: 0o600 });
+  await secureWriteFile(getSessionPath(), JSON.stringify(body) + '\n');
 }
 
 export async function deleteSession(): Promise<void> {
@@ -124,11 +134,4 @@ async function readKeystore(): Promise<string> {
     }
     throw err;
   }
-}
-
-function getOspexDir(): string {
-  // Defer to config.ts for the directory selection; recomputing here
-  // avoids a cycle with the side-effect-free getter.
-  const sessionFile = getSessionPath();
-  return sessionFile.slice(0, sessionFile.length - '/session'.length);
 }

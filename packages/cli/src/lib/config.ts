@@ -13,6 +13,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { secureMkdirP, secureWriteFile } from './secure-fs.js';
 
 export interface CliConfigFile {
   apiUrl?: string;
@@ -65,10 +66,8 @@ export async function loadConfigFile(): Promise<CliConfigFile> {
 }
 
 export async function saveConfigFile(config: CliConfigFile): Promise<void> {
-  const dir = getOspexHome();
-  await fs.mkdir(dir, { recursive: true });
-  const file = getConfigPath();
-  await fs.writeFile(file, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
+  await secureMkdirP(getOspexHome());
+  await secureWriteFile(getConfigPath(), JSON.stringify(config, null, 2) + '\n');
 }
 
 export async function resolveCliConfig(): Promise<ResolvedCliConfig> {
