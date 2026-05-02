@@ -107,6 +107,11 @@ export interface MarketBody {
   matchTime: string;
   status: string;
   speculations: MarketSpeculationBody[];
+  /**
+   * Detail-endpoint-only — undefined on /v1/markets list rows.
+   * Null when the contest has no JSONOdds linkage.
+   */
+  jsonoddsId?: string | null;
 }
 
 export interface MarketsListBody {

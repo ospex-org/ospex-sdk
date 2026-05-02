@@ -73,11 +73,12 @@ describe('OspexClient API surface', () => {
     expect(url.searchParams.get('window')).toBe('12');
   });
 
-  it('markets.get hits the path-parameter endpoint', async () => {
+  it('markets.get hits the path-parameter endpoint and surfaces jsonoddsId', async () => {
     const { fetch, calls } = makeFetch(() => ({
       status: 200,
       body: {
         contestId: '42',
+        jsonoddsId: 'a783e37e-4ce1-4f42-9dd6-615568f73044',
         awayTeam: 'A',
         homeTeam: 'B',
         sport: 'nba',
@@ -88,8 +89,33 @@ describe('OspexClient API surface', () => {
       },
     }));
     const client = new OspexClient({ apiUrl, fetch });
-    await client.markets.get('42');
+    const market = await client.markets.get('42');
     expect(calls[0]!.url).toBe(`${apiUrl}/v1/markets/42`);
+    expect(market.jsonoddsId).toBe('a783e37e-4ce1-4f42-9dd6-615568f73044');
+  });
+
+  it('markets.list rows do not surface jsonoddsId (detail-only field)', async () => {
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        markets: [
+          {
+            contestId: '1',
+            awayTeam: 'A',
+            homeTeam: 'B',
+            sport: 'nba',
+            sportId: 1,
+            matchTime: '2026-05-03T00:00:00Z',
+            status: 'verified',
+            speculations: [],
+          },
+        ],
+        pagination: { limit: 100, offset: 0, total: 1, hasMore: false },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const [first] = await client.markets.list();
+    expect(first?.jsonoddsId).toBeUndefined();
   });
 
   it('positions.byAddress validates the address and lowercases it', async () => {

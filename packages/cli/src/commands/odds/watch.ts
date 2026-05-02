@@ -40,12 +40,14 @@ export const oddsWatchCommand = new Command('watch')
       process.exit(1);
     }
 
-    // We need the contest's jsonodds_id to subscribe — that lives on the
-    // contest record but isn't exposed via /v1/markets. The current_odds
-    // table is keyed by (jsonodds_id, market). For M1 we look it up via
-    // the analytics endpoint, which exposes it; long-term it should
-    // surface on the market record itself.
-    const jsonoddsId = await fetchJsonoddsId(client, contestId);
+    const jsonoddsId = market.jsonoddsId;
+    if (!jsonoddsId) {
+      console.error(
+        `Contest ${contestId} has no jsonoddsId — odds watching is unavailable for ` +
+          `contests without an upstream JSONOdds linkage.`,
+      );
+      process.exit(1);
+    }
 
     const subs: Subscription[] = [];
     const onSnapshot =
@@ -97,15 +99,4 @@ function formatLine(kind: 'change' | 'refresh', o: OddsSnapshot): string {
   const away = o.awayOddsAmerican ?? '-';
   const home = o.homeOddsAmerican ?? '-';
   return `[${tag}] ${o.changedAt} ${o.market.padEnd(9)} line=${line} away=${away} home=${home}`;
-}
-
-async function fetchJsonoddsId(
-  client: { api: { request: <T>(path: string) => Promise<T> } },
-  contestId: string,
-): Promise<string> {
-  // Reuse the analytics endpoint which already returns jsonoddsId.
-  const body = await client.api.request<{ jsonoddsId: string }>(
-    `/v1/analytics/odds-history/${encodeURIComponent(contestId)}`,
-  );
-  return body.jsonoddsId;
 }

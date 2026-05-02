@@ -26,7 +26,7 @@ export class MarketsApi {
 }
 
 function toMarket(body: MarketBody): Market {
-  return {
+  const out: Market = {
     contestId: body.contestId,
     awayTeam: body.awayTeam,
     homeTeam: body.homeTeam,
@@ -36,6 +36,8 @@ function toMarket(body: MarketBody): Market {
     status: body.status,
     speculations: body.speculations.map(toMarketSpeculation),
   };
+  if (body.jsonoddsId !== undefined) out.jsonoddsId = body.jsonoddsId;
+  return out;
 }
 
 function toMarketSpeculation(body: MarketSpeculationBody): MarketSpeculation {

@@ -32,6 +32,13 @@ export interface Market {
   matchTime: string;
   status: string;
   speculations: MarketSpeculation[];
+  /**
+   * Upstream JSONOdds ID. Populated only by `markets.get(contestId)` —
+   * the list endpoint does not surface it. Null when the contest has
+   * no JSONOdds linkage (fed from a different upstream). Required for
+   * opening a `current_odds` Realtime channel.
+   */
+  jsonoddsId?: string | null;
 }
 
 export interface MarketsListOptions {
