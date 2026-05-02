@@ -1,0 +1,19 @@
+{
+  "name": "ospex-sdk-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ospex SDK and CLI — workspace root",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "yarn workspace @ospex/sdk build && yarn workspace @ospex/cli build",
+    "test": "yarn workspace @ospex/sdk test && yarn workspace @ospex/cli test",
+    "typecheck": "yarn workspace @ospex/sdk typecheck && yarn workspace @ospex/cli typecheck",
+    "clean": "yarn workspace @ospex/sdk clean && yarn workspace @ospex/cli clean"
+  },
+  "packageManager": "yarn@1.22.22"
+}
