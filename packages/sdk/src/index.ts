@@ -43,6 +43,10 @@ export type {
   PositionStatusTotals,
   ActivePositionView,
   ClaimablePositionView,
+  PendingSettlePositionView,
+  ClaimParams,
+  ClaimParamEntry,
+  ClaimParamsTxStep,
   // leaderboard
   LeaderboardEntry,
   // protocol

@@ -1,7 +1,16 @@
 import { OspexValidationError } from '../errors.js';
 import type { ApiClient } from './client.js';
-import type { Position, PositionStatus } from '../types/position.js';
-import type { PositionBody, PositionStatusBody, PositionsByAddressBody } from './types.js';
+import type {
+  Position,
+  PositionStatus,
+  ClaimParams,
+} from '../types/position.js';
+import type {
+  ClaimParamsResponseBody,
+  PositionBody,
+  PositionStatusBody,
+  PositionsByAddressBody,
+} from './types.js';
 
 export class PositionsApi {
   constructor(private readonly client: ApiClient) {}
@@ -21,9 +30,18 @@ export class PositionsApi {
     );
     return {
       active: body.active,
+      pendingSettle: body.pendingSettle,
       claimable: body.claimable,
       totals: body.totals,
     };
+  }
+
+  async claimParams(address: string): Promise<ClaimParams> {
+    const normalized = ensureAddress(address);
+    const body = await this.client.request<ClaimParamsResponseBody>(
+      `/v1/positions/${encodeURIComponent(normalized)}/claim-params`,
+    );
+    return { address: body.address, positions: body.positions };
   }
 }
 

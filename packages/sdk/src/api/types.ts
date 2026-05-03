@@ -163,16 +163,86 @@ export interface ClaimablePositionBody extends ActivePositionBody {
   estimatedPayoutWei6: string;
 }
 
+export interface PendingSettlePositionBody extends ActivePositionBody {
+  /** Predicted result once `settleSpeculation` is called. */
+  result: 'won' | 'push' | 'void';
+  /** Predicted on-chain winSide once settled. */
+  predictedWinSide: 'away' | 'home' | 'over' | 'under' | 'push';
+  estimatedPayoutUSDC: number;
+  estimatedPayoutWei6: string;
+}
+
 export interface PositionStatusBody {
   address: string;
   active: ActivePositionBody[];
+  pendingSettle: PendingSettlePositionBody[];
   claimable: ClaimablePositionBody[];
   totals: {
     activeCount: number;
+    pendingSettleCount: number;
     claimableCount: number;
     estimatedPayoutUSDC: number;
     estimatedPayoutWei6: string;
+    pendingSettlePayoutUSDC: number;
+    pendingSettlePayoutWei6: string;
   };
+}
+
+export type ClaimParamsTxStep =
+  | {
+      method: 'settleSpeculation';
+      target: 'SpeculationModule';
+      args: { speculationId: string };
+    }
+  | {
+      method: 'claimPosition';
+      target: 'PositionModule';
+      args: { speculationId: string; positionType: 0 | 1 };
+    };
+
+export interface ClaimParamEntryBody {
+  positionId: string;
+  speculationId: string;
+  description: string;
+  bucket: 'claimable' | 'pendingSettle';
+  result: 'won' | 'push' | 'void';
+  estimatedPayoutUSDC: number;
+  estimatedPayoutWei6: string;
+  /** Ordered: pendingSettle entries lead with `settleSpeculation`,
+   * claimable entries are a single `claimPosition` step. */
+  txParams: ClaimParamsTxStep[];
+}
+
+export interface ClaimParamsResponseBody {
+  address: string;
+  positions: ClaimParamEntryBody[];
+}
+
+export interface PositionByTxFilledEntryBody {
+  positionId: string;
+  speculationId: string;
+  user: string;
+  positionType: 0 | 1;
+  role: 'maker' | 'taker';
+  riskAmount: string;
+  riskAmountUSDC: number;
+  counterparty: string;
+}
+
+export interface PositionByTxResponseBody {
+  txHash: string;
+  blockNumber: number;
+  positions: PositionByTxFilledEntryBody[];
+}
+
+export interface ClaimResultResponseBody {
+  txHash: string;
+  blockNumber: number;
+  speculationId: string;
+  user: string;
+  positionType: 0 | 1;
+  payoutUSDC: number;
+  payoutWei6: string;
 }
 
 export interface LeaderboardEntryBody {

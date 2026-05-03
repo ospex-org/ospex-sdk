@@ -149,6 +149,51 @@ The error code is in `error (CODE): message` format — confirm both the message
 
 ---
 
+## Section 9 — M3 settle + claim flow
+
+Verifies position lifecycle: `settleSpeculation` (permissionless) followed by `claimPosition` (permissioned to the holder, but no allowance needed — payout flows OUT of PositionModule, never in).
+
+This section needs an actual settled-or-pending-settle position on Amoy (or a previously matched position whose contest has been scored). Two cases:
+
+**Case A — A pendingSettle position already exists for your wallet.**
+
+| # | Command | Expected | Validates |
+|---|---|---|---|
+| 9A.1 | `ospex positions status <walletA>` | `pendingSettle` count ≥ 1; predicted `result` and payout shown | Three-bucket categorization. |
+| 9A.2 | `ospex claim-all --address <walletA> --dry-run` | Action plan prints with `would settle + claim` rows, total predicted payout summed | Dry-run path; multi-step txParams parse. |
+| 9A.3 | `ospex claim-all --address <walletA>` | Per-row `[i/N] ✓ ... → payout $X.YZ (txs: ..., winSide=...)` | Live execution; settle then claim per entry. |
+| 9A.4 | `ospex positions status <walletA>` | `pendingSettle` count = 0; `claimable` count = 0; just-claimed rows now show `claimed=true` in `ospex positions list` | Indexer projection of POSITION_CLAIMED. |
+| 9A.5 | `cast call <PositionModule> "getPosition(uint256,address,uint8)(...)" <speculationId> <walletA> <positionType> --rpc-url <rpcUrl>` | `claimed=true` | Contract state matches Supabase. |
+
+**Case B — Need to create a pendingSettle position from scratch.**
+
+Requires the contest to be `Verified` and have `start_time` already in the past so `scoreContestFromOracle` is callable. The full create→submit→match→score→settle→claim cycle depends on contest creation (M4) and operator scoring access. If you have neither, document the run as "manual verification deferred" in the release ticket and revisit on the next operator scoring cycle.
+
+For partial verification right now:
+
+1. Use M2 to set up a matched position on a contest that is already scored on-chain. Confirm via `ospex markets show <contestId>` that the contest's `status` is `'scored'`.
+2. Run 9A.2 then 9A.3.
+3. If the speculation is already settled, the entry will appear in the `claimable` bucket instead of `pendingSettle` — same flow, single tx per entry.
+
+**Standalone settle command** (separate from claim-all):
+
+| # | Command | Expected | Validates |
+|---|---|---|---|
+| 9C.1 | `ospex settle <speculationId>` | Prints `txHash` + resolved `winSide` (`away \| home \| over \| under \| push \| void`) | `client.positions.settleSpeculation` end-to-end including event-log decode. |
+| 9C.2 | Re-run 9C.1 with the same speculationId | `OspexChainError` with revert reason `AlreadySettled` | Idempotency / reversion handling. |
+
+**Standalone single claim** (when you don't want claim-all to sweep everything):
+
+| # | Command | Expected | Validates |
+|---|---|---|---|
+| 9D.1 | `ospex claim <speculationId> --type upper` (against a settled position you actually own and won) | Prints `txHash` + `payoutUSDC` | `client.positions.claim` end-to-end. |
+| 9D.2 | Re-run 9D.1 | `OspexChainError` mentioning `AlreadyClaimed` | Already-claimed guard. |
+| 9D.3 | `ospex claim <speculationIdNotYetSettled> --type upper` | CLI prints "This position requires settlement first. Run `ospex settle ...`" then surfaces `OspexChainError` (`NotSettled`) | Clear error path, no auto-settle. |
+
+**Pass criterion**: at least one real settle + claim was executed end-to-end on Amoy via `ospex claim-all` (Case A or B), and the resulting `claimed=true` row is visible in Supabase via `ospex positions list <walletA>` plus on-chain via `cast call`. If no settled position exists at release time, this section is allowed to be marked "manual verification required at first real settlement" in the release ticket — the dry-run path (9A.2) can be exercised independently.
+
+---
+
 ## Section 8 — Cross-version smoke (after npm publish only)
 
 For when the SDK actually ships to npm. Run from a fresh shell with no SDK in `node_modules`:
@@ -177,6 +222,7 @@ Copy this into the release ticket:
 [ ] Section 5 — Two-wallet match (Amoy) — NON-NEGOTIABLE
 [ ] Section 6 — Partial fill
 [ ] Section 7 — Failure modes
+[ ] Section 9 — M3 settle + claim (or manual-verification-deferred note)
 [ ] Section 8 — Cross-version smoke (post-publish only)
 
 Operator: ____________

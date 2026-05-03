@@ -22,6 +22,10 @@ import { commitmentsMatchCommand } from './commands/commitments/match.js';
 import { commitmentsCancelCommand } from './commands/commitments/cancel.js';
 import { positionsListCommand } from './commands/positions/list.js';
 import { positionsStatusCommand } from './commands/positions/status.js';
+import { positionsClaimCommand } from './commands/positions/claim.js';
+import { positionsClaimAllCommand } from './commands/positions/claim-all.js';
+import { positionsSettleCommand } from './commands/positions/settle.js';
+import { positionsHistoryCommand } from './commands/positions/history.js';
 import { leaderboardShowCommand } from './commands/leaderboard/show.js';
 import { oddsWatchCommand } from './commands/odds/watch.js';
 import { walletImportCommand } from './commands/wallet/import.js';
@@ -56,7 +60,15 @@ function makeProgram(): Command {
   const positions = new Command('positions').description('Read positions for an address.');
   positions.addCommand(positionsListCommand);
   positions.addCommand(positionsStatusCommand);
+  positions.addCommand(positionsHistoryCommand);
   program.addCommand(positions);
+
+  // Top-level write commands. `claim`/`settle`/`claim-all` aren't
+  // nested under `positions` so the day-to-day flow ("ospex claim-all"
+  // → done) reads naturally.
+  program.addCommand(positionsClaimCommand);
+  program.addCommand(positionsClaimAllCommand);
+  program.addCommand(positionsSettleCommand);
 
   const leaderboard = new Command('leaderboard').description('Read the active leaderboard.');
   leaderboard.addCommand(leaderboardShowCommand);

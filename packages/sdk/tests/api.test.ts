@@ -140,6 +140,153 @@ describe('OspexClient API surface', () => {
     await expect(client.positions.byAddress('not-an-address')).rejects.toThrow();
   });
 
+  it('positions.status decodes the three-bucket response (active | pendingSettle | claimable)', async () => {
+    const { fetch, calls } = makeFetch(() => ({
+      status: 200,
+      body: {
+        address: '0xabcdefabcdef0123456789abcdef0123456789ab',
+        active: [
+          {
+            positionId: 'a',
+            speculationId: '10',
+            positionType: 0,
+            team: 'A',
+            opponent: 'B',
+            market: 'moneyline',
+            oddsDecimal: 2,
+            riskAmountUSDC: 100,
+            profitAmountUSDC: 100,
+          },
+        ],
+        pendingSettle: [
+          {
+            positionId: 'p',
+            speculationId: '20',
+            positionType: 0,
+            team: 'A',
+            opponent: 'B',
+            market: 'moneyline',
+            oddsDecimal: 2,
+            riskAmountUSDC: 50,
+            profitAmountUSDC: 50,
+            result: 'won',
+            predictedWinSide: 'away',
+            estimatedPayoutUSDC: 100,
+            estimatedPayoutWei6: '100000000',
+          },
+        ],
+        claimable: [
+          {
+            positionId: 'c',
+            speculationId: '30',
+            positionType: 1,
+            team: 'B',
+            opponent: 'A',
+            market: 'spread',
+            oddsDecimal: 1.91,
+            riskAmountUSDC: 100,
+            profitAmountUSDC: 91,
+            result: 'won',
+            estimatedPayoutUSDC: 191,
+            estimatedPayoutWei6: '191000000',
+          },
+        ],
+        totals: {
+          activeCount: 1,
+          pendingSettleCount: 1,
+          claimableCount: 1,
+          estimatedPayoutUSDC: 191,
+          estimatedPayoutWei6: '191000000',
+          pendingSettlePayoutUSDC: 100,
+          pendingSettlePayoutWei6: '100000000',
+        },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const status = await client.positions.status('0xABCDEFabcdef0123456789ABCDEF0123456789AB');
+    expect(status.active).toHaveLength(1);
+    expect(status.pendingSettle).toHaveLength(1);
+    expect(status.pendingSettle[0]!.predictedWinSide).toBe('away');
+    expect(status.claimable).toHaveLength(1);
+    expect(status.totals.pendingSettlePayoutWei6).toBe('100000000');
+    const url = new URL(calls[0]!.url);
+    expect(url.pathname).toBe('/v1/positions/0xabcdefabcdef0123456789abcdef0123456789ab/status');
+  });
+
+  it('positions.claimParams returns claimable entries with a single-step txParams array', async () => {
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        address: '0xabcdefabcdef0123456789abcdef0123456789ab',
+        positions: [
+          {
+            positionId: 'pid',
+            speculationId: '42',
+            description: 'A moneyline — Won (≈ $191.00)',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 191,
+            estimatedPayoutWei6: '191000000',
+            txParams: [
+              {
+                method: 'claimPosition',
+                target: 'PositionModule',
+                args: { speculationId: '42', positionType: 0 },
+              },
+            ],
+          },
+        ],
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const params = await client.positions.claimParams('0xABCDEFabcdef0123456789ABCDEF0123456789AB');
+    expect(params.positions).toHaveLength(1);
+    expect(params.positions[0]!.bucket).toBe('claimable');
+    expect(params.positions[0]!.txParams).toHaveLength(1);
+    expect(params.positions[0]!.txParams[0]!.method).toBe('claimPosition');
+  });
+
+  it('positions.claimParams returns pendingSettle entries with a settle+claim txParams array', async () => {
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        address: '0xabcdefabcdef0123456789abcdef0123456789ab',
+        positions: [
+          {
+            positionId: 'pid',
+            speculationId: '99',
+            description: 'A moneyline — Won (≈ $50.00, needs settle)',
+            bucket: 'pendingSettle',
+            result: 'won',
+            estimatedPayoutUSDC: 50,
+            estimatedPayoutWei6: '50000000',
+            txParams: [
+              {
+                method: 'settleSpeculation',
+                target: 'SpeculationModule',
+                args: { speculationId: '99' },
+              },
+              {
+                method: 'claimPosition',
+                target: 'PositionModule',
+                args: { speculationId: '99', positionType: 0 },
+              },
+            ],
+          },
+        ],
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const params = await client.positions.claimParams('0xABCDEFabcdef0123456789ABCDEF0123456789AB');
+    expect(params.positions).toHaveLength(1);
+    expect(params.positions[0]!.bucket).toBe('pendingSettle');
+    expect(params.positions[0]!.txParams).toHaveLength(2);
+    expect(params.positions[0]!.txParams[0]!.method).toBe('settleSpeculation');
+    expect(params.positions[0]!.txParams[0]!.target).toBe('SpeculationModule');
+    expect(params.positions[0]!.txParams[1]!.method).toBe('claimPosition');
+    expect(params.positions[0]!.txParams[1]!.target).toBe('PositionModule');
+  });
+
   it('commitments.list joins array statuses with commas', async () => {
     const { fetch, calls } = makeFetch(() => ({
       status: 200,
