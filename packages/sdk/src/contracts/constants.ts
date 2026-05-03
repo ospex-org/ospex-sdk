@@ -53,10 +53,12 @@ export const APPROVED_SIGNER_BY_CHAIN: Record<ChainId, `0x${string}`> = {
  * Default ospex-api-server URL — exposes POST /api/get-encrypted-secrets
  * for Chainlink Functions encrypted secrets retrieval.
  *
- * Verified live via `heroku apps:info -a ospex-api` on 2026-05-03. May
- * eventually be aliased behind secrets.ospex.org or similar.
+ * `secrets.ospex.org` is the protocol-stable alias for the underlying
+ * Heroku app `ospex-api` (verified responding with a valid encrypted
+ * payload on 2026-05-03). Prefer the alias in code so a Heroku app
+ * rename / migration doesn't ripple into the SDK.
  */
-export const OSPEX_API_SERVER_URL = 'https://ospex-api-47dafad18936.herokuapp.com' as const;
+export const OSPEX_API_SERVER_URL = 'https://secrets.ospex.org' as const;
 
 /** Default verify-pending timeout for waitForVerified — ~2x typical Chainlink callback latency. */
 export const DEFAULT_VERIFICATION_TIMEOUT_MS = 120_000 as const;

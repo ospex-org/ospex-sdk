@@ -4,9 +4,9 @@
  * stores a pre-encrypted blob in env vars and returns it verbatim —
  * there's no per-request encryption.
  *
- * Verified URL: https://ospex-api-47dafad18936.herokuapp.com (heroku
- * apps:info -a ospex-api on 2026-05-03). Override via
- * ContestsContext.apiServerUrl when running locally / in tests.
+ * Default URL `https://secrets.ospex.org` (protocol-stable alias for
+ * the Heroku app `ospex-api`). Override via ContestsContext.apiServerUrl
+ * when running locally / in tests.
  */
 import { OspexAPIError } from '../../errors.js';
 import { OSPEX_API_SERVER_URL } from '../../contracts/constants.js';
