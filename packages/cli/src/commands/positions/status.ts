@@ -8,7 +8,7 @@ const optionsSchema = z.object({
 });
 
 export const positionsStatusCommand = new Command('status')
-  .description('Categorize positions for an address (active vs claimable).')
+  .description('Categorize positions for an address (active / pendingSettle / claimable).')
   .argument('<address>', 'wallet address (0x…)')
   .option('--json', 'output as JSON')
   .action(async (address, opts) => {
@@ -22,8 +22,10 @@ export const positionsStatusCommand = new Command('status')
     formatOutput(
       {
         active: status.active.length,
+        pendingSettle: status.pendingSettle.length,
         claimable: status.claimable.length,
         estimatedPayoutUSDC: status.totals.estimatedPayoutUSDC,
+        pendingSettlePayoutUSDC: status.totals.pendingSettlePayoutUSDC,
       },
       { json: false },
     );

@@ -8,10 +8,15 @@
  * Refresh on contract redeploy. Mainnet is the production target; Amoy
  * is for integration testing.
  *
- * Only the addresses M2 actually uses are exposed via `getMatchingAddresses`
- * — `MatchingModule`, `PositionModule`, `USDC`. Other module addresses are
- * stored here for future-milestone use (M3 position reads, secondary
- * market) but not part of the public API surface yet.
+ * Active SDK consumers as of M3:
+ *   - MatchingModule — commitments.match (M2)
+ *   - PositionModule — commitments.{submit,match} allowance, positions.claim (M3)
+ *   - SpeculationModule — positions.settleSpeculation (M3)
+ *   - OspexCore — read-only event-log address filter for receipt parsing (M3)
+ *   - USDC — allowance + transfer
+ *
+ * The other modules (LeaderboardModule, SecondaryMarketModule, etc.)
+ * are stored here for future milestones.
  */
 
 import type { ChainId } from '../types/protocol.js';

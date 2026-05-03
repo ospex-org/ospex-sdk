@@ -18,6 +18,10 @@ export type {
   PositionStatusTotals,
   ActivePositionView,
   ClaimablePositionView,
+  PendingSettlePositionView,
+  ClaimParams,
+  ClaimParamEntry,
+  ClaimParamsTxStep,
 } from './position.js';
 export type { LeaderboardEntry } from './leaderboard.js';
 export type {

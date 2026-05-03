@@ -23,6 +23,7 @@ import { ProtocolApi } from './api/protocol.js';
 import { createReadClient } from './chain/client.js';
 import { Commitments } from './commitments/index.js';
 import { NonceCounter } from './commitments/context.js';
+import { Positions } from './positions/index.js';
 import { getAddresses, type OspexAddresses } from './contracts/addresses.js';
 import { OspexConfigError } from './errors.js';
 import { subscribeToOdds } from './realtime/odds.js';
@@ -71,7 +72,7 @@ export interface OspexClientOptions {
 export class OspexClient {
   readonly markets: MarketsApi;
   readonly commitments: Commitments;
-  readonly positions: PositionsApi;
+  readonly positions: Positions;
   readonly leaderboard: LeaderboardApi;
   readonly protocol: ProtocolApi;
   readonly health: HealthApi;
@@ -103,7 +104,7 @@ export class OspexClient {
     this._addresses = getAddresses(this._chainId);
 
     this.markets = new MarketsApi(this.api);
-    this.positions = new PositionsApi(this.api);
+    const positionsApi = new PositionsApi(this.api);
     this.leaderboard = new LeaderboardApi(this.api);
     this.protocol = new ProtocolApi(this.api);
     this.health = new HealthApi(this.api);
@@ -116,6 +117,15 @@ export class OspexClient {
       getAddresses: () => this._addresses,
       requireChainClient: () => this.requirePublicClient(),
       nonceCounter: this._nonceCounter,
+    });
+
+    this.positions = new Positions({
+      api: this.api,
+      positionsApi,
+      requireSigner: () => this.signer(),
+      getChainId: () => this._chainId,
+      getAddresses: () => this._addresses,
+      requireChainClient: () => this.requirePublicClient(),
     });
   }
 

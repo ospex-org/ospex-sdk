@@ -13,7 +13,7 @@ Yarn 1 workspaces. Commands run from the root or scoped: `yarn workspace @ospex/
 
 - **Schema**: `ospex-indexer/schema/live.sql`. Hand-written DB row types in `packages/sdk/src/db/types.ts` mirror that file. When the schema moves, update the dump first, then the SDK types.
 - **API contract**: `ospex-core-api/src/v1/`. The internal API response types in `packages/sdk/src/api/types.ts` mirror those handlers. When `ospex-core-api` changes a response shape, update both ends in lockstep.
-- **Contracts**: ABIs live at `packages/sdk/src/contracts/abi/`. `MatchingModule.json` is the full Foundry artifact, refreshed by copying from `ospex-foundry-matched-pairs/out/MatchingModule.sol/MatchingModule.json` on contract redeploy. `erc20.ts` is hand-written (USDC). `addresses.ts` carries deployed addresses for chain id 137 (mainnet) and 80002 (Amoy) — refresh from `docs/deployment/POLYGON_MAINNET_R4_output.txt` and `broadcast/DeployAmoy.s.sol/80002/run-latest.json` respectively.
+- **Contracts**: ABIs live at `packages/sdk/src/contracts/abi/`. `MatchingModule.json`, `PositionModule.json`, and `SpeculationModule.json` are full Foundry artifacts, refreshed by copying from `ospex-foundry-matched-pairs/out/<Module>.sol/<Module>.json` on contract redeploy. `erc20.ts` is hand-written (USDC). `addresses.ts` carries deployed addresses for chain id 137 (mainnet) and 80002 (Amoy) — refresh from `docs/deployment/POLYGON_MAINNET_R4_output.txt` and `broadcast/DeployAmoy.s.sol/80002/run-latest.json` respectively.
 
 ## Hard rules
 
@@ -28,6 +28,7 @@ Yarn 1 workspaces. Commands run from the root or scoped: `yarn workspace @ospex/
 - **Yarn workspace typecheck depends on dependent build.** `@ospex/cli` imports from `@ospex/sdk`'s `dist/index.d.ts` (via the workspace symlink + `types` field). Without `dist/`, every SDK import resolves to "Cannot find module" and ~5 implicit-any errors cascade through callbacks and `catch` blocks. The CLI's `typecheck` script chains `yarn workspace @ospex/sdk build` first — don't break that chain. Long-term proper fix is TypeScript project references (`composite: true`, `tsc --build`).
 - **viem `waitForTransactionReceipt` returns a receipt for both successful AND reverted transactions** — distinguished only by `receipt.status`. Without an explicit `status !== 'success'` check, write methods return "success" for txns that actually reverted on chain. `chain/client.ts:broadcastSignedTx` does this check and throws `OspexChainError({ txHash })` on revert. Any future viem-RPC interaction that "waits and returns" must do the same.
 - **`tsconfig.base.json` uses `module: NodeNext`** so `import x from './y.json' with { type: 'json' }` works for ABI artifacts. Do NOT downgrade to `Node16` — TypeScript will reject import attributes with `TS2823`.
+- **`CoreEventEmitted` event-log decoding requires double-wrapping in test fixtures.** Ospex's `OspexCore.emitCoreEvent(eventType, eventData)` declares `eventData` as a non-indexed `bytes` parameter. The log's `data` field is therefore the ABI-encoded form of a single `bytes` value (offset + length + payload), not the raw payload. When constructing fake receipts in tests, use `encodeAbiParameters([{ type: 'bytes' }], [innerEventData])` for the log data — passing the inner bytes directly will throw "Number ... is not in safe integer range" inside viem's decoder. Used by `positions/{settle,claim}.ts` for receipt parsing; tests at `tests/positions-{settle,claim,claimAll}.test.ts` follow the wrap pattern.
 
 ## Bootstrap config
 
@@ -63,10 +64,11 @@ node packages/cli/dist/index.js <command>    # run CLI without linking
 
 - **M1**: reads (`markets`, `commitments.list`, `positions`, `leaderboard`, `protocol`, `health`), Signer abstraction, KeystoreSigner, Realtime odds via `client.odds.subscribe`. CLI: read commands + `wallet {import, address, unlock, lock}`.
 - **M2**: `commitments.{submit, match, approve, cancel}` via `client.commitments`. Per-instance nonce counter (`max(floor, lastInProcess+1, unixSec)`). EIP-712 helpers in `src/chain/eip712.ts`. Chain client adapter in `src/chain/client.ts`. ABI + addresses in `src/contracts/`. Errors: `OspexAllowanceError` + `OspexChainError`. CLI: `init` + `commitments {approve, submit, match, cancel}` with allowance-prompt-and-retry.
-- **Integration validation**: manual playbook at `docs/MANUAL_INTEGRATION_TESTING.md`. Walked before every release; eight sections, M1 + M2 surfaces, ~15-20 minutes against Amoy.
+- **M3**: Position lifecycle. `positions.{claimParams, claim, settleSpeculation, claimAll, byTx, claimResult}` via `client.positions`. Receipt-driven payout / winSide parsing from `OspexCore.CoreEventEmitted` logs (`POSITION_CLAIMED`, `SPECULATION_SETTLED`). Three-bucket status (`active | pendingSettle | claimable`) — pendingSettle covers winners on scored-but-not-settled speculations. CLI: `positions history`, `claim`, `settle`, `claim-all` (with `--dry-run`), and the existing `positions status` extended to show pendingSettle. Depends on the multi-step `txParams[]` shape introduced in `ospex-core-api` PR #11. Implicit signer / no per-call signer arg, mirroring M2 ergonomics.
+- **Integration validation**: manual playbook at `docs/MANUAL_INTEGRATION_TESTING.md`. Walked before every release; nine sections, M1 + M2 + M3 surfaces, ~20-25 minutes against Amoy.
 
 ## What's deferred
 
 - M2.5: on-chain `cancelCommitment` + `raiseMinNonce` (bulk cancel-by-nonce); `commitments.matches.subscribe` (Realtime channel for match events); cross-process nonce coordination helpers; optional `GET /v1/makers/:address/nonce-floor` core-api endpoint for read-only / no-RPC clients.
-- M3: Position lifecycle (claims, payouts).
-- M4: Contest creation surface for ops tooling.
+- M3.5: Realtime `positions` subscription (Supabase channel for `POSITION_CLAIMED` / `SPECULATION_SETTLED` rows). On-chain Multicall3-based bulk claim (defer to demand). Auto-claim daemon (out of SDK scope; market-maker / agent territory).
+- M4: Contest creation surface for ops tooling. Secondary-market position UX.
