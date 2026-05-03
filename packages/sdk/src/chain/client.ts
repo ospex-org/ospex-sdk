@@ -19,7 +19,7 @@ import {
 } from 'viem';
 import { polygon, polygonAmoy } from 'viem/chains';
 import type { ChainId } from '../types/protocol.js';
-import { OspexConfigError } from '../errors.js';
+import { OspexChainError, OspexConfigError } from '../errors.js';
 
 const CHAIN_BY_ID = {
   137: polygon,
@@ -52,6 +52,14 @@ export function createReadClient(rpcUrl: string, chainId: ChainId): PublicClient
  * Broadcast a signed serialized transaction (returned by Signer's
  * `signTransaction`) and wait for confirmation. One round-trip through
  * the public client; no Signer interaction.
+ *
+ * viem's `waitForTransactionReceipt` resolves with a receipt regardless
+ * of execution outcome — both successful and reverted transactions
+ * produce a receipt, distinguished only by `receipt.status`. If the
+ * caller doesn't check the status, a reverted tx silently looks like
+ * a success. We treat anything other than `'success'` as a chain error
+ * here, with the txHash attached so the caller can investigate on
+ * Polygonscan.
  */
 export async function broadcastSignedTx(
   publicClient: PublicClient,
@@ -59,5 +67,8 @@ export async function broadcastSignedTx(
 ): Promise<{ txHash: Hash; receipt: TransactionReceipt }> {
   const txHash = await publicClient.sendRawTransaction({ serializedTransaction });
   const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+  if (receipt.status !== 'success') {
+    throw new OspexChainError('Transaction reverted on-chain.', { txHash });
+  }
   return { txHash, receipt };
 }

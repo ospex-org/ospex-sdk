@@ -77,6 +77,10 @@ export async function buildSignAndSend(params: SendTxParams): Promise<SendTxResu
   try {
     return await broadcastSignedTx(publicClient, serialized);
   } catch (err) {
+    // broadcastSignedTx already throws OspexChainError on reverted
+    // receipts (with the txHash attached). Re-throw those untouched so
+    // the structured info isn't buried under another wrapper.
+    if (err instanceof OspexChainError) throw err;
     throw new OspexChainError('Transaction broadcast or inclusion failed.', { cause: err });
   }
 }
