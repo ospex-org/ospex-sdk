@@ -119,6 +119,24 @@ export interface MarketsListBody {
   pagination: PaginationBody;
 }
 
+export interface ScriptApprovalEntryBody {
+  scriptHash: string;
+  purpose: 0 | 1 | 2;
+  leagueId: number;
+  version: number;
+  validUntil: number;
+  signature: string;
+  sourceUrl: string;
+}
+
+export interface ApprovedScriptsBody {
+  network: Network;
+  approvedSigner: string;
+  verify: ScriptApprovalEntryBody;
+  marketUpdate: ScriptApprovalEntryBody;
+  score: ScriptApprovalEntryBody;
+}
+
 export interface CommitmentsListBody {
   commitments: CommitmentBody[];
   pagination: PaginationBody;

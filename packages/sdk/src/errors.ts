@@ -10,7 +10,9 @@ export type OspexErrorCode =
   | 'VALIDATION_ERROR'
   | 'SIGNING_ERROR'
   | 'ALLOWANCE_INSUFFICIENT'
-  | 'CHAIN_ERROR';
+  | 'CHAIN_ERROR'
+  | 'SCRIPT_APPROVAL_INVALID'
+  | 'SUBSCRIPTION_ERROR';
 
 export class OspexError extends Error {
   readonly code: OspexErrorCode;
@@ -146,5 +148,74 @@ export class OspexChainError extends OspexError {
     this.name = 'OspexChainError';
     this.revertReason = init?.revertReason;
     this.txHash = init?.txHash;
+  }
+}
+
+/**
+ * A Chainlink Functions ScriptApproval is unusable for the requested
+ * operation: hash mismatch (provided source ≠ approved hash), expired
+ * (`validUntil` passed), or unconfigured (no approvals committed for the
+ * deployment's network).
+ *
+ * `reason` discriminates the case so the caller can give a precise
+ * remediation message.
+ */
+export type OspexScriptApprovalReason = 'hash_mismatch' | 'expired' | 'not_configured';
+
+export class OspexScriptApprovalError extends OspexError {
+  readonly reason: OspexScriptApprovalReason;
+  /** The expected scriptHash from the approval (when known). */
+  readonly expectedHash: string | undefined;
+  /** The actual hash computed from the submitted source (when known). */
+  readonly actualHash: string | undefined;
+
+  constructor(
+    message: string,
+    init: {
+      reason: OspexScriptApprovalReason;
+      expectedHash?: string;
+      actualHash?: string;
+      cause?: unknown;
+    },
+  ) {
+    super(
+      'SCRIPT_APPROVAL_INVALID',
+      message,
+      init.cause !== undefined ? { cause: init.cause } : undefined,
+    );
+    this.name = 'OspexScriptApprovalError';
+    this.reason = init.reason;
+    this.expectedHash = init.expectedHash;
+    this.actualHash = init.actualHash;
+  }
+}
+
+/**
+ * The Chainlink Functions subscription configuration is unusable —
+ * insufficient LINK funding in the caller's wallet, OracleModule isn't
+ * a registered consumer of the chosen subscription, or no subscriptionId
+ * was supplied on a network without a shared default.
+ */
+export type OspexSubscriptionReason =
+  | 'link_balance_insufficient'
+  | 'consumer_not_registered'
+  | 'subscription_id_missing';
+
+export class OspexSubscriptionError extends OspexError {
+  readonly reason: OspexSubscriptionReason;
+  readonly subscriptionId: bigint | undefined;
+
+  constructor(
+    message: string,
+    init: { reason: OspexSubscriptionReason; subscriptionId?: bigint; cause?: unknown },
+  ) {
+    super(
+      'SUBSCRIPTION_ERROR',
+      message,
+      init.cause !== undefined ? { cause: init.cause } : undefined,
+    );
+    this.name = 'OspexSubscriptionError';
+    this.reason = init.reason;
+    this.subscriptionId = init.subscriptionId;
   }
 }

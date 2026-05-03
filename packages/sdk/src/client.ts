@@ -15,6 +15,7 @@ import type { PublicClient } from 'viem';
 
 import { ApiClient } from './api/client.js';
 import { ConfigApi } from './api/config.js';
+import { ContestsApi } from './api/contests.js';
 import { HealthApi } from './api/health.js';
 import { LeaderboardApi } from './api/leaderboard.js';
 import { MarketsApi } from './api/markets.js';
@@ -23,6 +24,7 @@ import { ProtocolApi } from './api/protocol.js';
 import { createReadClient } from './chain/client.js';
 import { Commitments } from './commitments/index.js';
 import { NonceCounter } from './commitments/context.js';
+import { Contests } from './contests/index.js';
 import { Positions } from './positions/index.js';
 import { getAddresses, type OspexAddresses } from './contracts/addresses.js';
 import { OspexConfigError } from './errors.js';
@@ -72,6 +74,7 @@ export interface OspexClientOptions {
 export class OspexClient {
   readonly markets: MarketsApi;
   readonly commitments: Commitments;
+  readonly contests: Contests;
   readonly positions: Positions;
   readonly leaderboard: LeaderboardApi;
   readonly protocol: ProtocolApi;
@@ -104,6 +107,7 @@ export class OspexClient {
     this._addresses = getAddresses(this._chainId);
 
     this.markets = new MarketsApi(this.api);
+    const contestsApi = new ContestsApi(this.api);
     const positionsApi = new PositionsApi(this.api);
     this.leaderboard = new LeaderboardApi(this.api);
     this.protocol = new ProtocolApi(this.api);
@@ -117,6 +121,16 @@ export class OspexClient {
       getAddresses: () => this._addresses,
       requireChainClient: () => this.requirePublicClient(),
       nonceCounter: this._nonceCounter,
+    });
+
+    this.contests = new Contests({
+      api: this.api,
+      contestsApi,
+      marketsApi: this.markets,
+      requireSigner: () => this.signer(),
+      getChainId: () => this._chainId,
+      getAddresses: () => this._addresses,
+      requireChainClient: () => this.requirePublicClient(),
     });
 
     this.positions = new Positions({

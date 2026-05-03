@@ -9,6 +9,9 @@
 export { OspexClient, DEFAULT_API_URL } from './client.js';
 export type { OspexClientOptions } from './client.js';
 
+export { getAddresses } from './contracts/addresses.js';
+export type { OspexAddresses } from './contracts/addresses.js';
+
 export {
   OspexError,
   OspexAPIError,
@@ -17,8 +20,14 @@ export {
   OspexSigningError,
   OspexAllowanceError,
   OspexChainError,
+  OspexScriptApprovalError,
+  OspexSubscriptionError,
 } from './errors.js';
-export type { OspexErrorCode } from './errors.js';
+export type {
+  OspexErrorCode,
+  OspexScriptApprovalReason,
+  OspexSubscriptionReason,
+} from './errors.js';
 
 export type {
   // signer
@@ -47,6 +56,10 @@ export type {
   ClaimParams,
   ClaimParamEntry,
   ClaimParamsTxStep,
+  // contest (M4)
+  ContestStatus,
+  ScriptApproval,
+  ApprovedScripts,
   // leaderboard
   LeaderboardEntry,
   // protocol
