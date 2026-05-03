@@ -20,8 +20,14 @@ Yarn 1 workspaces. Commands run from the root or scoped: `yarn workspace @ospex/
 - **CLI never imports SDK internals.** Only `@ospex/sdk` and `@ospex/sdk/signers/keystore` — anything else is a layering violation.
 - **No network parameter on the public SDK.** A client is configured for one network; the API returns the network id, the SDK never asks the user.
 - **No module-level state in the SDK.** Multiple `OspexClient` instances must be fully isolated.
-- **Errors are typed.** Throw `OspexAPIError`, `OspexConfigError`, `OspexValidationError`, or `OspexSigningError` — never strings.
+- **Errors are typed.** Throw `OspexAPIError`, `OspexConfigError`, `OspexValidationError`, `OspexSigningError`, `OspexAllowanceError`, or `OspexChainError` — never strings.
 - **All I/O is async.** No mixed sync/async surfaces.
+
+## Build & dependency gotchas
+
+- **Yarn workspace typecheck depends on dependent build.** `@ospex/cli` imports from `@ospex/sdk`'s `dist/index.d.ts` (via the workspace symlink + `types` field). Without `dist/`, every SDK import resolves to "Cannot find module" and ~5 implicit-any errors cascade through callbacks and `catch` blocks. The CLI's `typecheck` script chains `yarn workspace @ospex/sdk build` first — don't break that chain. Long-term proper fix is TypeScript project references (`composite: true`, `tsc --build`).
+- **viem `waitForTransactionReceipt` returns a receipt for both successful AND reverted transactions** — distinguished only by `receipt.status`. Without an explicit `status !== 'success'` check, write methods return "success" for txns that actually reverted on chain. `chain/client.ts:broadcastSignedTx` does this check and throws `OspexChainError({ txHash })` on revert. Any future viem-RPC interaction that "waits and returns" must do the same.
+- **`tsconfig.base.json` uses `module: NodeNext`** so `import x from './y.json' with { type: 'json' }` works for ABI artifacts. Do NOT downgrade to `Node16` — TypeScript will reject import attributes with `TS2823`.
 
 ## Bootstrap config
 
