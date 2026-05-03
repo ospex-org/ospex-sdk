@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  OspexAllowanceError,
   OspexAPIError,
+  OspexChainError,
   OspexConfigError,
   OspexError,
   OspexSigningError,
@@ -48,5 +50,32 @@ describe('errors', () => {
   it('OspexValidationError exposes the field name', () => {
     const err = new OspexValidationError('bad', { field: 'address' });
     expect(err.field).toBe('address');
+  });
+
+  it('OspexAllowanceError carries the structured shortfall info', () => {
+    const err = new OspexAllowanceError('short', {
+      required: 1_000_000n,
+      current: 0n,
+      spender: '0xPositionModule',
+      token: '0xUSDC',
+    });
+    expect(err.code).toBe('ALLOWANCE_INSUFFICIENT');
+    expect(err.required).toBe(1_000_000n);
+    expect(err.current).toBe(0n);
+    expect(err.spender).toBe('0xPositionModule');
+    expect(err.token).toBe('0xUSDC');
+  });
+
+  it('OspexChainError carries optional revertReason and txHash', () => {
+    const cause = new Error('reverted: NonceTooLow()');
+    const err = new OspexChainError('match failed', {
+      revertReason: 'NonceTooLow',
+      txHash: '0xdeadbeef',
+      cause,
+    });
+    expect(err.code).toBe('CHAIN_ERROR');
+    expect(err.revertReason).toBe('NonceTooLow');
+    expect(err.txHash).toBe('0xdeadbeef');
+    expect((err as { cause?: unknown }).cause).toBe(cause);
   });
 });

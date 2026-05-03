@@ -24,6 +24,8 @@ export interface RequestOptions {
   method?: 'GET' | 'POST' | 'DELETE';
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
+  /** Extra request headers (Accept + Content-Type are set automatically). */
+  headers?: Record<string, string>;
   /** Per-request timeout override. */
   timeoutMs?: number;
   /** Per-request abort signal. */
@@ -52,6 +54,13 @@ export class ApiClient {
     if (options.body !== undefined) {
       headers['Content-Type'] = 'application/json';
       body = JSON.stringify(options.body);
+    }
+    // Caller-supplied headers last so they can override Accept /
+    // Content-Type if needed (rare, but supported).
+    if (options.headers !== undefined) {
+      for (const [k, v] of Object.entries(options.headers)) {
+        headers[k] = v;
+      }
     }
 
     const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;

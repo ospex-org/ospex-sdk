@@ -38,6 +38,36 @@ export async function promptPassphraseConfirmed(
   return a;
 }
 
+/**
+ * Yes/no with a default. Empty input returns `defaultYes`. Any of
+ * `y`/`yes`/`n`/`no` (case-insensitive) is accepted; anything else
+ * re-prompts.
+ */
+export async function promptYesNo(prompt: string, defaultYes = true): Promise<boolean> {
+  const suffix = defaultYes ? '[Y/n] ' : '[y/N] ';
+  for (;;) {
+    const raw = (await promptText(`${prompt} ${suffix}`)).trim().toLowerCase();
+    if (raw === '') return defaultYes;
+    if (raw === 'y' || raw === 'yes') return true;
+    if (raw === 'n' || raw === 'no') return false;
+    process.stdout.write('Please answer y or n.\n');
+  }
+}
+
+/**
+ * Free-form text with optional default. Empty input returns the
+ * default; if there's no default and input is empty, re-prompts.
+ */
+export async function promptValue(prompt: string, defaultValue?: string): Promise<string> {
+  const suffix = defaultValue !== undefined ? ` [${defaultValue}] ` : ' ';
+  for (;;) {
+    const raw = (await promptText(`${prompt}${suffix}`)).trim();
+    if (raw !== '') return raw;
+    if (defaultValue !== undefined) return defaultValue;
+    process.stdout.write('A value is required.\n');
+  }
+}
+
 interface ReadLineOptions {
   hidden: boolean;
 }

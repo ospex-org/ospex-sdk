@@ -13,7 +13,7 @@ Yarn 1 workspaces. Commands run from the root or scoped: `yarn workspace @ospex/
 
 - **Schema**: `ospex-indexer/schema/live.sql`. Hand-written DB row types in `packages/sdk/src/db/types.ts` mirror that file. When the schema moves, update the dump first, then the SDK types.
 - **API contract**: `ospex-core-api/src/v1/`. The internal API response types in `packages/sdk/src/api/types.ts` mirror those handlers. When `ospex-core-api` changes a response shape, update both ends in lockstep.
-- **Contracts**: ABIs are not committed yet — M1 is read-side only. M2 will copy the canonical artifacts into `packages/sdk/src/contracts/abi/` from `ospex-foundry-matched-pairs/out/<Contract>.sol/<Contract>.json`. Refresh on contract redeploy.
+- **Contracts**: ABIs live at `packages/sdk/src/contracts/abi/`. `MatchingModule.json` is the full Foundry artifact, refreshed by copying from `ospex-foundry-matched-pairs/out/MatchingModule.sol/MatchingModule.json` on contract redeploy. `erc20.ts` is hand-written (USDC). `addresses.ts` carries deployed addresses for chain id 137 (mainnet) and 80002 (Amoy) — refresh from `docs/deployment/POLYGON_MAINNET_R4_output.txt` and `broadcast/DeployAmoy.s.sol/80002/run-latest.json` respectively.
 
 ## Hard rules
 
@@ -53,9 +53,14 @@ node packages/cli/dist/index.js <command>    # run CLI without linking
 
 0600 keeps the file unreadable by other users on the host but does not protect against any process running as the same user. OS-keychain integration (DPAPI / Keychain / libsecret) is the higher-assurance option and is out of scope for v1. If that matters for the use case at hand, run write commands without `wallet unlock` — each one prompts for the passphrase inline and never writes the decrypted key to disk. Documented in `packages/cli/src/lib/client.ts`.
 
+## What's implemented
+
+- **M1**: reads (`markets`, `commitments.list`, `positions`, `leaderboard`, `protocol`, `health`), Signer abstraction, KeystoreSigner, Realtime odds via `client.odds.subscribe`. CLI: read commands + `wallet {import, address, unlock, lock}`.
+- **M2**: `commitments.{submit, match, approve, cancel}` via `client.commitments`. Per-instance nonce counter (`max(floor, lastInProcess+1, unixSec)`). EIP-712 helpers in `src/chain/eip712.ts`. Chain client adapter in `src/chain/client.ts`. ABI + addresses in `src/contracts/`. Errors: `OspexAllowanceError` + `OspexChainError`. CLI: `init` + `commitments {approve, submit, match, cancel}` with allowance-prompt-and-retry.
+- **Integration validation**: manual playbook at `docs/MANUAL_INTEGRATION_TESTING.md`. Walked before every release; eight sections, M1 + M2 surfaces, ~15-20 minutes against Amoy.
+
 ## What's deferred
 
-- M2: `commitments.submit`, `commitments.cancel`, `commitments.matches.subscribe`. ABI artifacts under `packages/sdk/src/contracts/abi/`. Chain client in `packages/sdk/src/chain/`. `rpcUrl` becomes a required SDK config (no default) when chain writes ship.
+- M2.5: on-chain `cancelCommitment` + `raiseMinNonce` (bulk cancel-by-nonce); `commitments.matches.subscribe` (Realtime channel for match events); cross-process nonce coordination helpers; optional `GET /v1/makers/:address/nonce-floor` core-api endpoint for read-only / no-RPC clients.
 - M3: Position lifecycle (claims, payouts).
-
-When you scaffold M2, create the `chain/` and `contracts/abi/` directories then — they're intentionally absent from M1 to keep the repo clean of empty placeholders.
+- M4: Contest creation surface for ops tooling.
