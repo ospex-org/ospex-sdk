@@ -30,7 +30,7 @@ import type { OddsSubscribeArgs, OddsSubscribeHandlers, Subscription } from './t
 import type { ChainId, PublicConfig } from './types/protocol.js';
 import type { Signer } from './types/signer.js';
 
-export const DEFAULT_API_URL = 'https://ospex-core-api-195f635df864.herokuapp.com';
+export const DEFAULT_API_URL = 'https://api.ospex.org';
 
 export interface OspexClientOptions {
   /** Base URL of `ospex-core-api`. Defaults to production. */

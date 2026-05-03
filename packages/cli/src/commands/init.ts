@@ -61,7 +61,7 @@ export const initCommand = new Command('init')
     } else if (opts.yes !== true) {
       const v = await promptValue(
         'core-api URL',
-        existing.apiUrl ?? 'https://ospex-core-api-195f635df864.herokuapp.com',
+        existing.apiUrl ?? 'https://api.ospex.org',
       );
       next.apiUrl = v;
     } else if (existing.apiUrl !== undefined) {
