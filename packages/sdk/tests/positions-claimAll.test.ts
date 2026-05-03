@@ -349,6 +349,96 @@ describe('positions.claimAll', () => {
     expect(result.entries[0]!.txHashes).toEqual([]);
     expect(result.entries[0]!.payoutWei6).toBe('50000000');
     expect(result.success).toBe(false); // dry-run never reports success
+    // Predicted-payout totals are aggregated in dry-run too — otherwise
+    // the CLI summary line shows "$0.00" while every entry shows a
+    // non-zero predicted payout.
+    expect(result.totals.totalPayoutWei6).toBe('50000000');
+    expect(result.totals.totalPayoutUSDC).toBeCloseTo(50, 6);
+  });
+
+  it('rejects live-mode --address that does not match the configured signer', async () => {
+    const otherWallet = ('0x' + 'ee'.repeat(20)) as `0x${string}`;
+    const ctx = fakeContext({
+      claimParams: { address: SIGNER_ADDR, positions: [] },
+      plannedTxs: [],
+    });
+    // No `opts.dryRun` — live mode. Address differs from the signer.
+    await expect(
+      claimAll(ctx, { address: otherWallet }),
+    ).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      field: 'address',
+      message: expect.stringMatching(/does not match the configured signer/i),
+    });
+  });
+
+  it('allows dry-run for any address even when the signer is different', async () => {
+    const otherWallet = ('0x' + 'ee'.repeat(20)) as `0x${string}`;
+    const ctx = fakeContext({
+      claimParams: {
+        address: otherWallet,
+        positions: [
+          {
+            positionId: `7_${otherWallet}_0`,
+            speculationId: '7',
+            description: 'X',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 25,
+            estimatedPayoutWei6: '25000000',
+            txParams: [
+              {
+                method: 'claimPosition',
+                target: 'PositionModule',
+                args: { speculationId: '7', positionType: 0 },
+              },
+            ],
+          },
+        ],
+      },
+      plannedTxs: [], // none expected
+    });
+    // Dry-run + cross-wallet inspection: no signer ↔ address coupling.
+    const result = await claimAll(ctx, { address: otherWallet, opts: { dryRun: true } });
+    expect(result.address).toBe(otherWallet.toLowerCase());
+    expect(result.entries).toHaveLength(1);
+    expect(result.totals.totalPayoutWei6).toBe('25000000');
+  });
+
+  it('defaults --address to the signer when omitted in live mode', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `9_${SIGNER_ADDR}_0`,
+            speculationId: '9',
+            description: 'D',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 10,
+            estimatedPayoutWei6: '10000000',
+            txParams: [
+              {
+                method: 'claimPosition',
+                target: 'PositionModule',
+                args: { speculationId: '9', positionType: 0 },
+              },
+            ],
+          },
+        ],
+      },
+      plannedTxs: [
+        {
+          status: 'success',
+          logs: [makeClaimedLog(9n, SIGNER_ADDR as `0x${string}`, 0, 10_000_000n)],
+        },
+      ],
+    });
+    const result = await claimAll(ctx); // no address, no dryRun
+    expect(result.address).toBe(SIGNER_ADDR);
+    expect(result.success).toBe(true);
+    expect(result.entries[0]!.payoutWei6).toBe('10000000');
   });
 
   it('rejects unknown txParams.method values forward-compatibly', async () => {

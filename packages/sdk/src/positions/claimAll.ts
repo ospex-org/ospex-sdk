@@ -14,6 +14,17 @@
  *
  * `opts.dryRun` skips all on-chain work and returns the action plan.
  *
+ * Address ↔ signer coupling:
+ *   - Live mode (default): `address` MUST match the configured signer's
+ *     address. `claimPosition` runs as `msg.sender` on-chain, so a plan
+ *     for any other wallet would either revert (signer doesn't hold the
+ *     positions) or — worse — silently sweep an unrelated position that
+ *     happens to share `(speculationId, signer, positionType)`. The SDK
+ *     throws `OspexValidationError` up front rather than letting that
+ *     happen. Omit `address` to default it to the signer.
+ *   - Dry-run mode: `address` may be any wallet — no on-chain work
+ *     happens, the call is read-only.
+ *
  * On-chain batching: there is no `claimMultiple` / `batchClaim`
  * primitive on PositionModule. Each claim is its own tx. A future
  * Multicall3-based optimization is out of scope for M3 (deferred to
@@ -27,7 +38,12 @@ import type { PositionsContext } from './context.js';
 import type { ClaimParamEntry } from '../types/position.js';
 
 export interface ClaimAllArgs {
-  /** Defaults to `signer.getAddress()` if not specified. */
+  /**
+   * Wallet to sweep. Defaults to the configured signer's address when
+   * omitted. In live mode the value MUST equal the signer's address —
+   * an explicit non-matching value throws `OspexValidationError`. In
+   * dry-run mode any wallet is permitted (the call is read-only).
+   */
   address?: string;
   opts?: ClaimAllOptions;
 }
@@ -81,33 +97,58 @@ export async function claimAll(
 ): Promise<ClaimAllResult> {
   const dryRun = args.opts?.dryRun === true;
 
-  let address: string;
+  // Validate the explicit address first, regardless of mode — a
+  // malformed value is wrong in either case.
+  let explicitAddress: string | undefined;
   if (args.address !== undefined) {
     if (!/^0x[0-9a-fA-F]{40}$/.test(args.address)) {
       throw new OspexValidationError('Invalid Ethereum address.', { field: 'address' });
     }
-    address = args.address.toLowerCase();
-  } else {
-    // Default to the configured signer's address. claimAll without an
-    // address only makes sense with a signer attached (claim() needs
-    // one anyway).
-    if (dryRun) {
-      // Dry-run still wants an address — try the signer first, fall
-      // back to a clear config error so the CLI can prompt.
-      try {
-        const signer = ctx.requireSigner();
-        address = (await signer.getAddress()).toLowerCase();
-      } catch (err) {
-        if (err instanceof OspexConfigError) {
-          throw new OspexConfigError(
-            'claimAll dry-run requires either an explicit `address` or an attached signer.',
-          );
-        }
-        throw err;
-      }
+    explicitAddress = args.address.toLowerCase();
+  }
+
+  let address: string;
+  if (!dryRun) {
+    // Live mode: a signer is mandatory because the on-chain
+    // `claimPosition(speculationId, positionType)` runs as `msg.sender`.
+    // Sweeping a plan for any wallet other than the signer is a footgun:
+    // either the signer doesn't hold those positions and every tx
+    // reverts (gas wasted), or — worse — the signer happens to hold a
+    // matching `(speculationId, positionType)` and we silently sweep
+    // an unrelated position under the wrong description. So in live
+    // mode we require an explicit address to match the signer, or we
+    // derive the address from the signer.
+    const signer = ctx.requireSigner();
+    const signerAddr = (await signer.getAddress()).toLowerCase();
+    if (explicitAddress === undefined) {
+      address = signerAddr;
+    } else if (explicitAddress !== signerAddr) {
+      throw new OspexValidationError(
+        `claimAll: address ${explicitAddress} does not match the configured signer ${signerAddr}. ` +
+          `claimPosition runs as the signer on-chain — sweeping another wallet's plan would either ` +
+          `revert or claim something unrelated. Either omit the address (defaults to the signer) or ` +
+          `use the dry-run path to inspect another wallet's plan read-only.`,
+        { field: 'address' },
+      );
     } else {
+      address = explicitAddress;
+    }
+  } else if (explicitAddress !== undefined) {
+    // Dry-run, explicit address: read-only, any wallet is fine.
+    address = explicitAddress;
+  } else {
+    // Dry-run, no explicit address: derive from signer; surface a
+    // clearer error if neither was provided.
+    try {
       const signer = ctx.requireSigner();
       address = (await signer.getAddress()).toLowerCase();
+    } catch (err) {
+      if (err instanceof OspexConfigError) {
+        throw new OspexConfigError(
+          'claimAll dry-run requires either an explicit `address` or an attached signer.',
+        );
+      }
+      throw err;
     }
   }
 
@@ -127,10 +168,13 @@ export async function claimAll(
 
     if (dryRun) {
       // Pretend each step succeeds and surface the predicted payout
-      // so the caller can render the plan.
+      // so the caller can render the plan. Aggregate into the total
+      // too — otherwise the dry-run summary reports $0.00 while every
+      // entry shows a non-zero predicted payout.
       entryResult.success = true;
       entryResult.payoutWei6 = entry.estimatedPayoutWei6;
       entryResult.payoutUSDC = entry.estimatedPayoutUSDC;
+      totalPayoutWei6 += BigInt(entry.estimatedPayoutWei6);
       entries.push(entryResult);
       continue;
     }
