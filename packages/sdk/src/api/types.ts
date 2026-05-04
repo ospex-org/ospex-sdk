@@ -89,6 +89,7 @@ export interface CommitmentBody {
 
 export interface SpeculationBody {
   speculationId: string;
+  contestId: string;
   type: 'moneyline' | 'spread' | 'total';
   lineTicks: number | null;
   line: number | null;
@@ -107,8 +108,8 @@ export interface ContestBody {
   matchTime: string;
   status: string;
   speculations: SpeculationBody[];
-  // Detail-endpoint-only fields — undefined on /v1/markets list rows.
-  // Populated by /v1/markets/:contestId.
+  // Detail-endpoint-only fields — undefined on /v1/contests list rows.
+  // Populated by /v1/contests/:contestId.
   jsonoddsId?: string | null;
   rundownId?: string | null;
   sportspageId?: string | null;
@@ -125,13 +126,30 @@ export interface ContestBody {
   voidedAt?: string | null;
 }
 
-/**
- * Wire body for `GET /v1/markets`. The wrapper field is still
- * `markets` because the HTTP path/body shape is owned by core-api;
- * the SDK renames its TS types but does not change the wire format.
- */
+/** Wire body for `GET /v1/contests`. */
 export interface ContestsListBody {
-  markets: ContestBody[];
+  contests: ContestBody[];
+  pagination: PaginationBody;
+}
+
+export interface SpeculationParentContextBody {
+  contestId: string;
+  awayTeam: string;
+  homeTeam: string;
+  sport: string;
+  matchTime: string;
+  status: string;
+}
+
+/** Wire body for `GET /v1/speculations/:speculationId`. */
+export interface SpeculationDetailBody extends SpeculationBody {
+  orderbook: CommitmentBody[];
+  contest: SpeculationParentContextBody;
+}
+
+/** Wire body for `GET /v1/speculations`. */
+export interface SpeculationsListBody {
+  speculations: SpeculationBody[];
   pagination: PaginationBody;
 }
 

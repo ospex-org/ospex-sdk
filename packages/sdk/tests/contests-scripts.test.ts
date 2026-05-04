@@ -1,7 +1,7 @@
 /**
  * ScriptsCache TTL + 503 error mapping tests. Caching matters because
  * the SDK creates one Contests instance per OspexClient — a bursty
- * caller (`ospex contest create` in a tight loop) shouldn't hit
+ * caller (`ospex contests create` in a tight loop) shouldn't hit
  * core-api on every invocation.
  */
 import { describe, expect, it, vi } from 'vitest';

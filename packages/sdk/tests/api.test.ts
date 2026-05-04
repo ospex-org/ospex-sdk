@@ -36,7 +36,7 @@ describe('OspexClient API surface', () => {
     const { fetch, calls } = makeFetch(() => ({
       status: 200,
       body: {
-        markets: [
+        contests: [
           {
             contestId: '42',
             awayTeam: 'Lakers',
@@ -48,6 +48,7 @@ describe('OspexClient API surface', () => {
             speculations: [
               {
                 speculationId: '101',
+                contestId: '42',
                 type: 'spread',
                 lineTicks: -35,
                 line: -3.5,
@@ -67,8 +68,9 @@ describe('OspexClient API surface', () => {
     const first = contests[0]!;
     expect(first.contestId).toBe('42');
     expect(first.speculations[0]!.awayLine).toBe(3.5);
+    expect(first.speculations[0]!.contestId).toBe('42');
     const url = new URL(calls[0]!.url);
-    expect(url.pathname).toBe('/v1/markets');
+    expect(url.pathname).toBe('/v1/contests');
     expect(url.searchParams.get('sport')).toBe('nba');
     expect(url.searchParams.get('window')).toBe('12');
   });
@@ -90,7 +92,7 @@ describe('OspexClient API surface', () => {
     }));
     const client = new OspexClient({ apiUrl, fetch });
     const contest = await client.contests.get('42');
-    expect(calls[0]!.url).toBe(`${apiUrl}/v1/markets/42`);
+    expect(calls[0]!.url).toBe(`${apiUrl}/v1/contests/42`);
     expect(contest.jsonoddsId).toBe('a783e37e-4ce1-4f42-9dd6-615568f73044');
   });
 
@@ -98,7 +100,7 @@ describe('OspexClient API surface', () => {
     const { fetch } = makeFetch(() => ({
       status: 200,
       body: {
-        markets: [
+        contests: [
           {
             contestId: '1',
             awayTeam: 'A',
@@ -116,6 +118,76 @@ describe('OspexClient API surface', () => {
     const client = new OspexClient({ apiUrl, fetch });
     const [first] = await client.contests.list();
     expect(first?.jsonoddsId).toBeUndefined();
+  });
+
+  it('speculations.list builds /v1/speculations with filters', async () => {
+    const { fetch, calls } = makeFetch(() => ({
+      status: 200,
+      body: {
+        speculations: [
+          {
+            speculationId: '500',
+            contestId: '42',
+            type: 'moneyline',
+            lineTicks: 0,
+            line: null,
+            speculationStatus: 0,
+          },
+        ],
+        pagination: { limit: 100, offset: 0, total: 1, hasMore: false },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const specs = await client.speculations.list({ contestId: '42', status: 'open' });
+    expect(specs).toHaveLength(1);
+    expect(specs[0]!.speculationId).toBe('500');
+    expect(specs[0]!.contestId).toBe('42');
+    const url = new URL(calls[0]!.url);
+    expect(url.pathname).toBe('/v1/speculations');
+    expect(url.searchParams.get('contestId')).toBe('42');
+    expect(url.searchParams.get('status')).toBe('open');
+  });
+
+  it('speculations.get returns orderbook + parent contest context', async () => {
+    const { fetch, calls } = makeFetch(() => ({
+      status: 200,
+      body: {
+        speculationId: '500',
+        contestId: '42',
+        type: 'moneyline',
+        lineTicks: 0,
+        line: null,
+        speculationStatus: 0,
+        orderbook: [],
+        contest: {
+          contestId: '42',
+          awayTeam: 'Lakers',
+          homeTeam: 'Celtics',
+          sport: 'nba',
+          matchTime: '2026-05-03T00:00:00Z',
+          status: 'verified',
+        },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const detail = await client.speculations.get('500');
+    expect(calls[0]!.url).toBe(`${apiUrl}/v1/speculations/500`);
+    expect(detail.contest.awayTeam).toBe('Lakers');
+    expect(detail.orderbook).toEqual([]);
+  });
+
+  it('commitments.list passes the speculationId filter through', async () => {
+    const { fetch, calls } = makeFetch(() => ({
+      status: 200,
+      body: {
+        commitments: [],
+        pagination: { limit: 100, offset: 0, total: 0, hasMore: false },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    await client.commitments.list({ speculationId: '500' });
+    const url = new URL(calls[0]!.url);
+    expect(url.searchParams.get('speculationId')).toBe('500');
   });
 
   it('positions.byAddress validates the address and lowercases it', async () => {

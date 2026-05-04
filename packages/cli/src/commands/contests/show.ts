@@ -1,7 +1,7 @@
 /**
- * `ospex contest show <contestId>` — read off-chain projected contest
+ * `ospex contests show <contestId>` — read off-chain projected contest
  * detail (with the orderbook-populated speculations) via core-api
- * `/v1/markets/:contestId`.
+ * `/v1/contests/:contestId`.
  */
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';

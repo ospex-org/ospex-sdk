@@ -18,7 +18,9 @@ import { commitmentsApproveCommand } from './commands/commitments/approve.js';
 import { commitmentsSubmitCommand } from './commands/commitments/submit.js';
 import { commitmentsMatchCommand } from './commands/commitments/match.js';
 import { commitmentsCancelCommand } from './commands/commitments/cancel.js';
-import { makeContestCommand } from './commands/contest/index.js';
+import { commitmentsShowCommand } from './commands/commitments/show.js';
+import { makeContestsCommand } from './commands/contests/index.js';
+import { makeSpeculationsCommand } from './commands/speculations/index.js';
 import { positionsListCommand } from './commands/positions/list.js';
 import { positionsStatusCommand } from './commands/positions/status.js';
 import { positionsClaimCommand } from './commands/positions/claim.js';
@@ -45,13 +47,15 @@ function makeProgram(): Command {
     'Read or sign commitments (orderbook + EIP-712 submit/match/cancel).',
   );
   commitments.addCommand(commitmentsListCommand);
+  commitments.addCommand(commitmentsShowCommand);
   commitments.addCommand(commitmentsApproveCommand);
   commitments.addCommand(commitmentsSubmitCommand);
   commitments.addCommand(commitmentsMatchCommand);
   commitments.addCommand(commitmentsCancelCommand);
   program.addCommand(commitments);
 
-  program.addCommand(makeContestCommand());
+  program.addCommand(makeContestsCommand());
+  program.addCommand(makeSpeculationsCommand());
 
   const positions = new Command('positions').description('Read positions for an address.');
   positions.addCommand(positionsListCommand);

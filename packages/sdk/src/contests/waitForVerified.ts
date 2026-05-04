@@ -69,7 +69,7 @@ export async function waitForVerified(
     if (Date.now() + pollIntervalMs > deadline) {
       throw new OspexChainError(
         `Contest ${id} did not reach Verified within ${timeoutMs} ms. ` +
-          'Run `ospex contest wait-verified <id>` again or check the Chainlink Functions request status.',
+          'Run `ospex contests wait-verified <id>` again or check the Chainlink Functions request status.',
       );
     }
     await sleep(pollIntervalMs);

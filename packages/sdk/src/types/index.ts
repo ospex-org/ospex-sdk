@@ -27,7 +27,10 @@ export type {
   ContestStatus,
   Contest,
   Speculation,
+  SpeculationDetail,
+  SpeculationParentContext,
   ContestsListOptions,
+  SpeculationsListOptions,
   ScriptApproval,
   ApprovedScripts,
 } from './contest.js';

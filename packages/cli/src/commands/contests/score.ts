@@ -1,8 +1,8 @@
 /**
- * `ospex contest score <contestId>` — submit a scoring request.
+ * `ospex contests score <contestId>` — submit a scoring request.
  * Returns immediately after on-chain inclusion; the Chainlink callback
  * (with the actual score) lands ~30-90 s later. Caller can poll
- * `ospex contest get <contestId>` for `status === 'scored'`.
+ * `ospex contests show <contestId>` for `status === 'scored'`.
  */
 import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
@@ -60,7 +60,7 @@ export const contestScoreCommand = new Command('score')
         `Scoring request sent (tx ${result.txHash}).\n` +
           (result.requestId !== null ? `Chainlink requestId: ${result.requestId}\n` : '') +
           `Chainlink callback typically lands within 30-90s. ` +
-          `Run \`ospex contest get ${result.contestId}\` to check status.\n`,
+          `Run \`ospex contests show ${result.contestId}\` to check status.\n`,
       );
     }
   });

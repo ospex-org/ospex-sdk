@@ -8,6 +8,7 @@ const optionsSchema = z.object({
   maker: z.string().optional(),
   scorer: z.string().optional(),
   contestId: z.string().optional(),
+  speculation: z.string().optional(),
   status: z.string().optional(),
   includeInvalidated: z.boolean().optional(),
   includeExpired: z.boolean().optional(),
@@ -21,6 +22,7 @@ export const commitmentsListCommand = new Command('list')
   .option('--maker <address>', 'filter by maker address')
   .option('--scorer <address>', 'filter by scorer contract address')
   .option('--contest-id <id>', 'filter by contest id')
+  .option('--speculation <id>', 'filter to commitments on a single speculation')
   .option('--status <list>', 'comma-separated statuses (default: open,partially_filled)')
   .option('--include-invalidated', 'include nonce-invalidated commitments')
   .option('--include-expired', 'include expired commitments')
@@ -33,6 +35,7 @@ export const commitmentsListCommand = new Command('list')
     if (parsed.maker !== undefined) listOpts.maker = parsed.maker;
     if (parsed.scorer !== undefined) listOpts.scorer = parsed.scorer;
     if (parsed.contestId !== undefined) listOpts.contestId = parsed.contestId;
+    if (parsed.speculation !== undefined) listOpts.speculationId = parsed.speculation;
     if (parsed.status !== undefined) listOpts.status = parsed.status;
     if (parsed.includeInvalidated !== undefined) {
       listOpts.includeInvalidated = parsed.includeInvalidated;

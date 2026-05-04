@@ -1,5 +1,5 @@
 /**
- * `ospex contest wait-verified <contestId>` — standalone polling
+ * `ospex contests wait-verified <contestId>` — standalone polling
  * helper. Useful when an earlier `create --no-wait` call needs to be
  * picked back up.
  */

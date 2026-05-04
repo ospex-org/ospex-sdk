@@ -1,12 +1,12 @@
 /**
- * `ospex contest create [--rundown-id ID] [--sportspage-id ID] [--jsonodds-id ID]`
+ * `ospex contests create [--rundown-id ID] [--sportspage-id ID] [--jsonodds-id ID]`
  *  - At least one of the three external ids is required.
  *  - On OspexAllowanceError: prompt to approve the right (token, spender)
  *    pair and retry once. LINK→OracleModule and USDC→TreasuryModule are
  *    distinguished from M2's USDC→PositionModule by inspecting err.token.
  *  - Without `--no-wait`, blocks until the Chainlink callback flips the
  *    contest to Verified (or timeout, in which case the contestId is
- *    surfaced and the user can re-poll with `ospex contest wait-verified`).
+ *    surfaced and the user can re-poll with `ospex contests wait-verified`).
  */
 import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
@@ -109,7 +109,7 @@ export const contestCreateCommand = new Command('create')
         verificationError = err;
         if (opts.json !== true) {
           process.stdout.write(
-            `Verification did not complete in time. Run \`ospex contest wait-verified ${result.contestId}\` to keep watching.\n`,
+            `Verification did not complete in time. Run \`ospex contests wait-verified ${result.contestId}\` to keep watching.\n`,
           );
         }
       }

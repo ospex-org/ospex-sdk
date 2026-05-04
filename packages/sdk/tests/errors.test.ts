@@ -34,11 +34,11 @@ describe('errors', () => {
     const err = new OspexAPIError('not found', {
       status: 404,
       apiCode: 'NOT_FOUND',
-      path: '/v1/markets/x',
+      path: '/v1/contests/x',
     });
     expect(err.status).toBe(404);
     expect(err.apiCode).toBe('NOT_FOUND');
-    expect(err.path).toBe('/v1/markets/x');
+    expect(err.path).toBe('/v1/contests/x');
   });
 
   it('cause is propagated when supplied', () => {
