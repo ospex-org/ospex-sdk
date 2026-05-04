@@ -34,13 +34,13 @@ export const oddsWatchCommand = new Command('watch')
     const includeRefreshes = parsed.includeRefreshes === true;
 
     const client = await getClient({ requiresSigner: false });
-    const market = await client.markets.get(contestId);
-    if (market.speculations.length === 0) {
+    const contest = await client.contests.get(contestId);
+    if (contest.speculations.length === 0) {
       console.error(`No speculations found for contest ${contestId}.`);
       process.exit(1);
     }
 
-    const jsonoddsId = market.jsonoddsId;
+    const jsonoddsId = contest.jsonoddsId;
     if (!jsonoddsId) {
       console.error(
         `Contest ${contestId} has no jsonoddsId — odds watching is unavailable for ` +

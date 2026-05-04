@@ -32,7 +32,7 @@ function makeFetch(
 const apiUrl = 'https://api.example.test';
 
 describe('OspexClient API surface', () => {
-  it('markets.list builds the right URL and decodes the response', async () => {
+  it('contests.list builds the right URL and decodes the response', async () => {
     const { fetch, calls } = makeFetch(() => ({
       status: 200,
       body: {
@@ -62,9 +62,9 @@ describe('OspexClient API surface', () => {
       },
     }));
     const client = new OspexClient({ apiUrl, fetch });
-    const markets = await client.markets.list({ sport: 'nba', hours: 12 });
-    expect(markets).toHaveLength(1);
-    const first = markets[0]!;
+    const contests = await client.contests.list({ sport: 'nba', hours: 12 });
+    expect(contests).toHaveLength(1);
+    const first = contests[0]!;
     expect(first.contestId).toBe('42');
     expect(first.speculations[0]!.awayLine).toBe(3.5);
     const url = new URL(calls[0]!.url);
@@ -73,7 +73,7 @@ describe('OspexClient API surface', () => {
     expect(url.searchParams.get('window')).toBe('12');
   });
 
-  it('markets.get hits the path-parameter endpoint and surfaces jsonoddsId', async () => {
+  it('contests.get hits the path-parameter endpoint and surfaces jsonoddsId', async () => {
     const { fetch, calls } = makeFetch(() => ({
       status: 200,
       body: {
@@ -89,12 +89,12 @@ describe('OspexClient API surface', () => {
       },
     }));
     const client = new OspexClient({ apiUrl, fetch });
-    const market = await client.markets.get('42');
+    const contest = await client.contests.get('42');
     expect(calls[0]!.url).toBe(`${apiUrl}/v1/markets/42`);
-    expect(market.jsonoddsId).toBe('a783e37e-4ce1-4f42-9dd6-615568f73044');
+    expect(contest.jsonoddsId).toBe('a783e37e-4ce1-4f42-9dd6-615568f73044');
   });
 
-  it('markets.list rows do not surface jsonoddsId (detail-only field)', async () => {
+  it('contests.list rows do not surface jsonoddsId (detail-only field)', async () => {
     const { fetch } = makeFetch(() => ({
       status: 200,
       body: {
@@ -114,7 +114,7 @@ describe('OspexClient API surface', () => {
       },
     }));
     const client = new OspexClient({ apiUrl, fetch });
-    const [first] = await client.markets.list();
+    const [first] = await client.contests.list();
     expect(first?.jsonoddsId).toBeUndefined();
   });
 
@@ -308,12 +308,12 @@ describe('OspexClient API surface', () => {
       body: { error: 'Contest not found', code: 'NOT_FOUND' },
     }));
     const client = new OspexClient({ apiUrl, fetch });
-    await expect(client.markets.get('999')).rejects.toMatchObject({
+    await expect(client.contests.get('999')).rejects.toMatchObject({
       name: 'OspexAPIError',
       status: 404,
       apiCode: 'NOT_FOUND',
     });
-    await expect(client.markets.get('999')).rejects.toBeInstanceOf(OspexAPIError);
+    await expect(client.contests.get('999')).rejects.toBeInstanceOf(OspexAPIError);
   });
 
   it('authDomain returns just the domain (M1 surface)', async () => {

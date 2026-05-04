@@ -1,7 +1,6 @@
 /**
- * `ospex contest list [--sport NFL] [--hours 72]` — alias of
- * `ospex markets list`, exposed under the contests verb so operators
- * have a contest-namespaced read.
+ * `ospex contest list [--sport NFL] [--hours 72]` — lists upcoming
+ * contests via the off-chain projected `/v1/markets` endpoint.
  */
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
@@ -18,7 +17,7 @@ const optionsSchema = z.object({
 });
 
 export const contestListCommand = new Command('list')
-  .description('List upcoming contests (alias of `ospex markets list`).')
+  .description('List upcoming contests (optionally filtered by sport / status / window).')
   .option('--json', 'output as JSON')
   .option('--sport <sport>', 'sport filter (nba, nhl, ncaab, nfl, mlb)')
   .option('--status <status>', 'contest status filter')

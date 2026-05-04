@@ -3,10 +3,10 @@
  */
 import { Command } from '@commander-js/extra-typings';
 import { contestCreateCommand } from './create.js';
-import { contestGetCommand } from './get.js';
 import { contestListCommand } from './list.js';
 import { contestScoreCommand } from './score.js';
 import { contestScriptsCommand } from './scripts.js';
+import { contestShowCommand } from './show.js';
 import { contestWaitVerifiedCommand } from './wait-verified.js';
 
 export function makeContestCommand(): Command {
@@ -17,7 +17,7 @@ export function makeContestCommand(): Command {
   );
   contest.addCommand(contestCreateCommand);
   contest.addCommand(contestScoreCommand);
-  contest.addCommand(contestGetCommand);
+  contest.addCommand(contestShowCommand);
   contest.addCommand(contestListCommand);
   contest.addCommand(contestWaitVerifiedCommand);
   contest.addCommand(contestScriptsCommand);

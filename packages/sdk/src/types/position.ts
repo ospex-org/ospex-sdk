@@ -1,4 +1,4 @@
-import type { MarketType } from './market.js';
+import type { MarketType } from './odds.js';
 
 export interface Position {
   speculationId: string;

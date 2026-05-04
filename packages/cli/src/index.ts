@@ -13,8 +13,6 @@ import { OspexError } from '@ospex/sdk';
 
 import { healthCommand } from './commands/health.js';
 import { initCommand } from './commands/init.js';
-import { marketsListCommand } from './commands/markets/list.js';
-import { marketsShowCommand } from './commands/markets/show.js';
 import { commitmentsListCommand } from './commands/commitments/list.js';
 import { commitmentsApproveCommand } from './commands/commitments/approve.js';
 import { commitmentsSubmitCommand } from './commands/commitments/submit.js';
@@ -42,11 +40,6 @@ function makeProgram(): Command {
 
   program.addCommand(healthCommand);
   program.addCommand(initCommand);
-
-  const markets = new Command('markets').description('Read protocol markets.');
-  markets.addCommand(marketsListCommand);
-  markets.addCommand(marketsShowCommand);
-  program.addCommand(markets);
 
   const commitments = new Command('commitments').description(
     'Read or sign commitments (orderbook + EIP-712 submit/match/cancel).',

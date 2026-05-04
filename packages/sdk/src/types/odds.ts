@@ -1,5 +1,17 @@
-import type { MarketType } from './market.js';
 import type { Network } from './protocol.js';
+
+/**
+ * Tag for the kind of odds row / scorer pairing this represents. Used
+ * by `Commitment.marketType` (which scorer the wager points at) and by
+ * `OddsSnapshot.market` (which scorer's odds row this is).
+ *
+ * Named `MarketType` because it tags the market-data layer (mirrors
+ * the `ContestMarket` struct in `OspexTypes.sol` and the
+ * `current_odds.market` Supabase column). It is *not* an alias for
+ * the (now removed) `Market` SDK entity — that role belongs to
+ * `Contest` from `./contest.ts`.
+ */
+export type MarketType = 'moneyline' | 'spread' | 'total';
 
 /**
  * One row from `current_odds`, mapped to the SDK's camelCase shape.

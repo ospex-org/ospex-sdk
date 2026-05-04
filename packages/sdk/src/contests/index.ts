@@ -8,8 +8,7 @@
  * resolve dependencies through ContestsContext lazily so the parent
  * OspexClient doesn't construct a chain client until a write fires.
  */
-import type { Market, MarketsListOptions } from '../types/market.js';
-import type { ApprovedScripts } from '../types/contest.js';
+import type { ApprovedScripts, Contest, ContestsListOptions } from '../types/contest.js';
 import type { ContestsContext } from './context.js';
 import {
   approveFee,
@@ -44,11 +43,11 @@ export class Contests {
     this.cache.invalidate();
   }
 
-  get(contestId: string | number | bigint): Promise<Market> {
+  get(contestId: string | number | bigint): Promise<Contest> {
     return get(this.ctx, contestId);
   }
 
-  list(options: MarketsListOptions = {}): Promise<Market[]> {
+  list(options: ContestsListOptions = {}): Promise<Contest[]> {
     return list(this.ctx, options);
   }
 
