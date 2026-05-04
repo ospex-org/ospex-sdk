@@ -46,7 +46,8 @@ describe('OspexClient — write-path config guards', () => {
     // lazy-config namespaces don't require chain init at construction
     // time. We don't open a real connection.
     const client = new OspexClient();
-    expect(typeof client.markets.list).toBe('function');
+    expect(typeof client.contests.list).toBe('function');
+    expect(typeof client.contests.get).toBe('function');
     expect(typeof client.commitments.list).toBe('function');
     expect(typeof client.commitments.get).toBe('function');
     expect(typeof client.positions.byAddress).toBe('function');

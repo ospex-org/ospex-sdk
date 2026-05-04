@@ -36,11 +36,13 @@ export type {
   SignTypedDataArgs,
   SignTransactionArgs,
   Signer,
-  // market
-  Market,
-  MarketSpeculation,
-  MarketsListOptions,
-  MarketType,
+  // contest
+  Contest,
+  ContestStatus,
+  ContestsListOptions,
+  Speculation,
+  ScriptApproval,
+  ApprovedScripts,
   // commitment
   Commitment,
   CommitmentStatus,
@@ -56,10 +58,6 @@ export type {
   ClaimParams,
   ClaimParamEntry,
   ClaimParamsTxStep,
-  // contest (M4)
-  ContestStatus,
-  ScriptApproval,
-  ApprovedScripts,
   // leaderboard
   LeaderboardEntry,
   // protocol
@@ -71,6 +69,7 @@ export type {
   Network,
   ChainId,
   // odds
+  MarketType,
   OddsSnapshot,
   OddsSubscribeArgs,
   OddsSubscribeHandlers,

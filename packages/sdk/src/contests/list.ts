@@ -1,11 +1,12 @@
 /**
  * `client.contests.list(opts?)` — lists upcoming contests via the
- * existing `/v1/markets` endpoint. Identical surface to MarketsApi.list;
- * exposed under `contests` so operators have a contest-namespaced verb.
+ * `GET /v1/markets` endpoint on core-api. The HTTP path stays under
+ * `/v1/markets` for now; the SDK surface is contest-namespaced so it
+ * mirrors the on-chain Contest entity.
  */
-import type { Market, MarketsListOptions } from '../types/market.js';
+import type { Contest, ContestsListOptions } from '../types/contest.js';
 import type { ContestsContext } from './context.js';
 
-export function list(ctx: ContestsContext, options: MarketsListOptions = {}): Promise<Market[]> {
-  return ctx.marketsApi.list(options);
+export function list(ctx: ContestsContext, options: ContestsListOptions = {}): Promise<Contest[]> {
+  return ctx.contestsApi.list(options);
 }

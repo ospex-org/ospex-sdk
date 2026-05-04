@@ -87,7 +87,7 @@ export interface CommitmentBody {
   createdAt: string;
 }
 
-export interface MarketSpeculationBody {
+export interface SpeculationBody {
   speculationId: string;
   type: 'moneyline' | 'spread' | 'total';
   lineTicks: number | null;
@@ -98,7 +98,7 @@ export interface MarketSpeculationBody {
   orderbook?: CommitmentBody[];
 }
 
-export interface MarketBody {
+export interface ContestBody {
   contestId: string;
   awayTeam: string;
   homeTeam: string;
@@ -106,10 +106,9 @@ export interface MarketBody {
   sportId: number;
   matchTime: string;
   status: string;
-  speculations: MarketSpeculationBody[];
+  speculations: SpeculationBody[];
   // Detail-endpoint-only fields — undefined on /v1/markets list rows.
-  // Populated by /v1/markets/:contestId (see ospex-core-api PR
-  // feature/scripts-approved-endpoint).
+  // Populated by /v1/markets/:contestId.
   jsonoddsId?: string | null;
   rundownId?: string | null;
   sportspageId?: string | null;
@@ -126,8 +125,13 @@ export interface MarketBody {
   voidedAt?: string | null;
 }
 
-export interface MarketsListBody {
-  markets: MarketBody[];
+/**
+ * Wire body for `GET /v1/markets`. The wrapper field is still
+ * `markets` because the HTTP path/body shape is owned by core-api;
+ * the SDK renames its TS types but does not change the wire format.
+ */
+export interface ContestsListBody {
+  markets: ContestBody[];
   pagination: PaginationBody;
 }
 

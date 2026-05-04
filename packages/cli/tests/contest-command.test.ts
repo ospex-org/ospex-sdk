@@ -8,10 +8,10 @@ import { describe, expect, it } from 'vitest';
 import { makeContestCommand } from '../src/commands/contest/index.js';
 
 describe('makeContestCommand', () => {
-  it('registers create / score / get / list / wait-verified / scripts as subcommands', () => {
+  it('registers create / score / show / list / wait-verified / scripts as subcommands', () => {
     const root = makeContestCommand();
     const names = root.commands.map((c) => c.name()).sort();
-    expect(names).toEqual(['create', 'get', 'list', 'score', 'scripts', 'wait-verified']);
+    expect(names).toEqual(['create', 'list', 'score', 'scripts', 'show', 'wait-verified']);
   });
 
   it('create requires at least one external id (validation runs before tx submission)', async () => {

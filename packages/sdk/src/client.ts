@@ -18,7 +18,6 @@ import { ConfigApi } from './api/config.js';
 import { ContestsApi } from './api/contests.js';
 import { HealthApi } from './api/health.js';
 import { LeaderboardApi } from './api/leaderboard.js';
-import { MarketsApi } from './api/markets.js';
 import { PositionsApi } from './api/positions.js';
 import { ProtocolApi } from './api/protocol.js';
 import { createReadClient } from './chain/client.js';
@@ -72,7 +71,6 @@ export interface OspexClientOptions {
 }
 
 export class OspexClient {
-  readonly markets: MarketsApi;
   readonly commitments: Commitments;
   readonly contests: Contests;
   readonly positions: Positions;
@@ -106,7 +104,6 @@ export class OspexClient {
     this._chainId = options.chainId ?? 137;
     this._addresses = getAddresses(this._chainId);
 
-    this.markets = new MarketsApi(this.api);
     const contestsApi = new ContestsApi(this.api);
     const positionsApi = new PositionsApi(this.api);
     this.leaderboard = new LeaderboardApi(this.api);
@@ -126,7 +123,6 @@ export class OspexClient {
     this.contests = new Contests({
       api: this.api,
       contestsApi,
-      marketsApi: this.markets,
       requireSigner: () => this.signer(),
       getChainId: () => this._chainId,
       getAddresses: () => this._addresses,

@@ -18,12 +18,12 @@ import type {
 
 import type { CurrentOddsRow } from '../db/types.js';
 import type {
+  MarketType,
   OddsSnapshot,
   OddsSubscribeArgs,
   OddsSubscribeHandlers,
   Subscription,
 } from '../types/odds.js';
-import type { MarketType } from '../types/market.js';
 import type { Network } from '../types/protocol.js';
 import { classifyOddsUpdate } from './classifier.js';
 

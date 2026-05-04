@@ -5,7 +5,6 @@ export type {
   SignTransactionArgs,
   Signer,
 } from './signer.js';
-export type { Market, MarketSpeculation, MarketsListOptions, MarketType } from './market.js';
 export type {
   Commitment,
   CommitmentStatus,
@@ -24,7 +23,14 @@ export type {
   ClaimParamsTxStep,
 } from './position.js';
 export type { LeaderboardEntry } from './leaderboard.js';
-export type { ContestStatus, ScriptApproval, ApprovedScripts } from './contest.js';
+export type {
+  ContestStatus,
+  Contest,
+  Speculation,
+  ContestsListOptions,
+  ScriptApproval,
+  ApprovedScripts,
+} from './contest.js';
 export type {
   ProtocolInfo,
   ProtocolContracts,
@@ -35,6 +41,7 @@ export type {
   ChainId,
 } from './protocol.js';
 export type {
+  MarketType,
   OddsSnapshot,
   OddsSubscribeArgs,
   OddsSubscribeHandlers,
