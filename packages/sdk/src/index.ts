@@ -41,6 +41,9 @@ export type {
   ContestStatus,
   ContestsListOptions,
   Speculation,
+  SpeculationDetail,
+  SpeculationParentContext,
+  SpeculationsListOptions,
   ScriptApproval,
   ApprovedScripts,
   // commitment

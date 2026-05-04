@@ -1,17 +1,16 @@
 /**
  * Typed wrapper around the contest read endpoints on core-api:
  *
- *   - `GET /v1/markets`             → list of Contests
- *   - `GET /v1/markets/:contestId`  → single Contest with orderbook
- *   - `GET /v1/contests/scripts/approved` → script approvals (M4)
+ *   - `GET /v1/contests`                     → list of Contests
+ *   - `GET /v1/contests/:contestId`          → single Contest with orderbook-populated speculations
+ *   - `GET /v1/contests/scripts/approved`    → script approvals (M4)
  *
  * The wider contests namespace (create/score/waitForVerified) lives at
  * `src/contests/`; this file is the API-layer adapter so reads stay
  * parallel to other api/* files (positions, commitments, etc.).
  *
- * The HTTP paths still say `/v1/markets` because that's a core-api
- * decision, not the SDK's. The SDK exposes the renamed
- * `client.contests.{list, get}` surface on top.
+ * Speculations also have their own first-class endpoint family — see
+ * `api/speculations.ts` and `client.speculations`.
  */
 import type { ApiClient } from './client.js';
 import type { Commitment } from '../types/commitment.js';
@@ -42,13 +41,13 @@ export class ContestsApi {
     if (options.hours !== undefined) query.window = options.hours;
     if (options.limit !== undefined) query.limit = options.limit;
     if (options.offset !== undefined) query.offset = options.offset;
-    const body = await this.client.request<ContestsListBody>('/v1/markets', { query });
-    return body.markets.map(toContest);
+    const body = await this.client.request<ContestsListBody>('/v1/contests', { query });
+    return body.contests.map(toContest);
   }
 
   async get(contestId: string | number): Promise<Contest> {
     const body = await this.client.request<ContestBody>(
-      `/v1/markets/${encodeURIComponent(String(contestId))}`,
+      `/v1/contests/${encodeURIComponent(String(contestId))}`,
     );
     return toContest(body);
   }
@@ -92,9 +91,10 @@ function toContest(body: ContestBody): Contest {
   return out;
 }
 
-function toSpeculation(body: SpeculationBody): Speculation {
+export function toSpeculation(body: SpeculationBody): Speculation {
   const out: Speculation = {
     speculationId: body.speculationId,
+    contestId: body.contestId,
     type: body.type,
     lineTicks: body.lineTicks,
     line: body.line,
@@ -106,7 +106,7 @@ function toSpeculation(body: SpeculationBody): Speculation {
   return out;
 }
 
-function toCommitment(body: CommitmentBody): Commitment {
+export function toCommitment(body: CommitmentBody): Commitment {
   return body satisfies Commitment;
 }
 

@@ -18,8 +18,10 @@ yarn workspace @ospex/cli link             # adds `ospex` to your PATH
 
 ospex init                                 # one-time: write ~/.ospex/config.json (rpcUrl required)
 ospex health                               # liveness probe
-ospex contest list --hours 168             # upcoming contests
-ospex contest show <contestId>             # one contest with its full orderbook
+ospex contests list --hours 168            # upcoming contests
+ospex contests show <contestId>            # one contest with its full orderbook
+ospex speculations list --contest <id>     # bettable lines under a contest
+ospex speculations show <speculationId>    # one speculation with its orderbook + parent contest
 ospex wallet import                        # encrypt a private key into ~/.ospex/keystore.json
 ospex wallet address                       # print the keystore's address
 ospex odds watch <contestId>               # live odds stream (line-delimited JSON with --json)
@@ -47,7 +49,10 @@ const client = new OspexClient();
 // Reads
 const contests = await client.contests.list({ sport: 'nba', hours: 24 });
 const contest = await client.contests.get(contestId);
-const orderbook = await client.commitments.list({ contestId });
+const speculations = await client.speculations.list({ contestId });
+const speculation = await client.speculations.get(speculationId);
+const orderbook = await client.commitments.list({ speculationId });
+const commitment = await client.commitments.get(commitmentHash);
 const positions = await client.positions.byAddress('0x…');
 const status = await client.positions.status('0x…');
 const board = await client.leaderboard.active();
@@ -110,12 +115,16 @@ Both maker and taker must approve **`PositionModule`** (NOT MatchingModule) for 
 |---|---|
 | `ospex init` | Interactive setup — writes `~/.ospex/config.json` (rpcUrl, chainId, apiUrl). |
 | `ospex health` | Hits `/healthz` and prints liveness info. |
-| `ospex contest list [--sport --status --hours --limit --offset]` | Lists upcoming contests with their speculations. |
-| `ospex contest show <contestId>` | One contest with its full orderbook. |
-| `ospex contest create [--rundown-id --sportspage-id --jsonodds-id]` | Submit `OracleModule.createContestFromOracle` (M4). |
-| `ospex contest score <contestId>` | Submit `OracleModule.scoreContestFromOracle` (M4). |
-| `ospex contest wait-verified <contestId>` | Poll until the contest reaches Verified state (M4). |
-| `ospex contest scripts` | Show the EIP-712 script approvals (debug). |
+| `ospex contests list [--sport --status --hours --limit --offset]` | Lists upcoming contests with their speculations. |
+| `ospex contests show <contestId>` | One contest with its full orderbook. |
+| `ospex contests create [--rundown-id --sportspage-id --jsonodds-id]` | Submit `OracleModule.createContestFromOracle` (M4). |
+| `ospex contests score <contestId>` | Submit `OracleModule.scoreContestFromOracle` (M4). |
+| `ospex contests wait-verified <contestId>` | Poll until the contest reaches Verified state (M4). |
+| `ospex contests scripts` | Show the EIP-712 script approvals (debug). |
+| `ospex speculations list [--contest --sport --status --limit --offset]` | List speculations across one or more contests. |
+| `ospex speculations show <speculationId>` | One speculation with its orderbook + parent contest context. |
+| `ospex commitments show <hash>` | Single commitment lookup by EIP-712 hash. |
+| `ospex commitments list [... --speculation <id> ...]` | Existing list extended with `--speculation` filter. |
 | `ospex commitments list [--maker --scorer --contest-id --status …]` | Lists commitments. Defaults to `open,partially_filled` and active rows. |
 | `ospex commitments approve <amount\|max>` | Approve PositionModule for USDC (M2). |
 | `ospex commitments submit <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>` | Sign + POST a commitment (M2). Prompts to approve if allowance is short. |

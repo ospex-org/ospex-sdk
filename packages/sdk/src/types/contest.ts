@@ -28,24 +28,64 @@ import type { Hex } from './signer.js';
 export type ContestStatus = 'unverified' | 'verified' | 'scored' | 'voided';
 
 /**
- * A single bettable line on a contest. `lineTicks` is the raw int32
- * from chain (10× ticks); `line` is the human-readable value
- * (`lineTicks / 10`). `awayLine` / `homeLine` are populated for spread
- * speculations only.
+ * A single bettable line on a contest. Mirrors the on-chain
+ * `Speculation` struct (`contestId` is field 1, hence always populated
+ * here too — a Speculation is meaningful standalone).
  *
- * `orderbook` is undefined on list-style endpoints and populated by
- * `client.contests.get(contestId)`.
+ * `lineTicks` is the raw int32 from chain (10× ticks); `line` is the
+ * human-readable value (`lineTicks / 10`). `awayLine` / `homeLine` are
+ * populated for spread speculations only.
+ *
+ * `orderbook` is undefined on list-style endpoints and populated when
+ * fetched via `client.contests.get(contestId)` or
+ * `client.speculations.get(speculationId)` — the latter also attaches
+ * a parent `contest` block (see `SpeculationDetail`).
  */
 export interface Speculation {
   speculationId: string;
+  contestId: string;
   type: MarketType;
   lineTicks: number | null;
   line: number | null;
   awayLine?: number;
   homeLine?: number;
-  /** 0 = active (open for new commitments), 1 = closed. */
+  /** 0 = open (taking commitments), 1 = closed (settled or scored). */
   speculationStatus: 0 | 1;
   orderbook?: Commitment[];
+}
+
+/**
+ * Small parent contest context attached by `client.speculations.get`.
+ * Five fields (the common "what game is this on?" question) — source
+ * hashes / lifecycle timestamps stay on the contest detail endpoint.
+ */
+export interface SpeculationParentContext {
+  contestId: string;
+  awayTeam: string;
+  homeTeam: string;
+  sport: string;
+  /** ISO-8601 string. */
+  matchTime: string;
+  status: string;
+}
+
+/**
+ * Returned by `client.speculations.get(speculationId)` — the speculation
+ * with a guaranteed-populated orderbook plus the parent contest context.
+ */
+export interface SpeculationDetail extends Speculation {
+  orderbook: Commitment[];
+  contest: SpeculationParentContext;
+}
+
+export interface SpeculationsListOptions {
+  /** Fast indexed path. */
+  contestId?: string | number;
+  sport?: string;
+  /** 'open' (taking commitments) or 'closed' (settled/scored). */
+  status?: 'open' | 'closed';
+  limit?: number;
+  offset?: number;
 }
 
 /**

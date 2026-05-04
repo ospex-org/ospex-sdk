@@ -14,6 +14,7 @@ export class CommitmentsApi {
     if (options.maker !== undefined) query.maker = options.maker;
     if (options.scorer !== undefined) query.scorer = options.scorer;
     if (options.contestId !== undefined) query.contestId = String(options.contestId);
+    if (options.speculationId !== undefined) query.speculationId = String(options.speculationId);
     if (options.status !== undefined) {
       query.status = Array.isArray(options.status) ? options.status.join(',') : options.status;
     }

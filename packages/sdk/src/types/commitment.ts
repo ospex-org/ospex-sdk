@@ -43,6 +43,13 @@ export interface CommitmentsListOptions {
   scorer?: string;
   contestId?: string | number;
   /**
+   * Filter to commitments matching this speculation. Resolves to a
+   * `speculation_key` server-side (single lookup), then `.eq()`-filters
+   * commitments — faster than passing `contestId + scorer` and matching
+   * on `lineTicks` client-side.
+   */
+  speculationId?: string | number;
+  /**
    * Comma-separated status list, or array. Defaults API-side to
    * `'open,partially_filled'`.
    */

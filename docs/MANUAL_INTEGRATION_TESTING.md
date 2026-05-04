@@ -36,13 +36,17 @@ All read endpoints. Run against the prod core-api by default; override with `OSP
 | # | Command | Expected | Validates |
 |---|---|---|---|
 | 1.1 | `ospex health` | `ok: true` plus a status object | API reachability + SDK transport. |
-| 1.2 | `ospex contest list --sport nba --limit 5` | Up to 5 NBA contests with `speculations[]` arrays | `client.contests.list`. |
-| 1.3 | `ospex contest show <contestId>` (pick one from 1.2) | Detail with `speculations[].orderbook` populated when commitments exist | `client.contests.get` + `fetchOpenCommitmentsByContestId` join. |
-| 1.4 | `ospex commitments list --limit 10` | Open + partially_filled rows; `riskAmount` printed as a string | List pagination + bigint serialization. |
-| 1.5 | `ospex commitments list --maker 0x… --status filled` | Subset for that maker | Multi-filter query path. |
-| 1.6 | `ospex positions list <address>` (pick a known active maker) | Position rows for the wallet | `client.positions.byAddress`. |
-| 1.7 | `ospex positions status <address>` | Aggregate active vs. claimable totals | `client.positions.status`. |
-| 1.8 | `ospex leaderboard show` | Top entries on the active leaderboard | `client.leaderboard.list`. |
+| 1.2 | `ospex contests list --sport nba --limit 5` | Up to 5 NBA contests with `speculations[]` arrays | `client.contests.list`. |
+| 1.3 | `ospex contests show <contestId>` (pick one from 1.2) | Detail with `speculations[].orderbook` populated when commitments exist | `client.contests.get` + `fetchOpenCommitmentsByContestId` join. |
+| 1.4 | `ospex speculations list --contest <contestId>` (use 1.2's id) | Bare speculation rows for that contest, each carrying `contestId` | `client.speculations.list`. |
+| 1.5 | `ospex speculations show <speculationId>` (pick one from 1.4) | Single speculation with `orderbook[]` + 5-field parent `contest` block | `client.speculations.get`. |
+| 1.6 | `ospex commitments list --limit 10` | Open + partially_filled rows; `riskAmount` printed as a string | List pagination + bigint serialization. |
+| 1.7 | `ospex commitments list --speculation <speculationId>` (use 1.4's id) | Subset filtered to that speculation only | `--speculation` filter end-to-end (resolves speculation_key server-side). |
+| 1.8 | `ospex commitments list --maker 0x… --status filled` | Subset for that maker | Multi-filter query path. |
+| 1.9 | `ospex commitments show <hash>` (pick one from 1.6) | Single commitment row with all canonical fields | `client.commitments.get`. |
+| 1.10 | `ospex positions list <address>` (pick a known active maker) | Position rows for the wallet | `client.positions.byAddress`. |
+| 1.11 | `ospex positions status <address>` | Aggregate active vs. claimable totals | `client.positions.status`. |
+| 1.12 | `ospex leaderboard show` | Top entries on the active leaderboard | `client.leaderboard.list`. |
 
 **Pass criterion**: every command returns 0, output is well-formed, and the `--json` variant is parseable JSON.
 
@@ -69,7 +73,7 @@ Do NOT run `ospex wallet unlock` on a shared / multi-user host — mode 0600 onl
 
 | # | Step | Expected | Validates |
 |---|---|---|---|
-| 3.1 | Pick a contest from `ospex contest list` whose `jsonoddsId` is non-null and start time is in the next 24h. | A contest id you can pass to `odds watch`. | — |
+| 3.1 | Pick a contest from `ospex contests list` whose `jsonoddsId` is non-null and start time is in the next 24h. | A contest id you can pass to `odds watch`. | — |
 | 3.2 | `ospex odds watch <contestId>` | Within ~30s, see at least one `current_odds` event print. | `/v1/config/public` bootstrap + lazy Supabase client + channel subscription + payload routing. |
 | 3.3 | Ctrl-C | Exits cleanly with no hanging promise. | Channel unsubscribe path. |
 | 3.4 | `ospex odds watch <invalid-id>` | Channel opens, no events arrive, no error. | Documents expected silence vs. failure. |
@@ -92,7 +96,7 @@ Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end bef
 | 4.6 | `ospex commitments list --maker <walletA>` | Row now `status='cancelled'` | Cancel propagation. |
 | 4.7 | `ospex commitments cancel <hash>` again | `{ ok: true }` (idempotent) | API CAS guard. |
 
-**Picking inputs for 4.2**: contest id from `ospex contest list --chain-id 80002` (assuming Amoy contests are seeded; otherwise ask ops to seed one). Scorer = one of the three Amoy scorer addresses (moneyline `0x2e6f…`, spread `0x0de8…`, total `0xac2e…`). `oddsTick=250` ⇒ 2.50 odds; `riskAmount=1000` ⇒ 0.001 USDC (lot-size aligned).
+**Picking inputs for 4.2**: contest id from `ospex contests list --chain-id 80002` (assuming Amoy contests are seeded; otherwise ask ops to seed one). Scorer = one of the three Amoy scorer addresses (moneyline `0x2e6f…`, spread `0x0de8…`, total `0xac2e…`). `oddsTick=250` ⇒ 2.50 odds; `riskAmount=1000` ⇒ 0.001 USDC (lot-size aligned).
 
 ---
 
@@ -171,7 +175,7 @@ Requires the contest to be `Verified` and have `start_time` already in the past 
 
 For partial verification right now:
 
-1. Use M2 to set up a matched position on a contest that is already scored on-chain. Confirm via `ospex contest show <contestId>` that the contest's `status` is `'scored'`.
+1. Use M2 to set up a matched position on a contest that is already scored on-chain. Confirm via `ospex contests show <contestId>` that the contest's `status` is `'scored'`.
 2. Run 9A.2 then 9A.3.
 3. If the speculation is already settled, the entry will appear in the `claimable` bucket instead of `pendingSettle` — same flow, single tx per entry.
 

@@ -1,6 +1,6 @@
 /**
- * `ospex contest list [--sport NFL] [--hours 72]` — lists upcoming
- * contests via the off-chain projected `/v1/markets` endpoint.
+ * `ospex contests list [--sport NFL] [--hours 72]` — lists upcoming
+ * contests via the off-chain projected `/v1/contests` endpoint.
  */
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';

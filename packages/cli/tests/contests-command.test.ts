@@ -1,29 +1,29 @@
 /**
- * Smoke tests for the `ospex contest *` command tree. Verifies the
+ * Smoke tests for the `ospex contests *` command tree. Verifies the
  * command composes without throwing and exposes the expected
  * subcommands. Full action invocation requires a configured client +
  * signer; that path is covered manually per docs/MANUAL_INTEGRATION_TESTING.md.
  */
 import { describe, expect, it } from 'vitest';
-import { makeContestCommand } from '../src/commands/contest/index.js';
+import { makeContestsCommand } from '../src/commands/contests/index.js';
 
-describe('makeContestCommand', () => {
+describe('makeContestsCommand', () => {
   it('registers create / score / show / list / wait-verified / scripts as subcommands', () => {
-    const root = makeContestCommand();
+    const root = makeContestsCommand();
     const names = root.commands.map((c) => c.name()).sort();
     expect(names).toEqual(['create', 'list', 'score', 'scripts', 'show', 'wait-verified']);
   });
 
+  it('command name is plural (contests, not contest)', () => {
+    const root = makeContestsCommand();
+    expect(root.name()).toBe('contests');
+  });
+
   it('create requires at least one external id (validation runs before tx submission)', async () => {
-    const root = makeContestCommand();
+    const root = makeContestsCommand();
     const create = root.commands.find((c) => c.name() === 'create');
     expect(create).toBeDefined();
     if (create === undefined) return;
-    // Commander runs the action on parseAsync; we want it to reject early
-    // because no external id is set. parseAsync(['node','prog','create'])
-    // — but that path will also trigger getClient which needs config.
-    // Rather than mock all of that, just assert that the help text
-    // documents the three external-id flags so they're clearly marked.
     const help = create.helpInformation();
     expect(help).toMatch(/--rundown-id/);
     expect(help).toMatch(/--sportspage-id/);
@@ -31,7 +31,7 @@ describe('makeContestCommand', () => {
   });
 
   it('score requires the contestId positional argument', () => {
-    const root = makeContestCommand();
+    const root = makeContestsCommand();
     const score = root.commands.find((c) => c.name() === 'score');
     expect(score).toBeDefined();
     if (score === undefined) return;
@@ -39,7 +39,7 @@ describe('makeContestCommand', () => {
   });
 
   it('wait-verified accepts --timeout-seconds', () => {
-    const root = makeContestCommand();
+    const root = makeContestsCommand();
     const wait = root.commands.find((c) => c.name() === 'wait-verified');
     expect(wait).toBeDefined();
     if (wait === undefined) return;
@@ -53,7 +53,7 @@ describe('makeContestCommand', () => {
     // mismatch silently dropped the flag and the command always
     // waited. This test pins the option to the commander convention
     // so a future schema rename has to update both ends.
-    const root = makeContestCommand();
+    const root = makeContestsCommand();
     const create = root.commands.find((c) => c.name() === 'create');
     expect(create).toBeDefined();
     if (create === undefined) return;

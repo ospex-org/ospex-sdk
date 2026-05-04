@@ -20,6 +20,7 @@ import { HealthApi } from './api/health.js';
 import { LeaderboardApi } from './api/leaderboard.js';
 import { PositionsApi } from './api/positions.js';
 import { ProtocolApi } from './api/protocol.js';
+import { SpeculationsApi } from './api/speculations.js';
 import { createReadClient } from './chain/client.js';
 import { Commitments } from './commitments/index.js';
 import { NonceCounter } from './commitments/context.js';
@@ -73,6 +74,7 @@ export interface OspexClientOptions {
 export class OspexClient {
   readonly commitments: Commitments;
   readonly contests: Contests;
+  readonly speculations: SpeculationsApi;
   readonly positions: Positions;
   readonly leaderboard: LeaderboardApi;
   readonly protocol: ProtocolApi;
@@ -106,6 +108,7 @@ export class OspexClient {
 
     const contestsApi = new ContestsApi(this.api);
     const positionsApi = new PositionsApi(this.api);
+    this.speculations = new SpeculationsApi(this.api);
     this.leaderboard = new LeaderboardApi(this.api);
     this.protocol = new ProtocolApi(this.api);
     this.health = new HealthApi(this.api);

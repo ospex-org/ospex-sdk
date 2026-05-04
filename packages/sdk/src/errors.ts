@@ -37,7 +37,7 @@ export class OspexAPIError extends OspexError {
   readonly status: number | undefined;
   /** The `code` field from the API's error envelope, when present. */
   readonly apiCode: string | undefined;
-  /** The endpoint path that failed (e.g. `/v1/markets`). */
+  /** The endpoint path that failed (e.g. `/v1/contests`). */
   readonly path: string | undefined;
 
   constructor(
