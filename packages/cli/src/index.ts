@@ -20,6 +20,7 @@ import { commitmentsApproveCommand } from './commands/commitments/approve.js';
 import { commitmentsSubmitCommand } from './commands/commitments/submit.js';
 import { commitmentsMatchCommand } from './commands/commitments/match.js';
 import { commitmentsCancelCommand } from './commands/commitments/cancel.js';
+import { makeContestCommand } from './commands/contest/index.js';
 import { positionsListCommand } from './commands/positions/list.js';
 import { positionsStatusCommand } from './commands/positions/status.js';
 import { positionsClaimCommand } from './commands/positions/claim.js';
@@ -56,6 +57,8 @@ function makeProgram(): Command {
   commitments.addCommand(commitmentsMatchCommand);
   commitments.addCommand(commitmentsCancelCommand);
   program.addCommand(commitments);
+
+  program.addCommand(makeContestCommand());
 
   const positions = new Command('positions').description('Read positions for an address.');
   positions.addCommand(positionsListCommand);

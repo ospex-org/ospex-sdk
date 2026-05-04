@@ -36,7 +36,23 @@ function toMarket(body: MarketBody): Market {
     status: body.status,
     speculations: body.speculations.map(toMarketSpeculation),
   };
+  // Conditional spread per `exactOptionalPropertyTypes`: only set keys
+  // that the body actually carried. Detail endpoint populates these;
+  // list endpoint omits them entirely.
   if (body.jsonoddsId !== undefined) out.jsonoddsId = body.jsonoddsId;
+  if (body.rundownId !== undefined) out.rundownId = body.rundownId;
+  if (body.sportspageId !== undefined) out.sportspageId = body.sportspageId;
+  if (body.contestCreator !== undefined) out.contestCreator = body.contestCreator;
+  if (body.leagueId !== undefined) out.leagueId = body.leagueId;
+  if (body.verifySourceHash !== undefined) out.verifySourceHash = body.verifySourceHash;
+  if (body.marketUpdateSourceHash !== undefined) out.marketUpdateSourceHash = body.marketUpdateSourceHash;
+  if (body.scoreContestSourceHash !== undefined) out.scoreContestSourceHash = body.scoreContestSourceHash;
+  if (body.awayScore !== undefined) out.awayScore = body.awayScore;
+  if (body.homeScore !== undefined) out.homeScore = body.homeScore;
+  if (body.contestCreatedAt !== undefined) out.contestCreatedAt = body.contestCreatedAt;
+  if (body.verifiedAt !== undefined) out.verifiedAt = body.verifiedAt;
+  if (body.scoredAt !== undefined) out.scoredAt = body.scoredAt;
+  if (body.voidedAt !== undefined) out.voidedAt = body.voidedAt;
   return out;
 }
 

@@ -107,16 +107,46 @@ export interface MarketBody {
   matchTime: string;
   status: string;
   speculations: MarketSpeculationBody[];
-  /**
-   * Detail-endpoint-only — undefined on /v1/markets list rows.
-   * Null when the contest has no JSONOdds linkage.
-   */
+  // Detail-endpoint-only fields — undefined on /v1/markets list rows.
+  // Populated by /v1/markets/:contestId (see ospex-core-api PR
+  // feature/scripts-approved-endpoint).
   jsonoddsId?: string | null;
+  rundownId?: string | null;
+  sportspageId?: string | null;
+  contestCreator?: string;
+  leagueId?: string;
+  verifySourceHash?: string | null;
+  marketUpdateSourceHash?: string | null;
+  scoreContestSourceHash?: string | null;
+  awayScore?: number | null;
+  homeScore?: number | null;
+  contestCreatedAt?: string | null;
+  verifiedAt?: string | null;
+  scoredAt?: string | null;
+  voidedAt?: string | null;
 }
 
 export interface MarketsListBody {
   markets: MarketBody[];
   pagination: PaginationBody;
+}
+
+export interface ScriptApprovalEntryBody {
+  scriptHash: string;
+  purpose: 0 | 1 | 2;
+  leagueId: number;
+  version: number;
+  validUntil: number;
+  signature: string;
+  sourceUrl: string;
+}
+
+export interface ApprovedScriptsBody {
+  network: Network;
+  approvedSigner: string;
+  verify: ScriptApprovalEntryBody;
+  marketUpdate: ScriptApprovalEntryBody;
+  score: ScriptApprovalEntryBody;
 }
 
 export interface CommitmentsListBody {
