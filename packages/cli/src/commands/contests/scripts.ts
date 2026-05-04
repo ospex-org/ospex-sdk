@@ -1,5 +1,5 @@
 /**
- * `ospex contest scripts` — debug helper. Prints the script-approval
+ * `ospex contests scripts` — debug helper. Prints the script-approval
  * state pulled from core-api `/v1/contests/scripts/approved`. Hidden
  * from default --help; surfaces under --help when invoked.
  */
