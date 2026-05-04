@@ -20,7 +20,8 @@ import type {
   SpeculationParentContextBody,
   SpeculationsListBody,
 } from './types.js';
-import { toCommitment, toSpeculation } from './contests.js';
+import { toCommitment } from './commitments.js';
+import { toSpeculation } from './contests.js';
 
 export class SpeculationsApi {
   constructor(private readonly client: ApiClient) {}

@@ -22,6 +22,7 @@ import {
   deriveSpeculationKey,
   type OspexCommitmentMessage,
 } from '../chain/eip712.js';
+import { toCommitment } from '../api/commitments.js';
 import { assertSufficientAllowance } from './allowance.js';
 import { readNonceFloor } from './nonce.js';
 import {
@@ -127,8 +128,8 @@ export async function submit(
 
   // 6. POST /v1/commitments with idempotency-key header.
   // 7. On NONCE_TOO_LOW, refetch the floor and retry exactly once.
-  const post = async (msg: OspexCommitmentMessage, sig: Hex, hashHex: Hex): Promise<Commitment> =>
-    ctx.api.request<CommitmentBody>('/v1/commitments', {
+  const post = async (msg: OspexCommitmentMessage, sig: Hex, hashHex: Hex): Promise<Commitment> => {
+    const body = await ctx.api.request<CommitmentBody>('/v1/commitments', {
       method: 'POST',
       headers: { 'Idempotency-Key': hashHex },
       body: {
@@ -147,6 +148,8 @@ export async function submit(
         signature: sig,
       },
     });
+    return toCommitment(body);
+  };
 
   ctx.nonceCounter.observe(maker, speculationKey, nonce);
   try {

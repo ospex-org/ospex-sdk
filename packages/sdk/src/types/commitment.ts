@@ -34,6 +34,16 @@ export interface Commitment {
   source: string;
   network: string;
   nonceInvalidated: boolean;
+  /**
+   * Derived: status is `'open'` or `'partially_filled'`, the row isn't
+   * `nonceInvalidated`, `remainingRiskAmount > 0`, and the expiry is in
+   * the future. The canonical "is this commitment still matchable?"
+   * predicate — mirrors every precondition `matchCommitment` enforces
+   * on chain. Computed at API decode time, so the expiry comparison is
+   * a snapshot — a commitment held in memory across its expiry won't
+   * silently flip to `false` without re-fetching.
+   */
+  isLive: boolean;
   /** ISO-8601 string. */
   createdAt: string;
 }

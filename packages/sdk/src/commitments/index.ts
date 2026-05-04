@@ -16,7 +16,22 @@ import type { Commitment, CommitmentsListOptions } from '../types/commitment.js'
 import type { Hex } from '../types/signer.js';
 import { approve, type ApproveArgs, type ApproveResult } from './approve.js';
 import { cancel, type CancelResult } from './cancel.js';
+import {
+  cancelAllOnSpeculation,
+  type CancelAllOnSpeculationArgs,
+  type CancelAllOnSpeculationResult,
+} from './cancelAllOnSpeculation.js';
+import {
+  cancelOnchain,
+  type CancelOnchainResult,
+} from './cancelOnchain.js';
+import { getNonceFloor, type GetNonceFloorArgs } from './getNonceFloor.js';
 import { match, type MatchArgs, type MatchResult } from './match.js';
+import {
+  raiseMinNonce,
+  type RaiseMinNonceArgs,
+  type RaiseMinNonceResult,
+} from './raiseMinNonce.js';
 import { submit, type SubmitArgs, type SubmitResult } from './submit.js';
 
 export class Commitments {
@@ -53,9 +68,36 @@ export class Commitments {
   cancel(hash: Hex): Promise<CancelResult> {
     return cancel(this.ctx, hash);
   }
+
+  // ── On-chain cancel + nonce floor (M2.5) ──────────────────────────
+
+  cancelOnchain(hash: Hex): Promise<CancelOnchainResult> {
+    return cancelOnchain(this.ctx, hash);
+  }
+
+  raiseMinNonce(args: RaiseMinNonceArgs): Promise<RaiseMinNonceResult> {
+    return raiseMinNonce(this.ctx, args);
+  }
+
+  cancelAllOnSpeculation(
+    args: CancelAllOnSpeculationArgs,
+  ): Promise<CancelAllOnSpeculationResult> {
+    return cancelAllOnSpeculation(this.ctx, args);
+  }
+
+  getNonceFloor(args: GetNonceFloorArgs): Promise<bigint> {
+    return getNonceFloor(this.ctx, args);
+  }
 }
 
 export type { ApproveArgs, ApproveResult } from './approve.js';
 export type { CancelResult } from './cancel.js';
+export type {
+  CancelAllOnSpeculationArgs,
+  CancelAllOnSpeculationResult,
+} from './cancelAllOnSpeculation.js';
+export type { CancelOnchainResult } from './cancelOnchain.js';
+export type { GetNonceFloorArgs } from './getNonceFloor.js';
 export type { MatchArgs, MatchResult } from './match.js';
+export type { RaiseMinNonceArgs, RaiseMinNonceResult } from './raiseMinNonce.js';
 export type { SubmitArgs, SubmitResult } from './submit.js';

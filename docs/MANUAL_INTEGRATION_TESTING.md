@@ -198,6 +198,32 @@ For partial verification right now:
 
 ---
 
+## Section 10 — M2.5 on-chain cancel (mainnet or Amoy)
+
+Validates `commitments.cancelOnchain`, `commitments.raiseMinNonce`, `commitments.cancelAllOnSpeculation`, and `commitments.getNonceFloor`. The contract has no `AlreadyCancelled` revert path, so re-cancelling is a *success* — that's a deliberate observation point in 10.4.
+
+Prereq: a funded test wallet (gas + a few USDC for the submits) on the chosen network. Mainnet contract addresses are in `packages/sdk/src/contracts/addresses.ts`; Amoy uses the same surface so the section runs on either.
+
+| # | Step | Expected | Validates |
+|---|---|---|---|
+| 10.1 | `ospex commitments submit <contestId> <scorer> <line> upper 250 1000` (any open speculation) — record the printed hash. | `hash`, `status='open'`. | M2 submit (smoke). |
+| 10.2 | `ospex commitments cancel-onchain <hash>` | `txHash` printed; Polygonscan link; receipt status success. | `cancelOnchain` happy path. |
+| 10.3 | `ospex commitments show <hash>` (poll up to 30s) | `status: cancelled`. | Indexer `COMMITMENT_CANCELLED` projection latency. |
+| 10.4 | `ospex commitments cancel-onchain <hash>` (second time, same hash) | tx **succeeds** again — no `AlreadyCancelled` revert. | Idempotency expectation documented in `cancelOnchain` jsdoc. |
+| 10.5 | Submit a second commitment, get it partially matched (use 5.x flow with a taker). Then `cancel-onchain <hash>`. | tx success; row eventually shows `status='cancelled'` while `filled_risk_amount > 0` is preserved. | Asymmetry between cancel and partial fill — contract is the arbiter. |
+| 10.6 | Have a second wallet attempt `cancel-onchain <hash>` against the original wallet's commitment. | `OspexChainError` with `reason: 'NotCommitmentMaker'`; no gas wasted (estimate fails). | `NotCommitmentMaker` selector → typed `reason`. |
+| 10.7 | Submit ≥2 commitments on the same speculation. Run `ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks> --dry-run`. | `invalidatedCount` matches the number of open rows. No tx sent. | Dry-run path + speculationKey filter. |
+| 10.8 | Run 10.7 without `--dry-run`. | tx succeeds; `MinNonceUpdated` event in receipt; both rows show `nonceInvalidated=true` within 30s; `status` stays `'open'`. | `cancelAllOnSpeculation` end-to-end + indexer `nonce_invalidated` projection. |
+| 10.9 | Run `cancel-all` again, this time passing `--new-min-nonce <n>` where `n` ≤ the floor printed by 10.10 (or the `newMinNonce` returned by 10.8). | `OspexChainError` with `reason: 'NonceMustIncrease'`. | `NonceMustIncrease` mapping. The default-path computation auto-bumps the floor by 1 every run, so the explicit override is needed to deterministically hit this revert. |
+| 10.10 | `ospex commitments nonce-floor --maker <addr> --contest-id <id> --scorer <addr> --line <ticks>` | Prints the post-10.8 newMinNonce as `minNonce`. | `getNonceFloor` read utility. |
+| 10.11 | Submit a fresh commitment, then `ospex commitments cancel <hash> --also-onchain`. | DELETE returns `200`; on-chain cancel emits `CommitmentCancelled`; `status='cancelled'`. | Composed off-chain + on-chain cancel — recommended pattern from `CANCEL_FLOW.md`. |
+
+**Pass criterion**: 10.1–10.4, 10.7–10.10, and 10.11 succeed end-to-end. 10.5 (partial-fill cancel) and 10.6 (third-party reject) require additional wallets / takers — defer to "manual verification at next two-wallet test cycle" in the release ticket if not feasible at PR time.
+
+A read-only automated smoke for `getNonceFloor` lives at `packages/sdk/tests/integration/onchain-cancel.test.ts` and runs under `OSPEX_INTEGRATION=1` with `OSPEX_TEST_RPC_URL`. Set `OSPEX_TEST_PRIVATE_KEY` + `OSPEX_TEST_LIVE_HASH` to additionally run 10.2 and 10.4 automatically.
+
+---
+
 ## Section 8 — Cross-version smoke (after npm publish only)
 
 For when the SDK actually ships to npm. Run from a fresh shell with no SDK in `node_modules`:
@@ -227,6 +253,7 @@ Copy this into the release ticket:
 [ ] Section 6 — Partial fill
 [ ] Section 7 — Failure modes
 [ ] Section 9 — M3 settle + claim (or manual-verification-deferred note)
+[ ] Section 10 — M2.5 on-chain cancel (10.5 / 10.6 may defer to two-wallet cycle)
 [ ] Section 8 — Cross-version smoke (post-publish only)
 
 Operator: ____________

@@ -78,4 +78,13 @@ describe('errors', () => {
     expect(err.txHash).toBe('0xdeadbeef');
     expect((err as { cause?: unknown }).cause).toBe(cause);
   });
+
+  it('OspexChainError carries the typed reason discriminator (M2.5)', () => {
+    const err = new OspexChainError('cancel reverted', { reason: 'NotCommitmentMaker' });
+    expect(err.code).toBe('CHAIN_ERROR');
+    expect(err.reason).toBe('NotCommitmentMaker');
+    // No reason → undefined, doesn't leak into `code`.
+    const plain = new OspexChainError('something else');
+    expect(plain.reason).toBeUndefined();
+  });
 });

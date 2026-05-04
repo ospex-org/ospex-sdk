@@ -13,7 +13,7 @@
  * `api/speculations.ts` and `client.speculations`.
  */
 import type { ApiClient } from './client.js';
-import type { Commitment } from '../types/commitment.js';
+import { toCommitment } from './commitments.js';
 import type {
   ApprovedScripts,
   Contest,
@@ -23,7 +23,6 @@ import type {
 } from '../types/contest.js';
 import type {
   ApprovedScriptsBody,
-  CommitmentBody,
   ContestBody,
   ContestsListBody,
   ScriptApprovalEntryBody,
@@ -104,10 +103,6 @@ export function toSpeculation(body: SpeculationBody): Speculation {
   if (body.homeLine !== undefined) out.homeLine = body.homeLine;
   if (body.orderbook !== undefined) out.orderbook = body.orderbook.map(toCommitment);
   return out;
-}
-
-export function toCommitment(body: CommitmentBody): Commitment {
-  return body satisfies Commitment;
 }
 
 function toApprovedScripts(body: ApprovedScriptsBody): ApprovedScripts {

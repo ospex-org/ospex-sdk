@@ -127,18 +127,37 @@ export class OspexAllowanceError extends OspexError {
 }
 
 /**
+ * Discriminator for known MatchingModule (and other Ospex contract)
+ * reverts. Set on `OspexChainError.reason` when the SDK could decode
+ * the revert against a known custom-error selector. Consumers can
+ * `switch (err.reason)` for typed handling without parsing strings.
+ */
+export type OspexChainErrorReason =
+  | 'NotCommitmentMaker'
+  | 'NonceMustIncrease';
+
+/**
  * On-chain interaction failed — either an RPC transport error, a
- * contract revert, or a transaction that reverted on inclusion. Carries
- * an optional `revertReason` string when the SDK could decode one;
- * raw bytes are always available via `cause`.
+ * contract revert, or a transaction that reverted on inclusion.
+ *
+ * `reason` is set when the SDK could decode a known custom error
+ * (e.g. `MatchingModule__NotCommitmentMaker`). `revertReason` is
+ * a free-form string for legacy / unknown reverts. `txHash` is set
+ * on receipt-level reverts so the caller can inspect on Polygonscan.
  */
 export class OspexChainError extends OspexError {
+  readonly reason: OspexChainErrorReason | undefined;
   readonly revertReason: string | undefined;
   readonly txHash: string | undefined;
 
   constructor(
     message: string,
-    init?: { revertReason?: string; txHash?: string; cause?: unknown },
+    init?: {
+      reason?: OspexChainErrorReason;
+      revertReason?: string;
+      txHash?: string;
+      cause?: unknown;
+    },
   ) {
     super(
       'CHAIN_ERROR',
@@ -146,6 +165,7 @@ export class OspexChainError extends OspexError {
       init?.cause !== undefined ? { cause: init.cause } : undefined,
     );
     this.name = 'OspexChainError';
+    this.reason = init?.reason;
     this.revertReason = init?.revertReason;
     this.txHash = init?.txHash;
   }

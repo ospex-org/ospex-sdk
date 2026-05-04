@@ -27,10 +27,16 @@ ospex wallet address                       # print the keystore's address
 ospex odds watch <contestId>               # live odds stream (line-delimited JSON with --json)
 
 # M2 chain writes — require ospex init + ospex wallet import
-ospex commitments approve max              # approve PositionModule for unlimited USDC
+ospex commitments approve max                                # approve PositionModule for unlimited USDC
 ospex commitments submit <contestId> <scorer> <lineTicks> upper 250 1000
-ospex commitments match <commitment-hash>  # match an existing maker commitment
-ospex commitments cancel <commitment-hash> # off-chain cancel via signed DELETE
+ospex commitments match <commitment-hash>                    # match an existing maker commitment
+ospex commitments cancel <commitment-hash>                   # off-chain cancel via signed DELETE
+ospex commitments cancel <commitment-hash> --also-onchain    # off-chain DELETE + authoritative on-chain cancel (M2.5)
+ospex commitments cancel-onchain <commitment-hash>           # on-chain cancel only (M2.5)
+ospex commitments cancel-all --contest-id <id> \             # bulk-cancel via raiseMinNonce (M2.5)
+  --scorer <addr> --line <ticks> [--dry-run]
+ospex commitments nonce-floor --maker <addr> \               # read on-chain nonce floor (M2.5)
+  --contest-id <id> --scorer <addr> --line <ticks>
 ```
 
 When `npm install -g @ospex/cli` is published this becomes a one-step install — for now use the workspace-link flow above.
@@ -109,6 +115,12 @@ There is intentionally no public-RPC default. `ospex init` requires you to enter
 
 Both maker and taker must approve **`PositionModule`** (NOT MatchingModule) for USDC. MatchingModule never custodies funds — it calls `PositionModule.recordFill`, which is where the `safeTransferFrom` happens. The SDK throws `OspexAllowanceError` with the structured shortfall when allowance is short; the CLI prompts to approve and retries.
 
+### Sovereign cancel — off-chain DELETE vs. on-chain cancel
+
+Off-chain `commitments.cancel(hash)` (DELETE `/v1/commitments/:hash`) marks the row cancelled in the API so the relay stops surfacing it. It does **not** prevent a taker who already holds the signed payload from matching the commitment — the contract still treats it as valid until `s_cancelledCommitments[hash]` flips on chain. For an authoritative cancel, use `commitments.cancelOnchain(hash)` (M2.5) which calls `MatchingModule.cancelCommitment(commitment)` directly. The CLI's `commitments cancel <hash> --also-onchain` runs both in sequence — the recommended pattern.
+
+For bulk cancel ("revoke every order I have on this speculation"), `commitments.cancelAllOnSpeculation({ contestId, scorer, lineTicks })` raises the maker's on-chain nonce floor so all sub-floor commitments become unmatchable in a single tx. The default `newMinNonce` is computed from `max(onChainFloor, lastInProcess, supabaseMaxStored) + 1` — override via the optional `newMinNonce` arg. The contract has no `AlreadyCancelled` revert path; calling `cancelOnchain` on a hash that's already cancelled is a no-op success, so don't infer "first cancel" from tx success.
+
 ## CLI command reference
 
 | Command | What it does |
@@ -129,7 +141,10 @@ Both maker and taker must approve **`PositionModule`** (NOT MatchingModule) for 
 | `ospex commitments approve <amount\|max>` | Approve PositionModule for USDC (M2). |
 | `ospex commitments submit <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>` | Sign + POST a commitment (M2). Prompts to approve if allowance is short. |
 | `ospex commitments match <hash> [--risk <amount>]` | Take a commitment as the taker (M2). Prompts to approve. |
-| `ospex commitments cancel <hash>` | Off-chain cancel via signed DELETE (M2). |
+| `ospex commitments cancel <hash> [--also-onchain]` | Off-chain cancel via signed DELETE (M2). With `--also-onchain` (M2.5) additionally calls `MatchingModule.cancelCommitment` for an authoritative cancel. |
+| `ospex commitments cancel-onchain <hash>` | On-chain cancel only — `MatchingModule.cancelCommitment(commitment)` (M2.5). Authoritative; cannot be reverted off-chain. |
+| `ospex commitments cancel-all --contest-id --scorer --line [--new-min-nonce] [--dry-run]` | Bulk-cancel every open commitment from this maker on one speculation by raising the on-chain nonce floor (M2.5). |
+| `ospex commitments nonce-floor --maker --contest-id --scorer --line` | Read the current on-chain `s_minNonces[maker][specKey]` (M2.5). |
 | `ospex positions list <address>` | Position history for an address. |
 | `ospex positions status <address>` | Active vs. claimable categorization. |
 | `ospex leaderboard show` | Top entries on the active leaderboard. |
@@ -151,7 +166,7 @@ What 0600 actually buys you: the file is unreadable by *other* users on the host
 
 - **M1**: reads, wallet plumbing, Realtime odds. No on-chain writes.
 - **M2 (this release)**: `commitments.{submit, match, approve, cancel}`, contract ABIs under `packages/sdk/src/contracts/abi/`, `rpcUrl` required for chain operations, allowance prompts in the CLI.
-- **M2.5**: on-chain `cancelCommitment` + `raiseMinNonce` (bulk cancel-by-nonce), multi-process nonce coordination helpers.
+- **M2.5**: on-chain `cancelCommitment` + `raiseMinNonce` (bulk cancel-by-speculation) — sovereign cancel that blocks even takers who already hold the signed payload. Adds `cancelOnchain`, `raiseMinNonce`, `cancelAllOnSpeculation`, `getNonceFloor` to `client.commitments`; CLI mirrors with `cancel-onchain`, `cancel-all`, `nonce-floor`, plus `--also-onchain` on the existing `cancel`. Recommended pattern (per `ospex-core-api/docs/CANCEL_FLOW.md`): off-chain DELETE *and* on-chain cancel — DELETE stops new takers, on-chain cancel stops takers who already have the payload.
 - **M3**: Position lifecycle (claims, payouts), event-driven matches.
 - **M4**: Contest creation surface for ops tooling.
 

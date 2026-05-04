@@ -14,6 +14,7 @@
 import { encodeFunctionData, type Hash, type TransactionReceipt } from 'viem';
 import { matchingModuleAbi } from '../contracts/abi/index.js';
 import { OspexValidationError } from '../errors.js';
+import { toCommitment } from '../api/commitments.js';
 import { assertSufficientAllowance } from './allowance.js';
 import { buildSignAndSend } from './sendTx.js';
 import type { CommitmentsContext } from './context.js';
@@ -160,5 +161,5 @@ export async function match(
     data,
   });
 
-  return { txHash, receipt, takerRisk, fillMakerRisk, commitment };
+  return { txHash, receipt, takerRisk, fillMakerRisk, commitment: toCommitment(commitment) };
 }
