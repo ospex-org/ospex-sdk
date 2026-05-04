@@ -8,8 +8,9 @@
  *
  * `OSPEX_KEYSTORE_PATH` overrides the keystore file location entirely —
  * this is the recommended bring-your-own-wallet path: point Ospex at a
- * Foundry-managed keystore (`cast wallet new <name>` or `cast wallet
- * import <name>`) so Ospex never handles the raw private key.
+ * Foundry-managed keystore (`cast wallet new ~/.foundry/keystores <name>`
+ * for a fresh key or `cast wallet import <name>` for an existing one)
+ * so Ospex never handles the raw private key.
  *
  * Tested via the OSPEX_HOME env var, which overrides the home directory
  * lookup so tests can point at a tmp dir without monkey-patching `os`.

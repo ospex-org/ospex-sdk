@@ -157,11 +157,13 @@ Units:
 
 The CLI signs the EIP-712 commitment with your Foundry passphrase, POSTs it to the API, and prints the commitment hash plus `status: open`.
 
-You can now see your commitment on the orderbook:
+You can now see your commitment on the orderbook (replace `<yourAddress>` with the address Foundry printed in step 2):
 
 ```bash
-ospex commitments list --maker $(ospex wallet address)
+ospex commitments list --maker <yourAddress>
 ```
+
+If you've piped scripts in mind: `ospex wallet address --json` emits machine-readable JSON on stdout (`{"address":"0x..."}`) while the passphrase prompt goes to stderr, so `ospex wallet address --json | jq -r .address` works cleanly.
 
 ## What's next
 

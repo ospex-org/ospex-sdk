@@ -3,6 +3,11 @@
  * — a passphrase prompt is the only interactive surface we need, and
  * raw-stdin is a few dozen lines.
  *
+ * **Prompts and echoed input go to stderr, never stdout.** This keeps
+ * `--json` output clean: callers can pipe `ospex … --json | jq …` even
+ * when a passphrase prompt fires, because the prompt fires on stderr
+ * and the JSON payload is the only thing on stdout.
+ *
  * These functions assume a TTY. Non-TTY callers (CI, piped stdin) should
  * provide credentials via env vars instead.
  */
@@ -12,14 +17,14 @@ const CTRL_D = String.fromCharCode(4);
 const BACKSPACE = String.fromCharCode(127);
 
 export async function promptText(prompt: string): Promise<string> {
-  process.stdout.write(prompt);
+  process.stderr.write(prompt);
   return readLine({ hidden: false });
 }
 
 export async function promptHidden(prompt: string): Promise<string> {
-  process.stdout.write(prompt);
+  process.stderr.write(prompt);
   const value = await readLine({ hidden: true });
-  process.stdout.write('\n');
+  process.stderr.write('\n');
   return value;
 }
 
@@ -50,7 +55,7 @@ export async function promptYesNo(prompt: string, defaultYes = true): Promise<bo
     if (raw === '') return defaultYes;
     if (raw === 'y' || raw === 'yes') return true;
     if (raw === 'n' || raw === 'no') return false;
-    process.stdout.write('Please answer y or n.\n');
+    process.stderr.write('Please answer y or n.\n');
   }
 }
 
@@ -64,7 +69,7 @@ export async function promptValue(prompt: string, defaultValue?: string): Promis
     const raw = (await promptText(`${prompt}${suffix}`)).trim();
     if (raw !== '') return raw;
     if (defaultValue !== undefined) return defaultValue;
-    process.stdout.write('A value is required.\n');
+    process.stderr.write('A value is required.\n');
   }
 }
 
@@ -118,7 +123,7 @@ function readLine(options: ReadLineOptions): Promise<string> {
           continue;
         }
         buf += ch;
-        if (!options.hidden) process.stdout.write(ch);
+        if (!options.hidden) process.stderr.write(ch);
       }
     };
 
