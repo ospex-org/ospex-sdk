@@ -23,7 +23,8 @@ yarn workspace @ospex/cli link             # adds `ospex` to your PATH (dev mode
 Wallet — Ospex never asks for your private key. Set up Foundry's keystore and point Ospex at it:
 
 ```bash
-cast wallet new ospex-test                                  # Foundry generates the key, prints only the address
+mkdir -p ~/.foundry/keystores
+cast wallet new ~/.foundry/keystores ospex-test             # Foundry generates the key, prints only the address
 export OSPEX_KEYSTORE_PATH=~/.foundry/keystores/ospex-test  # PowerShell: $env:OSPEX_KEYSTORE_PATH = "..."
 ```
 
@@ -167,7 +168,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex wallet import [--force]` | Encrypts a private key into `~/.ospex/keystore.json`. |
 | `ospex wallet unlock` | Caches the decrypted key for 15 minutes in `~/.ospex/session`. |
 | `ospex wallet lock` | Deletes the cached unlocked key. |
-| `ospex wallet address` | Prints the keystore's address (no decryption needed). |
+| `ospex wallet address` | Prints the keystore's address. Skips decryption if the keystore JSON includes a top-level `address`; Foundry-produced keystores omit it, so the passphrase is requested in that case. |
 
 Every command supports `--json` for machine-readable output.
 

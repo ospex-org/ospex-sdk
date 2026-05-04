@@ -50,11 +50,19 @@ The rest of the guide writes `ospex` for the binary; substitute `npx ospex` unti
 
 ## 2. Create or import a wallet via Foundry
 
-**Brand-new wallet** — Foundry generates the key in memory and never displays it:
+**Brand-new wallet** — Foundry generates the key in memory and never displays it. The first arg is the keystores *directory*; the second is the file name:
 
 ```bash
-cast wallet new ospex-test
-# Prompts for a passphrase. Prints only the address.
+mkdir -p ~/.foundry/keystores
+cast wallet new ~/.foundry/keystores ospex-test
+# Prompts for a passphrase. Prints only the address. Writes to ~/.foundry/keystores/ospex-test.
+```
+
+PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.foundry\keystores" | Out-Null
+cast wallet new "$env:USERPROFILE\.foundry\keystores" ospex-test
 ```
 
 **Existing private key** — Foundry takes the key over hidden input, encrypts it with your passphrase, and never shows it again:
@@ -62,6 +70,7 @@ cast wallet new ospex-test
 ```bash
 cast wallet import ospex-test --interactive
 # Hidden prompt for the PK, then a passphrase. Prints the address.
+# Auto-resolves to ~/.foundry/keystores/ospex-test.
 ```
 
 Either way, Foundry now owns an encrypted v3 keystore at `~/.foundry/keystores/ospex-test`.
@@ -102,7 +111,7 @@ ospex contests list --hours 168   # Should list upcoming contests.
 ospex wallet address              # Prompts for the Foundry passphrase. Prints your address.
 ```
 
-If `ospex wallet address` prompts you and prints the same address Foundry showed you in step 2, the wiring is correct.
+If `ospex wallet address` prompts you and prints the same address Foundry showed you in step 2, the wiring is correct. (Foundry-produced keystores omit the top-level `address` field, so Ospex derives it via the passphrase. Keystores produced by the legacy `ospex wallet import` flow include the field and skip the prompt.)
 
 ## 6. Place a commitment
 

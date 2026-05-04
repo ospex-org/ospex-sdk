@@ -60,9 +60,11 @@ node packages/cli/dist/index.js <command>    # run CLI without linking
 
 ## Wallet — Foundry-first by design
 
-The SDK and CLI deliberately do not handle raw private keys. The recommended setup is `cast wallet new <name>` (or `cast wallet import <name>`), then `export OSPEX_KEYSTORE_PATH=~/.foundry/keystores/<name>`. Ospex consumes a standard v3 keystore and prompts for the Foundry passphrase only when a signature is needed. The user-facing walkthrough is [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). This positioning keeps key-handling liability outside Ospex — Foundry's keystore is the trusted boundary.
+The SDK and CLI deliberately do not handle raw private keys. The recommended setup is `cast wallet new ~/.foundry/keystores <name>` (note the dir-then-name positional form — `cast wallet new <name>` alone treats `<name>` as a directory and fails on cast 1.5.x) for a brand-new key, or `cast wallet import <name>` for an existing one. Then `export OSPEX_KEYSTORE_PATH=~/.foundry/keystores/<name>`. Ospex consumes a standard v3 keystore and prompts for the Foundry passphrase only when a signature is needed. The user-facing walkthrough is [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). This positioning keeps key-handling liability outside Ospex — Foundry's keystore is the trusted boundary.
 
 `OSPEX_KEYSTORE_PATH` (precedence: env > default `~/.ospex/keystore.json`) is the override seam. `OSPEX_HOME` still moves the rest of the `.ospex/` directory; the keystore-path override is independent so a Foundry keystore can sit outside the Ospex home directory without disturbing config or session paths.
+
+Foundry-produced keystores omit the top-level `address` field that ethers' `encryptKeystoreJson` writes. `lib/keystore.ts:getKeystoreAddressIfPresent` returns null in that case; `wallet/address.ts` falls back to a passphrase-driven `KeystoreSigner.unlock(...).getAddress()` call. Any future code that wants the address cheaply must use the helper and handle the null case the same way.
 
 ## CLI session-cache trade-off (legacy path)
 
