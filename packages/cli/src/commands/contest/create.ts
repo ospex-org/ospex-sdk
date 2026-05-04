@@ -21,7 +21,10 @@ const optionsSchema = z.object({
   jsonoddsId: z.string().min(1).optional(),
   subscriptionId: z.string().regex(/^[0-9]+$/).optional(),
   gasLimit: z.coerce.number().int().positive().max(10_000_000).optional(),
-  noWait: z.boolean().optional(),
+  // Commander's `--no-wait` attribute name is `wait` (default true).
+  // The schema must mirror commander's naming or Zod silently strips the
+  // value and the wait branch always runs.
+  wait: z.boolean().optional(),
   json: z.boolean().optional(),
 });
 
@@ -74,6 +77,44 @@ export const contestCreateCommand = new Command('create')
       result = await tryCreate();
     }
 
+    // Pretty-print the create result immediately; defer JSON emission
+    // to the end so a single combined document covers create +
+    // verification. Two separate JSON docs on stdout aren't parseable
+    // by automation.
+    if (opts.json !== true) {
+      process.stdout.write(
+        `Contest ${result.contestId} created (tx ${result.txHash}).\n` +
+          (result.requestId !== null ? `Chainlink requestId: ${result.requestId}\n` : ''),
+      );
+    }
+
+    const shouldWait = opts.wait !== false;
+    let verification: { contestId: string; status: string } | null = null;
+    let verificationError: unknown = null;
+
+    if (shouldWait) {
+      if (opts.json !== true) {
+        process.stdout.write('Waiting for Chainlink verification (≤120s)...\n');
+      }
+      try {
+        const verified = await client.contests.waitForVerified(result.contestId);
+        verification = {
+          contestId: verified.contestId.toString(),
+          status: verified.status,
+        };
+        if (opts.json !== true) {
+          process.stdout.write(`Verified. Status: ${verified.status}.\n`);
+        }
+      } catch (err) {
+        verificationError = err;
+        if (opts.json !== true) {
+          process.stdout.write(
+            `Verification did not complete in time. Run \`ospex contest wait-verified ${result.contestId}\` to keep watching.\n`,
+          );
+        }
+      }
+    }
+
     if (opts.json === true) {
       formatOutput(
         {
@@ -81,39 +122,13 @@ export const contestCreateCommand = new Command('create')
           txHash: result.txHash,
           requestId: result.requestId,
           status: result.receipt.status,
+          verification,
         },
         { json: true },
       );
-    } else {
-      process.stdout.write(
-        `Contest ${result.contestId} created (tx ${result.txHash}).\n` +
-          (result.requestId !== null ? `Chainlink requestId: ${result.requestId}\n` : ''),
-      );
     }
 
-    if (opts.noWait === true) return;
-
-    if (opts.json !== true) {
-      process.stdout.write('Waiting for Chainlink verification (≤120s)...\n');
-    }
-    try {
-      const verified = await client.contests.waitForVerified(result.contestId);
-      if (opts.json === true) {
-        formatOutput(
-          { contestId: verified.contestId.toString(), status: verified.status },
-          { json: true },
-        );
-      } else {
-        process.stdout.write(`Verified. Status: ${verified.status}.\n`);
-      }
-    } catch (err) {
-      if (opts.json !== true) {
-        process.stdout.write(
-          `Verification did not complete in time. Run \`ospex contest wait-verified ${result.contestId}\` to keep watching.\n`,
-        );
-      }
-      throw err;
-    }
+    if (verificationError !== null) throw verificationError;
   });
 
 async function handleContestAllowance(
