@@ -58,11 +58,19 @@ node packages/cli/dist/index.js <command>    # run CLI without linking
 - Errors in `packages/sdk/src/errors.ts`.
 - KeystoreSigner in `packages/sdk/src/signers/keystore.ts` — exposed via subpath, NOT the main barrel.
 
-## CLI session-cache trade-off
+## Wallet — Foundry-first by design
 
-`ospex wallet unlock` writes the decrypted private key to `~/.ospex/session` plain JSON, mode 0600, 15-minute expiry. The parent dir is mode 0700. Both are written atomically via `lib/secure-fs.ts` (temp + rename + defensive chmod) so overwriting an existing path tightens the mode rather than inheriting it.
+The SDK and CLI deliberately do not handle raw private keys. The recommended setup is `cast wallet new ~/.foundry/keystores <name>` (note the dir-then-name positional form — `cast wallet new <name>` alone treats `<name>` as a directory and fails on cast 1.5.x) for a brand-new key, or `cast wallet import <name>` for an existing one. Then `export OSPEX_KEYSTORE_PATH=~/.foundry/keystores/<name>`. Ospex consumes a standard v3 keystore and prompts for the Foundry passphrase only when a signature is needed. The user-facing walkthrough is [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). This positioning keeps key-handling liability outside Ospex — Foundry's keystore is the trusted boundary.
 
-0600 keeps the file unreadable by other users on the host but does not protect against any process running as the same user. OS-keychain integration (DPAPI / Keychain / libsecret) is the higher-assurance option and is out of scope for v1. If that matters for the use case at hand, run write commands without `wallet unlock` — each one prompts for the passphrase inline and never writes the decrypted key to disk. Documented in `packages/cli/src/lib/client.ts`.
+`OSPEX_KEYSTORE_PATH` (precedence: env > default `~/.ospex/keystore.json`) is the override seam. `OSPEX_HOME` still moves the rest of the `.ospex/` directory; the keystore-path override is independent so a Foundry keystore can sit outside the Ospex home directory without disturbing config or session paths.
+
+Foundry-produced keystores omit the top-level `address` field that ethers' `encryptKeystoreJson` writes. `lib/keystore.ts:getKeystoreAddressIfPresent` returns null in that case; `wallet/address.ts` falls back to a passphrase-driven `KeystoreSigner.unlock(...).getAddress()` call. Any future code that wants the address cheaply must use the helper and handle the null case the same way.
+
+## CLI session-cache trade-off (legacy path)
+
+`ospex wallet import` / `unlock` / `lock` and the on-disk session cache predate the Foundry-first stance and are kept for backwards compatibility. New users should not be steered to them. `ospex wallet unlock` writes the decrypted private key to `~/.ospex/session` plain JSON, mode 0600, 15-minute expiry. The parent dir is mode 0700. Both are written atomically via `lib/secure-fs.ts` (temp + rename + defensive chmod) so overwriting an existing path tightens the mode rather than inheriting it.
+
+0600 keeps the file unreadable by other users on the host but does not protect against any process running as the same user. The Foundry path side-steps this entirely — no decrypted material is persisted; each write prompts for the passphrase. Documented in `packages/cli/src/lib/client.ts`.
 
 ## Vocabulary — match the contracts
 
