@@ -55,16 +55,24 @@ function makeFetch(rows: CommitmentBody[]): typeof globalThis.fetch {
 }
 
 describe('Commitment.isLive predicate', () => {
+  // Mirrors the contract's matchCommitment preconditions; partially_filled
+  // is takeable liquidity, so it MUST be live when remaining > 0 and the
+  // expiry is in the future (the core API treats open|partially_filled
+  // identically for the open book).
   const cases: Array<{
     name: string;
     overrides: Partial<CommitmentBody>;
     expectIsLive: boolean;
   }> = [
-    { name: 'open + not invalidated', overrides: { status: 'open', nonceInvalidated: false }, expectIsLive: true },
+    { name: 'open + not invalidated + remaining + future expiry', overrides: { status: 'open', nonceInvalidated: false }, expectIsLive: true },
     { name: 'open + invalidated', overrides: { status: 'open', nonceInvalidated: true }, expectIsLive: false },
-    { name: 'partially_filled + not invalidated', overrides: { status: 'partially_filled', nonceInvalidated: false }, expectIsLive: false },
-    { name: 'partially_filled + invalidated', overrides: { status: 'partially_filled', nonceInvalidated: true }, expectIsLive: false },
-    { name: 'filled', overrides: { status: 'filled' }, expectIsLive: false },
+    { name: 'partially_filled + not invalidated + remaining + future expiry', overrides: { status: 'partially_filled', nonceInvalidated: false, filledRiskAmount: '300000', remainingRiskAmount: '700000' }, expectIsLive: true },
+    { name: 'partially_filled + invalidated', overrides: { status: 'partially_filled', nonceInvalidated: true, filledRiskAmount: '300000', remainingRiskAmount: '700000' }, expectIsLive: false },
+    { name: 'partially_filled + zero remaining (defensive)', overrides: { status: 'partially_filled', filledRiskAmount: '1000000', remainingRiskAmount: '0' }, expectIsLive: false },
+    { name: 'open + remainingRiskAmount = 0 (shouldn\'t exist, defensive)', overrides: { status: 'open', remainingRiskAmount: '0' }, expectIsLive: false },
+    { name: 'open + expiry in the past', overrides: { status: 'open', expiry: '2000-01-01T00:00:00.000Z' }, expectIsLive: false },
+    { name: 'open + null expiry (legacy/indexer-only row)', overrides: { status: 'open', expiry: null }, expectIsLive: false },
+    { name: 'filled', overrides: { status: 'filled', remainingRiskAmount: '0', filledRiskAmount: '1000000' }, expectIsLive: false },
     { name: 'cancelled', overrides: { status: 'cancelled' }, expectIsLive: false },
     { name: 'expired', overrides: { status: 'expired' }, expectIsLive: false },
   ];

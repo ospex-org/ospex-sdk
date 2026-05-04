@@ -63,7 +63,15 @@ function makeRow(overrides: RowOverrides): CommitmentBody {
 }
 
 interface FakeOpts {
+  /**
+   * If `pageSize` is provided, `rows` is sliced into pages of that
+   * size and the API mock honors `query.offset` to return the matching
+   * slice. `hasMore` is set when more rows exist past `offset+pageSize`.
+   * Otherwise (the legacy path) all rows come back in a single page
+   * with `hasMore: false`.
+   */
   rows: CommitmentBody[];
+  pageSize?: number;
   onChainFloor: bigint;
   preObserve?: { speculationKey: string; nonce: bigint };
 }
@@ -71,6 +79,7 @@ interface FakeOpts {
 function fakeContext(opts: FakeOpts): {
   ctx: CommitmentsContext;
   sentTxs: { to: Hex; data: Hex }[];
+  apiCallCount: () => number;
 } {
   const txHash = ('0x' + 'bb'.repeat(32)) as Hash;
   const receipt = {
@@ -80,6 +89,7 @@ function fakeContext(opts: FakeOpts): {
     logs: [],
   } as unknown as TransactionReceipt;
   const sentTxs: { to: Hex; data: Hex }[] = [];
+  let apiCalls = 0;
 
   // We need to capture the calldata that gets signed so we can decode
   // it and assert the on-chain newMinNonce. We do that via the signer
@@ -109,7 +119,25 @@ function fakeContext(opts: FakeOpts): {
 
   const ctx: CommitmentsContext = {
     api: {
-      request: async (_path: string, _init?: unknown): Promise<unknown> => {
+      request: async (
+        _path: string,
+        init?: { query?: Record<string, string | number | boolean | undefined> },
+      ): Promise<unknown> => {
+        apiCalls += 1;
+        const offset = Number(init?.query?.offset ?? 0);
+        if (opts.pageSize !== undefined) {
+          const page = opts.rows.slice(offset, offset + opts.pageSize);
+          const body: CommitmentsListBody = {
+            commitments: page,
+            pagination: {
+              limit: opts.pageSize,
+              offset,
+              total: opts.rows.length,
+              hasMore: offset + page.length < opts.rows.length,
+            },
+          };
+          return body;
+        }
         const body: CommitmentsListBody = {
           commitments: opts.rows,
           pagination: { limit: 1000, offset: 0, total: opts.rows.length, hasMore: false },
@@ -126,7 +154,7 @@ function fakeContext(opts: FakeOpts): {
     requireChainClient: () => publicClient,
     nonceCounter,
   };
-  return { ctx, sentTxs };
+  return { ctx, sentTxs, apiCallCount: () => apiCalls };
 }
 
 function decodeRaiseMinNonceCall(data: Hex): { newMinNonce: bigint } {
@@ -224,5 +252,43 @@ describe('commitments.cancelAllOnSpeculation', () => {
     });
     const result = await cancelAllOnSpeculation(ctx, { ...baseArgs, newMinNonce: 50n });
     expect(result.invalidatedCount).toBe(0);
+  });
+
+  it('paginates past page 1 — the highest nonce on page 2 wins the supabaseMaxStored candidate', async () => {
+    // Maker has 7 commitments on this speculation. With pageSize=3, the
+    // SDK has to fetch 3 pages to see them all. The highest nonce
+    // (50_000) lives on page 2, so a single-page implementation would
+    // pick newMinNonce=2_001 (max of page-1 nonces=2000, +1) and miss
+    // the 50_000 commitment entirely. With pagination, newMinNonce
+    // should be 50_001.
+    const rows: CommitmentBody[] = [];
+    // Page 1: nonces 1000, 2000, 1500
+    for (const n of [1000, 2000, 1500]) rows.push(makeRow({ nonce: String(n), status: 'open' }));
+    // Page 2: nonces 50000, 3000, 4000  ← max lives here
+    for (const n of [50_000, 3000, 4000]) rows.push(makeRow({ nonce: String(n), status: 'open' }));
+    // Page 3: just one row
+    rows.push(makeRow({ nonce: '5000', status: 'open' }));
+
+    const { ctx, apiCallCount } = fakeContext({
+      onChainFloor: 0n,
+      rows,
+      pageSize: 3,
+    });
+    const result = await cancelAllOnSpeculation(ctx, baseArgs);
+    expect(result.newMinNonce).toBe(50_001n);
+    expect(result.invalidatedCount).toBe(7);
+    // 3 GET requests (3-3-1) is the expected pagination cost.
+    expect(apiCallCount()).toBe(3);
+  });
+
+  it('stops paginating when hasMore=false', async () => {
+    const rows: CommitmentBody[] = [
+      makeRow({ nonce: '100', status: 'open' }),
+      makeRow({ nonce: '200', status: 'open' }),
+    ];
+    const { ctx, apiCallCount } = fakeContext({ onChainFloor: 0n, rows, pageSize: 1000 });
+    await cancelAllOnSpeculation(ctx, baseArgs);
+    // 2 rows fit in one 1000-page → exactly 1 API call.
+    expect(apiCallCount()).toBe(1);
   });
 });

@@ -63,6 +63,30 @@ export class CommitmentsApi {
 export function toCommitment(body: CommitmentBody): Commitment {
   return {
     ...body,
-    isLive: body.status === 'open' && !body.nonceInvalidated,
+    isLive: computeIsLive(body),
   };
+}
+
+/**
+ * Mirrors the contract's matchCommitment preconditions:
+ *   1. status is 'open' or 'partially_filled' (both have remaining
+ *      maker risk and weren't cancelled). The core API treats these
+ *      identically as takeable liquidity.
+ *   2. nonce ≥ s_minNonces[maker][specKey] (i.e. not flagged
+ *      `nonceInvalidated` by the indexer's MIN_NONCE_UPDATED projection).
+ *   3. remainingRiskAmount > 0. A 'partially_filled' row with zero
+ *      remaining shouldn't exist (the indexer should flip to 'filled'),
+ *      but the contract reverts on zero remaining anyway — be defensive.
+ *   4. expiry is in the future. The contract reverts with
+ *      MatchingModule__CommitmentExpired otherwise. Null expiry only
+ *      appears on legacy / indexer-only rows that aren't matchable.
+ */
+function computeIsLive(body: CommitmentBody): boolean {
+  if (body.status !== 'open' && body.status !== 'partially_filled') return false;
+  if (body.nonceInvalidated) return false;
+  if (BigInt(body.remainingRiskAmount) <= 0n) return false;
+  if (body.expiry === null) return false;
+  const expiryMs = Date.parse(body.expiry);
+  if (!Number.isFinite(expiryMs) || expiryMs <= Date.now()) return false;
+  return true;
 }

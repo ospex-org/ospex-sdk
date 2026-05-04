@@ -14,10 +14,13 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { OspexChainError } from '@ospex/sdk';
-import type { Hex } from '@ospex/sdk';
+import type { Commitment, Hex } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { polygonscanTxUrl } from '../../lib/explorer.js';
 import { getClient } from '../../lib/client.js';
+
+const DRY_RUN_PAGE_LIMIT = 1000;
+const DRY_RUN_MAX_PAGES = 50;
 
 const optionsSchema = z.object({
   contestId: z.string().regex(/^[0-9]+$/, 'must be a non-negative integer'),
@@ -48,17 +51,34 @@ export const commitmentsCancelAllCommand = new Command('cancel-all')
     const maker = (await client.signer().getAddress()).toLowerCase() as Hex;
 
     if (opts.dryRun === true) {
-      // Mirror the cancel-all targeting filter: open + partially_filled,
-      // not nonce-invalidated, only this maker's rows on this speculation.
-      const rows = (
-        await client.commitments.list({
+      // Mirror the SDK's cancel-all targeting filter: only this maker's
+      // currently-matchable rows on this speculation. The list endpoint
+      // caps at 1000 per page, so paginate until we've exhausted the
+      // result set — otherwise the preview undercounts at >1000 rows
+      // and diverges from what cancel-all (no --dry-run) would actually
+      // do.
+      const rawRows: Commitment[] = [];
+      let offset = 0;
+      for (let page = 0; page < DRY_RUN_MAX_PAGES; page++) {
+        const pageRows = await client.commitments.list({
           maker,
           contestId: contestId.toString(),
           scorer,
           status: ['open', 'partially_filled'],
-          limit: 1000,
-        })
-      ).filter((c) => c.lineTicks === lineTicks);
+          limit: DRY_RUN_PAGE_LIMIT,
+          offset,
+        });
+        rawRows.push(...pageRows);
+        if (pageRows.length < DRY_RUN_PAGE_LIMIT) break;
+        offset += pageRows.length;
+        if (page === DRY_RUN_MAX_PAGES - 1) {
+          process.stderr.write(
+            `Warning: stopped paginating at ${DRY_RUN_MAX_PAGES * DRY_RUN_PAGE_LIMIT} rows; ` +
+              'preview may be incomplete. Pass an explicit --new-min-nonce and skip --dry-run.\n',
+          );
+        }
+      }
+      const rows = rawRows.filter((c) => c.lineTicks === lineTicks);
       const count = rows.length;
       if (opts.json === true) {
         formatOutput(

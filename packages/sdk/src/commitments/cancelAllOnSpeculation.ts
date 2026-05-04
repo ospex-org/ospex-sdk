@@ -34,7 +34,7 @@ import { readNonceFloor } from './nonce.js';
 import { raiseMinNonce } from './raiseMinNonce.js';
 import { validateLineTicks } from './validation.js';
 import type { CommitmentsContext } from './context.js';
-import type { CommitmentsListBody } from '../api/types.js';
+import type { CommitmentBody, CommitmentsListBody } from '../api/types.js';
 import type { Hex } from '../types/signer.js';
 
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
@@ -60,6 +60,11 @@ export interface CancelAllOnSpeculationResult {
 }
 
 const PAGE_LIMIT = 1000;
+// Hard ceiling on pagination depth. 50 × 1000 = 50,000 rows for one
+// (maker, contestId, scorer) tuple is already extreme; any caller above
+// that should be coordinating nonces externally and passing an explicit
+// `newMinNonce`.
+const MAX_PAGES = 50;
 
 export async function cancelAllOnSpeculation(
   ctx: CommitmentsContext,
@@ -80,24 +85,49 @@ export async function cancelAllOnSpeculation(
   const scorer = args.scorer.toLowerCase() as Hex;
   const speculationKey = deriveSpeculationKey(args.contestId, scorer, args.lineTicks);
 
-  // Pull all of this maker's commitments on this speculation, regardless
-  // of status / invalidation / expiry. We need the full nonce history to
-  // compute a safe default floor, AND to count the affected rows.
-  const list = await ctx.api.request<CommitmentsListBody>('/v1/commitments', {
-    query: {
-      maker,
-      contestId: args.contestId.toString(),
-      scorer,
-      // 'expired' isn't a server-side status filter; expiry is governed
-      // by includeExpired (which gates a `expiry > now()` clause).
-      status: 'open,partially_filled,filled,cancelled',
-      includeInvalidated: true,
-      includeExpired: true,
-      limit: PAGE_LIMIT,
-    },
-  });
+  // Pull EVERY one of this maker's commitments on this (contestId,
+  // scorer) tuple. We need the complete nonce history to pick a safe
+  // default floor, AND a complete count of affected rows. The list
+  // endpoint caps at limit=1000, so paginate until hasMore=false.
+  // (`speculation_key` filtering happens client-side because the API
+  // takes contestId + scorer + speculationId as filters but not
+  // lineTicks directly.)
+  const allRows: CommitmentBody[] = [];
+  let offset = 0;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const body = await ctx.api.request<CommitmentsListBody>('/v1/commitments', {
+      query: {
+        maker,
+        contestId: args.contestId.toString(),
+        scorer,
+        // 'expired' isn't a server-side status filter; expiry is
+        // governed by includeExpired (which gates a `expiry > now()`
+        // clause).
+        status: 'open,partially_filled,filled,cancelled',
+        includeInvalidated: true,
+        includeExpired: true,
+        limit: PAGE_LIMIT,
+        offset,
+      },
+    });
+    allRows.push(...body.commitments);
+    // Defensive: stop if the server returned an empty page (hasMore
+    // shouldn't be true with empty commitments, but if it ever is we
+    // need to break to avoid an infinite loop).
+    if (body.commitments.length === 0) break;
+    if (!body.pagination.hasMore) break;
+    offset += body.commitments.length;
+    if (page === MAX_PAGES - 1) {
+      throw new OspexValidationError(
+        `Maker has more than ${MAX_PAGES * PAGE_LIMIT} commitments matching ` +
+          `(maker, contestId=${args.contestId}, scorer); cannot safely auto-compute newMinNonce. ` +
+          'Pass an explicit newMinNonce to bypass.',
+        { field: 'newMinNonce' },
+      );
+    }
+  }
   const speculationKeyLower = speculationKey.toLowerCase();
-  const matching = list.commitments.filter(
+  const matching = allRows.filter(
     (c) => (c.speculationKey ?? '').toLowerCase() === speculationKeyLower,
   );
 
