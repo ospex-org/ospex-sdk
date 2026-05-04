@@ -50,6 +50,19 @@ export class CommitmentsApi {
   }
 }
 
-function toCommitment(body: CommitmentBody): Commitment {
-  return body satisfies Commitment;
+/**
+ * Wire body → public Commitment shape. The `isLive` predicate is
+ * computed here (the API doesn't return it) so every consumer sees a
+ * consistent value without each having to recompute it.
+ *
+ * Exported (vs file-local) so other API mappers — orderbooks embedded
+ * in contest detail responses, the body returned by `match`, the
+ * canonical row returned by `submit` — go through the same code path
+ * instead of each redoing the predicate.
+ */
+export function toCommitment(body: CommitmentBody): Commitment {
+  return {
+    ...body,
+    isLive: body.status === 'open' && !body.nonceInvalidated,
+  };
 }

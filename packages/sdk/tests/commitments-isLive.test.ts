@@ -1,0 +1,113 @@
+/**
+ * `Commitment.isLive` — derived predicate covering all status ×
+ * nonceInvalidated combinations. The mapper lives in
+ * `src/api/commitments.ts` (`toCommitment`) so the test exercises that
+ * directly with a stubbed fetch.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { OspexClient } from '../src/index.js';
+import type {
+  CommitmentBody,
+  CommitmentsListBody,
+} from '../src/api/types.js';
+
+const apiUrl = 'https://api.example.test';
+
+function makeBody(overrides: Partial<CommitmentBody> = {}): CommitmentBody {
+  return {
+    commitmentHash: '0x' + 'aa'.repeat(32),
+    maker: '0x' + 'bb'.repeat(20),
+    contestId: '1',
+    scorer: '0x' + 'cc'.repeat(20),
+    lineTicks: 0,
+    positionType: 0,
+    oddsTick: 200,
+    marketType: 'moneyline',
+    riskAmount: '1000000',
+    filledRiskAmount: '0',
+    remainingRiskAmount: '1000000',
+    nonce: '1',
+    expiry: '2099-01-01T00:00:00.000Z',
+    speculationKey: '0x' + 'dd'.repeat(32),
+    signature: '0x' + 'cc'.repeat(65),
+    status: 'open',
+    source: 'agent',
+    network: 'polygon',
+    nonceInvalidated: false,
+    createdAt: '2026-05-04T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function makeFetch(rows: CommitmentBody[]): typeof globalThis.fetch {
+  const fetchImpl: typeof globalThis.fetch = async () => {
+    const body: CommitmentsListBody = {
+      commitments: rows,
+      pagination: { limit: 100, offset: 0, total: rows.length, hasMore: false },
+    };
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  return fetchImpl;
+}
+
+describe('Commitment.isLive predicate', () => {
+  const cases: Array<{
+    name: string;
+    overrides: Partial<CommitmentBody>;
+    expectIsLive: boolean;
+  }> = [
+    { name: 'open + not invalidated', overrides: { status: 'open', nonceInvalidated: false }, expectIsLive: true },
+    { name: 'open + invalidated', overrides: { status: 'open', nonceInvalidated: true }, expectIsLive: false },
+    { name: 'partially_filled + not invalidated', overrides: { status: 'partially_filled', nonceInvalidated: false }, expectIsLive: false },
+    { name: 'partially_filled + invalidated', overrides: { status: 'partially_filled', nonceInvalidated: true }, expectIsLive: false },
+    { name: 'filled', overrides: { status: 'filled' }, expectIsLive: false },
+    { name: 'cancelled', overrides: { status: 'cancelled' }, expectIsLive: false },
+    { name: 'expired', overrides: { status: 'expired' }, expectIsLive: false },
+  ];
+
+  for (const c of cases) {
+    it(`${c.name} → isLive=${c.expectIsLive}`, async () => {
+      const client = new OspexClient({ apiUrl, fetch: makeFetch([makeBody(c.overrides)]) });
+      const [first] = await client.commitments.list();
+      expect(first?.isLive).toBe(c.expectIsLive);
+    });
+  }
+});
+
+describe('CommitmentsApi.list options pass-through', () => {
+  it('passes includeInvalidated=true on the wire when set', async () => {
+    let capturedUrl = '';
+    const fetchImpl: typeof globalThis.fetch = async (input) => {
+      capturedUrl = typeof input === 'string' ? input : (input as URL).toString();
+      const body: CommitmentsListBody = {
+        commitments: [],
+        pagination: { limit: 100, offset: 0, total: 0, hasMore: false },
+      };
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    const client = new OspexClient({ apiUrl, fetch: fetchImpl });
+    await client.commitments.list({ includeInvalidated: true });
+    const url = new URL(capturedUrl);
+    expect(url.searchParams.get('includeInvalidated')).toBe('true');
+  });
+
+  it('omits includeInvalidated when not specified (server default applies)', async () => {
+    let capturedUrl = '';
+    const fetchImpl: typeof globalThis.fetch = async (input) => {
+      capturedUrl = typeof input === 'string' ? input : (input as URL).toString();
+      const body: CommitmentsListBody = {
+        commitments: [],
+        pagination: { limit: 100, offset: 0, total: 0, hasMore: false },
+      };
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    const client = new OspexClient({ apiUrl, fetch: fetchImpl });
+    await client.commitments.list({ maker: '0x' + '11'.repeat(20) });
+    const url = new URL(capturedUrl);
+    expect(url.searchParams.has('includeInvalidated')).toBe(false);
+  });
+});

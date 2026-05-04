@@ -69,6 +69,18 @@ export class NonceCounter {
     const last = this.lastUsed.get(k) ?? 0n;
     if (used > last) this.lastUsed.set(k, used);
   }
+
+  /**
+   * Read the current per-instance high-water nonce for one
+   * (maker, speculationKey). Returns `undefined` when this process has
+   * never allocated a nonce for the pair. Used by
+   * `cancelAllOnSpeculation` to fold in-process activity into the
+   * default `newMinNonce` calculation without forcing the caller to
+   * thread the counter explicitly.
+   */
+  peek(maker: string, speculationKey: string): bigint | undefined {
+    return this.lastUsed.get(NonceCounter.keyFor(maker, speculationKey));
+  }
 }
 
 function max3(a: bigint, b: bigint, c: bigint): bigint {

@@ -18,6 +18,9 @@ import { commitmentsApproveCommand } from './commands/commitments/approve.js';
 import { commitmentsSubmitCommand } from './commands/commitments/submit.js';
 import { commitmentsMatchCommand } from './commands/commitments/match.js';
 import { commitmentsCancelCommand } from './commands/commitments/cancel.js';
+import { commitmentsCancelOnchainCommand } from './commands/commitments/cancel-onchain.js';
+import { commitmentsCancelAllCommand } from './commands/commitments/cancel-all.js';
+import { commitmentsNonceFloorCommand } from './commands/commitments/nonce-floor.js';
 import { commitmentsShowCommand } from './commands/commitments/show.js';
 import { makeContestsCommand } from './commands/contests/index.js';
 import { makeSpeculationsCommand } from './commands/speculations/index.js';
@@ -52,6 +55,9 @@ function makeProgram(): Command {
   commitments.addCommand(commitmentsSubmitCommand);
   commitments.addCommand(commitmentsMatchCommand);
   commitments.addCommand(commitmentsCancelCommand);
+  commitments.addCommand(commitmentsCancelOnchainCommand);
+  commitments.addCommand(commitmentsCancelAllCommand);
+  commitments.addCommand(commitmentsNonceFloorCommand);
   program.addCommand(commitments);
 
   program.addCommand(makeContestsCommand());

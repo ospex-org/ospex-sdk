@@ -34,6 +34,15 @@ export interface Commitment {
   source: string;
   network: string;
   nonceInvalidated: boolean;
+  /**
+   * Derived: `status === 'open' && !nonceInvalidated`. The canonical
+   * "is this commitment still matchable?" predicate. A commitment with
+   * `status='open'` but `nonceInvalidated=true` will revert any
+   * matchCommitment attempt with `MatchingModule__NonceTooLow` —
+   * `isLive` collapses both conditions into one boolean so consumers
+   * don't have to remember the second clause.
+   */
+  isLive: boolean;
   /** ISO-8601 string. */
   createdAt: string;
 }
