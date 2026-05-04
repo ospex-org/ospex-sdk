@@ -13,7 +13,13 @@ import {
 } from '../src/lib/config.js';
 
 let tmpDir: string;
-const ENV_KEYS = ['OSPEX_HOME', 'OSPEX_API_URL', 'OSPEX_SUPABASE_URL', 'OSPEX_SUPABASE_ANON_KEY'];
+const ENV_KEYS = [
+  'OSPEX_HOME',
+  'OSPEX_API_URL',
+  'OSPEX_SUPABASE_URL',
+  'OSPEX_SUPABASE_ANON_KEY',
+  'OSPEX_KEYSTORE_PATH',
+];
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(async () => {
@@ -23,6 +29,7 @@ beforeEach(async () => {
   delete process.env.OSPEX_API_URL;
   delete process.env.OSPEX_SUPABASE_URL;
   delete process.env.OSPEX_SUPABASE_ANON_KEY;
+  delete process.env.OSPEX_KEYSTORE_PATH;
 });
 
 afterEach(async () => {
@@ -39,6 +46,20 @@ describe('CLI config', () => {
     expect(getConfigPath()).toBe(path.join(tmpDir, 'config.json'));
     expect(getKeystorePath()).toBe(path.join(tmpDir, 'keystore.json'));
     expect(getSessionPath()).toBe(path.join(tmpDir, 'session'));
+  });
+
+  it('OSPEX_KEYSTORE_PATH overrides getKeystorePath even with OSPEX_HOME set', () => {
+    const override = path.join(tmpDir, 'foundry-keystore.json');
+    process.env.OSPEX_KEYSTORE_PATH = override;
+    expect(getKeystorePath()).toBe(override);
+    // Other paths still derived from OSPEX_HOME — only the keystore is redirected.
+    expect(getConfigPath()).toBe(path.join(tmpDir, 'config.json'));
+    expect(getSessionPath()).toBe(path.join(tmpDir, 'session'));
+  });
+
+  it('OSPEX_KEYSTORE_PATH treats empty string as unset', () => {
+    process.env.OSPEX_KEYSTORE_PATH = '';
+    expect(getKeystorePath()).toBe(path.join(tmpDir, 'keystore.json'));
   });
 
   it('loadConfigFile returns {} when the file does not exist', async () => {

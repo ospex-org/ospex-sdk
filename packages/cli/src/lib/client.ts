@@ -144,7 +144,10 @@ async function readKeystore(): Promise<string> {
   } catch (err) {
     if (isFileNotFound(err)) {
       throw new Error(
-        `No keystore found at ${file}. Run \`ospex wallet import\` to create one.`,
+        `No keystore found at ${file}. Recommended: create one with Foundry (` +
+          '`cast wallet new <name>` or `cast wallet import <name>`) and set ' +
+          '`OSPEX_KEYSTORE_PATH=~/.foundry/keystores/<name>` so Ospex consumes ' +
+          'it without handling your private key. See docs/QUICKSTART.md.',
       );
     }
     throw err;

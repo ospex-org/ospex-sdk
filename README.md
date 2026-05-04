@@ -9,24 +9,37 @@ This repo is a Yarn 1 workspaces monorepo with two packages:
 
 ## Quick start (CLI)
 
+For the minimum-friction zero-to-commitment walkthrough, see [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). Short version below.
+
+Install (until `@ospex/cli` is published, use local tarballs):
+
 ```bash
-git clone <repo> ospex-sdk && cd ospex-sdk
 yarn install
 yarn workspace @ospex/sdk build
 yarn workspace @ospex/cli build
-yarn workspace @ospex/cli link             # adds `ospex` to your PATH
+yarn workspace @ospex/cli link             # adds `ospex` to your PATH (dev mode)
+```
 
+Wallet — Ospex never asks for your private key. Set up Foundry's keystore and point Ospex at it:
+
+```bash
+cast wallet new ospex-test                                  # Foundry generates the key, prints only the address
+export OSPEX_KEYSTORE_PATH=~/.foundry/keystores/ospex-test  # PowerShell: $env:OSPEX_KEYSTORE_PATH = "..."
+```
+
+Configure and read:
+
+```bash
 ospex init                                 # one-time: write ~/.ospex/config.json (rpcUrl required)
 ospex health                               # liveness probe
 ospex contests list --hours 168            # upcoming contests
 ospex contests show <contestId>            # one contest with its full orderbook
 ospex speculations list --contest <id>     # bettable lines under a contest
 ospex speculations show <speculationId>    # one speculation with its orderbook + parent contest
-ospex wallet import                        # encrypt a private key into ~/.ospex/keystore.json
-ospex wallet address                       # print the keystore's address
+ospex wallet address                       # prompts for Foundry passphrase, prints the address
 ospex odds watch <contestId>               # live odds stream (line-delimited JSON with --json)
 
-# M2 chain writes — require ospex init + ospex wallet import
+# Chain writes — require ospex init + a configured keystore
 ospex commitments approve max                                # approve PositionModule for unlimited USDC
 ospex commitments submit <contestId> <scorer> <lineTicks> upper 250 1000
 ospex commitments match <commitment-hash>                    # match an existing maker commitment
@@ -39,7 +52,7 @@ ospex commitments nonce-floor --maker <addr> \               # read on-chain non
   --contest-id <id> --scorer <addr> --line <ticks>
 ```
 
-When `npm install -g @ospex/cli` is published this becomes a one-step install — for now use the workspace-link flow above.
+When `yarn global add @ospex/cli` is published this becomes a one-step install — for now use the workspace-link or tarball flow above.
 
 ## Quick start (SDK)
 
@@ -105,6 +118,8 @@ new OspexClient({
 
 The CLI reads its config in this order: env var (`OSPEX_API_URL`, `OSPEX_SUPABASE_URL`, `OSPEX_SUPABASE_ANON_KEY`, `OSPEX_RPC_URL`, `OSPEX_CHAIN_ID`) > `~/.ospex/config.json` > SDK built-in defaults.
 
+The keystore location is independent: `OSPEX_KEYSTORE_PATH` (recommended — point at a Foundry keystore at `~/.foundry/keystores/<name>`) or `~/.ospex/keystore.json` if no override is set.
+
 ### About `rpcUrl`
 
 Every chain operation (`commitments.submit`, `match`, `approve`) needs an RPC URL — the SDK uses it to read allowance and nonce floor, and to broadcast signed transactions. **Use Alchemy, Infura, or QuickNode in production.** The public Polygon RPCs (`polygon-rpc.com`, `rpc-amoy.polygon.technology`) are rate-limited and prone to drops, and `polygon-rpc.com` has been returning 401 since 2026-03 (per [`ospex-foundry-matched-pairs/docs/DEPLOYMENT.md`](../ospex-foundry-matched-pairs/docs/DEPLOYMENT.md)).
@@ -158,9 +173,11 @@ Every command supports `--json` for machine-readable output.
 
 ## Wallet security
 
-`ospex wallet unlock` writes the decrypted private key to `~/.ospex/session` (plain JSON, mode 0600, 15-minute TTL) inside `~/.ospex` (mode 0700). Both are written atomically and the modes are reasserted on overwrite — they do not silently inherit weaker permissions from a pre-existing file.
+**Recommended path: Foundry-managed keystore.** Run `cast wallet new <name>` (or `cast wallet import <name>`) once, then export `OSPEX_KEYSTORE_PATH=~/.foundry/keystores/<name>`. Ospex never sees your private key — it reads the v3 JSON keystore Foundry produces and prompts you for the passphrase only when a signature is needed. This is the path documented in the [QUICKSTART](./docs/QUICKSTART.md).
 
-What 0600 actually buys you: the file is unreadable by *other* users on the host. **Any process running as the same user can still read it while the session is unlocked.** OS-keychain integration (DPAPI on Windows, Keychain on macOS, libsecret on Linux) is the right answer for higher assurance and is out of scope for v1. If you don't want the cache, run write commands without `unlock`: each one prompts for the passphrase inline and never persists the decrypted key.
+**Legacy path (still functional but not recommended):** `ospex wallet import` writes an Ospex-managed keystore at `~/.ospex/keystore.json`. `ospex wallet unlock` caches the decrypted private key at `~/.ospex/session` (plain JSON, mode 0600, 15-minute TTL) inside `~/.ospex` (mode 0700). Both are written atomically and the modes are reasserted on overwrite — they do not silently inherit weaker permissions from a pre-existing file.
+
+What 0600 actually buys you: the session file is unreadable by *other* users on the host. **Any process running as the same user can still read it while the session is unlocked.** OS-keychain integration (DPAPI / Keychain / libsecret) is out of scope. The Foundry path avoids the session-cache trade-off entirely — each write prompts for the passphrase and the key is never persisted in cleartext.
 
 ## Roadmap
 
