@@ -187,7 +187,7 @@ ospex contests wait-verified <id>     # Wait for the Chainlink Functions verific
 
 ## Troubleshooting
 
-**`No keystore found at <path>`** — `OSPEX_KEYSTORE_PATH` isn't set, or it points at a file that doesn't exist. Re-export the variable in the same shell you're running `ospex` from.
+**`No keystore found at <path>`** — neither `~/.ospex/config.json` has a `keystorePath` nor `OSPEX_KEYSTORE_PATH` is set, or one of them points at a missing file. Run `ospex init` and supply the path when prompted (it persists across shells). For a per-shell override use `export OSPEX_KEYSTORE_PATH=…` instead.
 
 **`Failed to decrypt keystore`** — wrong passphrase, or the file is not a v3 keystore. Foundry always produces v3; this is almost always the passphrase.
 

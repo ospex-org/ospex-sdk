@@ -180,7 +180,7 @@ Every command supports `--json` for machine-readable output.
 
 ## Wallet security
 
-**Recommended path: Foundry-managed keystore.** Run `mkdir -p ~/.foundry/keystores && cast wallet new ~/.foundry/keystores <name>` (or `cast wallet import <name>` for an existing PK) once, then export `OSPEX_KEYSTORE_PATH=~/.foundry/keystores/<name>`. Ospex never sees your private key — it reads the v3 JSON keystore Foundry produces and prompts you for the passphrase only when a signature is needed. This is the path documented in the [QUICKSTART](./docs/QUICKSTART.md).
+**Recommended path: Foundry-managed keystore.** Run `mkdir -p ~/.foundry/keystores && cast wallet new ~/.foundry/keystores <name>` (or `cast wallet import <name>` for an existing PK) once, then run `ospex init` and supply the path (`~/.foundry/keystores/<name>`) when it prompts for **Keystore path** — it persists in `~/.ospex/config.json` so future shells just work. For per-shell overrides (scripts / CI) the `OSPEX_KEYSTORE_PATH` env var still wins when set. Ospex never sees your private key — it reads the v3 JSON keystore Foundry produces and prompts you for the passphrase only when a signature is needed. This is the path documented in the [QUICKSTART](./docs/QUICKSTART.md).
 
 **Legacy path (still functional but not recommended):** `ospex wallet import` writes an Ospex-managed keystore at `~/.ospex/keystore.json`. `ospex wallet unlock` caches the decrypted private key at `~/.ospex/session` (plain JSON, mode 0600, 15-minute TTL) inside `~/.ospex` (mode 0700). Both are written atomically and the modes are reasserted on overwrite — they do not silently inherit weaker permissions from a pre-existing file.
 
