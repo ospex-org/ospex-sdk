@@ -19,15 +19,16 @@ export const walletAddressCommand = new Command('address')
   .option('--json', 'output as JSON')
   .action(async (opts) => {
     const parsed = optionsSchema.parse(opts);
-    const file = getKeystorePath();
+    const file = await getKeystorePath();
     let raw: string;
     try {
       raw = await fs.readFile(file, 'utf8');
     } catch (err) {
       if (isFileNotFound(err)) {
         console.error(
-          `No keystore at ${file}. See docs/QUICKSTART.md to set up a Foundry ` +
-            'keystore and point Ospex at it via OSPEX_KEYSTORE_PATH.',
+          `No keystore at ${file}. Run \`ospex init\` and supply a Foundry ` +
+            'keystore path when prompted, or set OSPEX_KEYSTORE_PATH for a ' +
+            'per-shell override. See docs/QUICKSTART.md.',
         );
         process.exit(1);
       }

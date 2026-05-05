@@ -22,18 +22,18 @@ yarn workspace @ospex/cli link
 
 End users install via the tarball flow in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md), not this dev-mode link.
 
-Wallet — Ospex never asks for your private key. Set up Foundry's keystore and point Ospex at it:
+Wallet — Ospex never asks for your private key. Set up Foundry's keystore (Ospex reads it via a path you tell it about during `ospex init`):
 
 ```bash
 mkdir -p ~/.foundry/keystores
-cast wallet new ~/.foundry/keystores ospex-test             # Foundry generates the key, prints only the address
-export OSPEX_KEYSTORE_PATH=~/.foundry/keystores/ospex-test  # PowerShell: $env:OSPEX_KEYSTORE_PATH = "..."
+cast wallet new ~/.foundry/keystores ospex-test    # Foundry generates the key, prints only the address
+                                                   # — or `cast wallet import ospex-test` for an existing key
 ```
 
 Configure and read:
 
 ```bash
-ospex init                                 # one-time: write ~/.ospex/config.json (rpcUrl required)
+ospex init                                 # one-time prompts for chainId, apiUrl, rpcUrl, keystorePath
 ospex health                               # liveness probe
 ospex contests list --hours 168            # upcoming contests
 ospex contests show <contestId>            # one contest with its full orderbook
@@ -125,7 +125,7 @@ new OspexClient({
 
 The CLI reads its config in this order: env var (`OSPEX_API_URL`, `OSPEX_SUPABASE_URL`, `OSPEX_SUPABASE_ANON_KEY`, `OSPEX_RPC_URL`, `OSPEX_CHAIN_ID`) > `~/.ospex/config.json` > SDK built-in defaults.
 
-The keystore location is independent: `OSPEX_KEYSTORE_PATH` (recommended — point at a Foundry keystore at `~/.foundry/keystores/<name>`) or `~/.ospex/keystore.json` if no override is set.
+The keystore location follows the same precedence: `OSPEX_KEYSTORE_PATH` env var > `keystorePath` field in `~/.ospex/config.json` (set once via `ospex init`) > default `~/.ospex/keystore.json`. The recommended setup is to put a Foundry-managed keystore path in the config file (so future shells don't need to re-export anything), and reserve the env var for per-shell overrides — useful for scripts and CI. Leading `~/` in either source is expanded.
 
 ### About `rpcUrl`
 
@@ -147,7 +147,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 
 | Command | What it does |
 |---|---|
-| `ospex init` | Interactive setup — writes `~/.ospex/config.json` (rpcUrl, chainId, apiUrl). |
+| `ospex init` | Interactive setup — writes `~/.ospex/config.json` (rpcUrl, chainId, apiUrl, keystorePath). |
 | `ospex health` | Hits `/healthz` and prints liveness info. |
 | `ospex contests list [--sport --status --hours --limit --offset]` | Lists upcoming contests with their speculations. |
 | `ospex contests show <contestId>` | One contest with its full orderbook. |
@@ -180,7 +180,7 @@ Every command supports `--json` for machine-readable output.
 
 ## Wallet security
 
-**Recommended path: Foundry-managed keystore.** Run `mkdir -p ~/.foundry/keystores && cast wallet new ~/.foundry/keystores <name>` (or `cast wallet import <name>` for an existing PK) once, then export `OSPEX_KEYSTORE_PATH=~/.foundry/keystores/<name>`. Ospex never sees your private key — it reads the v3 JSON keystore Foundry produces and prompts you for the passphrase only when a signature is needed. This is the path documented in the [QUICKSTART](./docs/QUICKSTART.md).
+**Recommended path: Foundry-managed keystore.** Run `mkdir -p ~/.foundry/keystores && cast wallet new ~/.foundry/keystores <name>` (or `cast wallet import <name>` for an existing PK) once, then run `ospex init` and supply the path (`~/.foundry/keystores/<name>`) when it prompts for **Keystore path** — it persists in `~/.ospex/config.json` so future shells just work. For per-shell overrides (scripts / CI) the `OSPEX_KEYSTORE_PATH` env var still wins when set. Ospex never sees your private key — it reads the v3 JSON keystore Foundry produces and prompts you for the passphrase only when a signature is needed. This is the path documented in the [QUICKSTART](./docs/QUICKSTART.md).
 
 **Legacy path (still functional but not recommended):** `ospex wallet import` writes an Ospex-managed keystore at `~/.ospex/keystore.json`. `ospex wallet unlock` caches the decrypted private key at `~/.ospex/session` (plain JSON, mode 0600, 15-minute TTL) inside `~/.ospex` (mode 0700). Both are written atomically and the modes are reasserted on overwrite — they do not silently inherit weaker permissions from a pre-existing file.
 

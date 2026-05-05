@@ -17,7 +17,7 @@ export const walletImportCommand = new Command('import')
   .option('--force', 'overwrite an existing keystore')
   .action(async (opts) => {
     const parsed = optionsSchema.parse(opts);
-    const file = getKeystorePath();
+    const file = await getKeystorePath();
 
     if (!parsed.force) {
       try {
