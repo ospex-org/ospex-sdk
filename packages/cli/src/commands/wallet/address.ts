@@ -19,7 +19,7 @@ export const walletAddressCommand = new Command('address')
   .option('--json', 'output as JSON')
   .action(async (opts) => {
     const parsed = optionsSchema.parse(opts);
-    const file = getKeystorePath();
+    const file = await getKeystorePath();
     let raw: string;
     try {
       raw = await fs.readFile(file, 'utf8');

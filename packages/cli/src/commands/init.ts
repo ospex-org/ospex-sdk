@@ -7,6 +7,11 @@
  * the SDK deliberately has no public-RPC default. We require an explicit
  * value and recommend Alchemy / Infura / QuickNode in the prompt.
  *
+ * The keystore path prompt persists the bring-your-own-Foundry-keystore
+ * pointer so users don't have to `export OSPEX_KEYSTORE_PATH=…` in every
+ * shell. Optional — leaving it blank means the runtime falls back to env
+ * var or the legacy `~/.ospex/keystore.json` location.
+ *
  * The command is non-destructive: existing values are shown as defaults
  * (so re-running `init` is idempotent for unchanged fields).
  */
@@ -23,14 +28,16 @@ const optionsSchema = z.object({
   apiUrl: z.string().url().optional(),
   rpcUrl: z.string().url().optional(),
   chainId: chainIdSchema.optional(),
+  keystorePath: z.string().optional(),
   yes: z.boolean().optional(),
 });
 
 export const initCommand = new Command('init')
-  .description('Interactive setup for ~/.ospex/config.json (apiUrl, rpcUrl, chainId).')
+  .description('Interactive setup for ~/.ospex/config.json (apiUrl, rpcUrl, chainId, keystorePath).')
   .option('--api-url <url>', 'core-api URL (defaults to production)')
   .option('--rpc-url <url>', 'Polygon RPC URL (Alchemy / Infura / QuickNode recommended)')
   .option('--chain-id <id>', '137 (mainnet) or 80002 (amoy)')
+  .option('--keystore-path <path>', 'Foundry-managed keystore path (e.g. ~/.foundry/keystores/<name>)')
   .option('-y, --yes', 'accept all defaults non-interactively (still requires --rpc-url)')
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
@@ -81,7 +88,7 @@ export const initCommand = new Command('init')
       }
       next.rpcUrl = existing.rpcUrl;
     } else {
-      process.stdout.write(
+      process.stderr.write(
         '\nRPC URL — required for any chain operation (submit / match / approve).\n' +
           'Recommended: Alchemy / Infura / QuickNode. Public RPCs are rate-limited and prone\n' +
           "to drops, and Polygon's public mainnet RPC has been returning 401 since 2026-03.\n" +
@@ -94,21 +101,45 @@ export const initCommand = new Command('init')
         : await promptValue('RPC URL');
     }
 
+    // Keystore path — optional. Persists the bring-your-own-Foundry-
+    // keystore pointer so users don't have to export OSPEX_KEYSTORE_PATH
+    // in every shell. Empty input clears the field (delete, not assign-
+    // undefined, because exactOptionalPropertyTypes forbids the latter).
+    if (opts.keystorePath !== undefined) {
+      if (opts.keystorePath === '') delete next.keystorePath;
+      else next.keystorePath = opts.keystorePath;
+    } else if (opts.yes !== true) {
+      process.stderr.write(
+        '\nKeystore path — optional. Point at a Foundry-managed keystore file\n' +
+          '(e.g. ~/.foundry/keystores/<name>). Saving it here means future shells\n' +
+          "won't need OSPEX_KEYSTORE_PATH set. Hit enter to leave unset (the env var\n" +
+          'or the legacy ~/.ospex/keystore.json fallback still apply at runtime).\n\n',
+      );
+      const raw = existing.keystorePath !== undefined
+        ? await promptValue('Keystore path', existing.keystorePath)
+        : await promptValue('Keystore path', '');
+      if (raw === '') delete next.keystorePath;
+      else next.keystorePath = raw;
+    } else if (existing.keystorePath !== undefined) {
+      next.keystorePath = existing.keystorePath;
+    }
+
     // Confirm before write.
     if (opts.yes !== true) {
-      process.stdout.write(
+      process.stderr.write(
         `\nWriting:\n` +
-          `  apiUrl:  ${next.apiUrl ?? '(SDK default)'}\n` +
-          `  rpcUrl:  ${next.rpcUrl}\n` +
-          `  chainId: ${next.chainId}\n\n`,
+          `  apiUrl:       ${next.apiUrl ?? '(SDK default)'}\n` +
+          `  rpcUrl:       ${next.rpcUrl}\n` +
+          `  chainId:      ${next.chainId}\n` +
+          `  keystorePath: ${next.keystorePath ?? '(unset; falls back to env or ~/.ospex/keystore.json)'}\n\n`,
       );
       const ok = await promptYesNo('Save?', true);
       if (!ok) {
-        process.stdout.write('Aborted; no changes written.\n');
+        process.stderr.write('Aborted; no changes written.\n');
         return;
       }
     }
 
     await saveConfigFile(next);
-    process.stdout.write('Wrote ~/.ospex/config.json\n');
+    process.stderr.write('Wrote ~/.ospex/config.json\n');
   });

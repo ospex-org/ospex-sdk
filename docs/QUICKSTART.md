@@ -80,33 +80,24 @@ Either way, Foundry now owns an encrypted v3 keystore at `~/.foundry/keystores/o
 
 Fund the printed address with POL (gas), USDC (your stake), and — if you plan to create a contest — LINK.
 
-## 3. Tell Ospex which keystore to use
-
-```bash
-# macOS / Linux:
-export OSPEX_KEYSTORE_PATH=~/.foundry/keystores/ospex-test
-
-# Windows PowerShell:
-$env:OSPEX_KEYSTORE_PATH = "$env:USERPROFILE\.foundry\keystores\ospex-test"
-```
-
-Add the line to your shell profile (`~/.zshrc`, `~/.bashrc`, `$PROFILE`) so it persists.
-
-## 4. Configure Ospex
+## 3. Configure Ospex
 
 ```bash
 ospex init
 ```
 
-Answer:
+Answer the prompts:
 
 - **Network** — `137` for mainnet, `80002` for Amoy.
 - **API URL** — accept the default (production).
 - **RPC URL** — paste your Alchemy / Infura / QuickNode URL.
+- **Keystore path** — paste `~/.foundry/keystores/ospex-test` (or whatever name you used in step 2). Leading `~/` is expanded.
 
-The values land in `~/.ospex/config.json`.
+The values land in `~/.ospex/config.json`. From this point on, every Ospex command uses your Foundry keystore — no env vars, no shell-profile editing.
 
-## 5. Sanity check
+If you'd rather not persist the keystore path (e.g. you're scripting against multiple wallets), leave it blank at the prompt and instead `export OSPEX_KEYSTORE_PATH=…` in the shell where you run Ospex. Env var beats config file when both are set.
+
+## 4. Sanity check
 
 ```bash
 ospex health                      # Should report ok: true.
@@ -116,7 +107,7 @@ ospex wallet address              # Prompts for the Foundry passphrase. Prints y
 
 If `ospex wallet address` prompts you and prints the same address Foundry showed you in step 2, the wiring is correct. (Foundry-produced keystores omit the top-level `address` field, so Ospex derives it via the passphrase. Keystores produced by the legacy `ospex wallet import` flow include the field and skip the prompt.)
 
-## 6. Place a commitment
+## 5. Place a commitment
 
 One-time USDC approval to PositionModule. (This calls `approve(2^256-1)`; rerun with a smaller amount if you'd rather cap it.)
 

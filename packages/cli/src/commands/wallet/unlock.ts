@@ -8,7 +8,7 @@ import { promptHidden } from '../../lib/prompt.js';
 export const walletUnlockCommand = new Command('unlock')
   .description('Decrypt the keystore and cache for 15 minutes.')
   .action(async () => {
-    const file = getKeystorePath();
+    const file = await getKeystorePath();
     let json: string;
     try {
       json = await fs.readFile(file, 'utf8');

@@ -138,7 +138,7 @@ export async function deleteSession(): Promise<void> {
 }
 
 async function readKeystore(): Promise<string> {
-  const file = getKeystorePath();
+  const file = await getKeystorePath();
   try {
     return await fs.readFile(file, 'utf8');
   } catch (err) {

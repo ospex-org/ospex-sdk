@@ -2,15 +2,18 @@
  * Persistent CLI config: file at `~/.ospex/config.json`, layered with
  * env-var overrides at read time. Order of precedence:
  *
- *   env var (OSPEX_API_URL, OSPEX_SUPABASE_*)
+ *   env var (OSPEX_API_URL, OSPEX_SUPABASE_*, OSPEX_KEYSTORE_PATH, ...)
  *     > config file
- *     > SDK built-in default (only for apiUrl)
+ *     > SDK built-in default (only for apiUrl, and `~/.ospex/keystore.json`
+ *       for the keystore path)
  *
- * `OSPEX_KEYSTORE_PATH` overrides the keystore file location entirely —
- * this is the recommended bring-your-own-wallet path: point Ospex at a
- * Foundry-managed keystore (`cast wallet new ~/.foundry/keystores <name>`
- * for a fresh key or `cast wallet import <name>` for an existing one)
- * so Ospex never handles the raw private key.
+ * The keystore path is the recommended bring-your-own-wallet seam: point
+ * Ospex at a Foundry-managed keystore (`cast wallet new ~/.foundry/keystores
+ * <name>` for a fresh key or `cast wallet import <name>` for an existing
+ * one) so Ospex never handles the raw private key. Configure once via
+ * `ospex init` (saved into `~/.ospex/config.json`) so future shells don't
+ * need to re-export anything; the env var stays available as a per-shell
+ * override (handy for scripts and CI).
  *
  * Tested via the OSPEX_HOME env var, which overrides the home directory
  * lookup so tests can point at a tmp dir without monkey-patching `os`.
@@ -28,6 +31,11 @@ export interface CliConfigFile {
   rpcUrl?: string;
   /** 137 (mainnet) or 80002 (amoy). */
   chainId?: 137 | 80002;
+  /**
+   * Foundry-managed keystore path (or any v3 JSON keystore). Leading
+   * `~/` is expanded against the user's home directory at read time.
+   */
+  keystorePath?: string;
 }
 
 export interface ResolvedCliConfig {
@@ -50,14 +58,42 @@ export function getConfigPath(): string {
   return path.join(getOspexHome(), CONFIG_FILE_NAME);
 }
 
-export function getKeystorePath(): string {
-  const override = process.env.OSPEX_KEYSTORE_PATH;
-  if (override !== undefined && override !== '') return override;
+/**
+ * Resolve the keystore file path. Precedence:
+ *   1. `OSPEX_KEYSTORE_PATH` env var (per-shell override)
+ *   2. `keystorePath` field in `~/.ospex/config.json` (persistent — set
+ *      via `ospex init`)
+ *   3. default `~/.ospex/keystore.json` (legacy location)
+ *
+ * Leading `~/` in either env or config-file value is expanded against
+ * the user's home directory.
+ */
+export async function getKeystorePath(): Promise<string> {
+  const envOverride = process.env.OSPEX_KEYSTORE_PATH;
+  if (envOverride !== undefined && envOverride !== '') {
+    return expandTilde(envOverride);
+  }
+  const config = await loadConfigFile();
+  if (config.keystorePath !== undefined && config.keystorePath !== '') {
+    return expandTilde(config.keystorePath);
+  }
   return path.join(getOspexHome(), 'keystore.json');
 }
 
 export function getSessionPath(): string {
   return path.join(getOspexHome(), 'session');
+}
+
+/**
+ * Expand a leading `~/` (or bare `~`) to the user's home directory. Only
+ * the leading segment is touched — embedded `~` characters are kept.
+ */
+export function expandTilde(value: string): string {
+  if (value === '~') return os.homedir();
+  if (value.startsWith('~/') || value.startsWith('~\\')) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
 }
 
 export async function loadConfigFile(): Promise<CliConfigFile> {
@@ -73,6 +109,7 @@ export async function loadConfigFile(): Promise<CliConfigFile> {
     if (typeof obj.supabaseAnonKey === 'string') out.supabaseAnonKey = obj.supabaseAnonKey;
     if (typeof obj.rpcUrl === 'string') out.rpcUrl = obj.rpcUrl;
     if (obj.chainId === 137 || obj.chainId === 80002) out.chainId = obj.chainId;
+    if (typeof obj.keystorePath === 'string') out.keystorePath = obj.keystorePath;
     return out;
   } catch (err) {
     if (isFileNotFound(err)) return {};
