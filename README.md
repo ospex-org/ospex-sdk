@@ -59,9 +59,13 @@ Distribution is via [GitHub releases](https://github.com/ospex-org/ospex-sdk/rel
 
 ## Quick start (SDK)
 
+Install via [GitHub releases](https://github.com/ospex-org/ospex-sdk/releases) — download `ospex-sdk-<ver>.tgz` and:
+
 ```bash
-yarn add @ospex/sdk
+yarn add file:./ospex-sdk-<ver>.tgz
 ```
+
+Until the first release is tagged, build the tarball locally from a clone of this repo (`yarn workspace @ospex/sdk build && yarn workspace @ospex/sdk pack --filename ospex-sdk.tgz`) and `yarn add file:/abs/path/to/ospex-sdk/packages/sdk/ospex-sdk.tgz`.
 
 ```typescript
 import { OspexClient } from '@ospex/sdk';
