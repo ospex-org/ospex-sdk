@@ -53,7 +53,7 @@ ospex commitments nonce-floor --maker <addr> \               # read on-chain non
   --contest-id <id> --scorer <addr> --line <ticks>
 ```
 
-When the packages are published this becomes `yarn global add @ospex/sdk @ospex/cli`. Until then, use the workspace-link flow above for development, or the tarball flow in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md) for consuming the CLI from an external project.
+Distribution is via [GitHub releases](https://github.com/ospex-org/ospex-sdk/releases) — download both tarballs from the latest release and install with the tarball flow in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). The workspace-link flow above is for local development from this repo.
 
 ## Quick start (SDK)
 
