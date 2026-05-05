@@ -11,14 +11,16 @@ This repo is a Yarn 1 workspaces monorepo with two packages:
 
 For the minimum-friction zero-to-commitment walkthrough, see [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). Short version below.
 
-Install (until `@ospex/cli` is published, use local tarballs):
+For local development from this repo (workspace-link puts `ospex` on your PATH for dev iteration):
 
 ```bash
 yarn install
 yarn workspace @ospex/sdk build
 yarn workspace @ospex/cli build
-yarn workspace @ospex/cli link             # adds `ospex` to your PATH (dev mode)
+yarn workspace @ospex/cli link
 ```
+
+End users install via the tarball flow in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md), not this dev-mode link.
 
 Wallet — Ospex never asks for your private key. Set up Foundry's keystore and point Ospex at it:
 
