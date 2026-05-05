@@ -22,9 +22,9 @@ This guide assumes Polygon mainnet (chain id 137). For Polygon Amoy testnet subs
 
 ## 1. Install the CLI
 
-While `@ospex/sdk` and `@ospex/cli` are private, install from local tarballs.
+Distribution is via [GitHub releases](https://github.com/ospex-org/ospex-sdk/releases). Once a release is tagged, download `ospex-sdk-<ver>.tgz` and `ospex-cli-<ver>.tgz` from the release page, then skip to the **Install** step below — substitute the downloaded paths in the `yarn add` command.
 
-Build the tarballs once in the monorepo:
+Until the first release is tagged, build the tarballs locally from a clone of the monorepo:
 
 ```bash
 # In the ospex-sdk monorepo:
@@ -35,7 +35,7 @@ yarn workspace @ospex/sdk pack --filename ospex-sdk.tgz
 yarn workspace @ospex/cli pack --filename ospex-cli.tgz
 ```
 
-Then, in a working directory where you want to use the CLI:
+**Install** — in a working directory where you want to use the CLI:
 
 ```bash
 cd /path/to/your/working-dir
@@ -45,14 +45,9 @@ yarn add file:/abs/path/to/ospex-sdk/packages/sdk/ospex-sdk.tgz \
 npx ospex --version
 ```
 
-You install **both** tarballs in the same `yarn add` command. (The CLI uses the SDK at runtime but doesn't list it as a regular dependency — yarn 1 has a quirk that turns a transitive `@ospex/sdk` reference into a registry lookup, and the SDK isn't published yet.)
+(For the GitHub-release flow, swap the paths above for the downloaded tarballs — e.g. `file:./ospex-sdk-0.1.0.tgz`.)
 
-When the packages are published this becomes:
-
-```bash
-yarn global add @ospex/sdk @ospex/cli
-ospex --version
-```
+You install **both** tarballs in the same `yarn add` command. The CLI uses the SDK at runtime but doesn't list it as a regular dependency — yarn 1 has a quirk that turns a transitive `@ospex/sdk` reference into a registry lookup, and we distribute through GitHub releases rather than npm by design.
 
 The rest of the guide writes `ospex` for the binary; substitute `npx ospex` until it's on your PATH.
 

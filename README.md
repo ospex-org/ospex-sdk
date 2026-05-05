@@ -11,14 +11,16 @@ This repo is a Yarn 1 workspaces monorepo with two packages:
 
 For the minimum-friction zero-to-commitment walkthrough, see [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). Short version below.
 
-Install (until `@ospex/cli` is published, use local tarballs):
+For local development from this repo (workspace-link puts `ospex` on your PATH for dev iteration):
 
 ```bash
 yarn install
 yarn workspace @ospex/sdk build
 yarn workspace @ospex/cli build
-yarn workspace @ospex/cli link             # adds `ospex` to your PATH (dev mode)
+yarn workspace @ospex/cli link
 ```
+
+End users install via the tarball flow in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md), not this dev-mode link.
 
 Wallet — Ospex never asks for your private key. Set up Foundry's keystore and point Ospex at it:
 
@@ -53,13 +55,17 @@ ospex commitments nonce-floor --maker <addr> \               # read on-chain non
   --contest-id <id> --scorer <addr> --line <ticks>
 ```
 
-When the packages are published this becomes `yarn global add @ospex/sdk @ospex/cli`. Until then, use the workspace-link flow above for development, or the tarball flow in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md) for consuming the CLI from an external project.
+Distribution is via [GitHub releases](https://github.com/ospex-org/ospex-sdk/releases) — download both tarballs from the latest release and install with the tarball flow in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). The workspace-link flow above is for local development from this repo.
 
 ## Quick start (SDK)
 
+Install via [GitHub releases](https://github.com/ospex-org/ospex-sdk/releases) — download `ospex-sdk-<ver>.tgz` and:
+
 ```bash
-yarn add @ospex/sdk
+yarn add file:./ospex-sdk-<ver>.tgz
 ```
+
+Until the first release is tagged, build the tarball locally from a clone of this repo (`yarn workspace @ospex/sdk build && yarn workspace @ospex/sdk pack --filename ospex-sdk.tgz`) and `yarn add file:/abs/path/to/ospex-sdk/packages/sdk/ospex-sdk.tgz`.
 
 ```typescript
 import { OspexClient } from '@ospex/sdk';
