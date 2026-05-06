@@ -123,7 +123,12 @@ function readLine(options: ReadLineOptions): Promise<string> {
           continue;
         }
         buf += ch;
-        if (!options.hidden) process.stderr.write(ch);
+        // Don't echo. In non-hidden mode the terminal is in canonical mode
+        // and the kernel TTY driver already echoes user input as it's
+        // typed; echoing again from here produces the typed value a second
+        // time at the start of the next line. In hidden mode raw mode is
+        // on and we *want* no echo (it's a passphrase). Both cases: no
+        // write here.
       }
     };
 
