@@ -310,3 +310,37 @@ export interface LeaderboardBody {
   entries: LeaderboardEntryBody[];
   pagination: PaginationBody;
 }
+
+export interface GameTeamBody {
+  name: string;
+  abbreviation: string;
+}
+
+export interface GameExternalIdsBody {
+  jsonodds: string;
+  sportspage: string | null;
+  rundown: string | null;
+}
+
+export interface GameBody {
+  gameId: string;
+  slug: string;
+  sport: string;
+  matchTime: string;
+  status: string;
+  homeTeam: GameTeamBody;
+  awayTeam: GameTeamBody;
+  hasOdds: boolean;
+  contestCreated: boolean;
+  contestId: string | null;
+  canCreateContest: boolean;
+  externalIds: GameExternalIdsBody;
+}
+
+export interface GamesListBody {
+  sport: string | null;
+  windowHours: number;
+  availableOnly: boolean;
+  games: GameBody[];
+  pagination: PaginationBody;
+}

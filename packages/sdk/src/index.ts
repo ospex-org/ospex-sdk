@@ -77,4 +77,11 @@ export type {
   OddsSubscribeArgs,
   OddsSubscribeHandlers,
   Subscription,
+  // game
+  Game,
+  GameSport,
+  GameStatus,
+  GameTeam,
+  GameExternalIds,
+  GamesListOptions,
 } from './types/index.js';

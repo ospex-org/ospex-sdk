@@ -178,12 +178,18 @@ The full command reference is in the [README](../README.md).
 Anyone can create a contest — the protocol is permissionless. It's not part of the typical betting flow, but if you want to seed your own market:
 
 ```bash
-ospex contests scripts                # Verify mainnet script approvals are reachable.
-ospex contests create <args>          # Burns LINK + a USDC fee.
-ospex contests wait-verified <id>     # Wait for the Chainlink Functions verification callback.
+# 1. Find a game you'd like to make a contest for.
+ospex games list --sport mlb --hours 24
+
+# 2. Pick a row whose `creatable` column is `yes` and copy its gameId.
+#    (gameId is a stable UUID; the slug column shows you which game it is.)
+ospex contests create --game-id <pasted-gameId>
+
+# 3. Wait for the Chainlink Functions verification callback.
+ospex contests wait-verified <contestId>
 ```
 
-`ospex contests create --help` lists the inputs (rundown id, sportspage id, jsonodds id). Be aware that this burns real LINK on every call; the operator side of contest creation is documented further in the SDK CLAUDE.md.
+`ospex contests create` burns real LINK + a USDC fee on every call — the SDK pre-flights both allowances and prompts for them on demand. The three external IDs the contract requires (rundown / sportspage / jsonodds) are resolved server-side from the gameId; you never deal with them directly. Operator-side details on the M4 pipeline live in the SDK CLAUDE.md.
 
 ## Troubleshooting
 

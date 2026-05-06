@@ -50,3 +50,11 @@ export type {
   OddsSubscribeHandlers,
   Subscription,
 } from './odds.js';
+export type {
+  Game,
+  GameSport,
+  GameStatus,
+  GameTeam,
+  GameExternalIds,
+  GamesListOptions,
+} from './game.js';

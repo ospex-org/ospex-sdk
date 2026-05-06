@@ -23,6 +23,7 @@ import { commitmentsCancelAllCommand } from './commands/commitments/cancel-all.j
 import { commitmentsNonceFloorCommand } from './commands/commitments/nonce-floor.js';
 import { commitmentsShowCommand } from './commands/commitments/show.js';
 import { makeContestsCommand } from './commands/contests/index.js';
+import { gamesCommand } from './commands/games/index.js';
 import { makeSpeculationsCommand } from './commands/speculations/index.js';
 import { positionsListCommand } from './commands/positions/list.js';
 import { positionsStatusCommand } from './commands/positions/status.js';
@@ -61,6 +62,7 @@ function makeProgram(): Command {
   program.addCommand(commitments);
 
   program.addCommand(makeContestsCommand());
+  program.addCommand(gamesCommand);
   program.addCommand(makeSpeculationsCommand());
 
   const positions = new Command('positions').description('Read positions for an address.');

@@ -2,7 +2,8 @@
  * create() input validation. The full happy path requires a viem
  * PublicClient + Signer + on-chain readContract chain that's prohibitive
  * to mock for unit tests. We cover:
- *   - validation gate (no external ids → throws)
+ *   - missing gameId → throws OspexValidationError
+ *   - game.canCreateContest=false → throws with descriptive reason
  *   - approvals expired → throws OspexScriptApprovalError(reason='expired')
  * Integration of the full pipeline is exercised manually per
  * docs/MANUAL_INTEGRATION_TESTING.md.
@@ -13,7 +14,9 @@ import { OspexScriptApprovalError, OspexValidationError } from '../src/errors.js
 import { ScriptsCache } from '../src/contests/scripts.js';
 import type { ContestsContext } from '../src/contests/context.js';
 import type { ApprovedScripts } from '../src/types/contest.js';
+import type { Game } from '../src/types/game.js';
 import type { ContestsApi } from '../src/api/contests.js';
+import type { GamesApi } from '../src/api/games.js';
 
 function buildApprovals(verifyValidUntil: number): ApprovedScripts {
   const stub: ApprovedScripts['verify'] = {
@@ -34,21 +37,54 @@ function buildApprovals(verifyValidUntil: number): ApprovedScripts {
   };
 }
 
-function makeCtx(approvals: ApprovedScripts): ContestsContext {
+function buildGame(overrides: Partial<Game> = {}): Game {
+  return {
+    gameId: 'abc',
+    slug: 'aaa-bbb-2026-05-05',
+    sport: 'mlb',
+    matchTime: '2026-05-05T23:00:00+00:00',
+    status: 'upcoming',
+    homeTeam: { name: 'Home', abbreviation: 'HM' },
+    awayTeam: { name: 'Away', abbreviation: 'AW' },
+    hasOdds: true,
+    contestCreated: false,
+    contestId: null,
+    canCreateContest: true,
+    externalIds: { jsonodds: 'abc', sportspage: 'sp1', rundown: 'rd1' },
+    ...overrides,
+  };
+}
+
+function makeCtx(approvals: ApprovedScripts, game: Game = buildGame()): ContestsContext {
   const contestsApi = {
     scripts: async () => approvals,
   } as unknown as ContestsApi;
+  const gamesApi = {
+    get: async () => game,
+  } as unknown as GamesApi;
   return {
     contestsApi,
+    gamesApi,
     getChainId: () => 137 as const,
   } as unknown as ContestsContext;
 }
 
 describe('contests.create — validation', () => {
-  it('throws OspexValidationError when all three external ids are empty', async () => {
+  it('throws OspexValidationError when gameId is missing', async () => {
     const cache = new ScriptsCache();
     const ctx = makeCtx(buildApprovals(2_000_000_000));
+    // @ts-expect-error — exercising the runtime guard for callers that
+    // ignore the type and pass {} (e.g. JS consumers).
     await expect(create(ctx, {}, cache)).rejects.toBeInstanceOf(OspexValidationError);
+  });
+
+  it('throws OspexValidationError when game.canCreateContest is false', async () => {
+    const cache = new ScriptsCache();
+    const ctx = makeCtx(
+      buildApprovals(2_000_000_000),
+      buildGame({ canCreateContest: false, contestCreated: true, contestId: '12' }),
+    );
+    await expect(create(ctx, { gameId: 'abc' }, cache)).rejects.toBeInstanceOf(OspexValidationError);
   });
 
   it('throws OspexScriptApprovalError(reason=expired) when verify approval is past validUntil', async () => {
@@ -56,10 +92,10 @@ describe('contests.create — validation', () => {
     // Past timestamp — 2020-01-01.
     const ctx = makeCtx(buildApprovals(1_577_836_800));
     await expect(
-      create(ctx, { jsonoddsId: 'abc' }, cache),
+      create(ctx, { gameId: 'abc' }, cache),
     ).rejects.toBeInstanceOf(OspexScriptApprovalError);
     try {
-      await create(ctx, { jsonoddsId: 'abc' }, cache);
+      await create(ctx, { gameId: 'abc' }, cache);
     } catch (err) {
       expect((err as OspexScriptApprovalError).reason).toBe('expired');
     }
@@ -72,9 +108,9 @@ describe('contests.create — validation', () => {
     // Will fail later at fetchSource (no network) — but NOT with
     // OspexScriptApprovalError(reason=expired), proving the expiry
     // check accepted validUntil=0.
-    await expect(create(ctx, { jsonoddsId: 'abc' }, cache)).rejects.toThrow();
+    await expect(create(ctx, { gameId: 'abc' }, cache)).rejects.toThrow();
     try {
-      await create(ctx, { jsonoddsId: 'abc' }, cache);
+      await create(ctx, { gameId: 'abc' }, cache);
     } catch (err) {
       const isExpired =
         err instanceof OspexScriptApprovalError && err.reason === 'expired';
