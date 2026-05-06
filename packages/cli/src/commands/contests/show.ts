@@ -6,7 +6,7 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { getClient } from '../../lib/client.js';
-import { formatOutput } from '../../lib/format.js';
+import { formatMatchTime, formatOutput } from '../../lib/format.js';
 
 const optionsSchema = z.object({ json: z.boolean().optional() });
 
@@ -29,7 +29,7 @@ export const contestShowCommand = new Command('show')
         away: contest.awayTeam,
         home: contest.homeTeam,
         sport: contest.sport,
-        matchTime: contest.matchTime,
+        matchTime: formatMatchTime(contest.matchTime),
         status: contest.status,
         speculations: contest.speculations.length,
       },
