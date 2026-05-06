@@ -103,14 +103,45 @@ async function main(): Promise<void> {
   } catch (err) {
     if (err instanceof OspexError) {
       process.stderr.write(`error (${err.code}): ${err.message}\n`);
+      writeCauseChain(err);
       process.exit(1);
     }
     if (err instanceof Error) {
       process.stderr.write(`error: ${err.message}\n`);
+      writeCauseChain(err);
       process.exit(1);
     }
     process.stderr.write(`error: ${String(err)}\n`);
     process.exit(1);
+  }
+}
+
+/**
+ * Walk `Error.cause` chain to surface viem / RPC errors that the SDK
+ * attached but didn't unpack. viem's BaseError carries the decoded
+ * revert under `shortMessage` and any auxiliary lines under
+ * `metaMessages` — both are useful when an estimateGas reverts in
+ * `contests create` and the cause is a custom error like
+ * `OracleModule__InvalidScriptApproval`.
+ */
+function writeCauseChain(err: unknown): void {
+  let cur: unknown = (err as { cause?: unknown }).cause;
+  let depth = 0;
+  while (cur instanceof Error && depth < 6) {
+    const e = cur as {
+      message: string;
+      shortMessage?: string;
+      metaMessages?: string[];
+    };
+    const headline = e.shortMessage ?? e.message;
+    process.stderr.write(`  caused by: ${headline}\n`);
+    if (e.metaMessages?.length) {
+      for (const line of e.metaMessages) {
+        process.stderr.write(`    ${line}\n`);
+      }
+    }
+    cur = (cur as { cause?: unknown }).cause;
+    depth++;
   }
 }
 

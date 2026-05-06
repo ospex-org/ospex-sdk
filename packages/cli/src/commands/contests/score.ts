@@ -13,7 +13,9 @@ import { promptYesNo, promptValue } from '../../lib/prompt.js';
 
 const optionsSchema = z.object({
   subscriptionId: z.string().regex(/^[0-9]+$/).optional(),
-  gasLimit: z.coerce.number().int().positive().max(10_000_000).optional(),
+  // Mirror create.ts — Chainlink Functions Router caps callback gas at
+  // 300_000 on every supported chain.
+  gasLimit: z.coerce.number().int().positive().max(300_000).optional(),
   json: z.boolean().optional(),
 });
 
@@ -21,7 +23,7 @@ export const contestScoreCommand = new Command('score')
   .description('Submit OracleModule.scoreContestFromOracle for an existing contest.')
   .argument('<contestId>', 'contest id (uint256)')
   .option('--subscription-id <n>', 'Chainlink Functions subscription id')
-  .option('--gas-limit <n>', 'callback gas limit (default 500000)')
+  .option('--gas-limit <n>', 'Chainlink Functions callback gas limit (default 300000, Polygon router max)')
   .addOption(new Option('--json').hideHelp(false))
   .action(async (contestIdArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
