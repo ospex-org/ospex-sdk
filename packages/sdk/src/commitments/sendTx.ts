@@ -31,6 +31,26 @@ export interface SendTxResult {
   receipt: Awaited<ReturnType<typeof broadcastSignedTx>>['receipt'];
 }
 
+/**
+ * Compose a viem-style chain error into a one-line summary for the
+ * OspexChainError message. viem errors pack the decoded revert into
+ * `shortMessage` (e.g. "Execution reverted with reason: …") and the
+ * full chain-of-explanation into `message` / `metaMessages`. We prefer
+ * `shortMessage` for the headline and append `metaMessages` so a
+ * decoded custom-error name surfaces inline. The original viem error
+ * is preserved on `cause` for callers that want the full chain.
+ */
+function formatPreSendErr(stage: string, err: unknown): string {
+  const e = err as {
+    shortMessage?: string;
+    message?: string;
+    metaMessages?: string[];
+  } | undefined;
+  const headline = e?.shortMessage ?? e?.message ?? String(err);
+  const meta = e?.metaMessages?.length ? ' / ' + e.metaMessages.join(' / ') : '';
+  return `Pre-send chain reads failed (${stage}): ${headline}${meta}`;
+}
+
 export async function buildSignAndSend(params: SendTxParams): Promise<SendTxResult> {
   const { publicClient, signer, chainId, to, data } = params;
   const from = await signer.getAddress();
@@ -40,15 +60,30 @@ export async function buildSignAndSend(params: SendTxParams): Promise<SendTxResu
   let maxPriorityFeePerGas: bigint;
   let gas: bigint;
   try {
-    [nonce, { maxFeePerGas, maxPriorityFeePerGas }, gas] = await Promise.all([
-      publicClient.getTransactionCount({ address: from, blockTag: 'pending' }),
-      publicClient.estimateFeesPerGas(),
-      params.gas !== undefined
-        ? Promise.resolve(params.gas)
-        : publicClient.estimateGas({ account: from, to, data }).then((g) => (g * 110n) / 100n),
-    ]);
+    nonce = await publicClient.getTransactionCount({ address: from, blockTag: 'pending' });
   } catch (err) {
-    throw new OspexChainError('Pre-send chain reads failed (gas / fees / nonce).', { cause: err });
+    throw new OspexChainError(formatPreSendErr('nonce read', err), { cause: err });
+  }
+  try {
+    ({ maxFeePerGas, maxPriorityFeePerGas } = await publicClient.estimateFeesPerGas());
+  } catch (err) {
+    throw new OspexChainError(formatPreSendErr('estimateFeesPerGas', err), { cause: err });
+  }
+  try {
+    if (params.gas !== undefined) {
+      gas = params.gas;
+    } else {
+      const estimated = await publicClient.estimateGas({ account: from, to, data });
+      gas = (estimated * 110n) / 100n;
+    }
+  } catch (err) {
+    // estimateGas failures are the most common source of "I can't tell what's
+    // wrong" tickets — the underlying error from viem usually carries the
+    // decoded revert reason (`shortMessage` + `metaMessages`), but we used
+    // to swallow it under a generic wrapper. Surface the full message and
+    // attach the original via `cause` so the CLI's cause-chain walker can
+    // expose any custom-error selector / decoded reason.
+    throw new OspexChainError(formatPreSendErr('estimateGas', err), { cause: err });
   }
 
   const txArgs: SignTransactionArgs = {
