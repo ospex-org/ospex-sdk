@@ -5,17 +5,33 @@
 import type { ChainId } from '../types/protocol.js';
 
 /**
- * Default Chainlink Functions callback gas limit for OracleModule requests.
+ * Per-chain maximum Chainlink Functions callback gas. The router reverts
+ * with `GasLimitTooBig(uint32)` (selector 0x1d70f87a) carrying its
+ * `maxCallbackGasLimit` as the argument when a request exceeds this
+ * value. Both Polygon mainnet and Amoy currently sit at 300_000; this
+ * lookup exists so a future supported chain (e.g. Optimism, Base) can
+ * carry a different ceiling without touching the call sites.
  *
- * Capped at the Polygon mainnet Functions Router maximum (300,000). The
- * router reverts with `GasLimitTooBig(uint32)` (selector 0x1d70f87a) on
- * any request above its `maxCallbackGasLimit`. Polygon Amoy has the same
- * 300k ceiling, and the verify / score / market-update scripts the
- * protocol ships fit comfortably under it (lovable runs the same value).
+ * The SDK validates user-supplied `gasLimit` against this ceiling before
+ * building calldata (rather than letting the router revert with a LINK
+ * burn). The CLI's zod schema enforces the same upper bound so the user
+ * sees a typed rejection at parse time.
+ */
+export const OSPEX_FUNCTIONS_CALLBACK_GAS_MAX: Record<ChainId, number> = {
+  137: 300_000,
+  80002: 300_000,
+};
+
+/**
+ * Default Chainlink Functions callback gas limit for OracleModule requests.
+ * Picked to match the router cap on every supported chain so every request
+ * is accepted; the verify / score / market-update scripts the protocol
+ * ships fit comfortably under it (lovable runs the same value).
  *
  * Operators can pass a smaller value via `args.gasLimit` to economize on
- * subscription LINK draw; passing a larger value makes every request
- * revert at the router and burns the LINK transferAndCall payment.
+ * subscription LINK draw. Larger values are rejected client-side against
+ * `OSPEX_FUNCTIONS_CALLBACK_GAS_MAX` rather than letting the router revert
+ * after the LINK transferAndCall payment.
  */
 export const OSPEX_DEFAULT_GAS_LIMIT = 300_000 as const;
 

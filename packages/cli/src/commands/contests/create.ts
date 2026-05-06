@@ -24,7 +24,10 @@ import { promptYesNo, promptValue } from '../../lib/prompt.js';
 const optionsSchema = z.object({
   gameId: z.string().min(1),
   subscriptionId: z.string().regex(/^[0-9]+$/).optional(),
-  gasLimit: z.coerce.number().int().positive().max(10_000_000).optional(),
+  // 300_000 is the Chainlink Functions Router cap on every supported
+  // chain. SDK does the same chain-aware check; rejecting at parse time
+  // gives a typed CLI error without round-tripping through the SDK.
+  gasLimit: z.coerce.number().int().positive().max(300_000).optional(),
   // Commander's `--no-wait` attribute name is `wait` (default true).
   // The schema must mirror commander's naming or Zod silently strips the
   // value and the wait branch always runs.

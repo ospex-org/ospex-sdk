@@ -36,6 +36,7 @@ import {
   LINK_PAYMENT_PER_CALL_WEI,
   OSPEX_CREATE_CONTEST_TX_GAS,
   OSPEX_DEFAULT_GAS_LIMIT,
+  OSPEX_FUNCTIONS_CALLBACK_GAS_MAX,
   OSPEX_SHARED_SUBSCRIPTION_ID,
 } from '../contracts/constants.js';
 import {
@@ -104,8 +105,13 @@ export async function create(
   const sportspageId = game.externalIds.sportspage ?? '';
   const jsonoddsId = game.externalIds.jsonodds;
 
-  // 2. Resolve subscription.
+  // 2. Resolve subscription + validate callback gas against the per-chain
+  // router cap. Anything above the cap reverts at the Functions router
+  // with `GasLimitTooBig(uint32)` *after* the LINK transferAndCall
+  // payment, which would burn the per-call LINK with no contest created.
+  // Validate before any network or chain reads.
   const chainId = ctx.getChainId();
+  assertGasLimitWithinChainCap(args.gasLimit, chainId);
   const subscriptionId = resolveSubscriptionId(args.subscriptionId, chainId);
 
   // 3. Approvals.
@@ -183,6 +189,30 @@ export async function create(
   const requestId = parseRequestIdFromReceipt(receipt.logs, addresses.oracleModule);
 
   return { contestId, txHash, receipt, requestId };
+}
+
+/**
+ * Reject `args.gasLimit` values above the Chainlink Functions Router's
+ * `maxCallbackGasLimit` for the active chain. Shared by create + score
+ * (also exported via score.ts re-import). The router would otherwise
+ * revert with `GasLimitTooBig(uint32)` *after* it has accepted the LINK
+ * transferAndCall payment — i.e. the user's per-call LINK is burned for
+ * a request that never executes. Catching this client-side preserves
+ * the LINK and gives a typed error.
+ */
+export function assertGasLimitWithinChainCap(
+  gasLimit: number | undefined,
+  chainId: 137 | 80002,
+): void {
+  if (gasLimit === undefined) return;
+  const cap = OSPEX_FUNCTIONS_CALLBACK_GAS_MAX[chainId];
+  if (gasLimit > cap) {
+    throw new OspexValidationError(
+      `gasLimit ${gasLimit} exceeds the Chainlink Functions Router cap of ${cap} on chain ${chainId}. ` +
+        'The router would revert with GasLimitTooBig(uint32) after consuming the LINK payment.',
+      { field: 'gasLimit' },
+    );
+  }
 }
 
 function resolveSubscriptionId(override: bigint | undefined, chainId: 137 | 80002): bigint {

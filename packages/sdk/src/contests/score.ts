@@ -38,6 +38,7 @@ import { OspexSubscriptionError, OspexValidationError } from '../errors.js';
 import { buildSignAndSend } from '../commitments/sendTx.js';
 import type { Hex } from '../types/signer.js';
 import { assertLinkSufficient } from './helpers/approvals.js';
+import { assertGasLimitWithinChainCap } from './create.js';
 import { fetchEncryptedSecrets } from './helpers/fetchSecrets.js';
 import { assertSourceMatches, fetchSource } from './helpers/fetchSource.js';
 import type { ContestsContext } from './context.js';
@@ -69,6 +70,7 @@ export async function score(
   }
 
   const chainId = ctx.getChainId();
+  assertGasLimitWithinChainCap(args.gasLimit, chainId);
   const subscriptionId = resolveSubscriptionId(args.subscriptionId, chainId);
 
   const approvals = await scriptsCache.get(ctx);
