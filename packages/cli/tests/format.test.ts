@@ -52,18 +52,21 @@ describe('formatOutput / toHuman', () => {
 });
 
 describe('formatMatchTime', () => {
-  it('renders an ISO UTC string in 12h local form with a timezone abbreviation', () => {
+  it('renders a friendly local-time string for a UTC ISO input', () => {
     const out = formatMatchTime('2026-05-06T19:45:00+00:00');
-    // Locale and timezone vary across machines, so we pin only the
-    // shape: month-name + day, AM/PM, and a non-empty timezone token.
-    expect(out).toMatch(/[A-Z][a-z]+ \d+/);
-    expect(out).toMatch(/\d+:\d{2} (?:AM|PM)/);
-    expect(out).toMatch(/[A-Z]{2,5}|GMT[+-]\d+/);
-    // 24h ISO is no longer surfaced. (Don't check "T" — it can appear in
-    // timezone abbreviations like CDT/EST, and the matchers above already
-    // pin the friendly format.)
-    expect(out).not.toContain('19:45');
-    expect(out).not.toMatch(/2026-05-06/);
+
+    // The whole point — the raw ISO must not pass through.
+    expect(out).not.toContain('2026-05-06T');
+    expect(out).not.toBe('2026-05-06T19:45:00+00:00');
+
+    // Some clock-style time component is rendered.
+    expect(out).toMatch(/\d{1,2}:\d{2}/);
+
+    // At least some locale-formatted text (month name in any language).
+    // Locale + timezone vary across machines (en-US "May 6, 2:45 PM CDT",
+    // en-GB "6 May, 2:45 pm GMT-5", de-DE "6. Mai, 14:45 GMT-5", etc.) so
+    // we pin only the shape rather than asserting on en-US specifics.
+    expect(out).toMatch(/[A-Za-z]/);
   });
 
   it('returns the input unchanged if it cannot be parsed', () => {
