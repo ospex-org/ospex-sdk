@@ -19,15 +19,17 @@ describe('makeContestsCommand', () => {
     expect(root.name()).toBe('contests');
   });
 
-  it('create requires at least one external id (validation runs before tx submission)', async () => {
+  it('create takes a required --game-id (resolved to external IDs server-side)', async () => {
     const root = makeContestsCommand();
     const create = root.commands.find((c) => c.name() === 'create');
     expect(create).toBeDefined();
     if (create === undefined) return;
     const help = create.helpInformation();
-    expect(help).toMatch(/--rundown-id/);
-    expect(help).toMatch(/--sportspage-id/);
-    expect(help).toMatch(/--jsonodds-id/);
+    expect(help).toMatch(/--game-id/);
+    // External-id flags are gone — they're internal to the SDK now.
+    expect(help).not.toMatch(/--rundown-id/);
+    expect(help).not.toMatch(/--sportspage-id/);
+    expect(help).not.toMatch(/--jsonodds-id/);
   });
 
   it('score requires the contestId positional argument', () => {

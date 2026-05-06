@@ -1,6 +1,9 @@
 /**
- * `ospex contests create [--rundown-id ID] [--sportspage-id ID] [--jsonodds-id ID]`
- *  - At least one of the three external ids is required.
+ * `ospex contests create --game-id <id>`
+ *  - `gameId` is the stable identifier from `ospex games list` (the
+ *    row's `jsonodds_id`). The SDK fetches `/v1/games/:gameId`,
+ *    extracts the three external IDs the contract requires, and builds
+ *    the on-chain tx. Users never deal with the three IDs directly.
  *  - On OspexAllowanceError: prompt to approve the right (token, spender)
  *    pair and retry once. LINK→OracleModule and USDC→TreasuryModule are
  *    distinguished from M2's USDC→PositionModule by inspecting err.token.
@@ -16,9 +19,7 @@ import { getClient } from '../../lib/client.js';
 import { promptYesNo, promptValue } from '../../lib/prompt.js';
 
 const optionsSchema = z.object({
-  rundownId: z.string().min(1).optional(),
-  sportspageId: z.string().min(1).optional(),
-  jsonoddsId: z.string().min(1).optional(),
+  gameId: z.string().min(1),
   subscriptionId: z.string().regex(/^[0-9]+$/).optional(),
   gasLimit: z.coerce.number().int().positive().max(10_000_000).optional(),
   // Commander's `--no-wait` attribute name is `wait` (default true).
@@ -30,9 +31,7 @@ const optionsSchema = z.object({
 
 export const contestCreateCommand = new Command('create')
   .description('Create a contest by submitting OracleModule.createContestFromOracle.')
-  .option('--rundown-id <id>', 'Rundown contest id')
-  .option('--sportspage-id <id>', 'Sportspage contest id')
-  .option('--jsonodds-id <id>', 'JSONOdds contest id')
+  .requiredOption('--game-id <id>', 'gameId from `ospex games list`')
   .option(
     '--subscription-id <n>',
     'Chainlink Functions subscription id (defaults to OSPEX_SHARED_SUBSCRIPTION_ID per chain)',
@@ -42,20 +41,12 @@ export const contestCreateCommand = new Command('create')
   .addOption(new Option('--json').hideHelp(false))
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
-    if (
-      opts.rundownId === undefined &&
-      opts.sportspageId === undefined &&
-      opts.jsonoddsId === undefined
-    ) {
-      throw new Error('Provide at least one of --rundown-id, --sportspage-id, --jsonodds-id.');
-    }
 
     const client = await getClient({ requiresSigner: true, requiresChain: true });
 
-    const args: Parameters<typeof client.contests.create>[0] = {};
-    if (opts.rundownId !== undefined) args.rundownId = opts.rundownId;
-    if (opts.sportspageId !== undefined) args.sportspageId = opts.sportspageId;
-    if (opts.jsonoddsId !== undefined) args.jsonoddsId = opts.jsonoddsId;
+    const args: Parameters<typeof client.contests.create>[0] = {
+      gameId: opts.gameId,
+    };
     if (opts.subscriptionId !== undefined) args.subscriptionId = BigInt(opts.subscriptionId);
     if (opts.gasLimit !== undefined) args.gasLimit = opts.gasLimit;
 

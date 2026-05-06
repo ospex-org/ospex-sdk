@@ -151,7 +151,8 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex health` | Hits `/healthz` and prints liveness info. |
 | `ospex contests list [--sport --status --hours --limit --offset]` | Lists upcoming contests with their speculations. |
 | `ospex contests show <contestId>` | One contest with its full orderbook. |
-| `ospex contests create [--rundown-id --sportspage-id --jsonodds-id]` | Submit `OracleModule.createContestFromOracle` (M4). |
+| `ospex games list [--sport --hours --all]` | List upcoming games available for contest creation. Default filters to creatable rows; `--all` includes incomplete / past / already-created games. |
+| `ospex contests create --game-id <id>` | Submit `OracleModule.createContestFromOracle` (M4). `gameId` is the stable id from `ospex games list`; the SDK resolves the three external IDs server-side. |
 | `ospex contests score <contestId>` | Submit `OracleModule.scoreContestFromOracle` (M4). |
 | `ospex contests wait-verified <contestId>` | Poll until the contest reaches Verified state (M4). |
 | `ospex contests scripts` | Show the EIP-712 script approvals (debug). |

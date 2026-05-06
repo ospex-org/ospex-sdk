@@ -8,6 +8,7 @@
 import type { PublicClient } from 'viem';
 import type { ApiClient } from '../api/client.js';
 import type { ContestsApi } from '../api/contests.js';
+import type { GamesApi } from '../api/games.js';
 import type { ChainId } from '../types/protocol.js';
 import type { Signer } from '../types/signer.js';
 import type { OspexAddresses } from '../contracts/addresses.js';
@@ -15,6 +16,7 @@ import type { OspexAddresses } from '../contracts/addresses.js';
 export interface ContestsContext {
   api: ApiClient;
   contestsApi: ContestsApi;
+  gamesApi: GamesApi;
   requireSigner(): Signer;
   getChainId(): ChainId;
   getAddresses(): OspexAddresses;

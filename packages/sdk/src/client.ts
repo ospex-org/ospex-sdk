@@ -16,6 +16,7 @@ import type { PublicClient } from 'viem';
 import { ApiClient } from './api/client.js';
 import { ConfigApi } from './api/config.js';
 import { ContestsApi } from './api/contests.js';
+import { GamesApi } from './api/games.js';
 import { HealthApi } from './api/health.js';
 import { LeaderboardApi } from './api/leaderboard.js';
 import { PositionsApi } from './api/positions.js';
@@ -25,6 +26,7 @@ import { createReadClient } from './chain/client.js';
 import { Commitments } from './commitments/index.js';
 import { NonceCounter } from './commitments/context.js';
 import { Contests } from './contests/index.js';
+import { Games } from './games/index.js';
 import { Positions } from './positions/index.js';
 import { getAddresses, type OspexAddresses } from './contracts/addresses.js';
 import { OspexConfigError } from './errors.js';
@@ -74,6 +76,7 @@ export interface OspexClientOptions {
 export class OspexClient {
   readonly commitments: Commitments;
   readonly contests: Contests;
+  readonly games: Games;
   readonly speculations: SpeculationsApi;
   readonly positions: Positions;
   readonly leaderboard: LeaderboardApi;
@@ -107,12 +110,14 @@ export class OspexClient {
     this._addresses = getAddresses(this._chainId);
 
     const contestsApi = new ContestsApi(this.api);
+    const gamesApi = new GamesApi(this.api);
     const positionsApi = new PositionsApi(this.api);
     this.speculations = new SpeculationsApi(this.api);
     this.leaderboard = new LeaderboardApi(this.api);
     this.protocol = new ProtocolApi(this.api);
     this.health = new HealthApi(this.api);
     this.configApi = new ConfigApi(this.api);
+    this.games = new Games({ gamesApi });
 
     this.commitments = new Commitments({
       api: this.api,
@@ -126,6 +131,7 @@ export class OspexClient {
     this.contests = new Contests({
       api: this.api,
       contestsApi,
+      gamesApi,
       requireSigner: () => this.signer(),
       getChainId: () => this._chainId,
       getAddresses: () => this._addresses,

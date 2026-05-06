@@ -1,8 +1,10 @@
 /**
- * `client.contests.create(args)` — submits an `OracleModule.createContestFromOracle`
- * transaction. Full pipeline:
+ * `client.contests.create({ gameId, ... })` — submits an
+ * `OracleModule.createContestFromOracle` transaction. Full pipeline:
  *
- *  1. Validate at least one external id present.
+ *  1. Resolve `gameId` to the game row via `GET /v1/games/:gameId` and
+ *     extract `externalIds.{rundown, sportspage, jsonodds}`. Refuse if
+ *     the game's `canCreateContest` flag is false.
  *  2. Resolve the Chainlink subscription (caller override or shared default).
  *  3. Fetch script approvals (cached).
  *  4. Resolve verify JS source (caller override or fetch from approvals.verify.sourceUrl).
@@ -16,6 +18,11 @@
  * Chainlink Functions request id) is parsed when present in receipt
  * logs; null when the FunctionsClient `RequestSent` event isn't in
  * the OracleModule ABI we ship with.
+ *
+ * `gameId` here is the `jsonodds_id` (stable). The user-facing CLI
+ * surfaces `client.games.list()` so consumers can discover the gameId
+ * for a target game; they pass it through `--game-id` and the SDK
+ * does all the external-ID resolution behind the scenes.
  */
 import {
   encodeFunctionData,
@@ -46,9 +53,13 @@ import type { ContestsContext } from './context.js';
 import type { ScriptsCache } from './scripts.js';
 
 export interface CreateContestArgs {
-  rundownId?: string;
-  sportspageId?: string;
-  jsonoddsId?: string;
+  /**
+   * The `gameId` field from `client.games.list()` / `client.games.get()` —
+   * stable jsonodds_id of the target game. The SDK resolves the row
+   * via `GET /v1/games/:gameId` and pulls the three external IDs the
+   * contract requires.
+   */
+  gameId: string;
   /** Defaults to OSPEX_SHARED_SUBSCRIPTION_ID for the configured chain. */
   subscriptionId?: bigint;
   /** Defaults to OSPEX_DEFAULT_GAS_LIMIT (500_000). */
@@ -71,15 +82,26 @@ export async function create(
   args: CreateContestArgs,
   scriptsCache: ScriptsCache,
 ): Promise<CreateContestResult> {
-  // 1. Validate external ids.
-  const rundownId = args.rundownId ?? '';
-  const sportspageId = args.sportspageId ?? '';
-  const jsonoddsId = args.jsonoddsId ?? '';
-  if (rundownId === '' && sportspageId === '' && jsonoddsId === '') {
+  // 1. Resolve gameId to the game row → pull external IDs.
+  if (typeof args.gameId !== 'string' || args.gameId === '') {
     throw new OspexValidationError(
-      'At least one of rundownId, sportspageId, jsonoddsId is required (ContestModule.sol:207-213).',
+      'gameId is required. Get one from `client.games.list()` / `ospex games list`.',
     );
   }
+  const game = await ctx.gamesApi.get(args.gameId);
+  if (!game.canCreateContest) {
+    const reasons: string[] = [];
+    if (game.contestCreated) reasons.push('contest already created');
+    if (game.status !== 'upcoming') reasons.push(`status is "${game.status}", not "upcoming"`);
+    if (game.externalIds.sportspage === null) reasons.push('sportspage_id missing');
+    if (game.externalIds.rundown === null) reasons.push('rundown_id missing');
+    throw new OspexValidationError(
+      `Game ${args.gameId} cannot have a contest created: ${reasons.join(', ') || 'unknown reason'}.`,
+    );
+  }
+  const rundownId = game.externalIds.rundown ?? '';
+  const sportspageId = game.externalIds.sportspage ?? '';
+  const jsonoddsId = game.externalIds.jsonodds;
 
   // 2. Resolve subscription.
   const chainId = ctx.getChainId();
