@@ -34,6 +34,7 @@ import {
 import { contestModuleAbi, oracleModuleAbi } from '../contracts/abi/index.js';
 import {
   LINK_PAYMENT_PER_CALL_WEI,
+  OSPEX_CREATE_CONTEST_TX_GAS,
   OSPEX_DEFAULT_GAS_LIMIT,
   OSPEX_SHARED_SUBSCRIPTION_ID,
 } from '../contracts/constants.js';
@@ -165,13 +166,16 @@ export async function create(
     ],
   });
 
-  // 9. Submit.
+  // 9. Submit. Hardcoded outer-tx gas (OSPEX_CREATE_CONTEST_TX_GAS) bypasses
+  // estimateGas — see the constant's comment for why. EIP-1559 refunds
+  // anything we don't burn.
   const { txHash, receipt } = await buildSignAndSend({
     publicClient,
     signer,
     chainId,
     to: addresses.oracleModule,
     data,
+    gas: OSPEX_CREATE_CONTEST_TX_GAS,
   });
 
   // 10. Parse contestId and (best-effort) requestId.

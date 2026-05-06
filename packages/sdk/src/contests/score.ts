@@ -31,6 +31,7 @@ import { oracleModuleAbi } from '../contracts/abi/index.js';
 import {
   LINK_PAYMENT_PER_CALL_WEI,
   OSPEX_DEFAULT_GAS_LIMIT,
+  OSPEX_SCORE_CONTEST_TX_GAS,
   OSPEX_SHARED_SUBSCRIPTION_ID,
 } from '../contracts/constants.js';
 import { OspexSubscriptionError, OspexValidationError } from '../errors.js';
@@ -109,6 +110,7 @@ export async function score(
     chainId,
     to: addresses.oracleModule,
     data,
+    gas: OSPEX_SCORE_CONTEST_TX_GAS,
   });
 
   const requestId = parseRequestIdFromReceipt(receipt.logs, addresses.oracleModule);

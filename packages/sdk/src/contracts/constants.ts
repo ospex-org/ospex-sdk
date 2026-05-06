@@ -20,6 +20,25 @@ import type { ChainId } from '../types/protocol.js';
 export const OSPEX_DEFAULT_GAS_LIMIT = 300_000 as const;
 
 /**
+ * Transaction-level gas budget overrides for OracleModule entrypoints.
+ *
+ * Distinct from `OSPEX_DEFAULT_GAS_LIMIT` (the Chainlink callback gas, in
+ * calldata): these are the EVM gas the *outer* tx is allowed to use. The
+ * outer tx body is non-trivial — LINK transferFrom + transferAndCall to
+ * the router, USDC transferFrom via ContestModule → OspexCore →
+ * TreasuryModule, three EIP-712 signature verifications, contest
+ * record creation, and a Chainlink Functions request submit — and
+ * `eth_estimateGas` is unreliable in this region across some Polygon
+ * RPCs (Infura strips revert data, public RPCs hit state-history
+ * issues per `ospex-foundry-matched-pairs/docs/DEPLOYMENT.md`). We
+ * adopt lovable's tested ceilings and bypass estimateGas for these
+ * specific txs. EIP-1559 refunds the unused portion, so paying the
+ * ceiling cost is bounded by actual consumption.
+ */
+export const OSPEX_CREATE_CONTEST_TX_GAS = 2_000_000n as const;
+export const OSPEX_SCORE_CONTEST_TX_GAS = 1_000_000n as const;
+
+/**
  * Per-call LINK payment, in wei. Calculated as 1e18 / linkDenominator.
  *   - Polygon mainnet: linkDenominator = 200 → 0.005 LINK
  *   - Polygon Amoy:    linkDenominator = 250 → 0.004 LINK
