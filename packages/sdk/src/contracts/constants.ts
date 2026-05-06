@@ -4,8 +4,20 @@
  */
 import type { ChainId } from '../types/protocol.js';
 
-/** Default Chainlink Functions callback gas limit for OracleModule requests. */
-export const OSPEX_DEFAULT_GAS_LIMIT = 500_000 as const;
+/**
+ * Default Chainlink Functions callback gas limit for OracleModule requests.
+ *
+ * Capped at the Polygon mainnet Functions Router maximum (300,000). The
+ * router reverts with `GasLimitTooBig(uint32)` (selector 0x1d70f87a) on
+ * any request above its `maxCallbackGasLimit`. Polygon Amoy has the same
+ * 300k ceiling, and the verify / score / market-update scripts the
+ * protocol ships fit comfortably under it (lovable runs the same value).
+ *
+ * Operators can pass a smaller value via `args.gasLimit` to economize on
+ * subscription LINK draw; passing a larger value makes every request
+ * revert at the router and burns the LINK transferAndCall payment.
+ */
+export const OSPEX_DEFAULT_GAS_LIMIT = 300_000 as const;
 
 /**
  * Per-call LINK payment, in wei. Calculated as 1e18 / linkDenominator.

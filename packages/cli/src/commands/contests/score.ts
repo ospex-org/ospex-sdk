@@ -21,7 +21,7 @@ export const contestScoreCommand = new Command('score')
   .description('Submit OracleModule.scoreContestFromOracle for an existing contest.')
   .argument('<contestId>', 'contest id (uint256)')
   .option('--subscription-id <n>', 'Chainlink Functions subscription id')
-  .option('--gas-limit <n>', 'callback gas limit (default 500000)')
+  .option('--gas-limit <n>', 'Chainlink Functions callback gas limit (default 300000, Polygon router max)')
   .addOption(new Option('--json').hideHelp(false))
   .action(async (contestIdArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);

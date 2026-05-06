@@ -62,7 +62,7 @@ export interface CreateContestArgs {
   gameId: string;
   /** Defaults to OSPEX_SHARED_SUBSCRIPTION_ID for the configured chain. */
   subscriptionId?: bigint;
-  /** Defaults to OSPEX_DEFAULT_GAS_LIMIT (500_000). */
+  /** Defaults to OSPEX_DEFAULT_GAS_LIMIT (300_000 — Polygon Functions Router cap). */
   gasLimit?: number;
   /** Skip the ospex-api-server fetch when provided. */
   encryptedSecretsUrls?: Hex;

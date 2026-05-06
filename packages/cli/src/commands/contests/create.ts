@@ -39,7 +39,7 @@ export const contestCreateCommand = new Command('create')
     '--subscription-id <n>',
     'Chainlink Functions subscription id (defaults to OSPEX_SHARED_SUBSCRIPTION_ID per chain)',
   )
-  .option('--gas-limit <n>', 'callback gas limit (default 500000)')
+  .option('--gas-limit <n>', 'Chainlink Functions callback gas limit (default 300000, Polygon router max)')
   .option('--no-wait', 'skip polling for verification; print txHash and return')
   .addOption(new Option('--json').hideHelp(false))
   .action(async (rawOpts) => {
