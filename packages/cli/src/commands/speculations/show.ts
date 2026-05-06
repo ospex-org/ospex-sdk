@@ -10,7 +10,7 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { getClient } from '../../lib/client.js';
-import { formatOutput } from '../../lib/format.js';
+import { formatMatchTime, formatOutput } from '../../lib/format.js';
 
 const optionsSchema = z.object({ json: z.boolean().optional() });
 
@@ -34,7 +34,7 @@ export const speculationsShowCommand = new Command('show')
         type: detail.type,
         line: detail.line ?? '-',
         status: detail.speculationStatus === 0 ? 'open' : 'closed',
-        contest: `${detail.contest.awayTeam} @ ${detail.contest.homeTeam} (${detail.contest.sport}, ${detail.contest.matchTime}) — ${detail.contest.status}`,
+        contest: `${detail.contest.awayTeam} @ ${detail.contest.homeTeam} (${detail.contest.sport}, ${formatMatchTime(detail.contest.matchTime)}) — ${detail.contest.status}`,
         orderbookEntries: detail.orderbook.length,
       },
       { json: false },

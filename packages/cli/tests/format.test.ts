@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Writable } from 'node:stream';
-import { formatOutput, toHuman } from '../src/lib/format.js';
+import { formatMatchTime, formatOutput, toHuman } from '../src/lib/format.js';
 
 class StringSink extends Writable {
   buf = '';
@@ -48,5 +48,25 @@ describe('formatOutput / toHuman', () => {
   it('human mode renders nested values via JSON.stringify in cells', () => {
     const out = toHuman([{ id: 1, meta: { x: 1 } }]);
     expect(out).toContain('"x":1');
+  });
+});
+
+describe('formatMatchTime', () => {
+  it('renders an ISO UTC string in 12h local form with a timezone abbreviation', () => {
+    const out = formatMatchTime('2026-05-06T19:45:00+00:00');
+    // Locale and timezone vary across machines, so we pin only the
+    // shape: month-name + day, AM/PM, and a non-empty timezone token.
+    expect(out).toMatch(/[A-Z][a-z]+ \d+/);
+    expect(out).toMatch(/\d+:\d{2} (?:AM|PM)/);
+    expect(out).toMatch(/[A-Z]{2,5}|GMT[+-]\d+/);
+    // 24h ISO is no longer surfaced. (Don't check "T" — it can appear in
+    // timezone abbreviations like CDT/EST, and the matchers above already
+    // pin the friendly format.)
+    expect(out).not.toContain('19:45');
+    expect(out).not.toMatch(/2026-05-06/);
+  });
+
+  it('returns the input unchanged if it cannot be parsed', () => {
+    expect(formatMatchTime('not-a-date')).toBe('not-a-date');
   });
 });

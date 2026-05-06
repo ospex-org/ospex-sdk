@@ -5,14 +5,17 @@
  *    extracts the three external IDs the contract requires, and builds
  *    the on-chain tx. Users never deal with the three IDs directly.
  *  - On OspexAllowanceError: prompt to approve the right (token, spender)
- *    pair and retry once. LINK→OracleModule and USDC→TreasuryModule are
- *    distinguished from M2's USDC→PositionModule by inspecting err.token.
+ *    pair and retry. Both LINK→OracleModule and USDC→TreasuryModule may
+ *    be missing on a fresh wallet, so the call site loops up to two
+ *    approvals before giving up — fixing one at a time would surface the
+ *    second as a hard error after a successful approve tx.
  *  - Without `--no-wait`, blocks until the Chainlink callback flips the
  *    contest to Verified (or timeout, in which case the contestId is
  *    surfaced and the user can re-poll with `ospex contests wait-verified`).
  */
 import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
+import { formatUnits, parseUnits } from 'viem';
 import { getAddresses, OspexAllowanceError, type OspexClient } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
@@ -50,22 +53,27 @@ export const contestCreateCommand = new Command('create')
     if (opts.subscriptionId !== undefined) args.subscriptionId = BigInt(opts.subscriptionId);
     if (opts.gasLimit !== undefined) args.gasLimit = opts.gasLimit;
 
-    if (opts.subscriptionId === undefined && opts.json !== true) {
-      process.stdout.write(
-        'Using protocol shared Chainlink Functions subscription. Pass --subscription-id to use your own.\n',
-      );
+    // A fresh wallet typically needs two approvals (USDC fee, LINK
+    // payment). Loop the catch so the second approval prompt fires
+    // automatically after the first one succeeds — otherwise the user
+    // sees a successful approve tx followed by a hard error.
+    const MAX_APPROVAL_RETRIES = 2;
+    let result: Awaited<ReturnType<typeof client.contests.create>> | undefined;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= MAX_APPROVAL_RETRIES; attempt++) {
+      try {
+        result = await client.contests.create(args);
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (!(err instanceof OspexAllowanceError)) throw err;
+        if (attempt === MAX_APPROVAL_RETRIES) throw err;
+        const handled = await handleContestAllowance(client, err, opts.json === true);
+        if (!handled) throw err;
+      }
     }
-
-    const tryCreate = async () => client.contests.create(args);
-
-    let result;
-    try {
-      result = await tryCreate();
-    } catch (err) {
-      if (!(err instanceof OspexAllowanceError)) throw err;
-      const handled = await handleContestAllowance(client, err);
-      if (!handled) throw err;
-      result = await tryCreate();
+    if (result === undefined) {
+      throw lastErr ?? new Error('Contest creation did not return a result.');
     }
 
     // Pretty-print the create result immediately; defer JSON emission
@@ -122,32 +130,91 @@ export const contestCreateCommand = new Command('create')
     if (verificationError !== null) throw verificationError;
   });
 
+interface AllowanceCopy {
+  symbol: 'LINK' | 'USDC';
+  decimals: number;
+  moduleName: string;
+  purpose: string;
+}
+
+function describeAllowance(client: OspexClient, err: OspexAllowanceError): AllowanceCopy {
+  // Distinguish LINK→OracleModule from USDC→TreasuryModule by spender.
+  const oracleModule = getAddresses(client.chainId()).oracleModule.toLowerCase();
+  const isLink = err.spender.toLowerCase() === oracleModule;
+  return isLink
+    ? {
+        symbol: 'LINK',
+        decimals: 18,
+        moduleName: 'OracleModule',
+        purpose: 'Chainlink Functions request payment',
+      }
+    : {
+        symbol: 'USDC',
+        decimals: 6,
+        moduleName: 'TreasuryModule',
+        purpose: 'protocol contest creation fee',
+      };
+}
+
 async function handleContestAllowance(
   client: OspexClient,
   err: OspexAllowanceError,
+  jsonMode: boolean,
 ): Promise<boolean> {
-  // Distinguish LINK→OracleModule from USDC→TreasuryModule by spender.
-  const spender = err.spender.toLowerCase();
-  const oracleModule = getAddresses(client.chainId()).oracleModule.toLowerCase();
-  const isLink = spender === oracleModule;
+  const copy = describeAllowance(client, err);
+  const requiredHuman = formatUnits(err.required, copy.decimals);
+  const currentHuman = formatUnits(err.current, copy.decimals);
 
-  process.stdout.write(
-    `\nInsufficient ${isLink ? 'LINK' : 'USDC'} allowance.\n` +
-      `  Required: ${err.required.toString()}\n` +
-      `  Current:  ${err.current.toString()}\n` +
-      `  Spender:  ${err.spender} (${isLink ? 'OracleModule' : 'TreasuryModule'})\n` +
-      `  Token:    ${err.token}\n`,
+  // In --json mode, the user is scripting and probably doesn't want a
+  // half-open interactive flow. Surface the error so they can supply
+  // the approval out-of-band (`ospex contests approve …` is the SDK
+  // surface; the CLI subcommand for it is on the M3 backlog).
+  if (jsonMode) return false;
+
+  process.stderr.write(
+    `\n${copy.symbol} approval needed (${copy.purpose}).\n` +
+      `  Required: ${requiredHuman} ${copy.symbol}\n` +
+      `  Approved: ${currentHuman} ${copy.symbol}\n` +
+      `\nThe ${copy.moduleName} contract pulls this ${copy.symbol} from your wallet during the\n` +
+      `create transaction. This is a standard ERC-20 \`approve\` — your tokens stay in\n` +
+      `your wallet until the create call runs. Approve more than the minimum if you\n` +
+      `want to skip this prompt on future create calls.\n` +
+      `  Spender: ${err.spender} (${copy.moduleName})\n` +
+      `  Token:   ${err.token} (${copy.symbol})\n`,
   );
+
   const ok = await promptYesNo(
-    `Approve ${isLink ? 'OracleModule for LINK' : 'TreasuryModule for USDC'}?`,
+    `Allow ${copy.moduleName} to spend ${copy.symbol} from your wallet?`,
     true,
   );
   if (!ok) return false;
-  const choice = await promptValue('Amount? (max | <wei units>)', 'max');
-  const approveAmount = choice === 'max' ? 'max' : BigInt(choice);
-  const tx = isLink
-    ? await client.contests.approveLink(approveAmount)
-    : await client.contests.approveFee(approveAmount);
+
+  const choice = await promptValue(
+    `Amount in ${copy.symbol} (number, or "max" for unlimited)`,
+    requiredHuman,
+  );
+  let approveAmount: bigint | 'max';
+  if (choice.toLowerCase() === 'max') {
+    approveAmount = 'max';
+  } else {
+    try {
+      approveAmount = parseUnits(choice, copy.decimals);
+    } catch {
+      process.stderr.write(`Could not parse "${choice}" as a ${copy.symbol} amount.\n`);
+      return false;
+    }
+    if (approveAmount < err.required) {
+      process.stderr.write(
+        `Amount ${choice} ${copy.symbol} is less than the required ${requiredHuman} ${copy.symbol}.\n`,
+      );
+      return false;
+    }
+  }
+
+  const tx =
+    copy.symbol === 'LINK'
+      ? await client.contests.approveLink(approveAmount)
+      : await client.contests.approveFee(approveAmount);
   process.stdout.write(`approve tx: ${tx.txHash} (status ${tx.receipt.status})\n`);
   return true;
 }

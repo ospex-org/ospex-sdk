@@ -11,6 +11,29 @@
 
 import Table from 'cli-table3';
 
+/**
+ * Renders an ISO 8601 matchTime string in the user's local timezone with a
+ * 12h clock and short timezone abbreviation. The API returns UTC ISO
+ * strings; raw 24h UTC ("2026-05-06T19:45:00+00:00") is hard to read at a
+ * glance, so the human columns in `games list` / `contests list` /
+ * `contests show` route through this. JSON output keeps the raw ISO
+ * string so machine consumers don't have to re-parse a localized form.
+ *
+ * Falls back to the original input if `Date` can't parse it.
+ */
+export function formatMatchTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
+  }).format(d);
+}
+
 export interface FormatOptions {
   json: boolean;
   /** Override target stream — defaults to process.stdout. */

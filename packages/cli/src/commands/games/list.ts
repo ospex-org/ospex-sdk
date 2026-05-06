@@ -16,7 +16,7 @@ import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import type { GameSport } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
-import { formatOutput } from '../../lib/format.js';
+import { formatMatchTime, formatOutput } from '../../lib/format.js';
 
 const SPORT_VALUES = ['mlb', 'nba', 'ncaab', 'ncaaf', 'nfl', 'nhl'] as const;
 
@@ -65,7 +65,7 @@ export const gamesListCommand = new Command('list')
         sport: g.sport,
         away: g.awayTeam.abbreviation,
         home: g.homeTeam.abbreviation,
-        matchTime: g.matchTime,
+        matchTime: formatMatchTime(g.matchTime),
         creatable: g.canCreateContest ? 'yes' : 'no',
       })),
       { json: false },
