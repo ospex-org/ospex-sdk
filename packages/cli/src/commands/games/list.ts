@@ -1,12 +1,19 @@
 /**
- * `ospex games list [--sport mlb] [--hours 72] [--all]` — lists
- * upcoming games available for contest creation.
+ * `ospex games list [--sport mlb] [--hours 72] [--creatable-only]` —
+ * lists upcoming games on the schedule.
  *
- * The default narrows to games where all three external IDs are
- * present, status is `upcoming`, and no on-chain contest exists yet
- * — i.e. games a user can pass to `ospex contests create --game-id`
- * right now. `--all` widens the view to include incomplete /
- * already-created / past-status games.
+ * The default shows every upcoming game; the `creatable` column is the
+ * source of truth for whether each row can be passed to
+ * `ospex contests create --game-id`. The previous default (hide
+ * non-creatable rows) confused operators who expected the schedule to
+ * include rows whose external IDs hadn't landed yet — those rows
+ * become creatable later as the writer fills them in.
+ *
+ * `--creatable-only` re-applies the strict filter for users who only
+ * want rows they can act on right now.
+ *
+ * `--all` is a no-op alias for the new default; kept for back-compat
+ * with scripts written before the flip.
  *
  * Human output omits the three external IDs intentionally — the
  * user-facing identifier is `gameId`. JSON output includes the
@@ -27,16 +34,18 @@ const optionsSchema = z.object({
   limit: z.coerce.number().int().positive().max(200).optional(),
   offset: z.coerce.number().int().nonnegative().optional(),
   all: z.boolean().optional(),
+  creatableOnly: z.boolean().optional(),
 });
 
 export const gamesListCommand = new Command('list')
-  .description('List upcoming games available for contest creation.')
+  .description('List upcoming games on the schedule (creatable + pending).')
   .option('--json', 'output as JSON (includes externalIds)')
   .option('--sport <sport>', 'sport filter (mlb, nba, ncaab, ncaaf, nfl, nhl)')
   .option('--hours <n>', 'hours into the future (1-720, default 168)')
   .option('--limit <n>', 'page size (1-200)')
   .option('--offset <n>', 'pagination offset')
-  .option('--all', 'include games that cannot have a contest created (incomplete IDs / non-upcoming status / contest already created)')
+  .option('--creatable-only', 'show only rows where contest creation is possible right now (default: show all upcoming)')
+  .option('--all', '(deprecated; same as the new default — kept for back-compat with older scripts)')
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
     const client = await getClient({ requiresSigner: false });
@@ -46,7 +55,9 @@ export const gamesListCommand = new Command('list')
     if (opts.hours !== undefined) listOpts.hours = opts.hours;
     if (opts.limit !== undefined) listOpts.limit = opts.limit;
     if (opts.offset !== undefined) listOpts.offset = opts.offset;
-    if (opts.all === true) listOpts.availableOnly = false;
+    // Default: show every upcoming game (availableOnly=false). `--creatable-only`
+    // re-applies the strict filter. `--all` is preserved as a no-op alias.
+    listOpts.availableOnly = opts.creatableOnly === true;
 
     const games = await client.games.list(listOpts);
 
