@@ -134,20 +134,22 @@ ospex commitments submit \
   <riskAmount>
 ```
 
-Concrete example — moneyline scorer, line 0, betting upper at 2.50 odds, $0.001 USDC:
+Concrete example — contest 42, moneyline scorer, line 0, betting upper at 2.50 odds, $0.001 USDC:
 
 ```bash
 ospex commitments submit \
-  0xab12... \
-  0x2e6f... \
+  42 \
+  0xd846B7FdbD8C9F67d1580B2C6a8Bd7Fdcb15390b \
   0 upper 250 1000
 ```
+
+`0xd846…` is the Polygon mainnet moneyline scorer; the Amoy moneyline scorer is `0x2e6f…`. Discover the exact scorer for a given speculation via `ospex speculations list --contest <contestId>` rather than hard-coding it.
 
 Units:
 
 - `riskAmount` — USDC has 6 decimals, so `1000` = $0.001 USDC.
-- `oddsTick` — uses 2 decimal places, so `250` = 2.50.
-- `lineTicks` — also 2-decimal; `0` for moneyline, signed for spread/total.
+- `oddsTick` — 100× scale (2-decimal), so `250` = 2.50.
+- `lineTicks` — 10× scale (1-decimal); `0` for moneyline, signed for spread/total. A -3.5 spread is `-35`.
 
 The CLI signs the EIP-712 commitment with your Foundry passphrase, POSTs it to the API, and prints the commitment hash plus `status: open`.
 
