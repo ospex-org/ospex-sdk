@@ -361,6 +361,41 @@ export interface GamesListBody {
 }
 
 /**
+ * Wire body for one row of `GET /v1/contests/:contestId/odds`. Each
+ * market entry mirrors the `current_odds` row shape (camelCased) the
+ * writer populates — see `ospex-core-api/src/v1/odds.ts` for the
+ * server-side mapping.
+ *
+ * `line` semantics:
+ *   - moneyline: always null
+ *   - spread:    home team's spread (negative if home favored)
+ *   - total:     over/under threshold
+ */
+export interface OddsSnapshotBody {
+  jsonoddsId: string;
+  market: string;
+  network: string;
+  line: number | null;
+  awayOddsAmerican: number | null;
+  homeOddsAmerican: number | null;
+  upstreamLastUpdated: string;
+  pollCapturedAt: string;
+  changedAt: string;
+}
+
+export interface ContestOddsBody {
+  contestId: string;
+  /** Null when the contest has no upstream JSONOdds linkage. */
+  jsonoddsId: string | null;
+  /** Per-market entries are null when the writer hasn't populated them. */
+  odds: {
+    moneyline: OddsSnapshotBody | null;
+    spread: OddsSnapshotBody | null;
+    total: OddsSnapshotBody | null;
+  };
+}
+
+/**
  * Wire body for one row of `GET /v1/teams/aliases`. Joined through
  * `teams` server-side so consumers get canonical sport + display
  * fields without a second round-trip.

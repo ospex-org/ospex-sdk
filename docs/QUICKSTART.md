@@ -115,6 +115,16 @@ Find an upcoming contest:
 ospex contests list --hours 168
 ```
 
+Check current upstream reference odds for the contest. These are JSONOdds / Sportspage market averages, not Ospex liquidity — but they're useful as a starting reference for the `--odds` you'll pass to `commitments submit`:
+
+```bash
+ospex odds show <contestId>
+```
+
+Output shows all three markets (moneyline / spread / total) in both American and decimal odds, with a relative "last updated" stamp. Pass `--json` for a single JSON envelope (suitable for piping into a script). On Ospex you set your own price — these reference odds are a sanity check, not a required match.
+
+> **`show` vs `watch`**: `ospex odds show` is the user-facing one-shot snapshot — single round-trip, exits. `ospex odds watch` is the agent-facing streaming primitive — opens a Realtime channel, prints line-delimited JSON in `--json` mode, runs until SIGINT. Use `show` to decide a price; use `watch` to react to upstream odds moves over time.
+
 Submit a commitment in domain language — pick a side, decimal odds, and decimal USDC risk:
 
 ```bash
@@ -197,17 +207,27 @@ Same arguments mirror the on-chain `OspexCommitment` struct. No preview block, n
 
 ## What's next
 
+The CLI separates **one-shot user actions** (request → reply → exits) from **streaming / agent primitives** (subscribe → events → runs until SIGINT). Most day-to-day usage lives in the first table; the second is what an automated agent would build on.
+
+### One-shot actions (user)
+
 | Goal | Command |
 |---|---|
+| See current upstream reference odds for a contest | `ospex odds show <contestId>` |
 | Take an open commitment as the counterparty | `ospex commitments match <hash>` |
 | See your active and claimable positions | `ospex positions status <yourAddress>` |
 | Cancel an open commitment off-chain | `ospex commitments cancel <hash>` |
 | Cancel authoritatively on-chain | `ospex commitments cancel-onchain <hash>` |
 | Bulk-cancel all your orders on a speculation | `ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks>` |
-| Stream live odds | `ospex odds watch <contestId>` |
 | Claim a winning position after settlement | `ospex claim <speculationId> --type upper\|lower` |
 | Claim everything claimable for a wallet | `ospex claim-all` |
 | Settle a scored speculation (permissionless) | `ospex settle <speculationId>` |
+
+### Streaming / subscription (agent)
+
+| Goal | Command |
+|---|---|
+| Subscribe to upstream odds changes (NDJSON in `--json` mode) | `ospex odds watch <contestId>` |
 
 The full command reference is in the [README](../README.md).
 
@@ -223,6 +243,11 @@ ospex games list --sport mlb --hours 24
 #    the gameId (the stable UUID) or the slug — the resolver accepts both.
 ospex contests create --game-id <pasted-gameId>
 ospex contests create --game stl-sd-2026-05-08      # alias: slug or UUID
+
+# 3. (Optional) See the upstream reference odds for the contest you just
+#    created. The writer populates current_odds within ~30s; you can use
+#    these as a starting price when you submit the first commitment.
+ospex odds show <contestId>
 ```
 
 `--game` resolves a slug via `client.games.resolveGameId(input)`. The slug is mutable (the writer renames doubleheaders), so for anything you persist between sessions stick with `--game-id`. Multiple matches or no match fail closed.

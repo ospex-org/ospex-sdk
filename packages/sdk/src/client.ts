@@ -19,6 +19,7 @@ import { ContestsApi } from './api/contests.js';
 import { GamesApi } from './api/games.js';
 import { HealthApi } from './api/health.js';
 import { LeaderboardApi } from './api/leaderboard.js';
+import { OddsApi } from './api/odds.js';
 import { PositionsApi } from './api/positions.js';
 import { ProtocolApi } from './api/protocol.js';
 import { SpeculationsApi } from './api/speculations.js';
@@ -33,7 +34,12 @@ import { Teams } from './teams/index.js';
 import { getAddresses, type OspexAddresses } from './contracts/addresses.js';
 import { OspexConfigError } from './errors.js';
 import { subscribeToOdds } from './realtime/odds.js';
-import type { OddsSubscribeArgs, OddsSubscribeHandlers, Subscription } from './types/odds.js';
+import type {
+  ContestOddsSnapshot,
+  OddsSubscribeArgs,
+  OddsSubscribeHandlers,
+  Subscription,
+} from './types/odds.js';
 import type { ChainId, PublicConfig } from './types/protocol.js';
 import type { Signer } from './types/signer.js';
 
@@ -89,6 +95,7 @@ export class OspexClient {
   readonly api: ApiClient;
 
   private readonly configApi: ConfigApi;
+  private readonly oddsApi: OddsApi;
   private readonly options: OspexClientOptions;
   private supabasePromise: Promise<SupabaseClient> | undefined;
   private readonly _signer: Signer | undefined;
@@ -116,6 +123,7 @@ export class OspexClient {
     const gamesApi = new GamesApi(this.api);
     const positionsApi = new PositionsApi(this.api);
     const teamsApi = new TeamsApi(this.api);
+    this.oddsApi = new OddsApi(this.api);
     this.speculations = new SpeculationsApi(this.api);
     this.leaderboard = new LeaderboardApi(this.api);
     this.protocol = new ProtocolApi(this.api);
@@ -204,12 +212,23 @@ export class OspexClient {
   }
 
   /**
-   * Subscribe to a single (jsonoddsId, market) odds row via Supabase
-   * Realtime. Resolves once the channel is opened; events are routed
-   * to the handlers from then on. Call `subscription.unsubscribe()` to
-   * tear down the channel.
+   * Odds surface — both one-shot snapshot reads and Realtime streaming.
+   *
+   * - `snapshot(contestId)` — current upstream reference odds for the
+   *   contest's underlying game. Single round-trip, no channel. Use
+   *   when a user or agent needs to see odds *now* (e.g. before
+   *   pricing a commitment).
+   * - `subscribe({ jsonoddsId, market }, handlers)` — opens a Supabase
+   *   Realtime channel and routes change/refresh events to the
+   *   handlers. Use when an agent needs to react to upstream odds
+   *   moves over time. The args take a raw `jsonoddsId` because the
+   *   channel filter is by upstream id; resolve from a contestId via
+   *   `client.contests.get(contestId).jsonoddsId` first if needed.
    */
   readonly odds = {
+    snapshot: (contestId: string): Promise<ContestOddsSnapshot> => {
+      return this.oddsApi.snapshot(contestId);
+    },
     subscribe: async (
       args: OddsSubscribeArgs,
       handlers: OddsSubscribeHandlers,

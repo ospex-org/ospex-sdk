@@ -72,6 +72,7 @@ export type {
   Network,
   ChainId,
   // odds
+  ContestOddsSnapshot,
   MarketType,
   OddsSnapshot,
   OddsSubscribeArgs,

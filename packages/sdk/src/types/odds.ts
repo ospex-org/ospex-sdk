@@ -60,3 +60,25 @@ export interface OddsSubscribeHandlers {
 export interface Subscription {
   unsubscribe(): Promise<void>;
 }
+
+/**
+ * Public shape returned by `client.odds.snapshot(contestId)` — the
+ * one-shot counterpart to the Realtime `subscribe` channel. Always
+ * carries all three market keys so consumers don't need null-check
+ * the keys themselves; per-market values are `null` when the writer
+ * hasn't populated that market for the contest's upstream game (or
+ * when the contest has no upstream linkage at all, in which case
+ * `jsonoddsId` is also null).
+ *
+ * These are upstream reference odds (JSONOdds / Sportspage). Ospex
+ * commitments are user-priced and don't have to match these.
+ */
+export interface ContestOddsSnapshot {
+  contestId: string;
+  jsonoddsId: string | null;
+  odds: {
+    moneyline: OddsSnapshot | null;
+    spread: OddsSnapshot | null;
+    total: OddsSnapshot | null;
+  };
+}

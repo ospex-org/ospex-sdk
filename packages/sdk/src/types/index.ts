@@ -44,6 +44,7 @@ export type {
   ChainId,
 } from './protocol.js';
 export type {
+  ContestOddsSnapshot,
   MarketType,
   OddsSnapshot,
   OddsSubscribeArgs,

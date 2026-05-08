@@ -40,7 +40,8 @@ ospex contests show <contestId>            # one contest with its full orderbook
 ospex speculations list --contest <id>     # bettable lines under a contest
 ospex speculations show <speculationId>    # one speculation with its orderbook + parent contest
 ospex wallet address                       # prompts for Foundry passphrase, prints the address
-ospex odds watch <contestId>               # live odds stream (line-delimited JSON with --json)
+ospex odds show <contestId>                # one-shot snapshot of upstream reference odds
+ospex odds watch <contestId>               # streaming subscription (line-delimited JSON with --json)
 
 # Chain writes — require ospex init + a configured keystore
 ospex commitments approve max                                # approve PositionModule for unlimited USDC
@@ -180,7 +181,8 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex positions list <address>` | Position history for an address. |
 | `ospex positions status <address>` | Active vs. claimable categorization. |
 | `ospex leaderboard show` | Top entries on the active leaderboard. |
-| `ospex odds watch <contestId> [--json --include-refreshes]` | Streams Realtime odds events for the contest's three speculations. |
+| `ospex odds show <contestId> [--json]` | One-shot snapshot of upstream reference odds (moneyline / spread / total) for a contest's underlying game. Both American and decimal odds; `--json` emits a single envelope. Use this to decide a commitment price. |
+| `ospex odds watch <contestId> [--json --include-refreshes]` | Streams Realtime upstream odds change events. Line-delimited JSON in `--json` mode — agent-facing. Use `odds show` for a one-shot snapshot; `watch` is for reacting to changes over time. |
 | `ospex wallet import [--force]` | Encrypts a private key into `~/.ospex/keystore.json`. |
 | `ospex wallet unlock` | Caches the decrypted key for 15 minutes in `~/.ospex/session`. |
 | `ospex wallet lock` | Deletes the cached unlocked key. |
