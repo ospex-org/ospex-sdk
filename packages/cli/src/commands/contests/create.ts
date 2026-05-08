@@ -102,7 +102,18 @@ export const contestCreateCommand = new Command('create')
         ];
         process.stderr.write(lines.join('\n'));
 
-        const skipPrompt = opts.yes === true || opts.json === true;
+        // Consent rule (PROPOSAL §2.4 / review8): --yes is the
+        // consent flag, --json is output format only. They are
+        // orthogonal — --json alone DOES NOT auto-consent. Match
+        // the same contract `commitments submit` uses.
+        const skipPrompt = opts.yes === true;
+        const isInteractive = process.stdin.isTTY === true;
+        if (!skipPrompt && !isInteractive) {
+          throw new OspexValidationError(
+            '--yes is required for non-interactive --game <slug> create. ' +
+              'Re-run with --yes after reviewing the resolved game.',
+          );
+        }
         if (!skipPrompt) {
           const ok = await promptYesNo('Create contest for this game?', false);
           if (!ok) {

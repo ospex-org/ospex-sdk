@@ -8,6 +8,7 @@
  * lifetime. The writer's `slug` is exposed in the response for display
  * but is mutable; do NOT use it as a lookup key.
  */
+import { OspexAPIError } from '../errors.js';
 import type { ApiClient } from './client.js';
 import type {
   Game,
@@ -36,15 +37,16 @@ export class GamesApi {
    * pagination until `hasMore=false`. Used by `resolveGameId` so a
    * slug on page 2+ doesn't silently miss. Pagination cap is the
    * API's max limit (200) per request.
+   *
+   * Fails closed on stalled pagination — same pattern as
+   * `TeamsApi.aliases`. Returning a partial set could let a slug
+   * lookup miss a real match; better to surface the server bug.
    */
   async listAll(options: GamesListOptions = {}): Promise<Game[]> {
     const all: Game[] = [];
     const pageLimit = 200;
     let offset = options.offset ?? 0;
-    // Loop guard: 100 pages × 200 = 20k games, comfortably above
-    // any realistic forward window of upcoming games. Bounded so
-    // a misbehaving server can't spin forever.
-    const MAX_PAGES = 100;
+    const MAX_PAGES = 100; // 100 × 200 = 20k games — above any realistic forward window.
     for (let page = 0; page < MAX_PAGES; page++) {
       const query: Record<string, string | number | boolean | undefined> = {
         limit: pageLimit,
@@ -56,10 +58,20 @@ export class GamesApi {
       const body = await this.client.request<GamesListBody>('/v1/games', { query });
       all.push(...body.games.map(toGame));
       if (!body.pagination.hasMore) return all;
-      if (body.games.length === 0) return all;
+      if (body.games.length === 0) {
+        throw new OspexAPIError(
+          'Games pagination stalled: server returned hasMore=true with an empty page. ' +
+            'Refusing to return a partial games set — slug resolution requires the complete candidate list.',
+          { path: '/v1/games' },
+        );
+      }
       offset += body.games.length;
     }
-    return all;
+    throw new OspexAPIError(
+      `Games pagination exceeded ${MAX_PAGES} pages while the server still reported hasMore=true. ` +
+        'Refusing to return a partial games set.',
+      { path: '/v1/games' },
+    );
   }
 
   async get(gameId: string): Promise<Game> {
