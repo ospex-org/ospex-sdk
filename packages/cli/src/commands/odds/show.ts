@@ -1,5 +1,5 @@
 /**
- * `ospex odds show <contestId>` — one-shot snapshot of upstream
+ * `ospex odds show <contestId>` — one-shot snapshot of upstream market
  * reference odds for a contest's underlying game. Prints all three
  * markets (moneyline / spread / total) with both decimal and American
  * odds, the line value where applicable, and a relative "last updated"
@@ -12,17 +12,13 @@
  *   watch → "subscribe me to future upstream odds changes so I can
  *            react." — opens a Realtime channel, runs until SIGINT.
  *
- * Output is upstream reference odds (JSONOdds / Sportspage via
- * ospex-writer), NOT Ospex liquidity. Ospex commitments are user-priced
- * and don't have to match these. The footer line in human output and
- * the `source` field in --json output both label this explicitly.
- *
  * --json emits a single envelope object (NOT line-delimited like watch),
  * so consumers know they got exactly one snapshot per invocation.
  *
- * Spread `line` semantics: `home team's spread` (negative if home
- * favored). Matches the writer's pollCycle.ts:523 convention. Total
- * line is the over/under threshold. Moneyline line is null.
+ * Spread `line` semantics: home team's spread (negative if home
+ * favored); the API serves both `awayLine` (= -homeLine) and `homeLine`
+ * directly so this command never has to flip signs client-side. Total
+ * `line` is the over/under threshold. Moneyline `line` is omitted.
  */
 
 import { Command } from '@commander-js/extra-typings';
@@ -40,7 +36,7 @@ export const oddsShowCommand = new Command('show')
     'Show current upstream reference odds for a contest (single snapshot).',
   )
   .argument('<contestId>', 'contest ID')
-  .option('--json', 'emit a single JSON envelope (snapshot + source label)')
+  .option('--json', 'emit a single JSON envelope')
   .action(async (contestId, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
     const client = await getClient({ requiresSigner: false });
@@ -56,16 +52,12 @@ export const oddsShowCommand = new Command('show')
     if (opts.json === true) {
       formatOutput(
         {
-          source: 'upstream-reference',
-          sourceNote:
-            'JSONOdds / Sportspage market averages via ospex-writer. ' +
-            'Ospex commitments are user-priced; these are reference data only.',
           contest: {
             contestId: contest.contestId,
             awayTeam: contest.awayTeam,
             homeTeam: contest.homeTeam,
             sport: contest.sport,
-            startTime: contest.matchTime,
+            matchTime: contest.matchTime,
             jsonoddsId: snapshot.jsonoddsId,
           },
           odds: snapshot.odds,
@@ -88,7 +80,7 @@ export const oddsShowCommand = new Command('show')
 
     if (snapshot.jsonoddsId === null) {
       process.stdout.write(
-        '  (no upstream JSONOdds linkage — reference odds unavailable for this contest)\n',
+        '  (no upstream odds linkage — reference odds unavailable for this contest)\n',
       );
       return;
     }
@@ -107,11 +99,6 @@ export const oddsShowCommand = new Command('show')
     renderMoneyline(snapshot.odds.moneyline, contest);
     renderSpread(snapshot.odds.spread, contest);
     renderTotal(snapshot.odds.total);
-
-    process.stdout.write(
-      '\n  Source: JSONOdds / Sportspage via ospex-writer. These are upstream reference\n' +
-        '  odds — Ospex commitments are user-priced and don’t have to match these.\n',
-    );
   });
 
 function renderMoneyline(

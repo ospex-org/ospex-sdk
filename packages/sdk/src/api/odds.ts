@@ -15,10 +15,9 @@
  * not share a generic envelope across markets, so callers can't
  * misread spread side direction or total over/under naming.
  *
- * Source labelling: these are upstream reference odds (JSONOdds /
- * Sportspage via `ospex-writer`), not Ospex liquidity. SDK consumers
- * surfacing this to users should label it that way — see
- * `packages/cli/src/commands/odds/show.ts` for the CLI's footnote.
+ * Source labelling: these are upstream market reference odds, not
+ * Ospex liquidity. SDK consumers surfacing this to users should label
+ * it that way.
  */
 
 import type { ApiClient } from './client.js';
