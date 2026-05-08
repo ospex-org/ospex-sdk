@@ -27,7 +27,7 @@
  */
 
 import {
-  decimalOddsToTick,
+  parseOddsInput,
   lineDecimalToTicks,
   usdcDecimalToWei6,
 } from './decimals.js';
@@ -72,7 +72,7 @@ export async function prepareSubmit(
   args: HighLevelSubmitArgs,
 ): Promise<SubmitPreview> {
   // ── 1. Decimal inputs ───────────────────────────────────────────────
-  const oddsTick = decimalOddsToTick(args.odds);
+  const oddsTick = parseOddsInput(args.odds);
   const riskWei6 = usdcDecimalToWei6(args.riskUsdc);
 
   // ── 2. Parent resolution ────────────────────────────────────────────

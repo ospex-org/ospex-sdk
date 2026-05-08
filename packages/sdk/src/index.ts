@@ -114,7 +114,10 @@ export type {
 } from './types/preview.js';
 
 export {
+  americanOddsToTick,
   decimalOddsToTick,
+  parseOddsInput,
+  tickToAmericanOdds,
   tickToDecimalOdds,
   usdcDecimalToWei6,
   wei6ToDecimalUSDC,

@@ -61,6 +61,7 @@ describe('buildSubmitPreview — economics', () => {
     expect(p.economics.returnUSDC).toBe('2.500000');
     expect(p.economics.counterpartyRiskUSDC).toBe('1.500000');
     expect(p.economics.oddsDecimal).toBe('2.50');
+    expect(p.economics.oddsAmerican).toBe('+150');
     expect(p.economics.oddsTick).toBe(250);
   });
 

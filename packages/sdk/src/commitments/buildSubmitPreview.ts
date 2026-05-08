@@ -22,7 +22,12 @@
  */
 
 import { deriveSpeculationKey } from '../chain/eip712.js';
-import { tickToDecimalOdds, wei6ToDecimalUSDC, ticksToDecimalLine } from './decimals.js';
+import {
+  tickToAmericanOdds,
+  tickToDecimalOdds,
+  wei6ToDecimalUSDC,
+  ticksToDecimalLine,
+} from './decimals.js';
 import { pushPossible } from './pushPossible.js';
 import type { ResolveSideResult } from './resolveSide.js';
 import type { MarketType } from '../types/odds.js';
@@ -79,6 +84,7 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
   const economics: PreviewEconomics = {
     oddsTick: args.oddsTick,
     oddsDecimal: tickToDecimalOdds(args.oddsTick),
+    oddsAmerican: tickToAmericanOdds(args.oddsTick),
     riskWei6: args.riskWei6.toString(),
     riskUSDC: wei6ToDecimalUSDC(args.riskWei6),
     profitUSDC: wei6ToDecimalUSDC(profitWei6),

@@ -31,7 +31,17 @@ export type OutcomeResult = 'win' | 'lose' | 'push';
 /** What the user is risking + receiving + the protocol-level numerics. */
 export interface PreviewEconomics {
   oddsTick: number;
+  /** Decimal odds string with 2 fractional digits (e.g. "1.91", "2.50"). */
   oddsDecimal: string;
+  /**
+   * American odds string with explicit sign (e.g. "+150", "-110").
+   * Derived from `oddsTick`. For oddsTick = 200 (decimal 2.00, even
+   * money) the canonical rendering is "+100". Negative-American values
+   * are rounded via the same 2dp precision the protocol uses; round-
+   * trip from American input may surface a different American display
+   * if the input wasn't 2dp-clean (e.g. "-113" → tick 188 → "-114").
+   */
+  oddsAmerican: string;
   /** wei6 (USDC * 10^6) as a decimal string for JSON safety. */
   riskWei6: string;
   /** Formatted USDC string with 6 decimal places, e.g. "1.000000". */

@@ -33,7 +33,9 @@ export function renderPreview(preview: SubmitPreview, out: NodeJS.WritableStream
     out.write(`${INDENT}line:         ${preview.market.displayLine}  ${lineDetail}\n`);
   }
 
-  out.write(`${INDENT}odds:         ${preview.economics.oddsDecimal}  [oddsTick=${preview.economics.oddsTick}]\n`);
+  out.write(
+    `${INDENT}odds:         ${preview.economics.oddsDecimal} decimal / ${preview.economics.oddsAmerican} american  [oddsTick=${preview.economics.oddsTick}]\n`,
+  );
   out.write(`${INDENT}risk:         ${preview.economics.riskUSDC} USDC\n`);
   out.write(
     `${INDENT}to win:       ${preview.economics.profitUSDC} USDC  (return = ${preview.economics.returnUSDC} USDC)\n`,
