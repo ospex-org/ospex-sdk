@@ -11,9 +11,12 @@
 
 import type { PublicClient } from 'viem';
 import type { ApiClient } from '../api/client.js';
+import type { ContestsApi } from '../api/contests.js';
+import type { SpeculationsApi } from '../api/speculations.js';
 import type { ChainId } from '../types/protocol.js';
 import type { Signer } from '../types/signer.js';
 import type { OspexAddresses } from '../contracts/addresses.js';
+import type { Teams } from '../teams/index.js';
 
 export interface CommitmentsContext {
   api: ApiClient;
@@ -35,6 +38,16 @@ export interface CommitmentsContext {
    * pass `nonce` explicitly to `submit`.
    */
   nonceCounter: NonceCounter;
+  /**
+   * The high-level `submit` orchestrator (`prepareSubmit`) needs to
+   * fetch contest / speculation detail and team aliases. These getters
+   * are lazy so the parent OspexClient doesn't have to construct
+   * Contests/Speculations/Teams namespaces before a write actually
+   * fires. Same pattern as `requireSigner` / `requireChainClient`.
+   */
+  getContestsApi(): ContestsApi;
+  getSpeculationsApi(): SpeculationsApi;
+  getTeams(): Teams;
 }
 
 export class NonceCounter {

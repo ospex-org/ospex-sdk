@@ -109,57 +109,81 @@ If `ospex wallet address` prompts you and prints the same address Foundry showed
 
 ## 5. Place a commitment
 
-One-time USDC approval to PositionModule. (This calls `approve(2^256-1)`; rerun with a smaller amount if you'd rather cap it.)
-
-```bash
-ospex commitments approve max
-```
-
-Find a contest and a speculation:
+Find an upcoming contest:
 
 ```bash
 ospex contests list --hours 168
-ospex speculations list --contest <contestId>
 ```
 
-Submit:
+Submit a commitment in domain language — pick a side, decimal odds, and decimal USDC risk:
 
 ```bash
+# Moneyline, away side, 2.50 odds, $1 stake
 ospex commitments submit \
-  <contestId> \
-  <scorerAddress> \
-  <lineTicks> \
-  <upper|lower> \
-  <oddsTick> \
-  <riskAmount>
+  --speculation <speculationId> \
+  --side lakers \
+  --odds 2.50 \
+  --risk-usdc 1
+
+# Spread, home side at -3.5, $25 stake at 1.91 odds, by --contest (line implicit
+# from the unique speculation, or pass --line to lazy-create on first match)
+ospex commitments submit \
+  --contest <contestId> --market spread \
+  --side padres --line -3.5 \
+  --odds 1.91 --risk-usdc 25
+
+# Total, over 8.5 at 1.95 odds, $10 stake
+ospex commitments submit \
+  --contest <contestId> --market total \
+  --side over --line 8.5 \
+  --odds 1.95 --risk-usdc 10
 ```
 
-Concrete example — contest 42, moneyline scorer, line 0, betting upper at 2.50 odds, $0.001 USDC:
+The CLI prints a preview block before signing — contest, market, side, odds, risk, win/lose/push outcomes in plain language, and the raw protocol fields for verification:
 
-```bash
-ospex commitments submit \
-  42 \
-  0xd846B7FdbD8C9F67d1580B2C6a8Bd7Fdcb15390b \
-  0 upper 250 1000
+```
+Resolved commitment:
+  contest:      Cardinals @ Padres, 2026-05-08 — MLB
+  market:       moneyline (#123)
+  side:         San Diego Padres (home)  [positionType=Lower, scorer=0xd846…, source=nickname]
+  odds:         2.50  [oddsTick=250]
+  risk:         1.000000 USDC
+  to win:       1.500000 USDC  (return = 2.500000 USDC)
+
+Outcomes:
+  Padres win    → you win 1.500000 USDC
+  Cardinals win → you lose 1.000000 USDC
+
+Submit? [y/N]
 ```
 
-`0xd846…` is the Polygon mainnet moneyline scorer; the Amoy moneyline scorer is `0x2e6f…`. The full set of mainnet and Amoy scorers (moneyline / spread / total) lives in `packages/sdk/src/contracts/addresses.ts`. A future release will let you pass `--market <moneyline|spread|total>` and resolve the scorer automatically.
+Confirm with `y` and the CLI signs (one Foundry passphrase prompt, even if a USDC approval has to land first), posts the EIP-712 commitment, and prints the hash plus `status: open`.
 
-Units:
+**Flag conventions:**
 
-- `riskAmount` — USDC has 6 decimals, so `1000` = $0.001 USDC.
-- `oddsTick` — 100× scale (2-decimal), so `250` = 2.50.
-- `lineTicks` — 10× scale (1-decimal); `0` for moneyline, signed for spread/total. A -3.5 spread is `-35`.
+- **`--side`** — team name, last-token nickname (`lakers`), or any alias (`LAL`) for moneyline / spread; `over` or `under` for total.
+- **`--odds`** — decimal odds string. `2.50`, `1.91`, etc. The protocol bound is `1.01 ≤ odds ≤ 101.00`.
+- **`--risk-usdc`** — decimal USDC string. `1`, `0.001`, `25`. Must be a multiple of `$0.0001` per the contract's lot-size rule.
+- **`--line`** — selected-side displayed line. `--side padres --line -3.5` means "Padres -3.5" regardless of whether Padres are home or away; the resolver inverts to the protocol's away-side ticks under the hood.
+- **`--yes`** skips the confirmation prompt. **`--json`** emits a `schemaVersion: 1` envelope (`SubmitPreviewEnvelope`, or `SubmitJsonResult` with `--yes`). The two are orthogonal — non-TTY + `--json` without `--yes` errors out rather than hanging on a prompt.
 
-The CLI signs the EIP-712 commitment with your Foundry passphrase, POSTs it to the API, and prints the commitment hash plus `status: open`.
-
-You can now see your commitment on the orderbook (replace `<yourAddress>` with the address Foundry printed in step 2):
+You can see your commitment on the orderbook (replace `<yourAddress>` with the address Foundry printed in step 2):
 
 ```bash
 ospex commitments list --maker <yourAddress>
 ```
 
 If you've piped scripts in mind: `ospex wallet address --json` emits machine-readable JSON on stdout (`{"address":"0x..."}`) while the passphrase prompt goes to stderr, so `ospex wallet address --json | jq -r .address` works cleanly.
+
+### Advanced: `commitments submit-raw` (escape hatch)
+
+If you already hold canonical protocol values (raw scorer address, lineTicks at 10× scale, oddsTick at 100× scale, `riskAmount` in wei6) — say from a market-maker bot or a debugging session — there's a positional escape hatch:
+
+```bash
+ospex commitments submit-raw 42 0xd846… 0 upper 250 1000
+```
+
+Same arguments mirror the on-chain `OspexCommitment` struct. No preview block, no resolver. Use the high-level form unless you have a specific reason not to.
 
 ## What's next
 

@@ -15,6 +15,7 @@ import { healthCommand } from './commands/health.js';
 import { initCommand } from './commands/init.js';
 import { commitmentsListCommand } from './commands/commitments/list.js';
 import { commitmentsApproveCommand } from './commands/commitments/approve.js';
+import { commitmentsSubmitCommand } from './commands/commitments/submit.js';
 import { commitmentsSubmitRawCommand } from './commands/commitments/submit-raw.js';
 import { commitmentsMatchCommand } from './commands/commitments/match.js';
 import { commitmentsCancelCommand } from './commands/commitments/cancel.js';
@@ -53,6 +54,7 @@ function makeProgram(): Command {
   commitments.addCommand(commitmentsListCommand);
   commitments.addCommand(commitmentsShowCommand);
   commitments.addCommand(commitmentsApproveCommand);
+  commitments.addCommand(commitmentsSubmitCommand);
   commitments.addCommand(commitmentsSubmitRawCommand);
   commitments.addCommand(commitmentsMatchCommand);
   commitments.addCommand(commitmentsCancelCommand);

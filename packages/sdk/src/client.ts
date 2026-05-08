@@ -131,6 +131,13 @@ export class OspexClient {
       getAddresses: () => this._addresses,
       requireChainClient: () => this.requirePublicClient(),
       nonceCounter: this._nonceCounter,
+      // The high-level submit orchestrator needs contest detail,
+      // speculation detail, and the cached alias set. Lazy getters
+      // so reads-only consumers don't construct the dependencies
+      // they'll never use.
+      getContestsApi: () => contestsApi,
+      getSpeculationsApi: () => this.speculations,
+      getTeams: () => this.teams,
     });
 
     this.contests = new Contests({
