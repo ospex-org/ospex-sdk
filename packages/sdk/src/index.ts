@@ -72,11 +72,16 @@ export type {
   Network,
   ChainId,
   // odds
+  ContestOddsSnapshot,
   MarketType,
+  MoneylineOdds,
   OddsSnapshot,
   OddsSubscribeArgs,
   OddsSubscribeHandlers,
+  OddsTimestamps,
+  SpreadOdds,
   Subscription,
+  TotalOdds,
   // game
   Game,
   GameSport,

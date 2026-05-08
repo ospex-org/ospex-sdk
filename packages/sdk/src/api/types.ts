@@ -361,6 +361,59 @@ export interface GamesListBody {
 }
 
 /**
+ * Wire bodies for `GET /v1/contests/:contestId/odds`. Per-market
+ * shapes are explicit so the wire format can't be misread:
+ *
+ *   - moneyline: per-side American odds. No line field.
+ *   - spread:    awayLine + homeLine + per-side American odds. The
+ *                writer stores only home spread in current_odds.line;
+ *                the server fills awayLine = -homeLine before serving.
+ *   - total:     line (threshold) + overOddsAmerican + underOddsAmerican.
+ *                The writer's away/home → over/under storage convention
+ *                is hidden at the API boundary.
+ *
+ * See `ospex-core-api/src/v1/odds.ts` for the server-side mapping.
+ */
+interface OddsTimestampsBody {
+  upstreamLastUpdated: string;
+  pollCapturedAt: string;
+  changedAt: string;
+}
+
+export interface MoneylineOddsBody extends OddsTimestampsBody {
+  market: 'moneyline';
+  awayOddsAmerican: number | null;
+  homeOddsAmerican: number | null;
+}
+
+export interface SpreadOddsBody extends OddsTimestampsBody {
+  market: 'spread';
+  awayLine: number | null;
+  homeLine: number | null;
+  awayOddsAmerican: number | null;
+  homeOddsAmerican: number | null;
+}
+
+export interface TotalOddsBody extends OddsTimestampsBody {
+  market: 'total';
+  line: number | null;
+  overOddsAmerican: number | null;
+  underOddsAmerican: number | null;
+}
+
+export interface ContestOddsBody {
+  contestId: string;
+  /** Null when the contest has no upstream JSONOdds linkage. */
+  jsonoddsId: string | null;
+  /** Per-market entries are null when the writer hasn't populated them. */
+  odds: {
+    moneyline: MoneylineOddsBody | null;
+    spread: SpreadOddsBody | null;
+    total: TotalOddsBody | null;
+  };
+}
+
+/**
  * Wire body for one row of `GET /v1/teams/aliases`. Joined through
  * `teams` server-side so consumers get canonical sport + display
  * fields without a second round-trip.

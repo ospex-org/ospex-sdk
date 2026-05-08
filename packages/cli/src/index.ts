@@ -33,7 +33,7 @@ import { positionsClaimAllCommand } from './commands/positions/claim-all.js';
 import { positionsSettleCommand } from './commands/positions/settle.js';
 import { positionsHistoryCommand } from './commands/positions/history.js';
 import { leaderboardShowCommand } from './commands/leaderboard/show.js';
-import { oddsWatchCommand } from './commands/odds/watch.js';
+import { makeOddsCommand } from './commands/odds/index.js';
 import { walletImportCommand } from './commands/wallet/import.js';
 import { walletUnlockCommand } from './commands/wallet/unlock.js';
 import { walletLockCommand } from './commands/wallet/lock.js';
@@ -84,9 +84,7 @@ function makeProgram(): Command {
   leaderboard.addCommand(leaderboardShowCommand);
   program.addCommand(leaderboard);
 
-  const odds = new Command('odds').description('Live odds streaming.');
-  odds.addCommand(oddsWatchCommand);
-  program.addCommand(odds);
+  program.addCommand(makeOddsCommand());
 
   const wallet = new Command('wallet').description('Manage the local keystore wallet.');
   wallet.addCommand(walletImportCommand);

@@ -35,11 +35,15 @@ export const oddsWatchCommand = new Command('watch')
 
     const client = await getClient({ requiresSigner: false });
     const contest = await client.contests.get(contestId);
-    if (contest.speculations.length === 0) {
-      console.error(`No speculations found for contest ${contestId}.`);
-      process.exit(1);
-    }
 
+    // The Realtime channel filter is on (jsonodds_id, market) where the
+    // markets are the protocol's three constants (moneyline / spread /
+    // total). Existing Ospex speculations under the contest are NOT a
+    // precondition — speculations are lazy and not created until first
+    // commitment match. Previous code gated on `speculations.length > 0`,
+    // which made `odds watch` unusable on a freshly-created contest.
+    // The actual precondition is `jsonoddsId !== null` (without an
+    // upstream linkage there's no current_odds row to subscribe to).
     const jsonoddsId = contest.jsonoddsId;
     if (!jsonoddsId) {
       console.error(

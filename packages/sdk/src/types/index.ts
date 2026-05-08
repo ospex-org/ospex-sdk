@@ -44,11 +44,16 @@ export type {
   ChainId,
 } from './protocol.js';
 export type {
+  ContestOddsSnapshot,
   MarketType,
+  MoneylineOdds,
   OddsSnapshot,
   OddsSubscribeArgs,
   OddsSubscribeHandlers,
+  OddsTimestamps,
+  SpreadOdds,
   Subscription,
+  TotalOdds,
 } from './odds.js';
 export type {
   Game,
