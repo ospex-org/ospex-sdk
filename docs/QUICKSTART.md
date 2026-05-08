@@ -165,7 +165,11 @@ Confirm with `y` and the CLI signs (one Foundry passphrase prompt, even if a USD
 - **`--odds`** — decimal odds string. `2.50`, `1.91`, etc. The protocol bound is `1.01 ≤ odds ≤ 101.00`.
 - **`--risk-usdc`** — decimal USDC string. `1`, `0.001`, `25`. Must be a multiple of `$0.0001` per the contract's lot-size rule.
 - **`--line`** — selected-side displayed line. `--side padres --line -3.5` means "Padres -3.5" regardless of whether Padres are home or away; the resolver inverts to the protocol's away-side ticks under the hood.
-- **`--yes`** skips the confirmation prompt. **`--json`** emits a `schemaVersion: 1` envelope (`SubmitPreviewEnvelope`, or `SubmitJsonResult` with `--yes`). The two are orthogonal — non-TTY + `--json` without `--yes` errors out rather than hanging on a prompt.
+- **`--yes`** skips the confirmation prompt and signs/posts. **`--json`** is output-format only and pairs with `--yes`:
+  - `--json` alone → emits `SubmitPreviewEnvelope` (preview only, **no signing**). Use case: an agent inspects the resolved tuple before deciding whether to commit.
+  - `--yes --json` → signs/posts and emits `SubmitJsonResult` (preview + result).
+  - Any non-interactive run that would sign without `--yes` errors out rather than hanging on a prompt.
+- **`--approve-max`** opts into unlimited USDC approval when an approval is needed before signing. The default is to approve **exactly the required amount** for this submit — explicit and one-shot rather than open-ended. Pass `--approve-max` when you'd rather grant a single unlimited approval and avoid future approval prompts; the CLI surfaces the policy in the preview block before the prompt either way.
 
 You can see your commitment on the orderbook (replace `<yourAddress>` with the address Foundry printed in step 2):
 

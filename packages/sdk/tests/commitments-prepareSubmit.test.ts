@@ -337,6 +337,104 @@ describe('prepareSubmit — --contest mode', () => {
   });
 });
 
+describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', () => {
+  it('rejects --speculation when speculationStatus !== 0 (closed/scored)', async () => {
+    const ctx = buildContext({
+      spec: buildSpec({ speculationStatus: 1 }),
+    });
+    await expect(prepareSubmit(ctx, speculationArgs())).rejects.toThrow(
+      /closed \(settled or scored\)/,
+    );
+  });
+
+  it('--contest spread no-line: closed specs are filtered out before uniqueness check', async () => {
+    // One open + one closed at different lines — should resolve to the
+    // single open one, not throw "multiple speculations".
+    const contest = buildContest({
+      speculations: [
+        {
+          speculationId: '100',
+          contestId: '42',
+          type: 'spread',
+          lineTicks: -35,
+          line: -3.5,
+          speculationStatus: 0,
+        },
+        {
+          speculationId: '101',
+          contestId: '42',
+          type: 'spread',
+          lineTicks: -75,
+          line: -7.5,
+          speculationStatus: 1, // closed
+        },
+      ],
+    });
+    const ctx = buildContext({ contest, allowance: 25_000_000n });
+    const preview = await prepareSubmit(ctx, {
+      parent: { kind: 'contest', contestId: '42', market: 'spread' },
+      side: 'lakers',
+      odds: '1.91',
+      riskUsdc: '25',
+    });
+    expect(preview.market.speculation).toEqual({ mode: 'existing', speculationId: '100' });
+    expect(preview.market.lineTicks).toBe(-35);
+  });
+
+  it('--contest existing-mode classification: closed spec at same lineTicks is ignored, falls to lazy', async () => {
+    const contest = buildContest({
+      speculations: [
+        {
+          speculationId: '101',
+          contestId: '42',
+          type: 'spread',
+          lineTicks: -35,
+          line: -3.5,
+          speculationStatus: 1, // closed at the line we want
+        },
+      ],
+    });
+    const ctx = buildContext({ contest, allowance: 25_000_000n });
+    const preview = await prepareSubmit(ctx, {
+      parent: { kind: 'contest', contestId: '42', market: 'spread', line: '-3.5' },
+      side: 'lakers',
+      odds: '1.91',
+      riskUsdc: '25',
+    });
+    // Closed spec must NOT be picked as 'existing' — the user would
+    // sign a guaranteed-revert commitment.
+    expect(preview.market.speculation.mode).toBe('lazy');
+  });
+});
+
+describe('prepareSubmit — total negative-line guard (review #4 blocker 2)', () => {
+  it('rejects negative --line on total markets (binds wrong speculationKey otherwise)', async () => {
+    const contest = buildContest({ speculations: [] });
+    const ctx = buildContext({ contest });
+    await expect(
+      prepareSubmit(ctx, {
+        parent: { kind: 'contest', contestId: '42', market: 'total', line: '-8.5' },
+        side: 'over',
+        odds: '1.95',
+        riskUsdc: '10',
+      }),
+    ).rejects.toThrow(/non-negative/);
+  });
+
+  it('accepts positive --line on total without inversion', async () => {
+    const contest = buildContest({ speculations: [] });
+    const ctx = buildContext({ contest, allowance: 10_000_000n });
+    const preview = await prepareSubmit(ctx, {
+      parent: { kind: 'contest', contestId: '42', market: 'total', line: '8.5' },
+      side: 'over',
+      odds: '1.95',
+      riskUsdc: '10',
+    });
+    expect(preview.market.lineTicks).toBe(85);
+    expect(preview.market.displayLine).toBe('Over 8.5');
+  });
+});
+
 describe('submitPrepared — sanity guards', () => {
   it('refuses to sign if preview chainId differs from client', async () => {
     const ctx = buildContext({});
@@ -357,6 +455,18 @@ describe('submitPrepared — sanity guards', () => {
       raw: { ...preview.raw, verifyingContract: '0x'.padEnd(42, 'd') },
     };
     await expect(submitPrepared(ctx, tampered)).rejects.toThrow(/verifyingContract/);
+  });
+
+  it('refuses to sign if preview.raw.speculationKey was tampered with (review #4 also-fix 2)', async () => {
+    const ctx = buildContext({});
+    const preview = await prepareSubmit(ctx, speculationArgs());
+    // Tamper just the bundled key — leave contestId/scorer/lineTicks
+    // intact. The defense-in-depth re-derivation must catch this.
+    const tampered: SubmitPreview = {
+      ...preview,
+      raw: { ...preview.raw, speculationKey: '0x' + 'aa'.repeat(32) },
+    };
+    await expect(submitPrepared(ctx, tampered)).rejects.toThrow(/speculationKey/);
   });
 });
 

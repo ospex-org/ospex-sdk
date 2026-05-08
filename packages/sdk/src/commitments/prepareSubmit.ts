@@ -125,9 +125,15 @@ export async function prepareSubmit(
       speculationId: parent.pinnedSpeculation.speculationId,
     };
   } else {
-    const exact = (parent.contest!.speculations ?? []).find(
-      (s) => s.type === parent.market && (s.lineTicks ?? 0) === lineTicksProtocol,
-    );
+    // Filter to OPEN speculations before exact-match. Closed
+    // (speculationStatus !== 0) speculations have been settled or
+    // scored and cannot accept new commitments — matching against
+    // them would let the user sign a commitment that's guaranteed
+    // to revert. (resolveParent applies the same filter for the
+    // no-line uniqueness/ambiguity inference.)
+    const exact = (parent.contest!.speculations ?? [])
+      .filter((s) => s.speculationStatus === 0)
+      .find((s) => s.type === parent.market && (s.lineTicks ?? 0) === lineTicksProtocol);
     if (exact) {
       speculation = { mode: 'existing', speculationId: exact.speculationId };
     } else {
@@ -211,6 +217,14 @@ async function resolveParent(
       );
     }
     const spec = await ctx.getSpeculationsApi().get(args.parent.speculationId);
+    // Refuse to sign a commitment against a closed (settled/scored)
+    // speculation — the protocol would reject it and the user has
+    // probably mis-typed the id.
+    if (spec.speculationStatus !== 0) {
+      throw new OspexValidationError(
+        `Speculation ${spec.speculationId} is closed (settled or scored) and cannot accept new commitments.`,
+      );
+    }
     return {
       pinnedSpeculation: spec,
       contest: null,
@@ -240,20 +254,34 @@ async function resolveParent(
   }
 
   if (args.parent.line !== undefined) {
+    let parsed = lineDecimalToTicks(args.parent.line);
+    // Total markets are absolute — over and under share the same
+    // magnitude. A negative input is almost certainly a copy-paste
+    // mistake; if we silently signed against `lineTicks=-85` the
+    // preview would render "Over 8.5" via Math.abs() while the EIP-712
+    // tuple bound a different speculation key. Reject loudly.
+    if (market === 'total' && parsed < 0) {
+      throw new OspexValidationError(
+        `--line for total markets must be non-negative (got "${args.parent.line}"). ` +
+          'Total lines are absolute; the over/under direction is encoded in --side.',
+      );
+    }
     return {
       pinnedSpeculation: null,
       contest,
       market,
       scorer: scorers[market],
-      preliminaryLineTicks: lineDecimalToTicks(args.parent.line),
+      preliminaryLineTicks: parsed,
       userLineProvided: true,
     };
   }
 
   // spread/total without --line: try to find an unambiguous unique
-  // open speculation at this market type. Per proposal §3.1, multiple
+  // OPEN speculation at this market type. Per proposal §3.1, multiple
   // matches fail closed, zero requires --line for lazy creation.
-  const matches = (contest.speculations ?? []).filter((s) => s.type === market);
+  const matches = (contest.speculations ?? []).filter(
+    (s) => s.type === market && s.speculationStatus === 0,
+  );
   if (matches.length === 0) {
     throw new OspexValidationError(
       `No open ${market} speculation exists on contest ${contest.contestId}. ` +

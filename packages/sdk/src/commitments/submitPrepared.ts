@@ -22,6 +22,7 @@
 
 import {
   buildDomain,
+  deriveSpeculationKey,
   hashCommitment,
   OSPEX_COMMITMENT_TYPES,
   type OspexCommitmentMessage,
@@ -67,6 +68,25 @@ export async function submitPrepared(
     nonce: BigInt(preview.raw.nonce),
     expiry: BigInt(preview.raw.expiry),
   };
+
+  // Defense-in-depth: re-derive the speculationKey from the same tuple
+  // we're about to sign and cross-check `preview.raw.speculationKey`.
+  // A mismatch means the preview was tampered with after `prepareSubmit`
+  // canonicalized it — refuse to sign rather than trust either value.
+  // Catches contestId / scorer / lineTicks edits that didn't update
+  // the bundled key.
+  const expectedKey = deriveSpeculationKey(
+    message.contestId,
+    message.scorer,
+    message.lineTicks,
+  );
+  if (expectedKey.toLowerCase() !== preview.raw.speculationKey.toLowerCase()) {
+    throw new OspexValidationError(
+      `preview.raw.speculationKey (${preview.raw.speculationKey}) does not match the canonical derivation ` +
+        `from (contestId=${message.contestId}, scorer=${message.scorer}, lineTicks=${message.lineTicks}). ` +
+        'The preview may have been tampered with — re-run prepareSubmit.',
+    );
+  }
 
   const domain = buildDomain(chainId, matchingModule as Hex);
   const signature = await signer.signTypedData({

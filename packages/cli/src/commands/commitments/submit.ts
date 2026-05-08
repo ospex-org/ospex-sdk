@@ -1,8 +1,8 @@
 /**
  * `ospex commitments submit [flags]` — high-level domain-language
- * submit. Calls `client.commitments.prepareSubmit`, renders the §2.5
- * preview block, prompts for confirmation (unless `--yes`), runs any
- * needed approval, then `submitPrepared` to sign and post.
+ * submit. Calls `client.commitments.prepareSubmit`, then optionally
+ * the §2.5 preview block + confirmation prompt, then `submitPrepared`
+ * to sign and post (when not in preview-only mode).
  *
  * Flags (proposal §3.1):
  *   --speculation <id>       pin to an existing speculation
@@ -17,11 +17,21 @@
  *   --expiry <iso-or-unix>   default 24h from now
  *   --nonce <bigint>         override the SDK's nonce strategy
  *   --yes                    skip the [y/N] prompt
- *   --json                   emit SubmitPreviewEnvelope (preview-only)
- *                            or SubmitJsonResult (with --yes)
+ *   --json                   emit machine-readable JSON. Behavior pairs
+ *                            with --yes:
+ *                              --json alone     → SubmitPreviewEnvelope
+ *                                                 (preview only, NO signing)
+ *                              --yes --json     → SubmitJsonResult
+ *                                                 (preview + submit result)
+ *   --approve-max            grant unlimited USDC approval if needed.
+ *                            Default is to approve only the required
+ *                            amount (one-shot, safer).
  *
- * `--json` and `--yes` are orthogonal (PROPOSAL §2.4). Non-TTY +
- * `--json` + no `--yes` errors out instead of hanging on a prompt.
+ * Contract corollaries:
+ *   - `--json` is output format only. It does NOT imply `--yes`.
+ *   - Non-TTY + sign-required (i.e. without `--yes`) errors out
+ *     rather than hanging on a prompt nobody can answer.
+ *   - Decline at the prompt → exit code 130 (Ctrl-C convention).
  */
 
 import { Command, Option } from '@commander-js/extra-typings';
@@ -46,6 +56,7 @@ const optionsSchema = z.object({
   nonce: z.string().regex(/^[0-9]+$/).optional(),
   yes: z.boolean().optional(),
   json: z.boolean().optional(),
+  approveMax: z.boolean().optional(),
 });
 
 export const commitmentsSubmitCommand = new Command('submit')
@@ -63,6 +74,10 @@ export const commitmentsSubmitCommand = new Command('submit')
   .option('--expiry <iso-or-unix>', 'expiry timestamp; default 24h from now')
   .option('--nonce <bigint>', 'override the SDK nonce strategy')
   .option('--yes', 'skip the confirmation prompt')
+  .option(
+    '--approve-max',
+    'when an approval is required, grant unlimited (default: approve required amount only)',
+  )
   .addOption(new Option('--json').hideHelp(false))
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
@@ -76,18 +91,10 @@ export const commitmentsSubmitCommand = new Command('submit')
       ...(opts.nonce !== undefined ? { nonce: BigInt(opts.nonce) } : {}),
     };
 
-    // Per §2.4: write command + --json + non-TTY + no --yes is a
-    // contract violation — we'd hang on a prompt that nobody can
-    // answer. Surface it explicitly.
     const wantJson = opts.json === true;
     const skipPrompt = opts.yes === true;
+    const approveMax = opts.approveMax === true;
     const isInteractive = process.stdin.isTTY === true;
-    if (wantJson && !skipPrompt && !isInteractive) {
-      throw new OspexValidationError(
-        '--yes is required for non-interactive write commands. ' +
-          'Re-run with --yes --json after reviewing inputs.',
-      );
-    }
 
     const client = await getClient({ requiresSigner: true, requiresChain: true });
 
@@ -95,10 +102,50 @@ export const commitmentsSubmitCommand = new Command('submit')
     //    fetches, allowance + nonce reads. No signing yet.
     const preview = await client.commitments.prepareSubmit(args);
 
-    // 2. Render the preview block to stderr so --json keeps stdout clean.
+    // 2. `--json` alone (no --yes) is the preview-only mode per
+    //    PROPOSAL §6.2 — emit the SubmitPreviewEnvelope and exit
+    //    without prompting or signing. Use case: an agent inspects
+    //    the resolved tuple before deciding whether to run the
+    //    actual submit (`--yes --json`).
+    if (wantJson && !skipPrompt) {
+      formatOutput({ schemaVersion: 1, preview }, { json: true });
+      return;
+    }
+
+    // 3. From here on we will sign + post. Refuse non-interactive
+    //    runs that don't pass --yes — we'd hang on a prompt nobody
+    //    can answer.
+    if (!skipPrompt && !isInteractive) {
+      throw new OspexValidationError(
+        '--yes is required for non-interactive write commands. Re-run with --yes.',
+      );
+    }
+
+    // 4. Render the preview to stderr so stdout JSON (under --yes
+    //    --json) stays parseable.
     renderPreview(preview);
 
-    // 3. Confirm (unless --yes). 'n' or empty exits with 130 (matches
+    // 5. Approval policy disclosure — show what the CLI WILL do
+    //    BEFORE the user confirms. Default is to approve exactly
+    //    the required amount, not max. --approve-max opts into
+    //    unlimited approval.
+    const needsApproval = preview.approvals.find((a) => a.needsApproval);
+    if (needsApproval !== undefined && needsApproval.token === 'USDC') {
+      const policy = approveMax
+        ? `unlimited (max, 2^256-1)`
+        : `${needsApproval.required} wei6 (exact required amount)`;
+      process.stderr.write(
+        `Approval policy: will approve USDC ${policy} to ${needsApproval.spender}.\n`,
+      );
+      if (!approveMax) {
+        process.stderr.write(
+          '  (Pass --approve-max to grant unlimited approval and avoid future approval prompts.)\n',
+        );
+      }
+      process.stderr.write('\n');
+    }
+
+    // 6. Confirm (unless --yes). 'n' or empty exits with 130 (matches
     //    the Ctrl-C convention so scripts can distinguish "user
     //    declined" from "tx failed").
     if (!skipPrompt) {
@@ -109,22 +156,21 @@ export const commitmentsSubmitCommand = new Command('submit')
       }
     }
 
-    // 4. Single-passphrase / pre-flight approvals. The signer was
-    //    already unlocked during prepareSubmit (to derive maker), so
-    //    further signs reuse the cached key — one passphrase prompt
-    //    covers approve + commit submit.
-    const needsApproval = preview.approvals.find((a) => a.needsApproval);
-    if (needsApproval && needsApproval.token === 'USDC') {
+    // 7. Run the approval if needed. Single-passphrase machinery:
+    //    the signer was unlocked during prepareSubmit (to derive
+    //    maker); subsequent signs reuse the cached key.
+    if (needsApproval !== undefined && needsApproval.token === 'USDC') {
+      const amount: 'max' | bigint = approveMax ? 'max' : BigInt(needsApproval.required);
       process.stderr.write(
-        `Approving ${needsApproval.token} → ${needsApproval.spender}...\n`,
+        `Approving USDC → ${needsApproval.spender} (${approveMax ? 'unlimited' : `${needsApproval.required} wei6`})...\n`,
       );
-      const approveResult = await client.commitments.approve('max');
+      const approveResult = await client.commitments.approve(amount);
       process.stderr.write(
         `approve tx: ${approveResult.txHash} (status ${approveResult.receipt.status})\n`,
       );
     }
 
-    // 5. Sign + post the EIP-712 commitment.
+    // 8. Sign + post the EIP-712 commitment.
     let result;
     try {
       result = await client.commitments.submitPrepared(preview);
@@ -138,7 +184,8 @@ export const commitmentsSubmitCommand = new Command('submit')
       throw err;
     }
 
-    // 6. Output.
+    // 9. Output. With --yes --json, emit the full SubmitJsonResult
+    //    envelope (preview + result). Otherwise pretty text.
     if (wantJson) {
       formatOutput(
         { schemaVersion: 1, preview, result: { hash: result.hash, commitment: result.commitment } },
