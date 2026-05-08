@@ -22,12 +22,14 @@ import { LeaderboardApi } from './api/leaderboard.js';
 import { PositionsApi } from './api/positions.js';
 import { ProtocolApi } from './api/protocol.js';
 import { SpeculationsApi } from './api/speculations.js';
+import { TeamsApi } from './api/teams.js';
 import { createReadClient } from './chain/client.js';
 import { Commitments } from './commitments/index.js';
 import { NonceCounter } from './commitments/context.js';
 import { Contests } from './contests/index.js';
 import { Games } from './games/index.js';
 import { Positions } from './positions/index.js';
+import { Teams } from './teams/index.js';
 import { getAddresses, type OspexAddresses } from './contracts/addresses.js';
 import { OspexConfigError } from './errors.js';
 import { subscribeToOdds } from './realtime/odds.js';
@@ -77,6 +79,7 @@ export class OspexClient {
   readonly commitments: Commitments;
   readonly contests: Contests;
   readonly games: Games;
+  readonly teams: Teams;
   readonly speculations: SpeculationsApi;
   readonly positions: Positions;
   readonly leaderboard: LeaderboardApi;
@@ -112,12 +115,14 @@ export class OspexClient {
     const contestsApi = new ContestsApi(this.api);
     const gamesApi = new GamesApi(this.api);
     const positionsApi = new PositionsApi(this.api);
+    const teamsApi = new TeamsApi(this.api);
     this.speculations = new SpeculationsApi(this.api);
     this.leaderboard = new LeaderboardApi(this.api);
     this.protocol = new ProtocolApi(this.api);
     this.health = new HealthApi(this.api);
     this.configApi = new ConfigApi(this.api);
     this.games = new Games({ gamesApi });
+    this.teams = new Teams(teamsApi);
 
     this.commitments = new Commitments({
       api: this.api,

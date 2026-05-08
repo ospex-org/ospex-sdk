@@ -87,6 +87,8 @@ function toContest(body: ContestBody): Contest {
   if (body.verifiedAt !== undefined) out.verifiedAt = body.verifiedAt;
   if (body.scoredAt !== undefined) out.scoredAt = body.scoredAt;
   if (body.voidedAt !== undefined) out.voidedAt = body.voidedAt;
+  if (body.awayTeamId !== undefined) out.awayTeamId = body.awayTeamId;
+  if (body.homeTeamId !== undefined) out.homeTeamId = body.homeTeamId;
   return out;
 }
 

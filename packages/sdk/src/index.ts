@@ -85,3 +85,46 @@ export type {
   GameExternalIds,
   GamesListOptions,
 } from './types/index.js';
+
+// Resolver-layer surface (PR A) — preview model + high-level submit args
+// + the resolver primitives. CLI and external agents render text from
+// SubmitPreview; --json emits SubmitPreviewEnvelope / SubmitJsonResult.
+export type {
+  SubmitPreview,
+  SubmitPreviewEnvelope,
+  SubmitJsonResult,
+  PreparedSubmit,
+  HighLevelSubmitArgs,
+  SubmitParent,
+  PreviewContest,
+  PreviewMarket,
+  PreviewSide,
+  PreviewEconomics,
+  PreviewRaw,
+  PreviewApproval,
+  PreviewOutcome,
+  ResolutionSource,
+  SideRole,
+  SpeculationMode,
+  OutcomeResult,
+} from './types/preview.js';
+
+export {
+  decimalOddsToTick,
+  tickToDecimalOdds,
+  usdcDecimalToWei6,
+  wei6ToDecimalUSDC,
+  lineDecimalToTicks,
+  ticksToDecimalLine,
+} from './commitments/decimals.js';
+export { pushPossible } from './commitments/pushPossible.js';
+export {
+  resolveSide,
+  type TeamAlias,
+  type ContestContextForResolve,
+  type ResolveSideResult,
+} from './commitments/resolveSide.js';
+export {
+  buildSubmitPreview,
+  type BuildSubmitPreviewArgs,
+} from './commitments/buildSubmitPreview.js';

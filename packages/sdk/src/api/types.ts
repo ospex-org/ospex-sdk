@@ -124,6 +124,14 @@ export interface ContestBody {
   verifiedAt?: string | null;
   scoredAt?: string | null;
   voidedAt?: string | null;
+  /**
+   * Team UUIDs from `teams` resolved via the games-row join, added in
+   * core-api PR #15. Detail-endpoint-only. Null when the contest has
+   * no JSONOdds linkage or the games row is missing — the SDK
+   * resolver falls back to exact + nickname matching in that case.
+   */
+  awayTeamId?: string | null;
+  homeTeamId?: string | null;
 }
 
 /** Wire body for `GET /v1/contests`. */
@@ -136,6 +144,13 @@ export interface SpeculationParentContextBody {
   contestId: string;
   awayTeam: string;
   homeTeam: string;
+  /**
+   * Team UUIDs added in core-api PR #15. Null when the contest has no
+   * JSONOdds linkage — the SDK resolver scopes alias matching to these
+   * when both are non-null and falls back to exact + nickname otherwise.
+   */
+  awayTeamId: string | null;
+  homeTeamId: string | null;
   sport: string;
   matchTime: string;
   status: string;
@@ -342,5 +357,33 @@ export interface GamesListBody {
   windowHours: number;
   availableOnly: boolean;
   games: GameBody[];
+  pagination: PaginationBody;
+}
+
+/**
+ * Wire body for one row of `GET /v1/teams/aliases`. Joined through
+ * `teams` server-side so consumers get canonical sport + display
+ * fields without a second round-trip.
+ */
+export interface TeamAliasBody {
+  teamId: string;
+  sport: string;
+  sportId: number;
+  teamName: string;
+  abbrev: string;
+  alias: string;
+  /**
+   * Free-form classification. Real values seen in production:
+   * 'short' | 'full' | 'abbreviation' (and others added by ops).
+   * The SDK resolver matches against `alias` text regardless of
+   * `aliasType` — this field is informational only.
+   */
+  aliasType: string;
+  source: string;
+}
+
+/** Wire body for `GET /v1/teams/aliases`. */
+export interface TeamAliasesListBody {
+  aliases: TeamAliasBody[];
   pagination: PaginationBody;
 }
