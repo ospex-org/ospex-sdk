@@ -56,13 +56,17 @@ export interface Speculation {
 
 /**
  * Small parent contest context attached by `client.speculations.get`.
- * Five fields (the common "what game is this on?" question) — source
- * hashes / lifecycle timestamps stay on the contest detail endpoint.
+ * The common "what game is this on?" question — source hashes /
+ * lifecycle timestamps stay on the contest detail endpoint. Team
+ * UUIDs added in core-api PR #15 (resolved via the games-row join);
+ * null when no game linkage exists.
  */
 export interface SpeculationParentContext {
   contestId: string;
   awayTeam: string;
   homeTeam: string;
+  awayTeamId: string | null;
+  homeTeamId: string | null;
   sport: string;
   /** ISO-8601 string. */
   matchTime: string;
@@ -137,6 +141,14 @@ export interface Contest {
   scoredAt?: string | null;
   /** ISO timestamp of CONTEST_VOIDED projection. */
   voidedAt?: string | null;
+  /**
+   * Team UUIDs from `teams`, resolved server-side via the games-row
+   * join (added in core-api PR #15). Detail-endpoint-only. Null when
+   * the contest has no JSONOdds linkage or the games row is missing.
+   * Consumed by the SDK resolver layer to scope alias matching.
+   */
+  awayTeamId?: string | null;
+  homeTeamId?: string | null;
 }
 
 export interface ContestsListOptions {
