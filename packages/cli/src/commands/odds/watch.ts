@@ -47,8 +47,8 @@ export const oddsWatchCommand = new Command('watch')
     const jsonoddsId = contest.jsonoddsId;
     if (!jsonoddsId) {
       console.error(
-        `Contest ${contestId} has no jsonoddsId — odds watching is unavailable for ` +
-          `contests without an upstream JSONOdds linkage.`,
+        `Contest ${contestId} has no upstream odds linkage — odds watching is ` +
+          `unavailable for this contest.`,
       );
       process.exit(1);
     }

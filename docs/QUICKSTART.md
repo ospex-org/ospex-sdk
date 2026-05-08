@@ -115,7 +115,7 @@ Find an upcoming contest:
 ospex contests list --hours 168
 ```
 
-Check current upstream reference odds for the contest. These are JSONOdds / Sportspage market averages, not Ospex liquidity — but they're useful as a starting reference for the `--odds` you'll pass to `commitments submit`:
+Check current upstream market reference odds for the contest. These are not Ospex liquidity — but they're useful as a starting reference for the `--odds` you'll pass to `commitments submit`:
 
 ```bash
 ospex odds show <contestId>
