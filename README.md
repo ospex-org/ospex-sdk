@@ -44,7 +44,15 @@ ospex odds watch <contestId>               # live odds stream (line-delimited JS
 
 # Chain writes — require ospex init + a configured keystore
 ospex commitments approve max                                # approve PositionModule for unlimited USDC
-ospex commitments submit <contestId> <scorer> <lineTicks> upper 250 1000
+
+# High-level submit (domain-language inputs + win/lose/push preview).
+# Default approval policy is exact-required-amount; pass --approve-max for unlimited.
+ospex commitments submit \                                   # high-level path (recommended)
+  --speculation <id> --side lakers --odds 2.50 --risk-usdc 1
+ospex commitments submit \                                   # by --contest, line lazy-creates if absent
+  --contest <id> --market spread --side padres --line -3.5 --odds 1.91 --risk-usdc 25
+ospex commitments submit-raw <contestId> <scorer> <lineTicks> upper 250 1000  # protocol escape hatch
+
 ospex commitments match <commitment-hash>                    # match an existing maker commitment
 ospex commitments cancel <commitment-hash>                   # off-chain cancel via signed DELETE
 ospex commitments cancel <commitment-hash> --also-onchain    # off-chain DELETE + authoritative on-chain cancel (M2.5)
@@ -162,7 +170,8 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex commitments list [... --speculation <id> ...]` | Existing list extended with `--speculation` filter. |
 | `ospex commitments list [--maker --scorer --contest-id --status …]` | Lists commitments. Defaults to `open,partially_filled` and active rows. |
 | `ospex commitments approve <amount\|max>` | Approve PositionModule for USDC (M2). |
-| `ospex commitments submit <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>` | Sign + POST a commitment (M2). Prompts to approve if allowance is short. |
+| `ospex commitments submit [--speculation\|--contest --market --line] --side --odds --risk-usdc [--expiry --nonce --yes --json --approve-max]` | High-level submit. Domain-language inputs (`--side lakers --odds 2.50 --risk-usdc 1`) + a win/lose/push preview before signing. `--json` alone = preview only (no signing); `--yes --json` = preview + post-submit result. Default approval policy is exact-required-amount; `--approve-max` opts into unlimited. |
+| `ospex commitments submit-raw <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>` | Protocol-level escape hatch — same canonical-tuple form as the original `submit`. Use when you already have raw protocol values; otherwise prefer `submit`. |
 | `ospex commitments match <hash> [--risk <amount>]` | Take a commitment as the taker (M2). Prompts to approve. |
 | `ospex commitments cancel <hash> [--also-onchain]` | Off-chain cancel via signed DELETE (M2). With `--also-onchain` (M2.5) additionally calls `MatchingModule.cancelCommitment` for an authoritative cancel. |
 | `ospex commitments cancel-onchain <hash>` | On-chain cancel only — `MatchingModule.cancelCommitment(commitment)` (M2.5). Authoritative; cannot be reverted off-chain. |

@@ -78,7 +78,13 @@ export const commitmentsSubmitCommand = new Command('submit')
     '--approve-max',
     'when an approval is required, grant unlimited (default: approve required amount only)',
   )
-  .addOption(new Option('--json').hideHelp(false))
+  .addOption(
+    new Option(
+      '--json',
+      'machine-readable output. ALONE = preview only, no signing (SubmitPreviewEnvelope). ' +
+        'WITH --yes = signs/posts and emits SubmitJsonResult.',
+    ).hideHelp(false),
+  )
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
     const parent = parseParent(opts);

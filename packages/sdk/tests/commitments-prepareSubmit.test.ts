@@ -381,7 +381,13 @@ describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', ()
     expect(preview.market.lineTicks).toBe(-35);
   });
 
-  it('--contest existing-mode classification: closed spec at same lineTicks is ignored, falls to lazy', async () => {
+  it('--contest spread + --line matches a CLOSED exact spec → reject (cannot lazy-create at same tuple)', async () => {
+    // The SpeculationModule reverse lookup keeps the (contestId,
+    // scorer, lineTicks) → speculationId mapping permanently. Once
+    // a closed spec exists at that tuple, PositionModule.recordFill
+    // returns the closed id rather than creating a new one — any
+    // commitment we post here would revert with
+    // PositionModule__SpeculationNotOpen at match time.
     const contest = buildContest({
       speculations: [
         {
@@ -395,15 +401,115 @@ describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', ()
       ],
     });
     const ctx = buildContext({ contest, allowance: 25_000_000n });
+    await expect(
+      prepareSubmit(ctx, {
+        parent: { kind: 'contest', contestId: '42', market: 'spread', line: '-3.5' },
+        side: 'lakers',
+        odds: '1.91',
+        riskUsdc: '25',
+      }),
+    ).rejects.toThrow(/closed \(settled or scored\)/);
+  });
+
+  it('--contest moneyline + only existing moneyline spec is closed → reject', async () => {
+    const contest = buildContest({
+      speculations: [
+        {
+          speculationId: '100',
+          contestId: '42',
+          type: 'moneyline',
+          lineTicks: 0,
+          line: 0,
+          speculationStatus: 1, // closed
+        },
+      ],
+    });
+    const ctx = buildContext({ contest, allowance: 1_000_000n });
+    await expect(
+      prepareSubmit(ctx, {
+        parent: { kind: 'contest', contestId: '42', market: 'moneyline' },
+        side: 'lakers',
+        odds: '2.50',
+        riskUsdc: '1',
+      }),
+    ).rejects.toThrow(/closed \(settled or scored\)/);
+  });
+
+  it('--contest total + --line matches a CLOSED exact spec → reject', async () => {
+    const contest = buildContest({
+      speculations: [
+        {
+          speculationId: '102',
+          contestId: '42',
+          type: 'total',
+          lineTicks: 85,
+          line: 8.5,
+          speculationStatus: 1, // closed
+        },
+      ],
+    });
+    const ctx = buildContext({ contest, allowance: 10_000_000n });
+    await expect(
+      prepareSubmit(ctx, {
+        parent: { kind: 'contest', contestId: '42', market: 'total', line: '8.5' },
+        side: 'over',
+        odds: '1.95',
+        riskUsdc: '10',
+      }),
+    ).rejects.toThrow(/closed \(settled or scored\)/);
+  });
+
+  it('--contest with --line that has no existing spec at all → lazy still works', async () => {
+    // Closed spec at a DIFFERENT line shouldn't block lazy creation
+    // at a fresh line.
+    const contest = buildContest({
+      speculations: [
+        {
+          speculationId: '101',
+          contestId: '42',
+          type: 'spread',
+          lineTicks: -75,
+          line: -7.5,
+          speculationStatus: 1, // closed at -7.5
+        },
+      ],
+    });
+    const ctx = buildContext({ contest, allowance: 25_000_000n });
     const preview = await prepareSubmit(ctx, {
       parent: { kind: 'contest', contestId: '42', market: 'spread', line: '-3.5' },
       side: 'lakers',
       odds: '1.91',
       riskUsdc: '25',
     });
-    // Closed spec must NOT be picked as 'existing' — the user would
-    // sign a guaranteed-revert commitment.
+    // -3.5 has no spec (open or closed) → lazy is correct.
     expect(preview.market.speculation.mode).toBe('lazy');
+    expect(preview.market.lineTicks).toBe(-35);
+  });
+
+  it('home-side spread selection → canonical-tuple closed-spec check still catches it (inversion-safe)', async () => {
+    // User says "home -3.5"; canonical lineTicks = +35 (away
+    // perspective). A closed spec at +35 must still trigger the reject.
+    const contest = buildContest({
+      speculations: [
+        {
+          speculationId: '103',
+          contestId: '42',
+          type: 'spread',
+          lineTicks: 35, // away +3.5 = home -3.5
+          line: 3.5,
+          speculationStatus: 1, // closed
+        },
+      ],
+    });
+    const ctx = buildContext({ contest, allowance: 25_000_000n });
+    await expect(
+      prepareSubmit(ctx, {
+        parent: { kind: 'contest', contestId: '42', market: 'spread', line: '-3.5' },
+        side: 'nuggets', // home
+        odds: '1.91',
+        riskUsdc: '25',
+      }),
+    ).rejects.toThrow(/closed/);
   });
 });
 

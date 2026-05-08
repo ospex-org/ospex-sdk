@@ -125,16 +125,39 @@ export async function prepareSubmit(
       speculationId: parent.pinnedSpeculation.speculationId,
     };
   } else {
-    // Filter to OPEN speculations before exact-match. Closed
-    // (speculationStatus !== 0) speculations have been settled or
-    // scored and cannot accept new commitments — matching against
-    // them would let the user sign a commitment that's guaranteed
-    // to revert. (resolveParent applies the same filter for the
-    // no-line uniqueness/ambiguity inference.)
-    const exact = (parent.contest!.speculations ?? [])
-      .filter((s) => s.speculationStatus === 0)
-      .find((s) => s.type === parent.market && (s.lineTicks ?? 0) === lineTicksProtocol);
+    // Search across ALL specs (open + closed) for the exact canonical
+    // tuple. The contract's reverse lookup
+    //   SpeculationModule:s_speculationLookup[(contestId, scorer, lineTicks)]
+    // is permanent — once a closed spec exists at that tuple,
+    // PositionModule.recordFill returns the closed id (rather than
+    // creating a fresh one) and reverts with
+    // `PositionModule__SpeculationNotOpen` at match time. So:
+    //
+    //   - exact match + open    → existing mode (correct).
+    //   - exact match + closed  → reject. We refuse to sign a
+    //                             commitment that's guaranteed to
+    //                             fail on match.
+    //   - no match              → lazy (the protocol will create the
+    //                             speculation on first match).
+    //
+    // The home-side spread inversion compounds this risk: the user's
+    // displayed line is selected-side; the canonical tuple is
+    // away-side. The check here is on the canonical tuple, so home
+    // selection at e.g. `--line -3.5` correctly catches a closed
+    // spec stored as `lineTicks=+35`.
+    const exact = (parent.contest!.speculations ?? []).find(
+      (s) => s.type === parent.market && (s.lineTicks ?? 0) === lineTicksProtocol,
+    );
     if (exact) {
+      if (exact.speculationStatus !== 0) {
+        throw new OspexValidationError(
+          `Speculation ${exact.speculationId} on contest ${parent.contest!.contestId} ` +
+            `at ${parent.market} lineTicks=${lineTicksProtocol} is closed (settled or scored). ` +
+            'The protocol cannot create a fresh speculation at the same (contestId, scorer, lineTicks) ' +
+            'tuple, and any commitment posted against it would revert at match time. ' +
+            'Pick a different line, a different market, or wait for the next contest.',
+        );
+      }
       speculation = { mode: 'existing', speculationId: exact.speculationId };
     } else {
       speculation = { mode: 'lazy', speculationId: null, speculationKey };

@@ -228,7 +228,7 @@ It burns real LINK + a USDC fee on every call. The SDK pre-flights LINK→Oracle
 
 **`Failed to decrypt keystore`** — wrong passphrase, or the file is not a v3 keystore. Foundry always produces v3; this is almost always the passphrase.
 
-**`OspexAllowanceError: insufficient allowance`** — run `ospex commitments approve max` first. If you're creating contests, the LINK and USDC allowances target different modules (OracleModule and TreasuryModule, respectively); the CLI prompts on demand.
+**`OspexAllowanceError: insufficient allowance`** — `ospex commitments submit` (high-level) auto-approves exactly the required amount before signing, so this should be rare. Pass `--approve-max` to grant unlimited at the same step. For raw / scripted flows, run `ospex commitments approve <amount\|max>` separately. If you're creating contests, the LINK and USDC allowances target different modules (OracleModule and TreasuryModule, respectively); the CLI prompts on demand.
 
 **`OspexChainError: <selector>`** — a transaction reverted. The selector usually decodes to a known contract error (e.g., `MatchingModule__NonceMustIncrease`). Read the printed reason; if unclear, file an issue with the tx hash.
 
