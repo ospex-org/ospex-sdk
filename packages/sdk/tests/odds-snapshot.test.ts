@@ -3,6 +3,11 @@
  * read backed by `GET /v1/contests/:contestId/odds`. Uses a mocked
  * fetch (same pattern as api.test.ts) so the test never opens a real
  * socket or talks to Supabase.
+ *
+ * The endpoint exposes per-market shapes (moneyline / spread / total)
+ * rather than a generic `line + away/home` envelope; tests below assert
+ * that the SDK preserves those market-specific field names through the
+ * client mapping.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -31,8 +36,14 @@ function makeFetch(
 
 const apiUrl = 'https://api.example.test';
 
+const TIMESTAMPS = {
+  upstreamLastUpdated: '2026-05-08T22:00:00Z',
+  pollCapturedAt: '2026-05-08T22:00:30Z',
+  changedAt: '2026-05-08T22:00:30Z',
+};
+
 describe('client.odds.snapshot', () => {
-  it('hits the contest-centric endpoint and decodes all three markets', async () => {
+  it('hits the contest-centric endpoint and decodes per-market shapes', async () => {
     const { fetch, calls } = makeFetch(() => ({
       status: 200,
       body: {
@@ -40,37 +51,25 @@ describe('client.odds.snapshot', () => {
         jsonoddsId: 'jo-abc-123',
         odds: {
           moneyline: {
-            jsonoddsId: 'jo-abc-123',
             market: 'moneyline',
-            network: 'polygon',
-            line: null,
             awayOddsAmerican: 145,
             homeOddsAmerican: -180,
-            upstreamLastUpdated: '2026-05-08T22:00:00Z',
-            pollCapturedAt: '2026-05-08T22:00:30Z',
-            changedAt: '2026-05-08T22:00:30Z',
+            ...TIMESTAMPS,
           },
           spread: {
-            jsonoddsId: 'jo-abc-123',
             market: 'spread',
-            network: 'polygon',
-            line: -3.5,
+            awayLine: 3.5,
+            homeLine: -3.5,
             awayOddsAmerican: -110,
             homeOddsAmerican: -110,
-            upstreamLastUpdated: '2026-05-08T22:00:00Z',
-            pollCapturedAt: '2026-05-08T22:00:30Z',
-            changedAt: '2026-05-08T22:00:30Z',
+            ...TIMESTAMPS,
           },
           total: {
-            jsonoddsId: 'jo-abc-123',
             market: 'total',
-            network: 'polygon',
             line: 8.5,
-            awayOddsAmerican: -105,
-            homeOddsAmerican: -115,
-            upstreamLastUpdated: '2026-05-08T22:00:00Z',
-            pollCapturedAt: '2026-05-08T22:00:30Z',
-            changedAt: '2026-05-08T22:00:30Z',
+            overOddsAmerican: -105,
+            underOddsAmerican: -115,
+            ...TIMESTAMPS,
           },
         },
       },
@@ -79,12 +78,27 @@ describe('client.odds.snapshot', () => {
     const result = await client.odds.snapshot('42');
     expect(result.contestId).toBe('42');
     expect(result.jsonoddsId).toBe('jo-abc-123');
-    expect(result.odds.moneyline?.awayOddsAmerican).toBe(145);
-    expect(result.odds.moneyline?.line).toBeNull();
-    expect(result.odds.spread?.line).toBe(-3.5);
-    expect(result.odds.total?.line).toBe(8.5);
+
+    // moneyline: per-side odds, no line field.
     expect(result.odds.moneyline?.market).toBe('moneyline');
-    expect(result.odds.spread?.network).toBe('polygon');
+    expect(result.odds.moneyline?.awayOddsAmerican).toBe(145);
+    expect(result.odds.moneyline?.homeOddsAmerican).toBe(-180);
+    expect(result.odds.moneyline).not.toHaveProperty('line');
+
+    // spread: both sides labelled, no generic line.
+    expect(result.odds.spread?.market).toBe('spread');
+    expect(result.odds.spread?.awayLine).toBe(3.5);
+    expect(result.odds.spread?.homeLine).toBe(-3.5);
+    expect(result.odds.spread?.awayOddsAmerican).toBe(-110);
+    expect(result.odds.spread).not.toHaveProperty('line');
+
+    // total: line + over/under (NOT away/home).
+    expect(result.odds.total?.market).toBe('total');
+    expect(result.odds.total?.line).toBe(8.5);
+    expect(result.odds.total?.overOddsAmerican).toBe(-105);
+    expect(result.odds.total?.underOddsAmerican).toBe(-115);
+    expect(result.odds.total).not.toHaveProperty('awayOddsAmerican');
+    expect(result.odds.total).not.toHaveProperty('homeOddsAmerican');
 
     const url = new URL(calls[0]!.url);
     expect(url.pathname).toBe('/v1/contests/42/odds');
@@ -98,15 +112,10 @@ describe('client.odds.snapshot', () => {
         jsonoddsId: 'jo-x',
         odds: {
           moneyline: {
-            jsonoddsId: 'jo-x',
             market: 'moneyline',
-            network: 'polygon',
-            line: null,
             awayOddsAmerican: 200,
             homeOddsAmerican: -250,
-            upstreamLastUpdated: '2026-05-08T22:00:00Z',
-            pollCapturedAt: '2026-05-08T22:00:30Z',
-            changedAt: '2026-05-08T22:00:30Z',
+            ...TIMESTAMPS,
           },
           spread: null,
           total: null,
@@ -135,6 +144,37 @@ describe('client.odds.snapshot', () => {
     expect(result.odds.moneyline).toBeNull();
     expect(result.odds.spread).toBeNull();
     expect(result.odds.total).toBeNull();
+  });
+
+  it('spread with null homeLine carries null awayLine too (server-side derivation)', async () => {
+    // Server fills awayLine = -homeLine; if homeLine is null, awayLine
+    // is null too. The SDK passes both through unchanged.
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        contestId: '7',
+        jsonoddsId: 'jo-x',
+        odds: {
+          moneyline: null,
+          spread: {
+            market: 'spread',
+            awayLine: null,
+            homeLine: null,
+            awayOddsAmerican: -110,
+            homeOddsAmerican: -110,
+            ...TIMESTAMPS,
+          },
+          total: null,
+        },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const result = await client.odds.snapshot('7');
+    expect(result.odds.spread).toMatchObject({
+      market: 'spread',
+      awayLine: null,
+      homeLine: null,
+    });
   });
 
   it('URL-encodes special characters in contestId', async () => {

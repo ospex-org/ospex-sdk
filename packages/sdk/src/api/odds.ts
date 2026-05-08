@@ -10,8 +10,10 @@
  *
  * The endpoint resolves the contest's `jsonoddsId` server-side so
  * consumers can stay in contest-id vocabulary without an extra
- * round-trip. Markets the writer hasn't populated come back as `null`
- * so consumers always see the same `{ moneyline, spread, total }` shape.
+ * round-trip. Per-market entries use market-specific shapes (see
+ * `MoneylineOdds`, `SpreadOdds`, `TotalOdds`) — the wire format does
+ * not share a generic envelope across markets, so callers can't
+ * misread spread side direction or total over/under naming.
  *
  * Source labelling: these are upstream reference odds (JSONOdds /
  * Sportspage via `ospex-writer`), not Ospex liquidity. SDK consumers
@@ -22,11 +24,16 @@
 import type { ApiClient } from './client.js';
 import type {
   ContestOddsSnapshot,
-  OddsSnapshot,
-  MarketType,
+  MoneylineOdds,
+  SpreadOdds,
+  TotalOdds,
 } from '../types/odds.js';
-import type { Network } from '../types/protocol.js';
-import type { ContestOddsBody, OddsSnapshotBody } from './types.js';
+import type {
+  ContestOddsBody,
+  MoneylineOddsBody,
+  SpreadOddsBody,
+  TotalOddsBody,
+} from './types.js';
 
 export class OddsApi {
   constructor(private readonly client: ApiClient) {}
@@ -39,22 +46,44 @@ export class OddsApi {
       contestId: body.contestId,
       jsonoddsId: body.jsonoddsId,
       odds: {
-        moneyline: body.odds.moneyline ? toSnapshot(body.odds.moneyline) : null,
-        spread: body.odds.spread ? toSnapshot(body.odds.spread) : null,
-        total: body.odds.total ? toSnapshot(body.odds.total) : null,
+        moneyline: body.odds.moneyline ? toMoneyline(body.odds.moneyline) : null,
+        spread: body.odds.spread ? toSpread(body.odds.spread) : null,
+        total: body.odds.total ? toTotal(body.odds.total) : null,
       },
     };
   }
 }
 
-function toSnapshot(body: OddsSnapshotBody): OddsSnapshot {
+function toMoneyline(body: MoneylineOddsBody): MoneylineOdds {
   return {
-    jsonoddsId: body.jsonoddsId,
-    market: body.market as MarketType,
-    network: body.network as Network,
-    line: body.line,
+    market: 'moneyline',
     awayOddsAmerican: body.awayOddsAmerican,
     homeOddsAmerican: body.homeOddsAmerican,
+    upstreamLastUpdated: body.upstreamLastUpdated,
+    pollCapturedAt: body.pollCapturedAt,
+    changedAt: body.changedAt,
+  };
+}
+
+function toSpread(body: SpreadOddsBody): SpreadOdds {
+  return {
+    market: 'spread',
+    awayLine: body.awayLine,
+    homeLine: body.homeLine,
+    awayOddsAmerican: body.awayOddsAmerican,
+    homeOddsAmerican: body.homeOddsAmerican,
+    upstreamLastUpdated: body.upstreamLastUpdated,
+    pollCapturedAt: body.pollCapturedAt,
+    changedAt: body.changedAt,
+  };
+}
+
+function toTotal(body: TotalOddsBody): TotalOdds {
+  return {
+    market: 'total',
+    line: body.line,
+    overOddsAmerican: body.overOddsAmerican,
+    underOddsAmerican: body.underOddsAmerican,
     upstreamLastUpdated: body.upstreamLastUpdated,
     pollCapturedAt: body.pollCapturedAt,
     changedAt: body.changedAt,

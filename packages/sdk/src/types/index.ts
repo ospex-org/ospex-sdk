@@ -46,10 +46,14 @@ export type {
 export type {
   ContestOddsSnapshot,
   MarketType,
+  MoneylineOdds,
   OddsSnapshot,
   OddsSubscribeArgs,
   OddsSubscribeHandlers,
+  OddsTimestamps,
+  SpreadOdds,
   Subscription,
+  TotalOdds,
 } from './odds.js';
 export type {
   Game,

@@ -62,13 +62,77 @@ export interface Subscription {
 }
 
 /**
+ * Timestamp envelope shared across the three market-specific snapshot
+ * shapes. Mirrors the writer's `current_odds` columns:
+ *   - upstreamLastUpdated — when the upstream provider's row last moved
+ *   - pollCapturedAt      — when the writer last fetched the row
+ *   - changedAt           — when any tracked price column last changed
+ */
+export interface OddsTimestamps {
+  upstreamLastUpdated: string;
+  pollCapturedAt: string;
+  changedAt: string;
+}
+
+/**
+ * Moneyline snapshot — one entry under `ContestOddsSnapshot.odds.moneyline`.
+ * Carries per-side American odds only; moneyline is line-less by definition,
+ * so there is intentionally no `line` field in the shape.
+ */
+export interface MoneylineOdds extends OddsTimestamps {
+  market: 'moneyline';
+  awayOddsAmerican: number | null;
+  homeOddsAmerican: number | null;
+}
+
+/**
+ * Spread snapshot — both sides of the spread line are labelled
+ * (`awayLine = -homeLine` always). The writer stores only the home
+ * team's spread in `current_odds.line` (negative if home favored, per
+ * `ospex-writer/src/loop/pollCycle.ts:523`); we expose both sides so
+ * callers can't misalign with the raw column convention.
+ *
+ * No un-labelled `line` field on this type — that ambiguity is exactly
+ * what the per-market shapes were introduced to remove.
+ */
+export interface SpreadOdds extends OddsTimestamps {
+  market: 'spread';
+  /** Away team's spread (= -homeLine when home line is set). */
+  awayLine: number | null;
+  /** Home team's spread (raw `current_odds.line`). */
+  homeLine: number | null;
+  awayOddsAmerican: number | null;
+  homeOddsAmerican: number | null;
+}
+
+/**
+ * Total snapshot — `line` is the over/under threshold (perspective-
+ * neutral, single value). Over and under odds are named explicitly;
+ * the writer's storage convention (Over → `away_odds_american`,
+ * Under → `home_odds_american`, per pollCycle.ts:526) does not leak.
+ */
+export interface TotalOdds extends OddsTimestamps {
+  market: 'total';
+  /** Over/under threshold (perspective-neutral). */
+  line: number | null;
+  overOddsAmerican: number | null;
+  underOddsAmerican: number | null;
+}
+
+/**
  * Public shape returned by `client.odds.snapshot(contestId)` — the
  * one-shot counterpart to the Realtime `subscribe` channel. Always
- * carries all three market keys so consumers don't need null-check
+ * carries all three market keys so consumers don't need to null-check
  * the keys themselves; per-market values are `null` when the writer
  * hasn't populated that market for the contest's upstream game (or
  * when the contest has no upstream linkage at all, in which case
  * `jsonoddsId` is also null).
+ *
+ * Each market entry uses an explicit, market-specific shape rather
+ * than a generic envelope — see `MoneylineOdds`, `SpreadOdds`,
+ * `TotalOdds`. This avoids the kind of side-ambiguity (spread `line`
+ * = home or away?) and storage-detail leakage (total `awayOdds` =
+ * over odds?) that a shared shape would invite.
  *
  * These are upstream reference odds (JSONOdds / Sportspage). Ospex
  * commitments are user-priced and don't have to match these.
@@ -77,8 +141,8 @@ export interface ContestOddsSnapshot {
   contestId: string;
   jsonoddsId: string | null;
   odds: {
-    moneyline: OddsSnapshot | null;
-    spread: OddsSnapshot | null;
-    total: OddsSnapshot | null;
+    moneyline: MoneylineOdds | null;
+    spread: SpreadOdds | null;
+    total: TotalOdds | null;
   };
 }

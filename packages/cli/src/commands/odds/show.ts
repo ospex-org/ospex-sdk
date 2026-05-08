@@ -27,7 +27,7 @@
 
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
-import type { ContestOddsSnapshot, OddsSnapshot } from '@ospex/sdk';
+import type { MoneylineOdds, SpreadOdds, TotalOdds } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
 import { formatOutput } from '../../lib/format.js';
 
@@ -104,9 +104,9 @@ export const oddsShowCommand = new Command('show')
       return;
     }
 
-    renderMarket('moneyline', snapshot.odds.moneyline, contest);
-    renderMarket('spread', snapshot.odds.spread, contest);
-    renderMarket('total', snapshot.odds.total, contest);
+    renderMoneyline(snapshot.odds.moneyline, contest);
+    renderSpread(snapshot.odds.spread, contest);
+    renderTotal(snapshot.odds.total);
 
     process.stdout.write(
       '\n  Source: JSONOdds / Sportspage via ospex-writer. These are upstream reference\n' +
@@ -114,49 +114,60 @@ export const oddsShowCommand = new Command('show')
     );
   });
 
-function renderMarket(
-  market: 'moneyline' | 'spread' | 'total',
-  odds: OddsSnapshot | null,
+function renderMoneyline(
+  odds: MoneylineOdds | null,
   contest: { awayTeam: string; homeTeam: string },
 ): void {
   if (odds === null) {
-    process.stdout.write(`  ${market.padEnd(9)} (not available)\n\n`);
+    process.stdout.write(`  moneyline (not available)\n\n`);
     return;
   }
-  const updated = relativeTime(odds.changedAt);
-  if (market === 'moneyline') {
-    process.stdout.write(`  moneyline\n`);
-    process.stdout.write(
-      `    away (${contest.awayTeam}):  ${formatAmerican(odds.awayOddsAmerican)}  (decimal ${formatDecimal(odds.awayOddsAmerican)})\n`,
-    );
-    process.stdout.write(
-      `    home (${contest.homeTeam}):  ${formatAmerican(odds.homeOddsAmerican)}  (decimal ${formatDecimal(odds.homeOddsAmerican)})\n`,
-    );
-    process.stdout.write(`    updated: ${updated}\n\n`);
+  process.stdout.write(`  moneyline\n`);
+  process.stdout.write(
+    `    away (${contest.awayTeam}):  ${formatAmerican(odds.awayOddsAmerican)}  (decimal ${formatDecimal(odds.awayOddsAmerican)})\n`,
+  );
+  process.stdout.write(
+    `    home (${contest.homeTeam}):  ${formatAmerican(odds.homeOddsAmerican)}  (decimal ${formatDecimal(odds.homeOddsAmerican)})\n`,
+  );
+  process.stdout.write(`    updated: ${relativeTime(odds.changedAt)}\n\n`);
+}
+
+function renderSpread(
+  odds: SpreadOdds | null,
+  contest: { awayTeam: string; homeTeam: string },
+): void {
+  if (odds === null) {
+    process.stdout.write(`  spread (not available)\n\n`);
     return;
   }
-  if (market === 'spread') {
-    const homeLine = odds.line;
-    const awayLine = homeLine !== null ? -homeLine : null;
-    process.stdout.write(`  spread\n`);
-    process.stdout.write(
-      `    away (${contest.awayTeam}) ${formatLine(awayLine)}:  ${formatAmerican(odds.awayOddsAmerican)}  (decimal ${formatDecimal(odds.awayOddsAmerican)})\n`,
-    );
-    process.stdout.write(
-      `    home (${contest.homeTeam}) ${formatLine(homeLine)}:  ${formatAmerican(odds.homeOddsAmerican)}  (decimal ${formatDecimal(odds.homeOddsAmerican)})\n`,
-    );
-    process.stdout.write(`    updated: ${updated}\n\n`);
+  // awayLine + homeLine come labelled from the API — no client-side
+  // line-flipping logic needed.
+  process.stdout.write(`  spread\n`);
+  process.stdout.write(
+    `    away (${contest.awayTeam}) ${formatLine(odds.awayLine)}:  ${formatAmerican(odds.awayOddsAmerican)}  (decimal ${formatDecimal(odds.awayOddsAmerican)})\n`,
+  );
+  process.stdout.write(
+    `    home (${contest.homeTeam}) ${formatLine(odds.homeLine)}:  ${formatAmerican(odds.homeOddsAmerican)}  (decimal ${formatDecimal(odds.homeOddsAmerican)})\n`,
+  );
+  process.stdout.write(`    updated: ${relativeTime(odds.changedAt)}\n\n`);
+}
+
+function renderTotal(odds: TotalOdds | null): void {
+  if (odds === null) {
+    process.stdout.write(`  total (not available)\n\n`);
     return;
   }
-  // total
+  // overOdds/underOdds come from the API directly — no away/home →
+  // over/under remapping. Total has one line (the threshold), shared
+  // by both sides.
   process.stdout.write(`  total\n`);
   process.stdout.write(
-    `    over  ${formatLine(odds.line)}:  ${formatAmerican(odds.awayOddsAmerican)}  (decimal ${formatDecimal(odds.awayOddsAmerican)})\n`,
+    `    over  ${formatLine(odds.line)}:  ${formatAmerican(odds.overOddsAmerican)}  (decimal ${formatDecimal(odds.overOddsAmerican)})\n`,
   );
   process.stdout.write(
-    `    under ${formatLine(odds.line)}:  ${formatAmerican(odds.homeOddsAmerican)}  (decimal ${formatDecimal(odds.homeOddsAmerican)})\n`,
+    `    under ${formatLine(odds.line)}:  ${formatAmerican(odds.underOddsAmerican)}  (decimal ${formatDecimal(odds.underOddsAmerican)})\n`,
   );
-  process.stdout.write(`    updated: ${updated}\n\n`);
+  process.stdout.write(`    updated: ${relativeTime(odds.changedAt)}\n\n`);
 }
 
 function formatAmerican(american: number | null): string {

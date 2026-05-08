@@ -361,26 +361,44 @@ export interface GamesListBody {
 }
 
 /**
- * Wire body for one row of `GET /v1/contests/:contestId/odds`. Each
- * market entry mirrors the `current_odds` row shape (camelCased) the
- * writer populates — see `ospex-core-api/src/v1/odds.ts` for the
- * server-side mapping.
+ * Wire bodies for `GET /v1/contests/:contestId/odds`. Per-market
+ * shapes are explicit so the wire format can't be misread:
  *
- * `line` semantics:
- *   - moneyline: always null
- *   - spread:    home team's spread (negative if home favored)
- *   - total:     over/under threshold
+ *   - moneyline: per-side American odds. No line field.
+ *   - spread:    awayLine + homeLine + per-side American odds. The
+ *                writer stores only home spread in current_odds.line;
+ *                the server fills awayLine = -homeLine before serving.
+ *   - total:     line (threshold) + overOddsAmerican + underOddsAmerican.
+ *                The writer's away/home → over/under storage convention
+ *                is hidden at the API boundary.
+ *
+ * See `ospex-core-api/src/v1/odds.ts` for the server-side mapping.
  */
-export interface OddsSnapshotBody {
-  jsonoddsId: string;
-  market: string;
-  network: string;
-  line: number | null;
-  awayOddsAmerican: number | null;
-  homeOddsAmerican: number | null;
+interface OddsTimestampsBody {
   upstreamLastUpdated: string;
   pollCapturedAt: string;
   changedAt: string;
+}
+
+export interface MoneylineOddsBody extends OddsTimestampsBody {
+  market: 'moneyline';
+  awayOddsAmerican: number | null;
+  homeOddsAmerican: number | null;
+}
+
+export interface SpreadOddsBody extends OddsTimestampsBody {
+  market: 'spread';
+  awayLine: number | null;
+  homeLine: number | null;
+  awayOddsAmerican: number | null;
+  homeOddsAmerican: number | null;
+}
+
+export interface TotalOddsBody extends OddsTimestampsBody {
+  market: 'total';
+  line: number | null;
+  overOddsAmerican: number | null;
+  underOddsAmerican: number | null;
 }
 
 export interface ContestOddsBody {
@@ -389,9 +407,9 @@ export interface ContestOddsBody {
   jsonoddsId: string | null;
   /** Per-market entries are null when the writer hasn't populated them. */
   odds: {
-    moneyline: OddsSnapshotBody | null;
-    spread: OddsSnapshotBody | null;
-    total: OddsSnapshotBody | null;
+    moneyline: MoneylineOddsBody | null;
+    spread: SpreadOddsBody | null;
+    total: TotalOddsBody | null;
   };
 }
 
