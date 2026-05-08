@@ -162,10 +162,26 @@ describe('lineDecimalToTicks', () => {
     expect(() => lineDecimalToTicks('-3.55')).toThrow(OspexValidationError);
   });
 
-  it('rejects scientific notation / commas / NaN', () => {
+  it('rejects scientific notation / commas / NaN / Infinity / whitespace', () => {
     expect(() => lineDecimalToTicks('1e2')).toThrow(OspexValidationError);
     expect(() => lineDecimalToTicks('1,5')).toThrow(OspexValidationError);
     expect(() => lineDecimalToTicks('NaN')).toThrow(OspexValidationError);
+    expect(() => lineDecimalToTicks('Infinity')).toThrow(OspexValidationError);
+    expect(() => lineDecimalToTicks('-Infinity')).toThrow(OspexValidationError);
+    expect(() => lineDecimalToTicks(' 3.5')).toThrow(OspexValidationError);
+    expect(() => lineDecimalToTicks('3.5 ')).toThrow(OspexValidationError);
+    expect(() => lineDecimalToTicks('')).toThrow(OspexValidationError);
+  });
+
+  it('rejects values whose tick representation overflows int32', () => {
+    // INT32_MAX = 2_147_483_647; ticks = decimal × 10. So a decimal of
+    // 214_748_364.8 → tick 2_147_483_648 → overflow. Anything ≥ 214_748_364.8
+    // overflows; one decimal place above the boundary triggers it.
+    expect(() => lineDecimalToTicks('214748364.8')).toThrow(/int32/);
+    expect(() => lineDecimalToTicks('-214748364.9')).toThrow(/int32/);
+    // Just inside the bound is accepted.
+    expect(lineDecimalToTicks('214748364.7')).toBe(2_147_483_647);
+    expect(lineDecimalToTicks('-214748364.8')).toBe(-2_147_483_648);
   });
 });
 

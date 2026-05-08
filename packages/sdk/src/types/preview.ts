@@ -12,6 +12,7 @@
  */
 
 import type { MarketType } from './odds.js';
+import type { SubmitResult } from '../commitments/submit.js';
 
 /** How the resolver matched the user's `--side` input. */
 export type ResolutionSource = 'exact' | 'nickname' | 'alias' | 'over' | 'under';
@@ -124,32 +125,46 @@ export interface SubmitPreview {
   outcomes: PreviewOutcome[];
 }
 
-/** JSON envelope for `commitments submit --json` (preview only). */
+/**
+ * JSON envelope for `commitments submit --json` (preview only). Used
+ * over the wire — the in-memory `prepareSubmit(args): Promise<SubmitPreview>`
+ * returns the bare model. Add `schemaVersion: 1` only at the JSON
+ * boundary so downstream agents have a stable contract.
+ */
 export interface SubmitPreviewEnvelope {
   schemaVersion: 1;
   preview: SubmitPreview;
 }
 
 /**
- * Returned to the caller of `prepareSubmit` so it can drive a custom
- * confirmation flow before calling `submitPrepared`. Same shape as
- * `SubmitPreviewEnvelope` for symmetry.
- */
-export type PreparedSubmit = SubmitPreviewEnvelope;
-
-/**
  * Wire shape for `commitments submit --yes --json` (post-submit).
- * `result` carries the same fields the existing `submit` returns
- * (`hash`, `status`); kept loose here so this types module doesn't
- * import the runtime SubmitResult.
+ *
+ * `result` is the SDK's existing `SubmitResult` — `{ hash, commitment }` —
+ * not a re-invented `{ hash, status }` shape. Locking schemaVersion: 1
+ * with a result type that disagrees with what `commitments.submit`
+ * actually returns would be a self-inflicted contract break.
  */
 export interface SubmitJsonResult {
   schemaVersion: 1;
   preview: SubmitPreview;
-  result: { hash: string; status: string };
+  result: SubmitResult;
 }
 
-/** Parent selection for the new high-level `commitments submit`. */
+/**
+ * Parent selection for the new high-level `commitments submit`.
+ *
+ * A discriminated union with an explicit `kind` tag instead of two
+ * mutually-exclusive optional fields. Trade-offs:
+ *
+ * - Pro (kept): TypeScript enforces "exactly one of speculation / contest";
+ *   pattern matching on `kind` is exhaustive at compile time.
+ * - Con: slightly more verbose at call sites — `{ parent: { kind: 'speculation', speculationId: 123 } }`
+ *   vs. `{ speculationId: 123 }`.
+ *
+ * Public-API decision logged in PROPOSAL.md §6.1 (post-PR-A revision).
+ * The wire/JSON `--json` envelope shape is unaffected — this is a
+ * TypeScript-only ergonomic.
+ */
 export type SubmitParent =
   | { kind: 'speculation'; speculationId: string | number }
   | {

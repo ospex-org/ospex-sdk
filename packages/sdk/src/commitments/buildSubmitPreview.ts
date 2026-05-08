@@ -86,6 +86,12 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
     counterpartyRiskUSDC: wei6ToDecimalUSDC(profitWei6),
   };
 
+  // Derive the canonical speculationKey ONCE. It's used for raw.speculationKey
+  // (what gets signed) AND, when lazy, for market.speculation.speculationKey
+  // (what the preview shows). Caller-supplied speculation values for the
+  // lazy mode are overridden so the preview readback can never drift from
+  // what the signature binds — the trust-model invariant is that
+  // raw.speculationKey == market.speculation.speculationKey when lazy.
   const speculationKey = deriveSpeculationKey(args.contestId, args.scorer, args.lineTicks);
 
   const raw: PreviewRaw = {
@@ -134,7 +140,10 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
 
   const market: PreviewMarket = {
     type: args.market,
-    speculation: args.speculation,
+    speculation:
+      args.speculation.mode === 'lazy'
+        ? { mode: 'lazy', speculationId: null, speculationKey }
+        : args.speculation,
     lineTicks: args.lineTicks,
     displayLine,
   };
@@ -370,12 +379,21 @@ function buildSpreadOutcomes(
       },
     ];
   }
-  // selectedTicks === 0 — pick'em (rare for spread). Same shape as moneyline.
+  // selectedTicks === 0 — pick'em spread. lineTicks=0 IS an integer line
+  // (0 % 10 === 0), so pushPossible('spread', 0) returns true. Emit the
+  // three-row outcome including the tie/push, never collapse to the
+  // moneyline two-row shape — the protocol settles a tie as a push on
+  // any spread market regardless of how rare the line is in practice.
   return [
     {
       condition: `${team} wins`,
       result: 'win',
       payoutUSDC: winPayout,
+    },
+    {
+      condition: `${team} and ${opp} tie (final margin 0)`,
+      result: 'push',
+      payoutUSDC: pushPayout,
     },
     {
       condition: `${opp} wins`,

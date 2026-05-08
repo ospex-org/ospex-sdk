@@ -89,6 +89,41 @@ describe('buildSubmitPreview — raw EIP-712 block', () => {
     expect(p.raw.nonce).toBe('17000000001');
     expect(p.raw.speculationKey).toMatch(/^0x[0-9a-f]{64}$/i);
   });
+
+  it('canonicalizes lazy market.speculation.speculationKey to match raw.speculationKey', () => {
+    // Trust-model invariant: the preview readback must show the same
+    // protocol key the signature binds. Caller-supplied lazy keys are
+    // overridden by the canonical derivation.
+    const p = buildSubmitPreview(
+      baseArgs({
+        speculation: {
+          mode: 'lazy',
+          speculationId: null,
+          speculationKey: '0xdeadbeef', // intentionally wrong; should be overwritten
+        },
+      }),
+    );
+    expect(p.market.speculation).toMatchObject({
+      mode: 'lazy',
+      speculationId: null,
+      speculationKey: p.raw.speculationKey,
+    });
+    expect(p.market.speculation.mode === 'lazy' && p.market.speculation.speculationKey).not.toBe(
+      '0xdeadbeef',
+    );
+  });
+
+  it('passes existing speculation through unchanged (already canonical)', () => {
+    const p = buildSubmitPreview(
+      baseArgs({
+        speculation: { mode: 'existing', speculationId: '999' },
+      }),
+    );
+    expect(p.market.speculation).toEqual({
+      mode: 'existing',
+      speculationId: '999',
+    });
+  });
 });
 
 describe('buildSubmitPreview — approvals', () => {
@@ -259,5 +294,29 @@ describe('buildSubmitPreview — spread outcomes (home/away inversion)', () => {
     );
     expect(p.market.displayLine).toBe('Los Angeles Lakers +3.5');
     expect(p.outcomes[0]?.condition).toMatch(/wins.*OR.*loses/);
+  });
+
+  it('pickem at lineTicks=0: emits three-row outcomes including push (matches pushPossible)', () => {
+    // Spread line=0 satisfies `line_ticks % 10 === 0` so pushPossible
+    // returns true. The outcome generator must mirror that — never
+    // collapse to the moneyline two-row shape.
+    const p = buildSubmitPreview(
+      baseArgs({
+        market: 'spread',
+        lineTicks: 0,
+        riskWei6: 10_000_000n,
+        oddsTick: 200,
+        resolvedSide: {
+          positionType: 0,
+          resolvedLabel: 'Los Angeles Lakers',
+          role: 'away',
+          resolutionSource: 'exact',
+        },
+      }),
+    );
+    expect(p.outcomes).toHaveLength(3);
+    expect(p.outcomes.map((o) => o.result)).toEqual(['win', 'push', 'lose']);
+    expect(p.outcomes[1]?.condition).toMatch(/tie/);
+    expect(p.outcomes[1]?.payoutUSDC).toBe('10.000000'); // stake returned
   });
 });

@@ -93,7 +93,6 @@ export type {
   SubmitPreview,
   SubmitPreviewEnvelope,
   SubmitJsonResult,
-  PreparedSubmit,
   HighLevelSubmitArgs,
   SubmitParent,
   PreviewContest,

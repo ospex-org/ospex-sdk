@@ -38,8 +38,11 @@ export class Teams {
 
   /**
    * Fetch alias rows. Returns the resolver-shaped subset
-   * (`{ teamId, alias, aliasType }`); call `aliasesRaw()` if you need
-   * the full wire shape including team display fields.
+   * (`{ teamId, alias, aliasType }`). The full wire shape including
+   * team display fields (`teamName`, `abbrev`, `sport`, `sportId`,
+   * `source`) is available via `client.api.request('/v1/teams/aliases')`
+   * directly — keeping the high-level method narrow keeps the resolver
+   * contract minimal.
    */
   async aliases(opts: TeamsAliasesArgs = {}): Promise<TeamAlias[]> {
     const key = opts.sport ?? '';
