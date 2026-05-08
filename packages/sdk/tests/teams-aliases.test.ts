@@ -96,17 +96,44 @@ describe('client.teams.aliases — pagination', () => {
     expect(calls[0]?.url).toContain('sport=mlb');
   });
 
-  it('breaks safely if server returns hasMore=true with empty page', async () => {
+  it('throws OspexAPIError when server returns hasMore=true with an empty page (fail-closed)', async () => {
+    // The resolver trust model depends on the alias set being complete.
+    // Returning partial data would silently corrupt downstream
+    // resolution decisions — surface the server bug immediately.
     const { fetch, calls } = makeFetch(() => ({
       status: 200,
       body: PAGE_BODY([], true, 100, 0),
     }));
     const client = new OspexClient({ apiUrl, fetch });
-    const aliases = await client.teams.aliases();
-    expect(aliases).toHaveLength(0);
-    // Defensive break — exactly one page fetched, no infinite loop.
-    expect(calls).toHaveLength(1);
+    await expect(client.teams.aliases()).rejects.toThrow(/pagination stalled/i);
+    // Cache must NOT be poisoned by the partial data. A subsequent
+    // call should refetch (and throw again given the same fixture).
+    await expect(client.teams.aliases()).rejects.toThrow();
+    // Two failed fetches → two API hits, no cache hit.
+    expect(calls.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('throws OspexAPIError when MAX_PAGES (100) is exhausted while hasMore stays true', async () => {
+    // Mock a server that always reports hasMore=true with non-empty
+    // pages — the loop guard should kick in after 100 pages and throw,
+    // never silently return a partial set.
+    let pageNum = 0;
+    const { fetch, calls } = makeFetch(() => {
+      pageNum++;
+      return {
+        status: 200,
+        body: PAGE_BODY(
+          [{ teamId: `t${pageNum}`, alias: `A${pageNum}`, aliasType: 'short' }],
+          true,
+          999_999_999,
+          (pageNum - 1) * 1,
+        ),
+      };
+    });
+    const client = new OspexClient({ apiUrl, fetch });
+    await expect(client.teams.aliases()).rejects.toThrow(/exceeded.*pages/i);
+    expect(calls.length).toBe(100);
+  }, 10_000);
 });
 
 describe('client.teams.aliases — caching', () => {
