@@ -12,7 +12,7 @@
  */
 
 import type { MarketType } from './odds.js';
-import type { SubmitResult } from '../commitments/submit.js';
+import type { SubmitResult } from '../commitments/submitRaw.js';
 
 /** How the resolver matched the user's `--side` input. */
 export type ResolutionSource = 'exact' | 'nickname' | 'alias' | 'over' | 'under';

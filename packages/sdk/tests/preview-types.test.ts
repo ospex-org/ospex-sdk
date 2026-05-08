@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { SubmitJsonResult, SubmitPreviewEnvelope } from '../src/types/preview.js';
-import type { SubmitResult } from '../src/commitments/submit.js';
+import type { SubmitResult } from '../src/commitments/submitRaw.js';
 
 // Compile-time identity: SubmitJsonResult['result'] === SubmitResult.
 type AssertEqual<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2
