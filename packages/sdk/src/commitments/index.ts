@@ -91,7 +91,7 @@ export class Commitments {
   /**
    * Convenience: prepareSubmit → optional confirm callback →
    * submitPrepared in one call. The confirm hook is the CLI's seam
-   * for the `[y/N]` prompt; agents pass `confirm: async () => true`
+   * for the `[Y/n]` prompt; agents pass `confirm: async () => true`
    * (or omit `confirm` entirely) to skip.
    */
   async submit(args: HighLevelSubmitArgs & SubmitConfirmHook): Promise<SubmitResult> {

@@ -16,7 +16,7 @@
  *   --risk-usdc <decimal>    e.g. "1" or "0.001"
  *   --expiry <iso-or-unix>   default 24h from now
  *   --nonce <bigint>         override the SDK's nonce strategy
- *   --yes                    skip the [y/N] prompt
+ *   --yes                    skip the [Y/n] prompt
  *   --json                   emit machine-readable JSON. Behavior pairs
  *                            with --yes:
  *                              --json alone     → SubmitPreviewEnvelope
@@ -155,7 +155,7 @@ export const commitmentsSubmitCommand = new Command('submit')
     //    the Ctrl-C convention so scripts can distinguish "user
     //    declined" from "tx failed").
     if (!skipPrompt) {
-      const ok = await promptYesNo('Submit?', false);
+      const ok = await promptYesNo('Submit?', true);
       if (!ok) {
         process.stderr.write('Submit cancelled.\n');
         process.exit(130);

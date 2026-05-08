@@ -154,10 +154,10 @@ Outcomes:
   Padres win    → you win 1.500000 USDC
   Cardinals win → you lose 1.000000 USDC
 
-Submit? [y/N]
+Submit? [Y/n]
 ```
 
-Confirm with `y` and the CLI signs (one Foundry passphrase prompt, even if a USDC approval has to land first), posts the EIP-712 commitment, and prints the hash plus `status: open`.
+Confirm with Enter (or `y`) and the CLI signs (one Foundry passphrase prompt, even if a USDC approval has to land first), posts the EIP-712 commitment, and prints the hash plus `status: open`.
 
 **Flag conventions:**
 

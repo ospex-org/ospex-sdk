@@ -115,7 +115,7 @@ export const contestCreateCommand = new Command('create')
           );
         }
         if (!skipPrompt) {
-          const ok = await promptYesNo('Create contest for this game?', false);
+          const ok = await promptYesNo('Create contest for this game?', true);
           if (!ok) {
             process.stderr.write('Cancelled.\n');
             process.exit(130);
