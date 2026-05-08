@@ -143,7 +143,7 @@ ospex commitments submit \
   0 upper 250 1000
 ```
 
-`0xd846…` is the Polygon mainnet moneyline scorer; the Amoy moneyline scorer is `0x2e6f…`. Discover the exact scorer for a given speculation via `ospex speculations list --contest <contestId>` rather than hard-coding it.
+`0xd846…` is the Polygon mainnet moneyline scorer; the Amoy moneyline scorer is `0x2e6f…`. The full set of mainnet and Amoy scorers (moneyline / spread / total) lives in `packages/sdk/src/contracts/addresses.ts`. A future release will let you pass `--market <moneyline|spread|total>` and resolve the scorer automatically.
 
 Units:
 
@@ -171,7 +171,9 @@ If you've piped scripts in mind: `ospex wallet address --json` emits machine-rea
 | Cancel authoritatively on-chain | `ospex commitments cancel-onchain <hash>` |
 | Bulk-cancel all your orders on a speculation | `ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks>` |
 | Stream live odds | `ospex odds watch <contestId>` |
-| Claim a winning position after settlement | `ospex positions claim <contestId> <speculationId> <positionType>` |
+| Claim a winning position after settlement | `ospex claim <speculationId> --type upper\|lower` |
+| Claim everything claimable for a wallet | `ospex claim-all` |
+| Settle a scored speculation (permissionless) | `ospex settle <speculationId>` |
 
 The full command reference is in the [README](../README.md).
 
@@ -186,12 +188,11 @@ ospex games list --sport mlb --hours 24
 # 2. Pick a row whose `creatable` column is `yes` and copy its gameId.
 #    (gameId is a stable UUID; the slug column shows you which game it is.)
 ospex contests create --game-id <pasted-gameId>
-
-# 3. Wait for the Chainlink Functions verification callback.
-ospex contests wait-verified <contestId>
 ```
 
-`ospex contests create` burns real LINK + a USDC fee on every call — the SDK pre-flights both allowances and prompts for them on demand. The three external IDs the contract requires (rundown / sportspage / jsonodds) are resolved server-side from the gameId; you never deal with them directly. Operator-side details on the M4 pipeline live in the SDK CLAUDE.md.
+`ospex contests create` waits for the Chainlink Functions verification callback by default and prints the new `contestId` only after `contestStatus=Verified` lands on chain (typically 10–30 s). Pass `--no-wait` if you'd rather get the txHash immediately and poll separately with `ospex contests wait-verified <contestId>` — useful for scripted flows.
+
+It burns real LINK + a USDC fee on every call. The SDK pre-flights LINK→OracleModule and USDC→TreasuryModule allowances and prompts for them on demand. The three external IDs the contract requires (rundown / sportspage / jsonodds) are resolved server-side from the gameId; you never deal with them directly. Operator-side details on the M4 pipeline live in the SDK CLAUDE.md.
 
 ## Troubleshooting
 
