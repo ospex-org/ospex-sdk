@@ -125,6 +125,12 @@ ospex commitments submit \
   --odds 2.50 \
   --risk-usdc 1
 
+# Same moneyline by --contest (no --line — moneyline is line-less)
+ospex commitments submit \
+  --contest <contestId> --market moneyline \
+  --side lakers \
+  --odds 2.50 --risk-usdc 1
+
 # Spread, home side at -3.5, $25 stake at 1.91 odds, by --contest (line implicit
 # from the unique speculation, or pass --line to lazy-create on first match)
 ospex commitments submit \
@@ -164,7 +170,7 @@ Confirm with Enter (or `y`) and the CLI signs (one Foundry passphrase prompt, ev
 - **`--side`** — team name, last-token nickname (`lakers`), or any alias (`LAL`) for moneyline / spread; `over` or `under` for total.
 - **`--odds`** — decimal odds string. `2.50`, `1.91`, etc. The protocol bound is `1.01 ≤ odds ≤ 101.00`.
 - **`--risk-usdc`** — decimal USDC string. `1`, `0.001`, `25`. Must be a multiple of `$0.0001` per the contract's lot-size rule.
-- **`--line`** — selected-side displayed line. `--side padres --line -3.5` means "Padres -3.5" regardless of whether Padres are home or away; the resolver inverts to the protocol's away-side ticks under the hood.
+- **`--line`** — selected-side displayed line for spread / total. `--side padres --line -3.5` means "Padres -3.5" regardless of whether Padres are home or away; the resolver inverts to the protocol's away-side ticks under the hood. **Omit for `--market moneyline`** — moneyline is line-less, and the SDK errors (`OspexValidationError: --line is not valid for moneyline markets`) if `--line` is passed there.
 - **`--yes`** skips the confirmation prompt and signs/posts. **`--json`** is output-format only and pairs with `--yes`:
   - `--json` alone → emits `SubmitPreviewEnvelope` (preview only, **no signing**). Use case: an agent inspects the resolved tuple before deciding whether to commit.
   - `--yes --json` → signs/posts and emits `SubmitJsonResult` (preview + result).
