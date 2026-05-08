@@ -162,7 +162,7 @@ Resolved commitment:
   contest:      Cardinals @ Padres, 2026-05-08 — MLB
   market:       moneyline (#123)
   side:         San Diego Padres (home)  [positionType=Lower, scorer=0xd846…, source=nickname]
-  odds:         2.50  [oddsTick=250]
+  odds:         2.50 decimal / +150 american  [oddsTick=250]
   risk:         1.000000 USDC
   to win:       1.500000 USDC  (return = 2.500000 USDC)
 
@@ -173,12 +173,21 @@ Outcomes:
 Submit? [Y/n]
 ```
 
+(The `odds` line in the preview shows both decimal and American formats — `2.50 decimal / +150 american  [oddsTick=250]` — so the value you signed is unambiguous regardless of which format you typed.)
+
+
 Confirm with Enter (or `y`) and the CLI signs (one Foundry passphrase prompt, even if a USDC approval has to land first), posts the EIP-712 commitment, and prints the hash plus `status: open`.
 
 **Flag conventions:**
 
 - **`--side`** — team name, last-token nickname (`lakers`), or any alias (`LAL`) for moneyline / spread; `over` or `under` for total.
-- **`--odds`** — decimal odds string. `2.50`, `1.91`, etc. The protocol bound is `1.01 ≤ odds ≤ 101.00`.
+- **`--odds`** — decimal odds (`"2.50"`, `"1.91"`) **or** American odds with an explicit sign (`"+150"`, `"-110"`). Format is detected from the input shape:
+  - signed integer (no decimal point) → American
+  - decimal with no sign → decimal
+  - both signed AND decimal (`"+101.0"`) → ambiguous, rejected
+  - integer with neither sign nor decimal point (`"101"`) → ambiguous, rejected — use `"+101"` for American or `"101.0"` for decimal
+
+  Protocol bound is `1.01 ≤ decimal ≤ 101.00`, equivalent to American `[-10000, -100]` ∪ `[+100, +10000]`. The preview block echoes both formats so you can verify before signing; negative-American values round to the protocol's 2-decimal precision (e.g. `-113` → decimal `1.88` → re-displayed as `-114`).
 - **`--risk-usdc`** — decimal USDC string. `1`, `0.001`, `25`. Must be a multiple of `$0.0001` per the contract's lot-size rule.
 - **`--line`** — selected-side displayed line for spread / total. `--side padres --line -3.5` means "Padres -3.5" regardless of whether Padres are home or away; the resolver inverts to the protocol's away-side ticks under the hood. **Omit for `--market moneyline`** — moneyline is line-less, and the SDK errors (`OspexValidationError: --line is not valid for moneyline markets`) if `--line` is passed there.
 - **`--yes`** skips the confirmation prompt and signs/posts. **`--json`** is output-format only and pairs with `--yes`:

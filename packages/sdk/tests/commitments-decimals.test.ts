@@ -10,7 +10,10 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  americanOddsToTick,
   decimalOddsToTick,
+  parseOddsInput,
+  tickToAmericanOdds,
   tickToDecimalOdds,
   usdcDecimalToWei6,
   wei6ToDecimalUSDC,
@@ -76,6 +79,223 @@ describe('tickToDecimalOdds', () => {
   });
   it('rejects non-integer ticks', () => {
     expect(() => tickToDecimalOdds(1.5)).toThrow(OspexValidationError);
+  });
+});
+
+describe('americanOddsToTick', () => {
+  it('positive American: tick = magnitude + 100 (exact, no rounding)', () => {
+    const cases: Array<[string, number]> = [
+      ['+100', 200], // even money via positive
+      ['+115', 215],
+      ['+150', 250],
+      ['+200', 300],
+      ['+500', 600],
+      ['+10000', 10100], // protocol max
+    ];
+    for (const [input, expected] of cases) {
+      expect(americanOddsToTick(input)).toBe(expected);
+    }
+  });
+
+  it('negative American: tick = round(((|N|+100)*100)/|N|)', () => {
+    const cases: Array<[string, number]> = [
+      ['-100', 200], // even money via negative
+      ['-110', 191], // 1.9091 → rounds to 1.91
+      ['-150', 167], // 1.6667 → rounds to 1.67
+      ['-200', 150], // 1.50 exact
+      ['-500', 120], // 1.20 exact
+      ['-10000', 101], // protocol min
+    ];
+    for (const [input, expected] of cases) {
+      expect(americanOddsToTick(input)).toBe(expected);
+    }
+  });
+
+  it('rejects magnitude < 100', () => {
+    expect(() => americanOddsToTick('+99')).toThrow(/magnitude must be ≥ 100/);
+    expect(() => americanOddsToTick('-99')).toThrow(/magnitude must be ≥ 100/);
+    expect(() => americanOddsToTick('+0')).toThrow(/magnitude must be ≥ 100/);
+    expect(() => americanOddsToTick('-0')).toThrow(/magnitude must be ≥ 100/);
+    expect(() => americanOddsToTick('+50')).toThrow(/magnitude must be ≥ 100/);
+  });
+
+  it('rejects unsigned input', () => {
+    expect(() => americanOddsToTick('150')).toThrow(/Invalid American odds/);
+    expect(() => americanOddsToTick('-')).toThrow(/Invalid American odds/);
+    expect(() => americanOddsToTick('+')).toThrow(/Invalid American odds/);
+  });
+
+  it('rejects decimal points (American is integer-only)', () => {
+    expect(() => americanOddsToTick('+150.0')).toThrow(/Invalid American odds/);
+    expect(() => americanOddsToTick('-110.5')).toThrow(/Invalid American odds/);
+  });
+
+  it('rejects scientific notation, commas, NaN, whitespace', () => {
+    expect(() => americanOddsToTick('+1e2')).toThrow(/Invalid American odds/);
+    expect(() => americanOddsToTick('+1,500')).toThrow(/Invalid American odds/);
+    expect(() => americanOddsToTick('NaN')).toThrow(/Invalid American odds/);
+    expect(() => americanOddsToTick(' +150')).toThrow(/whitespace/);
+    expect(() => americanOddsToTick('+150 ')).toThrow(/whitespace/);
+  });
+
+  it('accepts boundary magnitudes (±10000)', () => {
+    // +10000 → decimal 101.00 = protocol max → tick 10100 (passes)
+    expect(americanOddsToTick('+10000')).toBe(10100);
+    // -10000 → decimal 1.01 = protocol min → tick 101 (passes)
+    expect(americanOddsToTick('-10000')).toBe(101);
+  });
+
+  it('rejects magnitudes above 10000 BEFORE rounding', () => {
+    // The original implementation accepted values like -15000 by silently
+    // rounding the resulting decimal back up to 1.01 = -10000 American
+    // (PR #30 review by Hermes). The strict pre-math check now rejects
+    // any |American| > 10000 with a clear error rather than letting the
+    // user sign a materially different price than they typed.
+    expect(() => americanOddsToTick('+10001')).toThrow(/magnitude must be ≤ 10000/);
+    expect(() => americanOddsToTick('-10001')).toThrow(/magnitude must be ≤ 10000/);
+    expect(() => americanOddsToTick('-15000')).toThrow(/magnitude must be ≤ 10000/);
+    expect(() => americanOddsToTick('-1000000')).toThrow(/magnitude must be ≤ 10000/);
+    // The old code path would have rounded -15000 → tick 101 (decimal 1.01
+    // = American -10000). Verify that's NOT what happens anymore.
+    let caught: unknown;
+    try {
+      americanOddsToTick('-15000');
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(OspexValidationError);
+  });
+});
+
+describe('tickToAmericanOdds', () => {
+  it('formats positive American (tick ≥ 200)', () => {
+    expect(tickToAmericanOdds(200)).toBe('+100'); // even money
+    expect(tickToAmericanOdds(215)).toBe('+115');
+    expect(tickToAmericanOdds(250)).toBe('+150');
+    expect(tickToAmericanOdds(300)).toBe('+200');
+    expect(tickToAmericanOdds(10100)).toBe('+10000'); // protocol max
+  });
+
+  it('formats negative American (tick < 200)', () => {
+    expect(tickToAmericanOdds(191)).toBe('-110'); // 100/(0.91) = 109.89 → 110
+    expect(tickToAmericanOdds(167)).toBe('-149'); // 100/0.67 = 149.25 → 149
+    expect(tickToAmericanOdds(150)).toBe('-200'); // 100/0.50 = 200 exact
+    expect(tickToAmericanOdds(120)).toBe('-500'); // 100/0.20 = 500 exact
+    expect(tickToAmericanOdds(101)).toBe('-10000'); // protocol min
+  });
+
+  it('rejects ticks outside protocol range', () => {
+    expect(() => tickToAmericanOdds(100)).toThrow(/protocol range/);
+    expect(() => tickToAmericanOdds(10101)).toThrow(/protocol range/);
+    expect(() => tickToAmericanOdds(0)).toThrow(/protocol range/);
+  });
+
+  it('rejects non-integer ticks', () => {
+    expect(() => tickToAmericanOdds(1.5)).toThrow(/integer/);
+  });
+});
+
+describe('parseOddsInput — dual-format with strict disambiguation', () => {
+  it('dispatches signed inputs to American', () => {
+    expect(parseOddsInput('+115')).toBe(215);
+    expect(parseOddsInput('-110')).toBe(191);
+    expect(parseOddsInput('+150')).toBe(250);
+    expect(parseOddsInput('+10000')).toBe(10100);
+  });
+
+  it('dispatches decimal-point inputs to decimal', () => {
+    expect(parseOddsInput('1.91')).toBe(191);
+    expect(parseOddsInput('2.50')).toBe(250);
+    expect(parseOddsInput('101.0')).toBe(10100);
+    expect(parseOddsInput('1.5')).toBe(150);
+  });
+
+  it('rejects integers without sign or decimal point (ambiguous)', () => {
+    expect(() => parseOddsInput('101')).toThrow(/Ambiguous/);
+    expect(() => parseOddsInput('101')).toThrow(/sign or decimal point/);
+    expect(() => parseOddsInput('150')).toThrow(/Ambiguous/);
+    expect(() => parseOddsInput('2')).toThrow(/Ambiguous/);
+    expect(() => parseOddsInput('1')).toThrow(/Ambiguous/);
+  });
+
+  it('ambiguous-integer error suggests valid examples (not raw input)', () => {
+    // Per Hermes' PR #30 review: for `--odds 2`, the prior message
+    // suggested `+2` for American — invalid because magnitude must
+    // be ≥ 100. The error must use static valid examples that work
+    // regardless of the user's input.
+    let message = '';
+    try {
+      parseOddsInput('2');
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toMatch(/Ambiguous/);
+    // Suggest valid American examples (±100/150/110), NOT "+2" / "-2".
+    expect(message).toContain('"+100"');
+    expect(message).toMatch(/\+150|-110/);
+    expect(message).not.toContain('"+2"');
+    expect(message).not.toContain('"-2"');
+    // Suggest a valid decimal example.
+    expect(message).toContain('"2.00"');
+
+    // Same for `--odds 1` — `+1` would also fail magnitude check.
+    let message1 = '';
+    try {
+      parseOddsInput('1');
+    } catch (err) {
+      message1 = err instanceof Error ? err.message : String(err);
+    }
+    expect(message1).not.toContain('"+1"');
+    expect(message1).not.toContain('"-1"');
+  });
+
+  it('rejects inputs with both sign and decimal point (ambiguous)', () => {
+    expect(() => parseOddsInput('+101.0')).toThrow(/Ambiguous/);
+    expect(() => parseOddsInput('+101.0')).toThrow(/pick one format/);
+    expect(() => parseOddsInput('-1.91')).toThrow(/Ambiguous/);
+    expect(() => parseOddsInput('+2.50')).toThrow(/Ambiguous/);
+    expect(() => parseOddsInput('-110.5')).toThrow(/Ambiguous/);
+  });
+
+  it('protocol bounds apply via the chosen path', () => {
+    // Decimal path
+    expect(() => parseOddsInput('1.00')).toThrow(/minimum/);
+    expect(() => parseOddsInput('150.00')).toThrow(/maximum/);
+    // American path: magnitude check before the math, then protocol
+    // range applies to the resulting tick (which is naturally bounded
+    // once magnitude is in [100, 10000]).
+    expect(() => parseOddsInput('+10001')).toThrow(/magnitude must be ≤ 10000/);
+    expect(() => parseOddsInput('-10001')).toThrow(/magnitude must be ≤ 10000/);
+    expect(() => parseOddsInput('+99')).toThrow(/magnitude must be ≥ 100/);
+  });
+
+  it('rejects whitespace, NaN, scientific notation regardless of format', () => {
+    expect(() => parseOddsInput(' 2.50')).toThrow(/whitespace/);
+    expect(() => parseOddsInput('2.50 ')).toThrow(/whitespace/);
+    expect(() => parseOddsInput(' +150')).toThrow(/whitespace/);
+    expect(() => parseOddsInput('NaN')).toThrow(); // either decimal-path or ambiguous
+    expect(() => parseOddsInput('1e2')).toThrow(); // hits decimal-path scientific reject
+  });
+
+  it('round-trips: decimal input → tick → American display matches expected', () => {
+    // Verify the display roundtrip (tick → American) for canonical values.
+    expect(tickToAmericanOdds(parseOddsInput('2.50'))).toBe('+150');
+    expect(tickToAmericanOdds(parseOddsInput('1.91'))).toBe('-110');
+    expect(tickToAmericanOdds(parseOddsInput('1.50'))).toBe('-200');
+    expect(tickToAmericanOdds(parseOddsInput('2.00'))).toBe('+100');
+  });
+
+  it('round-trips: American input → tick → decimal display lossless', () => {
+    expect(tickToDecimalOdds(parseOddsInput('+150'))).toBe('2.50');
+    expect(tickToDecimalOdds(parseOddsInput('-200'))).toBe('1.50');
+    // Negative American with non-2dp-clean conversion: input → tick rounds.
+    // -110 input → 1.9091... → tick 191 → "1.91" display. Fine.
+    expect(tickToDecimalOdds(parseOddsInput('-110'))).toBe('1.91');
+  });
+
+  it('+100 and -100 both map to tick 200 (even money)', () => {
+    expect(parseOddsInput('+100')).toBe(200);
+    expect(parseOddsInput('-100')).toBe(200);
   });
 });
 

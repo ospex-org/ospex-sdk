@@ -12,7 +12,10 @@
  *   --line <decimal>         selected-side displayed line (resolver
  *                            inverts when home is selected for spread)
  *   --side <input>           team-name / alias / over / under
- *   --odds <decimal>         e.g. "2.50"
+ *   --odds <value>           decimal (e.g. "2.50") OR American (e.g. "+150",
+ *                            "-110"). Plain integers like "101" are
+ *                            ambiguous and rejected — use "+101" / "-101"
+ *                            for American or "101.0" for decimal.
  *   --risk-usdc <decimal>    e.g. "1" or "0.001"
  *   --expiry <iso-or-unix>   default 24h from now
  *   --nonce <bigint>         override the SDK's nonce strategy
@@ -69,7 +72,10 @@ export const commitmentsSubmitCommand = new Command('submit')
   .option('--market <type>', 'market type: moneyline | spread | total')
   .option('--line <decimal>', 'selected-side displayed line (e.g. -3.5)')
   .option('--side <input>', 'team name / alias, or "over"/"under" for totals')
-  .option('--odds <decimal>', 'decimal odds (e.g. 2.50)')
+  .option(
+    '--odds <value>',
+    'decimal (e.g. "2.50", "1.91") or American with explicit sign (e.g. "+150", "-110"). Plain integers without a sign or decimal point are ambiguous and rejected.',
+  )
   .option('--risk-usdc <decimal>', 'decimal USDC risk (e.g. 1 or 0.001)')
   .option('--expiry <iso-or-unix>', 'expiry timestamp; default 24h from now')
   .option('--nonce <bigint>', 'override the SDK nonce strategy')
