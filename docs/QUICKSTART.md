@@ -213,10 +213,13 @@ Anyone can create a contest — the protocol is permissionless. It's not part of
 # 1. Find a game you'd like to make a contest for.
 ospex games list --sport mlb --hours 24
 
-# 2. Pick a row whose `creatable` column is `yes` and copy its gameId.
-#    (gameId is a stable UUID; the slug column shows you which game it is.)
+# 2. Pick a row whose `creatable` column is `yes`. You can pass either
+#    the gameId (the stable UUID) or the slug — the resolver accepts both.
 ospex contests create --game-id <pasted-gameId>
+ospex contests create --game stl-sd-2026-05-08      # alias: slug or UUID
 ```
+
+`--game` resolves a slug via `client.games.resolveGameId(input)`. The slug is mutable (the writer renames doubleheaders), so for anything you persist between sessions stick with `--game-id`. Multiple matches or no match fail closed.
 
 `ospex contests create` waits for the Chainlink Functions verification callback by default and prints the new `contestId` only after `contestStatus=Verified` lands on chain (typically 10–30 s). Pass `--no-wait` if you'd rather get the txHash immediately and poll separately with `ospex contests wait-verified <contestId>` — useful for scripted flows.
 
