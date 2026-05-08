@@ -111,7 +111,23 @@ export async function prepareSubmit(
     lineTicksProtocol = -lineTicksProtocol;
   }
 
-  // ── 6. Speculation key + existing/lazy classification ──────────────
+  // ── 6. Total-line invariant ────────────────────────────────────────
+  // Block resolves the same trust-model failure that motivated the
+  // CLI-input negative-total reject in resolveParent, but here for
+  // values that arrived from an existing/pinned speculation row.
+  // Total display/outcomes use Math.abs(lineTicks); raw.lineTicks
+  // would sign the negative value. Even though negative total specs
+  // "shouldn't exist", the raw escape hatch + permissionless lazy
+  // creation mean we must fail closed if we ever observe one.
+  if (parent.market === 'total' && lineTicksProtocol < 0) {
+    throw new OspexValidationError(
+      `Total speculation lineTicks must be non-negative (got ${lineTicksProtocol}). ` +
+        'Refusing to preview/sign because total display semantics ("Over X" / "Under X" using ' +
+        'Math.abs(lineTicks)) would not match the EIP-712 raw tuple.',
+    );
+  }
+
+  // ── 7. Speculation key + existing/lazy classification ──────────────
   const contestIdBig = parent.pinnedSpeculation
     ? BigInt(parent.pinnedSpeculation.contestId)
     : BigInt(parent.contest!.contestId);

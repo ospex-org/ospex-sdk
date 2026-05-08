@@ -89,7 +89,7 @@ Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end bef
 | # | Command | Expected | Validates |
 |---|---|---|---|
 | 4.1 | `ospex commitments approve max` | tx submitted, receipt confirmed; verify on Amoy Polygonscan that `allowance(walletA, PositionModule)` is `2^256-1` | Signer + chain client + ERC20 ABI + USDC + PositionModule address resolution. |
-| 4.2 | `ospex commitments submit <contestId> <scorerAddr> <lineTicks> upper 250 1000` | Prints commitment hash + `status: open` | Nonce-floor read + EIP-712 typed-data + sign + hash + POST + idempotency. |
+| 4.2 | `ospex commitments submit-raw <contestId> <scorerAddr> <lineTicks> upper 250 1000` | Prints commitment hash + `status: open` | Nonce-floor read + EIP-712 typed-data + sign + hash + POST + idempotency. (Raw form is used here because the test exercises the canonical-tuple surface directly; production users should prefer the high-level `submit`.) |
 | 4.3 | `ospex commitments list --maker <walletA>` | Row appears with `status='open'` and the right risk/odds | Indexer-free read path. |
 | 4.4 | Re-run 4.2 with **identical** inputs | Same commitment hash returned, no duplicate row | Server-side dedup on hash. |
 | 4.5 | `ospex commitments cancel <hash>` | `{ ok: true }` | EIP-712 cancel typed-data + DELETE flow. |
@@ -107,7 +107,7 @@ The flow that proves funds actually move. Irreplaceable; this section is **non-n
 | # | Step | Expected | Validates |
 |---|---|---|---|
 | 5.1 | Both wallets A and B have allowance set (4.1 covered A; repeat for B). | Both `allowance` calls return `2^256-1` on Polygonscan. | Approve flow on a second wallet. |
-| 5.2 | Wallet A: `ospex commitments submit ...` (fresh inputs). Capture hash. | Hash printed. | Same as 4.2. |
+| 5.2 | Wallet A: `ospex commitments submit-raw ...` (fresh inputs). Capture hash. | Hash printed. | Same as 4.2. |
 | 5.3 | Wallet B: `ospex commitments match <hashFromA>` | If allowance was missing, prompts to approve, prints both tx hashes; otherwise prints just the match tx hash. | `commitments.get(hash)` + match math + tx broadcast. |
 | 5.4 | `cast call <MatchingModuleAmoy> "s_filledRisk(bytes32)(uint256)" <hashFromA> --rpc-url <rpcUrl>` | Non-zero, equal to `fillMakerRisk` from the match tx | Contract observed the fill. |
 | 5.5 | `cast call <PositionModuleAmoy> "getPosition(uint256,address,uint8)(uint256,uint256,address,uint32,bool,uint8)" <speculationId> <walletA> <makerPositionType> --rpc-url <rpcUrl>` (verify exact signature against `IPositionModule.sol`) | Position with `riskAmount = fillMakerRisk` | Maker side recorded. |
@@ -127,7 +127,7 @@ Verifies the SDK's takerRisk math against the contract's revert-or-exact-fill ru
 
 | # | Step | Expected | Validates |
 |---|---|---|---|
-| 6.1 | Wallet A submits a 1000-unit commitment at oddsTick=200 (2.00). | `ospex commitments submit ... 200 1000` succeeds. | — |
+| 6.1 | Wallet A submits a 1000-unit commitment at oddsTick=200 (2.00). | `ospex commitments submit-raw ... 200 1000` succeeds. | — |
 | 6.2 | Wallet B: `ospex commitments match <hash> --risk 400` | Match succeeds; `commitments list` shows `filled_risk_amount` of 400 (taker side risks 400 = (400×100)/(200-100) → makerFill 400, takerRisk 400). | Partial-fill math + indexer projection. |
 | 6.3 | Wallet B again: `ospex commitments match <hash> --risk 600` | Commitment now `filled`. | Remaining-capacity match. |
 | 6.4 | `ospex commitments match <hash> --risk 100` (any wallet) | SDK throws `OspexValidationError` ("commitment has no remaining capacity") OR contract reverts `CommitmentFullyFilled` and SDK surfaces `OspexChainError`. | Fully-filled guard. |
@@ -206,7 +206,7 @@ Prereq: a funded test wallet (gas + a few USDC for the submits) on the chosen ne
 
 | # | Step | Expected | Validates |
 |---|---|---|---|
-| 10.1 | `ospex commitments submit <contestId> <scorer> <line> upper 250 1000` (any open speculation) — record the printed hash. | `hash`, `status='open'`. | M2 submit (smoke). |
+| 10.1 | `ospex commitments submit-raw <contestId> <scorer> <line> upper 250 1000` (any open speculation) — record the printed hash. | `hash`, `status='open'`. | M2 submit (smoke). |
 | 10.2 | `ospex commitments cancel-onchain <hash>` | `txHash` printed; Polygonscan link; receipt status success. | `cancelOnchain` happy path. |
 | 10.3 | `ospex commitments show <hash>` (poll up to 30s) | `status: cancelled`. | Indexer `COMMITMENT_CANCELLED` projection latency. |
 | 10.4 | `ospex commitments cancel-onchain <hash>` (second time, same hash) | tx **succeeds** again — no `AlreadyCancelled` revert. | Idempotency expectation documented in `cancelOnchain` jsdoc. |

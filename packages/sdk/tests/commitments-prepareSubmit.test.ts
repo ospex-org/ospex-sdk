@@ -539,6 +539,79 @@ describe('prepareSubmit — total negative-line guard (review #4 blocker 2)', ()
     expect(preview.market.lineTicks).toBe(85);
     expect(preview.market.displayLine).toBe('Over 8.5');
   });
+
+  it('rejects pinned total speculation whose lineTicks is negative (existing-spec invariant)', async () => {
+    // The raw escape hatch + permissionless lazy creation mean we
+    // could in principle encounter a negative-line total spec on
+    // chain. The high-level resolver must fail closed rather than
+    // sign a commitment whose preview ("Over X") disagrees with the
+    // raw tuple (lineTicks=-X).
+    const ctx = buildContext({
+      spec: buildSpec({
+        speculationId: '700',
+        type: 'total',
+        lineTicks: -85,
+        line: -8.5,
+      }),
+      allowance: 10_000_000n,
+    });
+    await expect(
+      prepareSubmit(ctx, {
+        parent: { kind: 'speculation', speculationId: '700' },
+        side: 'over',
+        odds: '1.95',
+        riskUsdc: '10',
+      }),
+    ).rejects.toThrow(/non-negative.*display semantics.*raw tuple/i);
+  });
+
+  it('rejects --contest --market total no-line when the unique open total has negative lineTicks', async () => {
+    const contest = buildContest({
+      speculations: [
+        {
+          speculationId: '710',
+          contestId: '42',
+          type: 'total',
+          lineTicks: -85,
+          line: -8.5,
+          speculationStatus: 0, // open, but negative — bad data
+        },
+      ],
+    });
+    const ctx = buildContext({ contest, allowance: 10_000_000n });
+    await expect(
+      prepareSubmit(ctx, {
+        parent: { kind: 'contest', contestId: '42', market: 'total' },
+        side: 'over',
+        odds: '1.95',
+        riskUsdc: '10',
+      }),
+    ).rejects.toThrow(/non-negative/i);
+  });
+
+  it('positive existing total speculation still works (regression for the new invariant)', async () => {
+    const contest = buildContest({
+      speculations: [
+        {
+          speculationId: '720',
+          contestId: '42',
+          type: 'total',
+          lineTicks: 85,
+          line: 8.5,
+          speculationStatus: 0,
+        },
+      ],
+    });
+    const ctx = buildContext({ contest, allowance: 10_000_000n });
+    const preview = await prepareSubmit(ctx, {
+      parent: { kind: 'contest', contestId: '42', market: 'total' },
+      side: 'over',
+      odds: '1.95',
+      riskUsdc: '10',
+    });
+    expect(preview.market.lineTicks).toBe(85);
+    expect(preview.market.speculation).toEqual({ mode: 'existing', speculationId: '720' });
+  });
 });
 
 describe('submitPrepared — sanity guards', () => {
