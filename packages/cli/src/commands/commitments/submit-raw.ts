@@ -1,10 +1,15 @@
 /**
- * `ospex commitments submit <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>`
+ * `ospex commitments submit-raw <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>`
  *
- * Args mirror the on-chain OspexCommitment struct (no speculationId —
- * the contract derives that from contestId+scorer+lineTicks). On
- * `OspexAllowanceError` we offer to approve PositionModule and retry
- * once. Prints the EIP-712 commitment hash on success.
+ * Protocol-level escape hatch — direct positional surface mirroring the
+ * on-chain OspexCommitment struct (no speculationId — the contract
+ * derives that from contestId+scorer+lineTicks). Most users should
+ * reach for the high-level `ospex commitments submit` (lands in the
+ * follow-up PR) which accepts domain-language inputs and renders an
+ * explicit win/lose/push preview before signing.
+ *
+ * On `OspexAllowanceError` we offer to approve PositionModule and
+ * retry once. Prints the EIP-712 commitment hash on success.
  */
 
 import { Command, Option } from '@commander-js/extra-typings';
@@ -38,8 +43,12 @@ function parseExpiry(raw: string): bigint {
   return BigInt(Math.floor(ms / 1000));
 }
 
-export const commitmentsSubmitCommand = new Command('submit')
-  .description('Sign and submit an EIP-712 OspexCommitment.')
+export const commitmentsSubmitRawCommand = new Command('submit-raw')
+  .description(
+    'Protocol-level escape hatch — sign + post an EIP-712 OspexCommitment using ' +
+      'the literal canonical tuple. Prefer `ospex commitments submit` for the ' +
+      'domain-language flow with preview block.',
+  )
   .argument('<contestId>', 'contest id (uint256)')
   .argument('<scorer>', 'scorer module address')
   .argument('<lineTicks>', 'line ticks (int32, 10× scale)')
@@ -64,7 +73,7 @@ export const commitmentsSubmitCommand = new Command('submit')
 
     const client = await getClient({ requiresSigner: true, requiresChain: true });
 
-    const trySubmit = async () => client.commitments.submit(args);
+    const trySubmit = async () => client.commitments.submitRaw(args);
 
     let result;
     try {

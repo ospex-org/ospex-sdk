@@ -32,7 +32,7 @@ import {
   type RaiseMinNonceArgs,
   type RaiseMinNonceResult,
 } from './raiseMinNonce.js';
-import { submit, type SubmitArgs, type SubmitResult } from './submit.js';
+import { submitRaw, type RawSubmitArgs, type SubmitResult } from './submitRaw.js';
 
 export class Commitments {
   private readonly api: CommitmentsApi;
@@ -53,8 +53,14 @@ export class Commitments {
 
   // ── Writes (M2) ───────────────────────────────────────────────────
 
-  submit(args: SubmitArgs): Promise<SubmitResult> {
-    return submit(this.ctx, args);
+  /**
+   * Protocol-level escape hatch for advanced operators with canonical
+   * tuple values already in hand. Most callers should use the high-level
+   * `submit` (PR C) which renders a domain-language preview before
+   * signing.
+   */
+  submitRaw(args: RawSubmitArgs): Promise<SubmitResult> {
+    return submitRaw(this.ctx, args);
   }
 
   match(hash: Hex, opts: MatchArgs = {}): Promise<MatchResult> {
@@ -100,4 +106,4 @@ export type { CancelOnchainResult } from './cancelOnchain.js';
 export type { GetNonceFloorArgs } from './getNonceFloor.js';
 export type { MatchArgs, MatchResult } from './match.js';
 export type { RaiseMinNonceArgs, RaiseMinNonceResult } from './raiseMinNonce.js';
-export type { SubmitArgs, SubmitResult } from './submit.js';
+export type { RawSubmitArgs, SubmitResult } from './submitRaw.js';
