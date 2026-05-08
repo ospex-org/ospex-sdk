@@ -138,13 +138,32 @@ describe('americanOddsToTick', () => {
     expect(() => americanOddsToTick('+150 ')).toThrow(/whitespace/);
   });
 
-  it('rejects values that round outside the protocol range', () => {
-    // +10001 → tick 10101 (above max)
-    expect(() => americanOddsToTick('+10001')).toThrow(/maximum/);
-    // -10001 → tick rounds to 100 (below min). Actually
-    // ((10001+100)*100)/10001 = 1010100/10001 = 100.999... → rounds to 101.
-    // So the boundary is tight; explicit value to check: -1000000 (very large)
-    expect(() => americanOddsToTick('-1000000')).toThrow(/minimum/);
+  it('accepts boundary magnitudes (±10000)', () => {
+    // +10000 → decimal 101.00 = protocol max → tick 10100 (passes)
+    expect(americanOddsToTick('+10000')).toBe(10100);
+    // -10000 → decimal 1.01 = protocol min → tick 101 (passes)
+    expect(americanOddsToTick('-10000')).toBe(101);
+  });
+
+  it('rejects magnitudes above 10000 BEFORE rounding', () => {
+    // The original implementation accepted values like -15000 by silently
+    // rounding the resulting decimal back up to 1.01 = -10000 American
+    // (PR #30 review by Hermes). The strict pre-math check now rejects
+    // any |American| > 10000 with a clear error rather than letting the
+    // user sign a materially different price than they typed.
+    expect(() => americanOddsToTick('+10001')).toThrow(/magnitude must be ≤ 10000/);
+    expect(() => americanOddsToTick('-10001')).toThrow(/magnitude must be ≤ 10000/);
+    expect(() => americanOddsToTick('-15000')).toThrow(/magnitude must be ≤ 10000/);
+    expect(() => americanOddsToTick('-1000000')).toThrow(/magnitude must be ≤ 10000/);
+    // The old code path would have rounded -15000 → tick 101 (decimal 1.01
+    // = American -10000). Verify that's NOT what happens anymore.
+    let caught: unknown;
+    try {
+      americanOddsToTick('-15000');
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(OspexValidationError);
   });
 });
 
@@ -199,6 +218,37 @@ describe('parseOddsInput — dual-format with strict disambiguation', () => {
     expect(() => parseOddsInput('1')).toThrow(/Ambiguous/);
   });
 
+  it('ambiguous-integer error suggests valid examples (not raw input)', () => {
+    // Per Hermes' PR #30 review: for `--odds 2`, the prior message
+    // suggested `+2` for American — invalid because magnitude must
+    // be ≥ 100. The error must use static valid examples that work
+    // regardless of the user's input.
+    let message = '';
+    try {
+      parseOddsInput('2');
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toMatch(/Ambiguous/);
+    // Suggest valid American examples (±100/150/110), NOT "+2" / "-2".
+    expect(message).toContain('"+100"');
+    expect(message).toMatch(/\+150|-110/);
+    expect(message).not.toContain('"+2"');
+    expect(message).not.toContain('"-2"');
+    // Suggest a valid decimal example.
+    expect(message).toContain('"2.00"');
+
+    // Same for `--odds 1` — `+1` would also fail magnitude check.
+    let message1 = '';
+    try {
+      parseOddsInput('1');
+    } catch (err) {
+      message1 = err instanceof Error ? err.message : String(err);
+    }
+    expect(message1).not.toContain('"+1"');
+    expect(message1).not.toContain('"-1"');
+  });
+
   it('rejects inputs with both sign and decimal point (ambiguous)', () => {
     expect(() => parseOddsInput('+101.0')).toThrow(/Ambiguous/);
     expect(() => parseOddsInput('+101.0')).toThrow(/pick one format/);
@@ -211,8 +261,11 @@ describe('parseOddsInput — dual-format with strict disambiguation', () => {
     // Decimal path
     expect(() => parseOddsInput('1.00')).toThrow(/minimum/);
     expect(() => parseOddsInput('150.00')).toThrow(/maximum/);
-    // American path
-    expect(() => parseOddsInput('+10001')).toThrow(/maximum/);
+    // American path: magnitude check before the math, then protocol
+    // range applies to the resulting tick (which is naturally bounded
+    // once magnitude is in [100, 10000]).
+    expect(() => parseOddsInput('+10001')).toThrow(/magnitude must be ≤ 10000/);
+    expect(() => parseOddsInput('-10001')).toThrow(/magnitude must be ≤ 10000/);
     expect(() => parseOddsInput('+99')).toThrow(/magnitude must be ≥ 100/);
   });
 

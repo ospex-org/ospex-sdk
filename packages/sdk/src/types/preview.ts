@@ -190,7 +190,14 @@ export interface HighLevelSubmitArgs {
   parent: SubmitParent;
   /** Free-form team name, alias, or `over`/`under`. */
   side: string;
-  /** Decimal odds as string, e.g. "2.50". */
+  /**
+   * Odds input string. Two formats accepted:
+   *   - decimal with explicit decimal point: "1.91", "2.50", "101.00"
+   *   - signed American: "+150", "-110", "+10000"
+   * Plain integers (`"2"`, `"101"`) are rejected as ambiguous; signed
+   * decimals (`"+101.0"`) are rejected as conflicting. See
+   * `parseOddsInput` for the disambiguation rules.
+   */
   odds: string;
   /** Decimal USDC as string, e.g. "1" or "0.001". */
   riskUsdc: string;

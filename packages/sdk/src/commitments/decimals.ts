@@ -148,6 +148,14 @@ function formatOddsTick(tick: number): string {
 
 const AMERICAN_ODDS_RE = /^[+-]\d+$/;
 const MIN_AMERICAN_MAGNITUDE = 100;
+// Hard upper bound on |American| corresponding to the protocol's
+// decimal range [1.01, 101.00]. Without this, large negative inputs
+// (e.g. -15000) would silently round their decimal back up to 1.01
+// and pass the post-math `tick < MIN_ODDS_TICK` check; the user would
+// sign a materially different canonical price than they typed.
+// Symmetrically applied to positive American so the rejection message
+// is consistent.
+const MAX_AMERICAN_MAGNITUDE = 10000;
 
 /**
  * Parse American odds (signed integer, magnitude ≥ 100) into oddsTick
@@ -188,6 +196,17 @@ export function americanOddsToTick(input: string): number {
       `American odds magnitude must be ≥ ${MIN_AMERICAN_MAGNITUDE}, got "${input}". ` +
         `Magnitudes below 100 don't have a standard American-odds meaning ` +
         `(decimal odds at the boundary is 2.00 = "+100" or "-100").`,
+    );
+  }
+  if (magnitude > MAX_AMERICAN_MAGNITUDE) {
+    // Reject before the math runs. Otherwise large negative magnitudes
+    // round their resulting tick up to MIN_ODDS_TICK (decimal 1.01 =
+    // American -10000) and silently accept a price the user did not
+    // type — see ospex-org/ospex-sdk PR #30 review.
+    throw new OspexValidationError(
+      `American odds magnitude must be ≤ ${MAX_AMERICAN_MAGNITUDE}, got "${input}". ` +
+        `Protocol range is decimal 1.01–101.00, equivalent to American ` +
+        `[-${MAX_AMERICAN_MAGNITUDE}, -100] ∪ [+100, +${MAX_AMERICAN_MAGNITUDE}].`,
     );
   }
 
@@ -299,10 +318,15 @@ export function parseOddsInput(input: string): number {
   }
 
   if (!hasSign && !hasDecimalPoint) {
+    // Use static examples for the suggestion. Interpolating the raw
+    // input would produce nonsense for small integers (e.g. for
+    // `--odds 2`, suggesting `+2` is invalid because American magnitudes
+    // must be ≥ 100). The two examples below cover both formats with
+    // values that are always valid against the protocol bounds.
     throw new OspexValidationError(
       `Ambiguous odds "${input}": plain integers without a sign or decimal point are ambiguous ` +
-        `between American (sign required, e.g. "+${input}") and decimal (decimal point required, ` +
-        `e.g. "${input}.00"). Add a sign for American or a decimal point for decimal.`,
+        `between American and decimal odds. Add a sign for American odds (e.g. "+100", "+150", ` +
+        `or "-110") or a decimal point for decimal odds (e.g. "2.00").`,
     );
   }
 
