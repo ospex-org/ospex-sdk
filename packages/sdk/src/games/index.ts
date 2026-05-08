@@ -31,12 +31,14 @@ export class Games {
   /**
    * Resolve a `--game <slug-or-id>` input to a canonical `gameId`
    * (the row's `jsonodds_id`). UUID inputs short-circuit; slug
-   * inputs scan the widest forward games window the API will serve.
-   * See `resolveGameId.ts` for the algorithm + failure modes.
+   * inputs walk the full paginated games window so a slug on page
+   * 2+ doesn't silently miss. Returns a discriminated result so
+   * callers (notably the CLI) can show a confirmation block on the
+   * slug path. See `resolveGameId.ts` for the algorithm.
    */
-  resolveGameId(input: string): Promise<string> {
+  resolveGameId(input: string): Promise<import('./resolveGameId.js').ResolveGameIdResult> {
     return resolveGameId(input, {
-      listGames: () => this.ctx.gamesApi.list({ hours: 720, availableOnly: false }),
+      listGames: () => this.ctx.gamesApi.listAll({ hours: 720, availableOnly: false }),
     });
   }
 }

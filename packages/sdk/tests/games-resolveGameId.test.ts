@@ -33,32 +33,40 @@ describe('resolveGameId', () => {
   it('passes UUID inputs through without listing games', async () => {
     const listGames = vi.fn(async () => [] as Game[]);
     const out = await resolveGameId(UUID_A, { listGames });
-    expect(out).toBe(UUID_A);
+    expect(out).toEqual({ gameId: UUID_A, source: 'uuid', game: null });
     expect(listGames).not.toHaveBeenCalled();
   });
 
   it('passes uppercase / mixed-case UUIDs through (case-insensitive)', async () => {
     const listGames = vi.fn(async () => [] as Game[]);
     const upper = UUID_A.toUpperCase();
-    expect(await resolveGameId(upper, { listGames })).toBe(upper);
+    const out = await resolveGameId(upper, { listGames });
+    expect(out).toEqual({ gameId: upper, source: 'uuid', game: null });
   });
 
-  it('resolves a slug to its gameId via games.list', async () => {
+  it('passes whitespace-padded UUIDs through after trim (review7 nit)', async () => {
+    const listGames = vi.fn(async () => [] as Game[]);
+    const out = await resolveGameId(`  ${UUID_A}  `, { listGames });
+    expect(out).toEqual({ gameId: UUID_A, source: 'uuid', game: null });
+    expect(listGames).not.toHaveBeenCalled();
+  });
+
+  it('resolves a slug to its gameId + Game via games.list', async () => {
+    const game = buildGame({ gameId: UUID_A, slug: 'stl-sd-2026-05-08' });
     const listGames = vi.fn(async () => [
-      buildGame({ gameId: UUID_A, slug: 'stl-sd-2026-05-08' }),
+      game,
       buildGame({ gameId: UUID_B, slug: 'nyy-mil-2026-05-08' }),
     ]);
     const out = await resolveGameId('stl-sd-2026-05-08', { listGames });
-    expect(out).toBe(UUID_A);
+    expect(out).toEqual({ gameId: UUID_A, source: 'slug', game });
     expect(listGames).toHaveBeenCalledTimes(1);
   });
 
   it('matches slugs case-insensitively', async () => {
-    const listGames = vi.fn(async () => [
-      buildGame({ gameId: UUID_A, slug: 'stl-sd-2026-05-08' }),
-    ]);
-    expect(await resolveGameId('STL-SD-2026-05-08', { listGames })).toBe(UUID_A);
-    expect(await resolveGameId('  stl-sd-2026-05-08  ', { listGames })).toBe(UUID_A);
+    const game = buildGame({ gameId: UUID_A, slug: 'stl-sd-2026-05-08' });
+    const listGames = vi.fn(async () => [game]);
+    expect((await resolveGameId('STL-SD-2026-05-08', { listGames })).gameId).toBe(UUID_A);
+    expect((await resolveGameId('  stl-sd-2026-05-08  ', { listGames })).gameId).toBe(UUID_A);
   });
 
   it('throws OspexValidationError when no slug matches', async () => {
@@ -82,11 +90,14 @@ describe('resolveGameId', () => {
     );
   });
 
-  it('rejects empty / non-string input', async () => {
+  it('rejects empty / whitespace-only / non-string input (review7 nit)', async () => {
     const listGames = vi.fn(async () => [] as Game[]);
     await expect(resolveGameId('', { listGames })).rejects.toThrow(OspexValidationError);
+    await expect(resolveGameId('   ', { listGames })).rejects.toThrow(OspexValidationError);
     await expect(
       resolveGameId(null as unknown as string, { listGames }),
     ).rejects.toThrow(OspexValidationError);
+    // Whitespace-only must NOT trigger a network lookup.
+    expect(listGames).not.toHaveBeenCalled();
   });
 });

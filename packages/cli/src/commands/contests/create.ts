@@ -39,6 +39,7 @@ const optionsSchema = z.object({
   // value and the wait branch always runs.
   wait: z.boolean().optional(),
   json: z.boolean().optional(),
+  yes: z.boolean().optional(),
 });
 
 export const contestCreateCommand = new Command('create')
@@ -54,6 +55,7 @@ export const contestCreateCommand = new Command('create')
   )
   .option('--gas-limit <n>', 'Chainlink Functions callback gas limit (default 300000, Polygon router max)')
   .option('--no-wait', 'skip polling for verification; print txHash and return')
+  .option('--yes', 'skip the slug-resolved confirmation prompt (no effect for --game-id / UUID input)')
   .addOption(new Option('--json').hideHelp(false))
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
@@ -75,9 +77,41 @@ export const contestCreateCommand = new Command('create')
 
     const client = await getClient({ requiresSigner: true, requiresChain: true });
 
-    const gameId = hasGameId
-      ? (opts.gameId as string)
-      : await client.games.resolveGameId(opts.game as string);
+    let gameId: string;
+    if (hasGameId) {
+      gameId = opts.gameId as string;
+    } else {
+      const resolved = await client.games.resolveGameId(opts.game as string);
+      gameId = resolved.gameId;
+      // Show a confirmation block when the input was a slug — slugs
+      // are mutable + human-readable, so it's easy to fat-finger one
+      // and end up creating a contest for the wrong game (which burns
+      // real LINK + USDC). Skip the prompt under --yes or --json
+      // (scripted/agent contexts).
+      if (resolved.source === 'slug' && resolved.game !== null) {
+        const g = resolved.game;
+        const lines = [
+          '',
+          'Resolved game:',
+          `  input:   ${opts.game}`,
+          `  gameId:  ${g.gameId}`,
+          `  matchup: ${g.awayTeam.name} @ ${g.homeTeam.name} — ${g.sport.toUpperCase()}`,
+          `  time:    ${g.matchTime}`,
+          `  status:  ${g.status}${g.canCreateContest ? '' : '  (NOT creatable — create will fail downstream)'}`,
+          '',
+        ];
+        process.stderr.write(lines.join('\n'));
+
+        const skipPrompt = opts.yes === true || opts.json === true;
+        if (!skipPrompt) {
+          const ok = await promptYesNo('Create contest for this game?', false);
+          if (!ok) {
+            process.stderr.write('Cancelled.\n');
+            process.exit(130);
+          }
+        }
+      }
+    }
 
     const args: Parameters<typeof client.contests.create>[0] = {
       gameId,
