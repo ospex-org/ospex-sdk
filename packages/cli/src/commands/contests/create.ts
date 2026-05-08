@@ -1,9 +1,14 @@
 /**
- * `ospex contests create --game-id <id>`
+ * `ospex contests create --game-id <id>` (or `--game <slug-or-id>`)
  *  - `gameId` is the stable identifier from `ospex games list` (the
  *    row's `jsonodds_id`). The SDK fetches `/v1/games/:gameId`,
  *    extracts the three external IDs the contract requires, and builds
  *    the on-chain tx. Users never deal with the three IDs directly.
+ *  - `--game <slug-or-id>` is the resolver-friendly alias added in
+ *    PR D. UUID inputs are passed through; slug inputs are resolved
+ *    against `games.slug` for the configured network. Multiple
+ *    matches or no match fail closed. `--game-id` remains canonical
+ *    forever.
  *  - On OspexAllowanceError: prompt to approve the right (token, spender)
  *    pair and retry. Both LINK→OracleModule and USDC→TreasuryModule may
  *    be missing on a fresh wallet, so the call site loops up to two
@@ -16,13 +21,14 @@
 import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { formatUnits, parseUnits } from 'viem';
-import { getAddresses, OspexAllowanceError, type OspexClient } from '@ospex/sdk';
+import { getAddresses, OspexAllowanceError, OspexValidationError, type OspexClient } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
 import { promptYesNo, promptValue } from '../../lib/prompt.js';
 
 const optionsSchema = z.object({
-  gameId: z.string().min(1),
+  gameId: z.string().min(1).optional(),
+  game: z.string().min(1).optional(),
   subscriptionId: z.string().regex(/^[0-9]+$/).optional(),
   // 300_000 is the Chainlink Functions Router cap on every supported
   // chain. SDK does the same chain-aware check; rejecting at parse time
@@ -33,25 +39,93 @@ const optionsSchema = z.object({
   // value and the wait branch always runs.
   wait: z.boolean().optional(),
   json: z.boolean().optional(),
+  yes: z.boolean().optional(),
 });
 
 export const contestCreateCommand = new Command('create')
   .description('Create a contest by submitting OracleModule.createContestFromOracle.')
-  .requiredOption('--game-id <id>', 'gameId from `ospex games list`')
+  .option('--game-id <id>', 'gameId from `ospex games list` (canonical UUID)')
+  .option(
+    '--game <slug-or-id>',
+    'resolver-friendly alias: pass either the slug from `ospex games list` or a UUID',
+  )
   .option(
     '--subscription-id <n>',
     'Chainlink Functions subscription id (defaults to OSPEX_SHARED_SUBSCRIPTION_ID per chain)',
   )
   .option('--gas-limit <n>', 'Chainlink Functions callback gas limit (default 300000, Polygon router max)')
   .option('--no-wait', 'skip polling for verification; print txHash and return')
+  .option('--yes', 'skip the slug-resolved confirmation prompt (no effect for --game-id / UUID input)')
   .addOption(new Option('--json').hideHelp(false))
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
 
+    // Resolve --game / --game-id: exactly one must be set. --game
+    // accepts either a UUID (passed through) or a slug (resolved
+    // via the SDK's resolver against `games.slug`). Multiple matches
+    // or no match fail closed inside the SDK.
+    const hasGame = opts.game !== undefined;
+    const hasGameId = opts.gameId !== undefined;
+    if (hasGame && hasGameId) {
+      throw new OspexValidationError(
+        '--game and --game-id are mutually exclusive. Pass exactly one.',
+      );
+    }
+    if (!hasGame && !hasGameId) {
+      throw new OspexValidationError('Either --game-id <id> or --game <slug-or-id> is required.');
+    }
+
     const client = await getClient({ requiresSigner: true, requiresChain: true });
 
+    let gameId: string;
+    if (hasGameId) {
+      gameId = opts.gameId as string;
+    } else {
+      const resolved = await client.games.resolveGameId(opts.game as string);
+      gameId = resolved.gameId;
+      // Show a confirmation block when the input was a slug — slugs
+      // are mutable + human-readable, so it's easy to fat-finger one
+      // and end up creating a contest for the wrong game (which burns
+      // real LINK + USDC). Skip the prompt under --yes or --json
+      // (scripted/agent contexts).
+      if (resolved.source === 'slug' && resolved.game !== null) {
+        const g = resolved.game;
+        const lines = [
+          '',
+          'Resolved game:',
+          `  input:   ${opts.game}`,
+          `  gameId:  ${g.gameId}`,
+          `  matchup: ${g.awayTeam.name} @ ${g.homeTeam.name} — ${g.sport.toUpperCase()}`,
+          `  time:    ${g.matchTime}`,
+          `  status:  ${g.status}${g.canCreateContest ? '' : '  (NOT creatable — create will fail downstream)'}`,
+          '',
+        ];
+        process.stderr.write(lines.join('\n'));
+
+        // Consent rule (PROPOSAL §2.4 / review8): --yes is the
+        // consent flag, --json is output format only. They are
+        // orthogonal — --json alone DOES NOT auto-consent. Match
+        // the same contract `commitments submit` uses.
+        const skipPrompt = opts.yes === true;
+        const isInteractive = process.stdin.isTTY === true;
+        if (!skipPrompt && !isInteractive) {
+          throw new OspexValidationError(
+            '--yes is required for non-interactive --game <slug> create. ' +
+              'Re-run with --yes after reviewing the resolved game.',
+          );
+        }
+        if (!skipPrompt) {
+          const ok = await promptYesNo('Create contest for this game?', false);
+          if (!ok) {
+            process.stderr.write('Cancelled.\n');
+            process.exit(130);
+          }
+        }
+      }
+    }
+
     const args: Parameters<typeof client.contests.create>[0] = {
-      gameId: opts.gameId,
+      gameId,
     };
     if (opts.subscriptionId !== undefined) args.subscriptionId = BigInt(opts.subscriptionId);
     if (opts.gasLimit !== undefined) args.gasLimit = opts.gasLimit;
