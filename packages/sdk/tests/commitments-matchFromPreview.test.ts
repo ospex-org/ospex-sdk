@@ -109,12 +109,13 @@ function buildContest(overrides: Partial<Contest> = {}): Contest {
 function buildPreview(opts: {
   commitment?: Commitment;
   speculation?: MatchPreview['speculation'];
+  taker?: Hex;
 } = {}): MatchPreview {
   return buildMatchPreview({
     commitment: opts.commitment ?? makeCommitment(),
     chainId: 137,
     matchingModuleAddress: ADDRESSES.matchingModule,
-    taker: TAKER,
+    taker: opts.taker ?? TAKER,
     awayTeam: 'Los Angeles Lakers',
     homeTeam: 'Denver Nuggets',
     awayTeamId: 'lakers-uuid',
@@ -136,9 +137,16 @@ function buildPreview(opts: {
 interface CtxOpts {
   freshCommitment?: Commitment;
   freshContest?: Contest;
+  /** Default chain `allowance(...)` reading when no spender-specific override matches. */
   takerAllowanceWei6?: bigint;
+  /** Override `USDC.allowance(taker, PositionModule)` only. */
+  positionAllowanceWei6?: bigint;
+  /** Override `USDC.allowance(taker, TreasuryModule)` only. */
+  treasuryAllowanceWei6?: bigint;
   takerAddress?: Hex;
   estimateGasFails?: boolean;
+  /** Capture every readContract call so tests can assert on call shape. */
+  reads?: Array<{ functionName: string; args: readonly unknown[] }>;
 }
 
 function buildCtx(opts: CtxOpts = {}): {
@@ -146,7 +154,12 @@ function buildCtx(opts: CtxOpts = {}): {
   apiRequest: ReturnType<typeof vi.fn>;
   contestsGet: ReturnType<typeof vi.fn>;
   publicClient: PublicClient;
+  reads: Array<{ functionName: string; args: readonly unknown[] }>;
 } {
+  // Reuse the caller's reads array if present so they can capture
+  // dispatched reads from outside; otherwise create a fresh one and
+  // expose it on the return.
+  if (opts.reads === undefined) opts.reads = [];
   const fresh = opts.freshCommitment ?? makeCommitment();
   const freshContest = opts.freshContest ?? buildContest();
   const apiRequest = vi.fn(async (_path: string) => fresh);
@@ -163,6 +176,8 @@ function buildCtx(opts: CtxOpts = {}): {
     logs: [],
   } as unknown as TransactionReceipt;
 
+  const positionLower = ADDRESSES.positionModule.toLowerCase();
+  const treasuryLower = ADDRESSES.treasuryModule.toLowerCase();
   const publicClient = {
     sendRawTransaction: async () => txHash,
     waitForTransactionReceipt: async () => receipt,
@@ -172,7 +187,26 @@ function buildCtx(opts: CtxOpts = {}): {
       if (opts.estimateGasFails) throw new Error('estimate failed');
       return 80_000n;
     },
-    readContract: async () => opts.takerAllowanceWei6 ?? 100_000_000n,
+    readContract: async ({
+      functionName,
+      args,
+    }: {
+      functionName: string;
+      args: readonly unknown[];
+    }) => {
+      opts.reads?.push({ functionName, args });
+      if (functionName !== 'allowance') {
+        throw new Error(`unexpected readContract: ${functionName}`);
+      }
+      const spender = (args[1] as string).toLowerCase();
+      if (spender === positionLower && opts.positionAllowanceWei6 !== undefined) {
+        return opts.positionAllowanceWei6;
+      }
+      if (spender === treasuryLower && opts.treasuryAllowanceWei6 !== undefined) {
+        return opts.treasuryAllowanceWei6;
+      }
+      return opts.takerAllowanceWei6 ?? 100_000_000n;
+    },
   } as unknown as PublicClient;
 
   const signer: Signer = {
@@ -192,7 +226,7 @@ function buildCtx(opts: CtxOpts = {}): {
     getSpeculationsApi: () => ({}) as ReturnType<CommitmentsContext['getSpeculationsApi']>,
     getTeams: () => ({}) as ReturnType<CommitmentsContext['getTeams']>,
   };
-  return { ctx, apiRequest, contestsGet, publicClient };
+  return { ctx, apiRequest, contestsGet, publicClient, reads: opts.reads };
 }
 
 describe('matchFromPreview — always re-fetches', () => {
@@ -313,6 +347,87 @@ describe('matchFromPreview — allowance recheck', () => {
     const preview = buildPreview();
     const { ctx } = buildCtx({ takerAllowanceWei6: 100n }); // way less than needed
     await expect(matchFromPreview(ctx, preview)).rejects.toThrow(OspexAllowanceError);
+  });
+
+  it('iterates approvals[] — for lazy preview, reads BOTH PositionModule and TreasuryModule', async () => {
+    // Lazy preview's approvals[] has two USDC rows; the chain
+    // recheck must hit both so the lazy-creation-fee row's
+    // TreasuryModule allowance shortfall is caught before send.
+    const preview = buildPreview({
+      speculation: { mode: 'lazy', speculationId: null, speculationKey: '0x'.padEnd(66, 'a') },
+    });
+    const { ctx, reads } = buildCtx({
+      // Allowances comfortably cover both required values; we're
+      // asserting on the read shape, not on a shortfall.
+      positionAllowanceWei6: 100_000_000n,
+      treasuryAllowanceWei6: 100_000_000n,
+      // Lazy spec: contest must NOT carry a matching open speculation
+      // (otherwise the freshMode check flips to 'existing' and bails
+      // before allowance recheck fires).
+      freshContest: buildContest({ speculations: [] }),
+    });
+    await matchFromPreview(ctx, preview);
+
+    const allowanceReads = reads.filter((r) => r.functionName === 'allowance');
+    const spenders = allowanceReads.map((r) =>
+      (r.args[1] as string).toLowerCase(),
+    );
+    expect(spenders).toContain(ADDRESSES.positionModule.toLowerCase());
+    expect(spenders).toContain(ADDRESSES.treasuryModule.toLowerCase());
+  });
+
+  it('lazy non-self: TreasuryModule allowance shortfall on chain → throws OspexAllowanceError', async () => {
+    // Closes a real preflight gap: previously the chain recheck only
+    // looked at PositionModule, so a maker who drained their TM
+    // allowance between preview and send (or a fresh wallet that
+    // hadn't approved TreasuryModule yet) would slip past preflight
+    // and revert in TreasuryModule.processSplitFee.
+    const preview = buildPreview({
+      speculation: { mode: 'lazy', speculationId: null, speculationKey: '0x'.padEnd(66, 'a') },
+    });
+    const { ctx } = buildCtx({
+      positionAllowanceWei6: 100_000_000n, // PM is fine
+      treasuryAllowanceWei6: 100n, // TM is short — required is 250_000n half-fee
+      freshContest: buildContest({ speculations: [] }),
+    });
+    await expect(matchFromPreview(ctx, preview)).rejects.toThrow(OspexAllowanceError);
+  });
+
+  it('self-match: PM allowance < (fillMakerRisk + takerRisk) sum → throws OspexAllowanceError', async () => {
+    // Reproduction of the live-Polygon failure that motivated this
+    // fix. Preview's commitment-risk row carries the doubled
+    // requirement (sum of both transferFrom calls hitting the same
+    // wallet). On-chain allowance equal to taker risk alone is not
+    // enough — the chain recheck must catch it before send.
+    const preview = buildPreview({ taker: MAKER });
+    expect(preview.selfMatch).toBe(true);
+    const positionRow = preview.approvals.find(
+      (r) => r.purpose === 'commitment-risk',
+    )!;
+    const takerRiskOnly = BigInt(preview.economics.takerRiskWei6);
+    const doubledRequired = BigInt(positionRow.required);
+    expect(doubledRequired).toBeGreaterThan(takerRiskOnly);
+
+    const { ctx } = buildCtx({
+      takerAddress: MAKER, // signer must match preview.taker
+      positionAllowanceWei6: takerRiskOnly, // covers the old, single-side requirement
+    });
+    await expect(matchFromPreview(ctx, preview)).rejects.toThrow(OspexAllowanceError);
+  });
+
+  it('self-match: PM allowance >= sum → passes recheck, tx sends', async () => {
+    const preview = buildPreview({ taker: MAKER });
+    const positionRow = preview.approvals.find(
+      (r) => r.purpose === 'commitment-risk',
+    )!;
+    const required = BigInt(positionRow.required);
+
+    const { ctx } = buildCtx({
+      takerAddress: MAKER,
+      positionAllowanceWei6: required, // exactly enough
+    });
+    const result = await matchFromPreview(ctx, preview);
+    expect(result.txHash).toMatch(/^0x[0-9a-f]+$/i);
   });
 });
 

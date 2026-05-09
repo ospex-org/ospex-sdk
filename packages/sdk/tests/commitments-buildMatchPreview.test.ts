@@ -321,6 +321,82 @@ describe('buildMatchPreview — approvals (existing vs lazy)', () => {
   });
 });
 
+describe('buildMatchPreview — self-match PositionModule allowance doubling', () => {
+  // For a self-match, PositionModule.recordFill performs TWO
+  // safeTransferFrom calls against the same wallet — fillMakerRisk
+  // and takerRisk. The wallet's PositionModule USDC allowance must
+  // cover the SUM. Mirrors the lazy-creation-fee row's existing
+  // self-match doubling.
+  it('non-self match: commitment-risk required = takerRiskWei6 only', () => {
+    // baseArgs: maker risk 1 USDC at oddsTick 250 → fillMakerRisk
+    // 1.0 USDC, takerRisk 1.5 USDC.
+    const p = buildMatchPreview(baseArgs());
+    expect(p.selfMatch).toBe(false);
+    const row = p.approvals.find((r) => r.purpose === 'commitment-risk')!;
+    expect(BigInt(row.required)).toBe(1_500_000n); // takerRisk only
+  });
+
+  it('self-match (existing speculation): commitment-risk required = fillMakerRisk + takerRisk', () => {
+    const p = buildMatchPreview(baseArgs({ taker: MAKER }));
+    expect(p.selfMatch).toBe(true);
+    expect(p.speculation.mode).toBe('existing');
+    const row = p.approvals.find((r) => r.purpose === 'commitment-risk')!;
+    // fillMakerRisk 1.0 USDC + takerRisk 1.5 USDC = 2.5 USDC.
+    expect(BigInt(row.required)).toBe(2_500_000n);
+  });
+
+  it('self-match (lazy speculation): commitment-risk required is also doubled', () => {
+    // Cross-cuts with the lazy-creation-fee row's full-fee doubling —
+    // both rows must double independently, neither covers the other.
+    const p = buildMatchPreview(
+      baseArgs({
+        taker: MAKER,
+        speculation: { mode: 'lazy' },
+        speculationCreationTotalFeeWei6: 500_000n,
+      }),
+    );
+    expect(p.selfMatch).toBe(true);
+    const positionRow = p.approvals.find((r) => r.purpose === 'commitment-risk')!;
+    const lazyRow = p.approvals.find((r) => r.purpose === 'lazy-creation-fee')!;
+    expect(BigInt(positionRow.required)).toBe(2_500_000n); // PM = fill + taker
+    expect(BigInt(lazyRow.required)).toBe(500_000n); // TM = full fee
+  });
+
+  it('self-match partial fill: PM required reflects the partial-fill sum, not the maker total', () => {
+    // takerDesiredRisk = 0.5 USDC → fillMakerRisk = 0.3333 USDC
+    // (rounded down to 0.3330 by the lot-size rule), takerRisk = 0.49995 USDC.
+    // Sum = 0.83295 USDC = 832950 wei6.
+    const p = buildMatchPreview(
+      baseArgs({ taker: MAKER, takerDesiredRiskWei6: 500_000n }),
+    );
+    const row = p.approvals.find((r) => r.purpose === 'commitment-risk')!;
+    const expected =
+      BigInt(p.economics.fillMakerRiskWei6) + BigInt(p.economics.takerRiskWei6);
+    expect(BigInt(row.required)).toBe(expected);
+    // Sanity that the fixture math actually exercises the partial-fill
+    // path (otherwise the assertion above is just a tautology).
+    expect(p.warnings).toContain('partial-fill');
+  });
+
+  it('self-match needsApproval: 1.6 USDC allowance is INSUFFICIENT for the doubled requirement', () => {
+    // Reproduction of the live-Polygon failure that motivated this
+    // fix. baseArgs takerRisk = 1.5 USDC; takerDesiredRiskWei6 1.6
+    // gives fillMakerRisk 1.0 USDC + takerRisk 1.5 USDC = 2.5 USDC
+    // total. A 1.6 USDC allowance covers takerRisk in isolation but
+    // is < the 2.5 USDC sum → needsApproval must be true.
+    const p = buildMatchPreview(
+      baseArgs({
+        taker: MAKER,
+        takerPositionAllowanceWei6: 1_600_000n,
+      }),
+    );
+    const row = p.approvals.find((r) => r.purpose === 'commitment-risk')!;
+    expect(row.needsApproval).toBe(true);
+    expect(BigInt(row.current)).toBe(1_600_000n);
+    expect(BigInt(row.required)).toBe(2_500_000n);
+  });
+});
+
 describe('buildMatchPreview — maker treasury allowance warning', () => {
   it('lazy + maker treasury allowance < maker share → warning + boolean false', () => {
     const p = buildMatchPreview(

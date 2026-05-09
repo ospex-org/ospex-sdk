@@ -262,6 +262,31 @@ describe('commitments match — preview renderer (warnings)', () => {
   });
 });
 
+describe('commitments match — self-match wallet stake clarifier', () => {
+  // Reproduces the live-Polygon failure mode: the user sees `taker
+  // risks: 1.6 USDC` and `maker fill: 1.0 USDC` but doesn't realize
+  // that on a self-match the same wallet pays both, so the actual
+  // outlay against PositionModule is 2.6 USDC. The renderer must
+  // surface that sum explicitly.
+  it('self-match: shows wallet stake = takerRisk + fillMakerRisk', () => {
+    const preview = buildExisting({ taker: MAKER });
+    expect(preview.selfMatch).toBe(true);
+    const out = captureRender(preview);
+    // baseArgs default at oddsTick 250 → fillMakerRisk 1.0, takerRisk 1.5.
+    // Sum = 2.5 USDC.
+    expect(out).toMatch(
+      /⚠ self-match wallet stake: 2\.500000 USDC \(maker fill \+ taker risk paid by the same wallet\)/,
+    );
+  });
+
+  it('non-self-match: does not show the wallet-stake clarifier', () => {
+    const preview = buildExisting();
+    expect(preview.selfMatch).toBe(false);
+    const out = captureRender(preview);
+    expect(out).not.toMatch(/self-match wallet stake/);
+  });
+});
+
 describe('commitments match — spread / total line displays', () => {
   it('spread shows BOTH maker and taker line perspectives', () => {
     const preview = buildExisting({

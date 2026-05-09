@@ -4,7 +4,7 @@
  * `SubmitPreview` — dumb formatting, single source of truth in the SDK.
  */
 
-import type { MatchPreview } from '@ospex/sdk';
+import { wei6ToDecimalUSDC, type MatchPreview } from '@ospex/sdk';
 
 const INDENT = '  ';
 const stderr = process.stderr;
@@ -54,6 +54,20 @@ export function renderMatchPreview(
   if (preview.warnings.includes('partial-fill')) {
     out.write(
       `${INDENT}              ⚠ partial fill: this match leaves capacity on the maker commitment\n`,
+    );
+  }
+  if (preview.selfMatch) {
+    // PositionModule.recordFill pulls fillMakerRisk + takerRisk from
+    // the same wallet on a self-match, and the renderer's two preceding
+    // lines split that into the two sides. Surface the SUM explicitly
+    // so the user reads the actual wallet outlay without doing the
+    // arithmetic — the corresponding `commitment-risk` approval row's
+    // `required` is computed against this same sum.
+    const walletStakeWei6 =
+      BigInt(preview.economics.takerRiskWei6) +
+      BigInt(preview.economics.fillMakerRiskWei6);
+    out.write(
+      `${INDENT}              ⚠ self-match wallet stake: ${wei6ToDecimalUSDC(walletStakeWei6)} USDC (maker fill + taker risk paid by the same wallet)\n`,
     );
   }
 
