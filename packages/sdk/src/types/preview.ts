@@ -41,8 +41,14 @@ export type SpeculationMode =
        * — a different spender from the `riskAmount` (which goes to
        * `PositionModule`). The CLI surfaces this in the preview so
        * the maker isn't surprised by a +0.25 USDC charge at match
-       * time, and the SDK's allowance preflight in `prepareSubmit`
-       * checks both spenders for lazy commitments (PR B).
+       * time. NOTE: as of this PR, the SDK's allowance preflight
+       * still only checks PositionModule; a follow-up will preflight
+       * the TreasuryModule allowance for lazy commitments and
+       * surface a second `approvals[]` row when both are short.
+       * Until then, a maker submitting a lazy commit with insufficient
+       * TreasuryModule allowance will not be blocked at submit time;
+       * the first match will revert with `ERC20InsufficientAllowance`
+       * against TreasuryModule.
        */
       makerCreationFeeUSDC: string;
     };

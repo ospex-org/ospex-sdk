@@ -47,7 +47,9 @@ ospex odds watch <contestId>               # streaming subscription (line-delimi
 ospex commitments approve max                                # approve PositionModule for unlimited USDC
 
 # High-level submit (domain-language inputs + win/lose/push preview).
-# Default approval policy is exact-required-amount; pass --approve-max for unlimited.
+# Interactive: prompts for an amount with the exact-required value as default;
+# type "max" at that prompt for unlimited. Non-interactive (--yes): exact-required
+# by default, or pass --approve-max alongside --yes for unlimited.
 ospex commitments submit \                                   # high-level path (recommended)
   --speculation <id> --side lakers --odds 2.50 --risk-usdc 1
 ospex commitments submit \                                   # by --contest, line lazy-creates if absent
@@ -171,7 +173,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex commitments list [... --speculation <id> ...]` | Existing list extended with `--speculation` filter. |
 | `ospex commitments list [--maker --scorer --contest-id --status …]` | Lists commitments. Defaults to `open,partially_filled` and active rows. |
 | `ospex commitments approve <amount\|max>` | Approve PositionModule for USDC (M2). |
-| `ospex commitments submit [--speculation\|--contest --market --line] --side --odds --risk-usdc [--expiry --nonce --yes --json --approve-max]` | High-level submit. Domain-language inputs (`--side lakers --odds 2.50 --risk-usdc 1`) + a win/lose/push preview before signing. `--json` alone = preview only (no signing); `--yes --json` = preview + post-submit result. Default approval policy is exact-required-amount; `--approve-max` opts into unlimited. |
+| `ospex commitments submit [--speculation\|--contest --market --line] --side --odds --risk-usdc [--expiry --nonce --yes --json --approve-max]` | High-level submit. Domain-language inputs (`--side lakers --odds 2.50 --risk-usdc 1`) + a win/lose/push preview before signing. `--json` alone = preview only (no signing); `--yes --json` = preview + post-submit result. Interactive flow asks for the approval amount with exact-required as the default — type `max` for unlimited. Non-interactive (`--yes`) defaults to exact-required; pass `--approve-max` alongside `--yes` for unlimited. |
 | `ospex commitments submit-raw <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>` | Protocol-level escape hatch — same canonical-tuple form as the original `submit`. Use when you already have raw protocol values; otherwise prefer `submit`. |
 | `ospex commitments match <hash> [--risk <amount>]` | Take a commitment as the taker (M2). Prompts to approve. |
 | `ospex commitments cancel <hash> [--also-onchain]` | Off-chain cancel via signed DELETE (M2). With `--also-onchain` (M2.5) additionally calls `MatchingModule.cancelCommitment` for an authoritative cancel. |

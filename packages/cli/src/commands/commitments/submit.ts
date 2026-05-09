@@ -105,7 +105,7 @@ export const commitmentsSubmitCommand = new Command('submit')
   .option('--yes', 'skip the confirmation prompt')
   .option(
     '--approve-max',
-    'when an approval is required, grant unlimited (default: approve required amount only)',
+    'with --yes (non-interactive), approve unlimited USDC instead of the exact required amount. Ignored in interactive mode — to grant unlimited interactively, type "max" at the amount prompt.',
   )
   .addOption(
     new Option(
