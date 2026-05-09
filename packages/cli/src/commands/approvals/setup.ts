@@ -16,8 +16,10 @@
  *
  * Output:
  *   - human (default) — preview block + Y/n prompt + per-tx progress.
- *   - --json without --yes — emits JsonSetupPlan, no signing.
- *   - --yes --json — signs/sends and emits { plan, results: [...] }.
+ *   - --json without --yes — emits SetupPreviewEnvelope
+ *     ({ schemaVersion, plan }), no signing.
+ *   - --yes --json — signs/sends and emits SetupResultEnvelope
+ *     ({ schemaVersion, plan, results }).
  *
  * Approvals are sent sequentially. Already-sufficient allowances are
  * skipped so this is idempotent — re-running with the same flags is a
@@ -32,12 +34,18 @@ import { getClient } from '../../lib/client.js';
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
 import {
   buildSetupPlan,
+  parseLinkInput,
+  parseUsdcInput,
   type ApprovalSpenderKey,
   type PlanItem,
   type SetupInput,
-  type SetupPlan,
 } from '../../lib/approvalsPlan.js';
-import { renderSetupPlan, setupPlanToJson } from '../../lib/approvalsRender.js';
+import {
+  buildSetupPreviewEnvelope,
+  buildSetupResultEnvelope,
+  renderSetupPlan,
+  type JsonSetupResult,
+} from '../../lib/approvalsRender.js';
 
 const optionsSchema = z.object({
   riskUsdc: z.string().optional(),
@@ -46,13 +54,6 @@ const optionsSchema = z.object({
   yes: z.boolean().optional(),
   json: z.boolean().optional(),
 });
-
-interface ExecResult {
-  spenderModule: ApprovalSpenderKey;
-  txHash: string;
-  blockNumber: string;
-  status: 'success' | 'reverted';
-}
 
 export const approvalsSetupCommand = new Command('setup')
   .description(
@@ -103,6 +104,16 @@ export const approvalsSetupCommand = new Command('setup')
       );
     }
 
+    // Pre-parse flag amounts BEFORE any signer/chain interaction, so a
+    // typo'd `--risk-usdc not-a-number` errors out without first
+    // prompting for the keystore passphrase. Hermes flagged the
+    // opposite ordering on PR #38 review. The result is discarded —
+    // buildSetupPlan re-parses internally — and parseLinkInput /
+    // parseUsdcInput throw on bad shape.
+    if (opts.riskUsdc !== undefined) parseUsdcInput(opts.riskUsdc);
+    if (opts.feeUsdc !== undefined) parseUsdcInput(opts.feeUsdc);
+    if (opts.link !== undefined) parseLinkInput(opts.link);
+
     const client = await getClient({ requiresSigner: true, requiresChain: true });
 
     // Ensure the signer is unlocked once up-front so the subsequent
@@ -118,21 +129,21 @@ export const approvalsSetupCommand = new Command('setup')
 
     const plan = buildSetupPlan(input, current);
 
-    // Render preview / JSON envelope.
+    // --json without --yes → preview-only envelope, no signing.
     if (wantJson && !skipPrompt) {
-      formatOutput(setupPlanToJson(plan), { json: true });
+      formatOutput(buildSetupPreviewEnvelope(plan), { json: true });
       return;
     }
     if (!wantJson) {
       renderSetupPlan(plan, process.stderr);
     }
 
+    // Idempotent re-run: no txs to send. Emit empty-results envelope
+    // for JSON consumers; nothing further for human mode (the plan
+    // renderer already printed "Nothing to do").
     if (plan.willSendCount === 0) {
       if (wantJson) {
-        formatOutput(
-          { ...setupPlanToJson(plan), results: [] },
-          { json: true },
-        );
+        formatOutput(buildSetupResultEnvelope(plan, []), { json: true });
       }
       return;
     }
@@ -145,7 +156,7 @@ export const approvalsSetupCommand = new Command('setup')
       }
     }
 
-    const results: ExecResult[] = [];
+    const results: JsonSetupResult[] = [];
     for (const item of plan.items) {
       if (item.action.kind !== 'send') continue;
       if (!wantJson) {
@@ -161,7 +172,7 @@ export const approvalsSetupCommand = new Command('setup')
     }
 
     if (wantJson) {
-      formatOutput({ ...setupPlanToJson(plan), results }, { json: true });
+      formatOutput(buildSetupResultEnvelope(plan, results), { json: true });
       return;
     }
     process.stderr.write(
@@ -190,7 +201,7 @@ async function runInteractivePrompts(current: ApprovalsSnapshot): Promise<SetupI
 async function executeItem(
   client: Awaited<ReturnType<typeof getClient>>,
   item: PlanItem,
-): Promise<ExecResult> {
+): Promise<JsonSetupResult> {
   if (item.action.kind !== 'send') {
     throw new Error('executeItem called on a non-send plan item');
   }

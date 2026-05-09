@@ -10,13 +10,16 @@
  *   2. USDC → TreasuryModule  (`--fee-usdc`)   — protocol fees
  *   3. LINK → OracleModule    (`--link`)        — Chainlink (contests only)
  *
- * Auto-include rule: if the caller provides `--risk-usdc` but omits
- * `--fee-usdc`, we target a small fee budget so the most common
- * mid-bet approval prompt (the maker's / taker's half of the lazy
- * speculation creation fee, 0.25 USDC each) doesn't fire on the next
- * commitment match. Pass `--fee-usdc 0` (or empty in interactive mode)
- * to opt out. The auto-include amount is intentionally small —
- * approving one's worst-case exposure is a feature, not a bug.
+ * Auto-include rule: when the caller provides ONLY `--risk-usdc`
+ * (omitting both `--fee-usdc` and `--link`), we target a small fee
+ * budget so the most common mid-bet approval prompt (the maker's /
+ * taker's half of the lazy speculation creation fee, 0.25 USDC each)
+ * doesn't fire on the next commitment match. Pass `--fee-usdc 0` to
+ * opt out. The rule is deliberately scoped to the casual-bettor
+ * shape — a user who sets `--link` is in operator territory and
+ * should be explicit about every dimension; a surprise USDC approval
+ * alongside a contest-creation setup would be a financial-UX bug
+ * (Hermes flagged the looser rule on PR #38 review).
  *
  * Skip rule: if the wallet already has at least the requested allowance
  * for a given spender, the planner emits a `skip-already-approved`
@@ -122,15 +125,19 @@ export function buildSetupPlan(input: SetupInput, current: ApprovalsSnapshot): S
   let feeParsed = parseUsdcInput(input.feeUsdc);
   const linkParsed = parseLinkInput(input.link);
 
-  // Auto-include: when the user explicitly set risk but did not set
-  // fee, target a small fee budget. We detect "did not set" by raw
-  // input shape (undefined) — distinct from "0"/"skip", which the
-  // user explicitly chose to opt out.
+  // Auto-include: when the caller passed ONLY --risk-usdc (no
+  // --fee-usdc and no --link), target a small fee budget. "Did not
+  // set" is detected by raw input shape (undefined) — distinct from
+  // "0" / "skip", which is an explicit opt-out. The link === undefined
+  // gate keeps the rule scoped to the casual-bettor shape: any caller
+  // touching --link is in operator territory and should be explicit
+  // about every dimension.
   let autoIncludedFee = false;
   if (
-    riskParsed.kind !== 'skip' &&
+    input.riskUsdc !== undefined &&
     input.feeUsdc === undefined &&
-    feeParsed.kind === 'skip'
+    input.link === undefined &&
+    riskParsed.kind !== 'skip'
   ) {
     feeParsed = parseUsdcInput(FEE_AUTO_INCLUDE_USDC);
     autoIncludedFee = true;

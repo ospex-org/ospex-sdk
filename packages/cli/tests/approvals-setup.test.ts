@@ -21,6 +21,8 @@ import {
   parseUsdcInput,
 } from '../src/lib/approvalsPlan.js';
 import {
+  buildSetupPreviewEnvelope,
+  buildSetupResultEnvelope,
   renderSetupPlan,
   setupPlanToJson,
 } from '../src/lib/approvalsRender.js';
@@ -149,6 +151,25 @@ describe('buildSetupPlan — auto-include rule', () => {
     expect(planLink.items.find((i) => i.spenderModule === 'treasuryModule')!.action.kind).toBe(
       'skip-not-requested',
     );
+  });
+
+  // Regression: the auto-include rule must NOT trigger when --link is
+  // set (the casual-bettor exemption applies only when riskUsdc is the
+  // ONLY dimension). A user passing --risk-usdc + --link is in
+  // operator territory and should be explicit about every dimension —
+  // surprise USDC approvals next to a contest-creation setup is a
+  // financial-UX bug. Hermes flagged the prior looser rule on PR #38.
+  it('does NOT auto-include fee when --risk-usdc + --link are set together', () => {
+    const plan = buildSetupPlan({ riskUsdc: '50', link: '2' }, makeSnapshot());
+    const treasury = plan.items.find((i) => i.spenderModule === 'treasuryModule')!;
+    expect(treasury.action.kind).toBe('skip-not-requested');
+    expect(treasury.autoIncluded).toBe(false);
+    // Sanity: the two dimensions the user DID set are still send.
+    const position = plan.items.find((i) => i.spenderModule === 'positionModule')!;
+    const oracle = plan.items.find((i) => i.spenderModule === 'oracleModule')!;
+    expect(position.action.kind).toBe('send');
+    expect(oracle.action.kind).toBe('send');
+    expect(plan.willSendCount).toBe(2);
   });
 });
 
@@ -306,7 +327,6 @@ describe('setupPlanToJson', () => {
   it('serialises bigints to decimal strings + formatted human-readable companions', () => {
     const plan = buildSetupPlan({ riskUsdc: '50', feeUsdc: '5' }, makeSnapshot());
     const json = setupPlanToJson(plan);
-    expect(json.schemaVersion).toBe(1);
     expect(json.willSendCount).toBe(2);
     const position = json.items.find((i) => i.spenderModule === 'positionModule')!;
     expect(position.action.kind).toBe('send');
@@ -342,5 +362,61 @@ describe('setupPlanToJson', () => {
       'positionModule',
       'treasuryModule',
     ]);
+  });
+});
+
+describe('setup envelope shape', () => {
+  // Regression: the JSON contract for `--json` (preview) and
+  // `--yes --json` (executed) must be { schemaVersion, plan, [results] }
+  // — schemaVersion at the envelope level, NOT inside the plan body.
+  // Hermes flagged a flat-shape variant on PR #38 review.
+  it('preview envelope shape: { schemaVersion: 1, plan: {...} }', () => {
+    const plan = buildSetupPlan({ riskUsdc: '50' }, makeSnapshot());
+    const env = buildSetupPreviewEnvelope(plan);
+    expect(env.schemaVersion).toBe(1);
+    expect(env.plan).toBeDefined();
+    expect(env.plan.willSendCount).toBe(2);
+    expect((env.plan as Record<string, unknown>).schemaVersion).toBeUndefined();
+    expect((env as Record<string, unknown>).results).toBeUndefined();
+  });
+
+  it('result envelope shape: { schemaVersion: 1, plan: {...}, results: [...] }', () => {
+    const plan = buildSetupPlan({ riskUsdc: '50' }, makeSnapshot());
+    const env = buildSetupResultEnvelope(plan, [
+      {
+        spenderModule: 'positionModule',
+        txHash: '0xtx',
+        blockNumber: '12345',
+        status: 'success',
+      },
+    ]);
+    expect(env.schemaVersion).toBe(1);
+    expect(env.plan.willSendCount).toBe(2);
+    expect(env.results).toHaveLength(1);
+    expect(env.results[0]!.spenderModule).toBe('positionModule');
+    expect((env.plan as Record<string, unknown>).schemaVersion).toBeUndefined();
+  });
+
+  it('result envelope tolerates an empty results array (idempotent re-run)', () => {
+    const plan = buildSetupPlan(
+      { riskUsdc: '50', feeUsdc: '5' },
+      makeSnapshot({ positionModule: 100_000_000n, treasuryModule: 10_000_000n }),
+    );
+    const env = buildSetupResultEnvelope(plan, []);
+    expect(env.schemaVersion).toBe(1);
+    expect(env.plan.willSendCount).toBe(0);
+    expect(env.results).toEqual([]);
+  });
+
+  it('round-trips both envelopes through JSON.stringify', () => {
+    const plan = buildSetupPlan({ riskUsdc: 'max' }, makeSnapshot());
+    expect(() => JSON.stringify(buildSetupPreviewEnvelope(plan))).not.toThrow();
+    expect(() =>
+      JSON.stringify(
+        buildSetupResultEnvelope(plan, [
+          { spenderModule: 'positionModule', txHash: '0xab', blockNumber: '1', status: 'success' },
+        ]),
+      ),
+    ).not.toThrow();
   });
 });

@@ -103,7 +103,10 @@ export function renderApprovalsSnapshot(
       `${INDENT}${''.padEnd(16)}                    (only needed if you create or score contests)\n`,
     );
   }
-  out.write('\nRun `ospex approvals setup` to add or change.\n');
+  out.write(
+    '\nRun `ospex approvals setup` to add or increase approvals.\n' +
+      '(Existing higher approvals are not reduced by `setup`.)\n',
+  );
 }
 
 // ── Setup plan render ──────────────────────────────────────────────
@@ -125,21 +128,62 @@ export interface JsonSetupPlanItem {
 }
 
 export interface JsonSetupPlan {
-  schemaVersion: 1;
   owner: string;
   chainId: number;
   willSendCount: number;
   items: JsonSetupPlanItem[];
 }
 
+/**
+ * Per-tx execution result emitted by the setup orchestrator. Mirrors
+ * the shape `client.commitments.approve` already returns, narrowed to
+ * the fields agents need to verify on chain.
+ */
+export interface JsonSetupResult {
+  spenderModule: PlanItem['spenderModule'];
+  txHash: string;
+  blockNumber: string;
+  status: 'success' | 'reverted';
+}
+
+/**
+ * Preview-only envelope (`--json` without `--yes`). No txs were sent.
+ * Mirrors `MatchPreviewEnvelope` / `SubmitPreviewEnvelope` in the SDK.
+ */
+export interface SetupPreviewEnvelope {
+  schemaVersion: 1;
+  plan: JsonSetupPlan;
+}
+
+/**
+ * Result envelope (`--yes --json`). Includes the plan that was acted
+ * on plus per-tx results. `results` is empty when willSendCount === 0
+ * (idempotent re-run; everything was already approved).
+ */
+export interface SetupResultEnvelope {
+  schemaVersion: 1;
+  plan: JsonSetupPlan;
+  results: JsonSetupResult[];
+}
+
 export function setupPlanToJson(plan: SetupPlan): JsonSetupPlan {
   return {
-    schemaVersion: 1,
     owner: plan.owner,
     chainId: plan.chainId,
     willSendCount: plan.willSendCount,
     items: plan.items.map(planItemToJson),
   };
+}
+
+export function buildSetupPreviewEnvelope(plan: SetupPlan): SetupPreviewEnvelope {
+  return { schemaVersion: 1, plan: setupPlanToJson(plan) };
+}
+
+export function buildSetupResultEnvelope(
+  plan: SetupPlan,
+  results: JsonSetupResult[],
+): SetupResultEnvelope {
+  return { schemaVersion: 1, plan: setupPlanToJson(plan), results };
 }
 
 function planItemToJson(item: PlanItem): JsonSetupPlanItem {
