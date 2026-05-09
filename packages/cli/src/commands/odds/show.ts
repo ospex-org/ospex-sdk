@@ -116,7 +116,7 @@ function renderMoneyline(
   process.stdout.write(
     `    home (${contest.homeTeam}):  ${formatAmerican(odds.homeOddsAmerican)}  (decimal ${formatDecimal(odds.homeOddsAmerican)})\n`,
   );
-  process.stdout.write(`    updated: ${relativeTime(odds.changedAt)}\n\n`);
+  process.stdout.write(`    ${formatFreshness(odds)}\n\n`);
 }
 
 function renderSpread(
@@ -136,7 +136,7 @@ function renderSpread(
   process.stdout.write(
     `    home (${contest.homeTeam}) ${formatLine(odds.homeLine)}:  ${formatAmerican(odds.homeOddsAmerican)}  (decimal ${formatDecimal(odds.homeOddsAmerican)})\n`,
   );
-  process.stdout.write(`    updated: ${relativeTime(odds.changedAt)}\n\n`);
+  process.stdout.write(`    ${formatFreshness(odds)}\n\n`);
 }
 
 function renderTotal(odds: TotalOdds | null): void {
@@ -154,7 +154,7 @@ function renderTotal(odds: TotalOdds | null): void {
   process.stdout.write(
     `    under ${formatLine(odds.line)}:  ${formatAmerican(odds.underOddsAmerican)}  (decimal ${formatDecimal(odds.underOddsAmerican)})\n`,
   );
-  process.stdout.write(`    updated: ${relativeTime(odds.changedAt)}\n\n`);
+  process.stdout.write(`    ${formatFreshness(odds)}\n\n`);
 }
 
 function formatAmerican(american: number | null): string {
@@ -177,16 +177,61 @@ function formatLine(line: number | null): string {
   return String(line);
 }
 
-function relativeTime(iso: string): string {
+/**
+ * Render the two-part freshness line shown beneath each market.
+ *
+ * Why two parts: `changedAt` (price last moved) and `pollCapturedAt`
+ * (writer last fetched the row from the upstream) answer different
+ * questions:
+ *
+ *   - "Has this price been moving?"   → changedAt
+ *   - "Is the data stale?"            → pollCapturedAt
+ *
+ * Showing only `changedAt` (the previous behavior) made a stable
+ * line look like a stale row. The new format is unambiguous: how
+ * long the price has been steady, and how recently we re-confirmed
+ * it from the upstream.
+ *
+ * Example: a Pistons-Cavaliers total at 212.5 -105/-115 that the
+ * market hasn't moved in 12 hours but the writer re-polled 5 minutes
+ * ago renders as:
+ *
+ *   price stable for 12h · writer polled 5m ago
+ */
+export function formatFreshness(odds: { changedAt: string; pollCapturedAt: string }): string {
+  return (
+    `price stable for ${formatDuration(odds.changedAt)}` +
+    ` · writer polled ${formatRelative(odds.pollCapturedAt)}`
+  );
+}
+
+function formatRelative(iso: string): string {
+  const e = elapsedSince(iso);
+  if (e === null) return iso;
+  return `${e.text} ago`;
+}
+
+function formatDuration(iso: string): string {
+  const e = elapsedSince(iso);
+  if (e === null) return iso;
+  return e.text;
+}
+
+/**
+ * Common bucketing for relative-time display. Returns the unit-suffixed
+ * magnitude (e.g. "5m", "12h", "3d") without "ago" so the caller can
+ * decide whether to attach a tense.
+ */
+function elapsedSince(iso: string): { text: string } | null {
   const then = new Date(iso).getTime();
   const now = Date.now();
-  if (!Number.isFinite(then)) return iso;
+  if (!Number.isFinite(then)) return null;
   const seconds = Math.max(0, Math.round((now - then) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 60) return { text: `${seconds}s` };
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return { text: `${minutes}m` };
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return { text: `${hours}h` };
   const days = Math.round(hours / 24);
-  return `${days}d ago`;
+  return { text: `${days}d` };
 }
