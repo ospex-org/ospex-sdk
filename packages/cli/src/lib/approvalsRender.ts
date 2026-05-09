@@ -101,10 +101,7 @@ export function renderApprovalsSnapshot(
       `${INDENT}${''.padEnd(16)}                    (only needed if you create or score contests)\n`,
     );
   }
-
-  out.write(
-    '\nRun `ospex approvals setup` to add or change. For balances + readiness, run `ospex doctor`.\n',
-  );
+  out.write('\n');
 }
 
 function serializeEntry(spender: string, raw: bigint, decimals: number): JsonAllowanceEntry {
