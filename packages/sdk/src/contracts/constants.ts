@@ -5,6 +5,37 @@
 import type { ChainId } from '../types/protocol.js';
 
 /**
+ * Per-chain protocol speculation creation fee in wei6 (USDC × 10^6).
+ * Paid only when a commitment match triggers lazy speculation creation
+ * — i.e., the FIRST match on a `(contestId, scorer, lineTicks)` key.
+ * The total is split 50/50 between the maker and taker of that first
+ * match via `TreasuryModule.processSplitFee`. Once the speculation
+ * exists, no further matches incur this fee.
+ *
+ * Source: `ospex-foundry-matched-pairs/script/DeployPolygon.s.sol:91`
+ * (= 500000 wei6 = 0.50 USDC) and `DeployAmoy.s.sol:81` (same value).
+ * The deploy-script comment annotates this as CONFIGURABLE; refresh
+ * the table on any redeploy that changes it.
+ */
+export const SPECULATION_CREATION_FEE_WEI6: Record<ChainId, bigint> = {
+  137: 500_000n,
+  80002: 500_000n,
+};
+
+/**
+ * Per-chain per-side share of the speculation creation fee — what
+ * one party (maker OR taker) pays when their match triggers lazy
+ * creation. The contract computes `firstHalf = total / 2`
+ * (TreasuryModule.sol:224); for the canonical 500000 total, both
+ * halves are equal. Mirrored here rather than computed at call sites
+ * so the value is visible in code review next to its source.
+ */
+export const SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6: Record<ChainId, bigint> = {
+  137: 250_000n,
+  80002: 250_000n,
+};
+
+/**
  * Per-chain maximum Chainlink Functions callback gas. The router reverts
  * with `GasLimitTooBig(uint32)` (selector 0x1d70f87a) carrying its
  * `maxCallbackGasLimit` as the argument when a request exceeds this

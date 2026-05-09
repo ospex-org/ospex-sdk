@@ -37,9 +37,11 @@
  *                                                 (preview only, NO signing)
  *                              --yes --json     → SubmitJsonResult
  *                                                 (preview + submit result)
- *   --approve-max            grant unlimited USDC approval if needed.
- *                            Default is to approve only the required
- *                            amount (one-shot, safer).
+ *   --approve-max            non-interactive (`--yes`) shorthand for
+ *                            "approve unlimited" when an approval is
+ *                            needed. In interactive mode the user
+ *                            chooses the amount at the per-approval
+ *                            prompt and this flag is unused.
  *
  * Contract corollaries:
  *   - `--json` is output format only. It does NOT imply `--yes`.
@@ -50,10 +52,17 @@
 
 import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
-import { OspexAPIError, OspexValidationError, type HighLevelSubmitArgs, type SubmitParent } from '@ospex/sdk';
+import {
+  OspexAPIError,
+  OspexValidationError,
+  usdcDecimalToWei6,
+  wei6ToDecimalUSDC,
+  type HighLevelSubmitArgs,
+  type SubmitParent,
+} from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
-import { promptYesNo } from '../../lib/prompt.js';
+import { promptValue, promptYesNo } from '../../lib/prompt.js';
 import { renderPreview } from '../../lib/previewRender.js';
 
 const marketSchema = z.enum(['moneyline', 'spread', 'total']);
@@ -96,7 +105,7 @@ export const commitmentsSubmitCommand = new Command('submit')
   .option('--yes', 'skip the confirmation prompt')
   .option(
     '--approve-max',
-    'when an approval is required, grant unlimited (default: approve required amount only)',
+    'with --yes (non-interactive), approve unlimited USDC instead of the exact required amount. Ignored in interactive mode — to grant unlimited interactively, type "max" at the amount prompt.',
   )
   .addOption(
     new Option(
@@ -151,27 +160,7 @@ export const commitmentsSubmitCommand = new Command('submit')
     //    --json) stays parseable.
     renderPreview(preview);
 
-    // 5. Approval policy disclosure — show what the CLI WILL do
-    //    BEFORE the user confirms. Default is to approve exactly
-    //    the required amount, not max. --approve-max opts into
-    //    unlimited approval.
-    const needsApproval = preview.approvals.find((a) => a.needsApproval);
-    if (needsApproval !== undefined && needsApproval.token === 'USDC') {
-      const policy = approveMax
-        ? `unlimited (max, 2^256-1)`
-        : `${needsApproval.required} wei6 (exact required amount)`;
-      process.stderr.write(
-        `Approval policy: will approve USDC ${policy} to ${needsApproval.spender}.\n`,
-      );
-      if (!approveMax) {
-        process.stderr.write(
-          '  (Pass --approve-max to grant unlimited approval and avoid future approval prompts.)\n',
-        );
-      }
-      process.stderr.write('\n');
-    }
-
-    // 6. Confirm (unless --yes). 'n' or empty exits with 130 (matches
+    // 5. Confirm (unless --yes). 'n' or empty exits with 130 (matches
     //    the Ctrl-C convention so scripts can distinguish "user
     //    declined" from "tx failed").
     if (!skipPrompt) {
@@ -182,15 +171,76 @@ export const commitmentsSubmitCommand = new Command('submit')
       }
     }
 
-    // 7. Run the approval if needed. Single-passphrase machinery:
-    //    the signer was unlocked during prepareSubmit (to derive
-    //    maker); subsequent signs reuse the cached key.
+    // 6. Run approval if needed. The flow mirrors the contests-create
+    //    handler: an approval-required block (required vs current,
+    //    spender + token addresses, plain-language description) +
+    //    two prompts — Allow Y/N, then Amount-with-"max"-fallback.
+    //
+    //    Non-interactive (--yes): no prompts — uses --approve-max for
+    //    unlimited or the exact required amount otherwise. Both flags
+    //    stay supported for scripted flows; the interactive path no
+    //    longer mentions --approve-max in any inline-suggestion line
+    //    (the flag exists, but suggesting it nudges users toward
+    //    unlimited approval as a default, which we don't want).
+    const needsApproval = preview.approvals.find((a) => a.needsApproval);
     if (needsApproval !== undefined && needsApproval.token === 'USDC') {
-      const amount: 'max' | bigint = approveMax ? 'max' : BigInt(needsApproval.required);
-      process.stderr.write(
-        `Approving USDC → ${needsApproval.spender} (${approveMax ? 'unlimited' : `${needsApproval.required} wei6`})...\n`,
-      );
-      const approveResult = await client.commitments.approve(amount);
+      const requiredWei6 = BigInt(needsApproval.required);
+      const currentWei6 = BigInt(needsApproval.current);
+      let approveAmount: bigint | 'max';
+
+      if (skipPrompt) {
+        approveAmount = approveMax ? 'max' : requiredWei6;
+      } else {
+        const requiredHuman = wei6ToDecimalUSDC(requiredWei6);
+        const currentHuman = wei6ToDecimalUSDC(currentWei6);
+        process.stderr.write(
+          `\nUSDC approval needed (commitment risk).\n` +
+            `  Required: ${requiredHuman} USDC\n` +
+            `  Approved: ${currentHuman} USDC\n` +
+            `\nThe PositionModule contract pulls this USDC from your wallet when this\n` +
+            `commitment matches on-chain. This is a standard ERC-20 \`approve\` — your tokens\n` +
+            `stay in your wallet until a counterparty matches. Approve more than the minimum\n` +
+            `if you want to skip this prompt on future submits.\n` +
+            `  Spender: ${needsApproval.spender} (PositionModule)\n`,
+        );
+        const allow = await promptYesNo(
+          `Allow PositionModule to spend USDC from your wallet?`,
+          true,
+        );
+        if (!allow) {
+          process.stderr.write('Approval declined; submit cancelled.\n');
+          process.exit(130);
+        }
+        const choice = await promptValue(
+          `Amount in USDC (number, or "max" for unlimited)`,
+          requiredHuman,
+        );
+        if (choice.toLowerCase() === 'max') {
+          approveAmount = 'max';
+        } else {
+          let parsed: bigint;
+          try {
+            parsed = usdcDecimalToWei6(choice);
+          } catch {
+            process.stderr.write(`Could not parse "${choice}" as a USDC amount.\n`);
+            process.exit(1);
+          }
+          if (parsed < requiredWei6) {
+            process.stderr.write(
+              `Amount ${choice} USDC is less than the required ${requiredHuman} USDC.\n`,
+            );
+            process.exit(1);
+          }
+          approveAmount = parsed;
+        }
+      }
+
+      const display =
+        approveAmount === 'max'
+          ? 'unlimited'
+          : `${wei6ToDecimalUSDC(approveAmount)} USDC (${approveAmount} wei6)`;
+      process.stderr.write(`Approving USDC → ${needsApproval.spender} (${display})...\n`);
+      const approveResult = await client.commitments.approve(approveAmount);
       process.stderr.write(
         `approve tx: ${approveResult.txHash} (status ${approveResult.receipt.status})\n`,
       );

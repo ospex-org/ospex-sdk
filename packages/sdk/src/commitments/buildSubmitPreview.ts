@@ -61,7 +61,16 @@ export interface BuildSubmitPreviewArgs {
   market: MarketType;
   scorer: Hex;
   lineTicks: number;
-  speculation: SpeculationMode;
+  /**
+   * Input shape for the speculation discriminator. Deliberately
+   * narrower than the public `SpeculationMode` — the lazy variant
+   * omits `makerCreationFeeUSDC` because that's enriched here from
+   * `makerCreationFeeWei6`. Caller supplies the bare structural data;
+   * `buildSubmitPreview` computes the user-facing fee string.
+   */
+  speculation:
+    | { mode: 'existing'; speculationId: string }
+    | { mode: 'lazy'; speculationId: null; speculationKey: string };
   // Side (already resolved)
   resolvedSide: ResolveSideResult;
   sideInput: string;
@@ -72,6 +81,16 @@ export interface BuildSubmitPreviewArgs {
   maker: Hex;
   chainId: number;
   matchingModuleAddress: Hex;
+  /**
+   * Per-side share of the protocol speculation creation fee, in wei6.
+   * Only used when `speculation.mode === 'lazy'`; passed in from the
+   * orchestrator (which reads it from
+   * `SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6[chainId]`). Setting it
+   * to 0n is acceptable in tests / future chains where the fee is
+   * disabled, but the canonical mainnet value is 250000n (0.25 USDC).
+   * Formatted in the lazy preview as `makerCreationFeeUSDC`.
+   */
+  makerCreationFeeWei6: bigint;
   expirySec: bigint;
   /** Provenance of the chosen expiry — see prepareSubmit's parseExpiry. */
   expirySource: ExpirySource;
@@ -167,7 +186,12 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
     type: args.market,
     speculation:
       args.speculation.mode === 'lazy'
-        ? { mode: 'lazy', speculationId: null, speculationKey }
+        ? {
+            mode: 'lazy',
+            speculationId: null,
+            speculationKey,
+            makerCreationFeeUSDC: wei6ToDecimalUSDC(args.makerCreationFeeWei6),
+          }
         : args.speculation,
     lineTicks: args.lineTicks,
     displayLine,

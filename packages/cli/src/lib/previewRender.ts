@@ -51,10 +51,26 @@ export function renderPreview(preview: SubmitPreview, out: NodeJS.WritableStream
 
   if (preview.market.speculation.mode === 'lazy') {
     out.write(
-      `${INDENT}speculation:  not yet created — will be lazily created on first match\n`,
+      `${INDENT}speculation:  not yet created — lazily created on first match\n`,
     );
     out.write(
       `${INDENT}              speculationKey=${preview.market.speculation.speculationKey}\n`,
+    );
+    // The maker's share of the protocol speculation creation fee. Paid
+    // ONLY if this commitment is the first match on the speculationKey
+    // (the match that triggers lazy creation); pulled from the maker's
+    // TreasuryModule allowance (a different spender from the risk).
+    // If a prior match already created the speculation by the time this
+    // commitment is filled, the fee is not charged. Disclosing it here
+    // so the maker isn't surprised by a +0.25 USDC charge at match time.
+    out.write(
+      `${INDENT}              creation fee: +${preview.market.speculation.makerCreationFeeUSDC} USDC if you're the first to match\n`,
+    );
+    out.write(
+      `${INDENT}              (your share of the protocol speculation-creation fee, split with the\n`,
+    );
+    out.write(
+      `${INDENT}              counterparty; not pulled if a prior match already created the speculation)\n`,
     );
   }
 

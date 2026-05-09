@@ -178,6 +178,32 @@ Submit? [Y/n]
 
 Confirm with Enter (or `y`) and the CLI signs (one Foundry passphrase prompt, even if a USDC approval has to land first), posts the EIP-712 commitment, and prints the hash plus `status: open`.
 
+If the speculation doesn't yet exist (no prior matches on this `(contestId, scorer, lineTicks)` tuple), the preview also surfaces the per-side speculation creation fee — paid only if YOUR commitment turns out to be the first match:
+
+```
+speculation:  not yet created — lazily created on first match
+              speculationKey=0x3b7b…
+              creation fee: +0.250000 USDC if you're the first to match
+              (your share of the protocol speculation-creation fee, split with the
+              counterparty; not pulled if a prior match already created the speculation)
+```
+
+If a USDC approval is required, the CLI shows the required-vs-current allowance and asks two short questions — first a Y/N consent, then the amount (which you can type as a number or `max` for unlimited):
+
+```
+USDC approval needed (commitment risk).
+  Required: 1 USDC
+  Approved: 0 USDC
+
+The PositionModule contract pulls this USDC from your wallet when this
+commitment matches on-chain. ...
+  Spender: 0x0DCd… (PositionModule)
+Allow PositionModule to spend USDC from your wallet? [Y/n]
+Amount in USDC (number, or "max" for unlimited) [1]
+```
+
+Default at the amount prompt is exactly the required amount — you opt in to a buffer (or `max`) only if you choose. Non-interactive submits (`--yes`) use the exact required amount unless you also pass `--approve-max`.
+
 **Flag conventions:**
 
 - **`--side`** — team name, last-token nickname (`lakers`), or any alias (`LAL`) for moneyline / spread; `over` or `under` for total.
@@ -205,7 +231,7 @@ Confirm with Enter (or `y`) and the CLI signs (one Foundry passphrase prompt, ev
 
   Validation: `now < expiry ≤ now + 1y` (protocol cap).
 
-- **`--approve-max`** opts into unlimited USDC approval when an approval is needed before signing. The default is to approve **exactly the required amount** for this submit — explicit and one-shot rather than open-ended. Pass `--approve-max` when you'd rather grant a single unlimited approval and avoid future approval prompts; the CLI surfaces the policy in the preview block before the prompt either way.
+- **`--approve-max`** — non-interactive shortcut, **only applied with `--yes`**. When set alongside `--yes`, an unlimited USDC approval is sent if approval is needed; without it, `--yes` defaults to the exact required amount. **Ignored in interactive mode** — there the CLI prompts for the approval amount (default exact-required) and you type `max` if you want unlimited at that step. The previous "policy in the preview block" language was removed when the flow split into a confirm-then-approve sequence; the amount choice now lives at the dedicated approval prompt, not in the preview header.
 
 You can see your commitment on the orderbook (replace `<yourAddress>` with the address Foundry printed in step 2):
 
@@ -282,7 +308,7 @@ It burns real LINK + a USDC fee on every call. The SDK pre-flights LINK→Oracle
 
 **`Failed to decrypt keystore`** — wrong passphrase, or the file is not a v3 keystore. Foundry always produces v3; this is almost always the passphrase.
 
-**`OspexAllowanceError: insufficient allowance`** — `ospex commitments submit` (high-level) auto-approves exactly the required amount before signing, so this should be rare. Pass `--approve-max` to grant unlimited at the same step. For raw / scripted flows, run `ospex commitments approve <amount\|max>` separately. If you're creating contests, the LINK and USDC allowances target different modules (OracleModule and TreasuryModule, respectively); the CLI prompts on demand.
+**`OspexAllowanceError: insufficient allowance`** — `ospex commitments submit` (high-level) prompts for an approval and runs it before signing, so this should be rare. Interactive runs default the amount prompt to the exact-required value — type `max` instead if you want unlimited. Non-interactive runs (`--yes`) default to exact-required; pass `--approve-max` alongside `--yes` for unlimited. For raw / scripted flows that approve out-of-band, run `ospex commitments approve <amount\|max>` separately. If you're creating contests, the LINK and USDC allowances target different modules (OracleModule and TreasuryModule, respectively); the CLI prompts on demand.
 
 **`OspexChainError: <selector>`** — a transaction reverted. The selector usually decodes to a known contract error (e.g., `MatchingModule__NonceMustIncrease`). Read the printed reason; if unclear, file an issue with the tx hash.
 
