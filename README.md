@@ -44,7 +44,10 @@ ospex odds show <contestId>                # one-shot snapshot of upstream refer
 ospex odds watch <contestId>               # streaming subscription (line-delimited JSON with --json)
 
 # Chain writes — require ospex init + a configured keystore
-ospex commitments approve max                                # approve PositionModule for unlimited USDC
+ospex approvals setup --risk-usdc 50                         # blessed multi-spender path (also auto-includes a small fee budget)
+ospex commitments approve 5                                  # single-spender shortcut: PositionModule for 5 USDC (decimal)
+ospex commitments approve max                                # …or unlimited
+ospex commitments approve-raw 5000000                        # raw 6-decimal-units form for power users / scripts
 
 # High-level submit (domain-language inputs + win/lose/push preview).
 # Interactive: prompts for an amount with the exact-required value as default;
@@ -178,7 +181,8 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex commitments show <hash-or-prefix>` | Single commitment lookup. Accepts a full EIP-712 hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars). Resolves over all statuses (cancelled / expired rows included). |
 | `ospex commitments list [... --speculation <id> ...]` | Existing list extended with `--speculation` filter. |
 | `ospex commitments list [--maker --scorer --contest-id --status …]` | Lists commitments. Defaults to `open,partially_filled` and active rows. |
-| `ospex commitments approve <amount\|max>` | Approve PositionModule for USDC (M2). |
+| `ospex commitments approve <decimal-usdc\|max>` | Approve PositionModule for USDC (M2). Argument is decimal USDC (`5`, `0.25`) or `max`. Renders a confirmation prompt before signing; pass `--yes` to skip. For raw 6-decimal-units, use `commitments approve-raw`. The blessed multi-spender path is `ospex approvals setup --risk-usdc <n>`. |
+| `ospex commitments approve-raw <wei6\|max>` | Same as `approve` but takes a raw 6-decimal-units integer (e.g. `5000000` = 5 USDC). Power-user / scripted-flow shortcut; otherwise prefer `approve`. |
 | `ospex commitments submit [--speculation\|--contest --market --line] --side --odds --risk-usdc [--expiry --nonce --yes --json --approve-max]` | High-level submit. Domain-language inputs (`--side lakers --odds 2.50 --risk-usdc 1`) + a win/lose/push preview before signing. `--json` alone = preview only (no signing); `--yes --json` = preview + post-submit result. Interactive flow asks for the approval amount with exact-required as the default — type `max` for unlimited. Non-interactive (`--yes`) defaults to exact-required; pass `--approve-max` alongside `--yes` for unlimited. |
 | `ospex commitments submit-raw <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>` | Protocol-level escape hatch — same canonical-tuple form as the original `submit`. Use when you already have raw protocol values; otherwise prefer `submit`. |
 | `ospex commitments match <hash-or-prefix> [--risk-usdc <decimal>] [--yes --json --approve-max]` | Take a commitment as the taker (M2). Renders a preview with both `taker risks` and `maker fill` lines before signing; pass `--yes` to skip the prompt. Accepts a full hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars). `--risk-usdc` is the **taker** desired risk / max outlay in decimal USDC (e.g. `--risk-usdc 0.5`); default is full fill. `--json` alone = preview only (no tx); `--yes --json` = preview + post-submit result. |
