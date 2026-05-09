@@ -311,7 +311,7 @@ ospex commitments match "$HASH" --json
 ospex commitments match "$HASH" --yes --json
 ```
 
-`--json` alone is preview-only (no signer is unlocked, no tx is sent). `--yes --json` runs the full flow and emits `{ schemaVersion, preview, result: { txHash, status, blockNumber, takerRiskWei6, fillMakerRiskWei6 } }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
+`--json` alone is preview-only — no transaction is signed or sent. The signer may briefly unlock to derive the taker address (for the `selfMatch` flag and the allowance preflight), which mirrors how `commitments submit --json` works; on a non-TTY run with no cached session, the underlying passphrase prompt fails. Pre-cache a session via `ospex wallet unlock` (15-min TTL) if you need preview-only output from a script. `--yes --json` runs the full flow and emits `{ schemaVersion, preview, result: { txHash, status, blockNumber, takerRiskWei6, fillMakerRiskWei6 } }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
 
 `--approve-max` is the non-interactive shortcut for unlimited USDC approval; without it, `--yes` approves the exact amount needed.
 

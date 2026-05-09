@@ -3,23 +3,32 @@
  * domain-language match. Mirrors `commitments submit`'s preview /
  * confirm / approve / sign flow:
  *
+ *   0. Early non-TTY guard. Refuses runs without `--yes` on
+ *      non-interactive stdin BEFORE any signer-unlock work, so the
+ *      user gets an actionable "--yes is required" message instead of
+ *      a cryptic "hidden input requires a TTY" failure from the
+ *      keystore passphrase prompt. `--json` alone is allowed past the
+ *      guard so an agent's preview-only path stays consumable from a
+ *      script (see step 3).
  *   1. Resolve input via `client.commitments.resolveByPrefix` so the
  *      truncated `0x…` from `commitments list` is actionable. Echoes
  *      the full resolved hash to stderr if the input was a prefix.
  *   2. Call `client.commitments.prepareMatch({ commitment, ... })` —
- *      no signing yet. Returns a structured `MatchPreview`.
+ *      no signing yet. Returns a structured `MatchPreview`. Note:
+ *      preparing the preview reads the taker address from the signer
+ *      (for `selfMatch` and the allowance preflight), so the keystore
+ *      passphrase prompt may fire even on the `--json`-alone path
+ *      when no session is cached. This mirrors `commitments submit`.
  *   3. `--json` alone (no `--yes`) → emit `MatchPreviewEnvelope`,
  *      exit. Agent flow: inspect tuple before deciding whether to
  *      execute.
- *   4. Refuse non-TTY without `--yes` — would hang on a prompt nobody
- *      can answer.
- *   5. Render the preview to stderr; prompt to confirm unless `--yes`.
+ *   4. Render the preview to stderr; prompt to confirm unless `--yes`.
  *      Decline → exit 130 (Ctrl-C convention).
- *   6. Run any required approvals (commitment-risk on PositionModule;
+ *   5. Run any required approvals (commitment-risk on PositionModule;
  *      lazy-creation-fee on TreasuryModule when the commitment matches
  *      a not-yet-created speculation). `--approve-max` non-interactive
  *      shorthand for unlimited; otherwise prompt.
- *   7. Call `client.commitments.matchFromPreview(preview)` — always
+ *   6. Call `client.commitments.matchFromPreview(preview)` — always
  *      re-fetches and re-checks state immediately before sending.
  *
  * `--risk-usdc` is the TAKER's desired risk / max outlay (USDC
@@ -86,6 +95,22 @@ export const commitmentsMatchCommand = new Command('match')
     const approveMax = opts.approveMax === true;
     const isInteractive = process.stdin.isTTY === true;
 
+    // ── 0. Early non-TTY guard. ────────────────────────────────────
+    // Refuses runs that would hang on a confirmation prompt (no
+    // `--yes`) before we trigger any signer unlock. The keystore
+    // passphrase prompt that loadSigner runs is hidden-stdin and
+    // fails outright on non-TTY runs with a less-actionable error
+    // than the message below; better to fail here with an actionable
+    // hint. `--json` alone (preview-only for agents) is allowed past
+    // this guard — it may still hit the hidden-input error if no
+    // session is cached, but that is a separate, documented condition
+    // unrelated to the no-confirmation case Hermes flagged.
+    if (!skipPrompt && !wantJson && !isInteractive) {
+      throw new OspexValidationError(
+        '--yes is required for non-interactive runs of `commitments match`. Re-run with --yes.',
+      );
+    }
+
     const client = await getClient({ requiresSigner: true, requiresChain: true });
 
     // ── 1. Resolve input via the SDK's prefix resolver. ─────────────
@@ -115,14 +140,7 @@ export const commitmentsMatchCommand = new Command('match')
       return;
     }
 
-    // ── 4. Refuse non-TTY runs without --yes. ──────────────────────
-    if (!skipPrompt && !isInteractive) {
-      throw new OspexValidationError(
-        '--yes is required for non-interactive write commands. Re-run with --yes.',
-      );
-    }
-
-    // ── 5. Render preview + confirm (unless --yes). ────────────────
+    // ── 4. Render preview + confirm (unless --yes). ────────────────
     renderMatchPreview(preview);
     if (!skipPrompt) {
       const ok = await promptYesNo('Match?', true);
@@ -132,7 +150,7 @@ export const commitmentsMatchCommand = new Command('match')
       }
     }
 
-    // ── 6. Run approvals if needed. ────────────────────────────────
+    // ── 5. Run approvals if needed. ────────────────────────────────
     // commitment-risk → PositionModule (always present); lazy-creation-fee
     // → TreasuryModule (present iff speculation.mode === 'lazy').
     for (const row of preview.approvals) {
@@ -200,7 +218,7 @@ export const commitmentsMatchCommand = new Command('match')
       );
     }
 
-    // ── 7. Sign + send. matchFromPreview always re-fetches first. ──
+    // ── 6. Sign + send. matchFromPreview always re-fetches first. ──
     let result;
     try {
       result = await client.commitments.matchFromPreview(preview);

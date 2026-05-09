@@ -175,15 +175,15 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex contests scripts` | Show the EIP-712 script approvals (debug). |
 | `ospex speculations list [--contest --sport --status --limit --offset]` | List speculations across one or more contests. |
 | `ospex speculations show <speculationId>` | One speculation with its orderbook + parent contest context. |
-| `ospex commitments show <hash>` | Single commitment lookup by EIP-712 hash. |
+| `ospex commitments show <hash-or-prefix>` | Single commitment lookup. Accepts a full EIP-712 hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars). Resolves over all statuses (cancelled / expired rows included). |
 | `ospex commitments list [... --speculation <id> ...]` | Existing list extended with `--speculation` filter. |
 | `ospex commitments list [--maker --scorer --contest-id --status …]` | Lists commitments. Defaults to `open,partially_filled` and active rows. |
 | `ospex commitments approve <amount\|max>` | Approve PositionModule for USDC (M2). |
 | `ospex commitments submit [--speculation\|--contest --market --line] --side --odds --risk-usdc [--expiry --nonce --yes --json --approve-max]` | High-level submit. Domain-language inputs (`--side lakers --odds 2.50 --risk-usdc 1`) + a win/lose/push preview before signing. `--json` alone = preview only (no signing); `--yes --json` = preview + post-submit result. Interactive flow asks for the approval amount with exact-required as the default — type `max` for unlimited. Non-interactive (`--yes`) defaults to exact-required; pass `--approve-max` alongside `--yes` for unlimited. |
 | `ospex commitments submit-raw <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>` | Protocol-level escape hatch — same canonical-tuple form as the original `submit`. Use when you already have raw protocol values; otherwise prefer `submit`. |
-| `ospex commitments match <hash> [--risk <amount>]` | Take a commitment as the taker (M2). Prompts to approve. |
-| `ospex commitments cancel <hash> [--also-onchain]` | Off-chain cancel via signed DELETE (M2). With `--also-onchain` (M2.5) additionally calls `MatchingModule.cancelCommitment` for an authoritative cancel. |
-| `ospex commitments cancel-onchain <hash>` | On-chain cancel only — `MatchingModule.cancelCommitment(commitment)` (M2.5). Authoritative; cannot be reverted off-chain. |
+| `ospex commitments match <hash-or-prefix> [--risk-usdc <decimal>] [--yes --json --approve-max]` | Take a commitment as the taker (M2). Renders a preview with both `taker risks` and `maker fill` lines before signing; pass `--yes` to skip the prompt. Accepts a full hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars). `--risk-usdc` is the **taker** desired risk / max outlay in decimal USDC (e.g. `--risk-usdc 0.5`); default is full fill. `--json` alone = preview only (no tx); `--yes --json` = preview + post-submit result. |
+| `ospex commitments cancel <hash-or-prefix> [--also-onchain]` | Off-chain cancel via signed DELETE (M2). With `--also-onchain` (M2.5) additionally calls `MatchingModule.cancelCommitment` for an authoritative cancel. |
+| `ospex commitments cancel-onchain <hash-or-prefix>` | On-chain cancel only — `MatchingModule.cancelCommitment(commitment)` (M2.5). Authoritative; cannot be reverted off-chain. |
 | `ospex commitments cancel-all --contest-id --scorer --line [--new-min-nonce] [--dry-run]` | Bulk-cancel every open commitment from this maker on one speculation by raising the on-chain nonce floor (M2.5). |
 | `ospex commitments nonce-floor --maker --contest-id --scorer --line` | Read the current on-chain `s_minNonces[maker][specKey]` (M2.5). |
 | `ospex positions list <address>` | Position history for an address. |
