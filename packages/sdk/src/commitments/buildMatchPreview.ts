@@ -181,13 +181,23 @@ export function buildMatchPreview(args: BuildMatchPreviewArgs): MatchPreview {
         };
 
   // ── Approvals[] ───────────────────────────────────────────────────
+  // PositionModule.recordFill performs TWO safeTransferFrom calls — one
+  // for the maker side (`fillMakerRisk`) and one for the taker side
+  // (`takerRisk`). For a non-self match those land on different wallets
+  // and consume different ERC-20 allowances. For a SELF match both
+  // calls hit the same wallet, so the wallet's PositionModule USDC
+  // allowance has to cover the SUM. Mirrors the doubling already
+  // applied to the lazy-creation-fee row's `takerShareWei6` below.
+  const positionRequiredWei6 = selfMatch
+    ? takerRiskWei6 + fillMakerRiskWei6
+    : takerRiskWei6;
   const approvals: PreviewApproval[] = [
     {
       token: 'USDC',
       spender: args.positionModuleAddress,
-      required: takerRiskWei6.toString(),
+      required: positionRequiredWei6.toString(),
       current: args.takerPositionAllowanceWei6.toString(),
-      needsApproval: args.takerPositionAllowanceWei6 < takerRiskWei6,
+      needsApproval: args.takerPositionAllowanceWei6 < positionRequiredWei6,
       purpose: 'commitment-risk',
     },
   ];

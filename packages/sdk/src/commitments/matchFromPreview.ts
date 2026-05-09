@@ -142,6 +142,21 @@ export async function matchFromPreview(
   }
 
   // ── 6. Allowance re-check on chain. ───────────────────────────────
+  // Iterate every USDC approval row in the preview and assert each
+  // one's `required` against the on-chain allowance for that spender.
+  // Two reasons to use the preview's `approvals[]` rather than re-
+  // deriving from `economics.takerRiskWei6`:
+  //   (a) `commitment-risk` `required` already encodes the self-match
+  //       doubling (PositionModule pulls fillMakerRisk + takerRisk
+  //       from the same wallet on a self-match). Re-deriving from
+  //       takerRiskWei6 alone undercounts and lets a guaranteed
+  //       revert through.
+  //   (b) Lazy-mode adds a `lazy-creation-fee` row for TreasuryModule
+  //       that the prior single-row check ignored entirely. A wallet
+  //       that drained its TM allowance between preview and send
+  //       would slip past preflight and revert in TreasuryModule's
+  //       processSplitFee.
+  // Single source of truth = `preview.approvals[]`.
   const signer = ctx.requireSigner();
   const publicClient = ctx.requireChainClient();
   const taker = (await signer.getAddress()).toLowerCase() as Hex;
@@ -152,14 +167,16 @@ export async function matchFromPreview(
       { field: 'taker' },
     );
   }
-  const takerRiskWei6 = BigInt(preview.economics.takerRiskWei6);
-  await assertSufficientAllowance(
-    publicClient,
-    addresses.usdc as Hex,
-    taker,
-    addresses.positionModule as Hex,
-    takerRiskWei6,
-  );
+  for (const row of preview.approvals) {
+    if (row.token !== 'USDC') continue;
+    await assertSufficientAllowance(
+      publicClient,
+      addresses.usdc as Hex,
+      taker,
+      row.spender as Hex,
+      BigInt(row.required),
+    );
+  }
 
   // ── 7. Build calldata + send tx. ──────────────────────────────────
   // The OspexCommitment struct on chain mirrors the maker's signed
@@ -198,7 +215,7 @@ export async function matchFromPreview(
   return {
     txHash,
     receipt,
-    takerRisk: takerRiskWei6,
+    takerRisk: BigInt(preview.economics.takerRiskWei6),
     fillMakerRisk: previewFillMakerRiskWei6,
     commitment: fresh,
   };
