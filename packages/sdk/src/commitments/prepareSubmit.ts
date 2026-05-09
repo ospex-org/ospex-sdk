@@ -32,6 +32,7 @@ import {
   usdcDecimalToWei6,
 } from './decimals.js';
 import { buildSubmitPreview } from './buildSubmitPreview.js';
+import { SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6 } from '../contracts/constants.js';
 import { resolveSide, type ContestContextForResolve } from './resolveSide.js';
 import { readAllowance } from './allowance.js';
 import { readNonceFloor } from './nonce.js';
@@ -162,7 +163,13 @@ export async function prepareSubmit(
   const scorer = parent.scorer;
   const speculationKey = deriveSpeculationKey(contestIdBig, scorer, lineTicksProtocol);
 
-  let speculation: SpeculationMode;
+  // Input shape for the speculation discriminator — narrower than the
+  // public `SpeculationMode` because `buildSubmitPreview` enriches the
+  // lazy variant with `makerCreationFeeUSDC` from the per-chain wei6
+  // fee constant. We hand it the bare structural data here.
+  let speculation:
+    | { mode: 'existing'; speculationId: string }
+    | { mode: 'lazy'; speculationId: null; speculationKey: string };
   if (parent.pinnedSpeculation) {
     speculation = {
       mode: 'existing',
@@ -266,6 +273,11 @@ export async function prepareSubmit(
     maker,
     chainId,
     matchingModuleAddress: addresses.matchingModule as Hex,
+    // Per-side speculation creation fee for this chain. The preview's
+    // lazy variant exposes this as `makerCreationFeeUSDC`; existing
+    // mode ignores it. Looked up by chainId so a future chain with a
+    // different fee schedule wires through without touching call sites.
+    makerCreationFeeWei6: SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6[chainId] ?? 0n,
     expirySec,
     expirySource: source,
     matchTimeSec,

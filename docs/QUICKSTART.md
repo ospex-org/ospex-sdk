@@ -178,6 +178,32 @@ Submit? [Y/n]
 
 Confirm with Enter (or `y`) and the CLI signs (one Foundry passphrase prompt, even if a USDC approval has to land first), posts the EIP-712 commitment, and prints the hash plus `status: open`.
 
+If the speculation doesn't yet exist (no prior matches on this `(contestId, scorer, lineTicks)` tuple), the preview also surfaces the per-side speculation creation fee — paid only if YOUR commitment turns out to be the first match:
+
+```
+speculation:  not yet created — lazily created on first match
+              speculationKey=0x3b7b…
+              creation fee: +0.250000 USDC if you're the first to match
+              (your share of the protocol speculation-creation fee, split with the
+              counterparty; not pulled if a prior match already created the speculation)
+```
+
+If a USDC approval is required, the CLI shows the required-vs-current allowance and asks two short questions — first a Y/N consent, then the amount (which you can type as a number or `max` for unlimited):
+
+```
+USDC approval needed (commitment risk).
+  Required: 1 USDC
+  Approved: 0 USDC
+
+The PositionModule contract pulls this USDC from your wallet when this
+commitment matches on-chain. ...
+  Spender: 0x0DCd… (PositionModule)
+Allow PositionModule to spend USDC from your wallet? [Y/n]
+Amount in USDC (number, or "max" for unlimited) [1]
+```
+
+Default at the amount prompt is exactly the required amount — you opt in to a buffer (or `max`) only if you choose. Non-interactive submits (`--yes`) use the exact required amount unless you also pass `--approve-max`.
+
 **Flag conventions:**
 
 - **`--side`** — team name, last-token nickname (`lakers`), or any alias (`LAL`) for moneyline / spread; `over` or `under` for total.

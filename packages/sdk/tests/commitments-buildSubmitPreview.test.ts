@@ -48,6 +48,7 @@ const baseArgs = (overrides: Partial<BuildSubmitPreviewArgs> = {}): BuildSubmitP
   expirySec: 1778281200n,
   expirySource: 'default-match-time' as const,
   matchTimeSec: 1778281200n,
+  makerCreationFeeWei6: 250_000n, // canonical mainnet per-side share (0.25 USDC)
   nonce: 17_000_000_001n,
   positionModuleAddress: PM,
   usdcCurrentAllowanceWei6: 0n,
@@ -114,6 +115,30 @@ describe('buildSubmitPreview — raw EIP-712 block', () => {
     expect(p.market.speculation.mode === 'lazy' && p.market.speculation.speculationKey).not.toBe(
       '0xdeadbeef',
     );
+  });
+
+  it('lazy variant carries makerCreationFeeUSDC formatted from makerCreationFeeWei6', () => {
+    // The renderer surfaces this as "+X.XX USDC if you're the first
+    // to match" so the maker isn't surprised by the speculation
+    // creation fee at match time. Canonical mainnet share is 0.25 USDC.
+    const p = buildSubmitPreview(
+      baseArgs({
+        speculation: { mode: 'lazy', speculationId: null, speculationKey: '0xabcd' },
+        makerCreationFeeWei6: 250_000n,
+      }),
+    );
+    expect(p.market.speculation).toMatchObject({
+      mode: 'lazy',
+      makerCreationFeeUSDC: '0.250000',
+    });
+  });
+
+  it('existing variant has no makerCreationFeeUSDC field (no lazy creation fee applies)', () => {
+    const p = buildSubmitPreview(
+      baseArgs({ speculation: { mode: 'existing', speculationId: '999' } }),
+    );
+    expect(p.market.speculation).toEqual({ mode: 'existing', speculationId: '999' });
+    expect(p.market.speculation).not.toHaveProperty('makerCreationFeeUSDC');
   });
 
   it('passes existing speculation through unchanged (already canonical)', () => {

@@ -23,7 +23,29 @@ export type SideRole = 'away' | 'home' | 'over' | 'under';
 /** Discriminator for speculation existence at preview time. */
 export type SpeculationMode =
   | { mode: 'existing'; speculationId: string }
-  | { mode: 'lazy'; speculationId: null; speculationKey: string };
+  | {
+      mode: 'lazy';
+      speculationId: null;
+      speculationKey: string;
+      /**
+       * The maker's share of the speculation creation fee — paid ONLY
+       * if this commitment turns out to be the first match on the
+       * `speculationKey` (i.e., this match is what triggers lazy
+       * creation). Formatted decimal USDC string (`"0.250000"`); see
+       * `SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6` for the source
+       * value, and `TreasuryModule.processSplitFee` for the split
+       * mechanic. If the speculation already exists at match time
+       * (someone else triggered creation), no fee is charged.
+       *
+       * The fee is pulled from the maker's `TreasuryModule` allowance
+       * — a different spender from the `riskAmount` (which goes to
+       * `PositionModule`). The CLI surfaces this in the preview so
+       * the maker isn't surprised by a +0.25 USDC charge at match
+       * time, and the SDK's allowance preflight in `prepareSubmit`
+       * checks both spenders for lazy commitments (PR B).
+       */
+      makerCreationFeeUSDC: string;
+    };
 
 /** Three-valued outcome result on a single condition row. */
 export type OutcomeResult = 'win' | 'lose' | 'push';
