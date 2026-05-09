@@ -269,7 +269,22 @@ export interface HighLevelSubmitArgs {
   odds: string;
   /** Decimal USDC as string, e.g. "1" or "0.001". */
   riskUsdc: string;
-  /** ISO-8601 or unix-seconds. Default 24h from now. */
+  /**
+   * Expiry input. Three accepted forms (detection is by shape):
+   *   - duration: "30m", "4h", "1d", "1w" (suffix-letter)
+   *   - ISO-8601 / RFC3339: "2026-05-09T20:00:00Z" or "...-05:00"
+   *   - unix-seconds: "1715299200"
+   *
+   * Default (omitted): the contest's scheduled match time exactly —
+   * pregame commitments expire at tip-off so a stale price can't be
+   * filled after the game starts. If matchTime is missing or invalid,
+   * falls back to `now + 1h` (the preview annotates this as
+   * `source = 'missing-match-time-fallback'`); if matchTime is already
+   * past, the SDK throws — pass `expiry` explicitly to opt into a
+   * live/post-start commitment.
+   *
+   * Validation: `now < expiry ≤ now + 1y` (protocol cap).
+   */
   expiry?: string | number;
   /** Explicit nonce override. */
   nonce?: bigint;
