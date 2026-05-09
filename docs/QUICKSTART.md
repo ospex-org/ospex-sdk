@@ -1,8 +1,14 @@
 # Ospex quickstart
 
-Goal: zero to a placed commitment on Polygon mainnet in about ten minutes.
+From zero to your first bet on Polygon mainnet in about ten minutes. The shared setup (install, wallet, config, sanity-check) is six commands. After that, pick the path that matches what you want to do:
 
-This is the minimum-friction path. The longer manual playbook at [`MANUAL_INTEGRATION_TESTING.md`](./MANUAL_INTEGRATION_TESTING.md) covers full release validation; you don't need it.
+- **[Match an existing commitment](#match-an-existing-commitment)** — fastest. You take the other side of a bet someone else has posted. Read this first if you're a casual bettor.
+- **[Submit your own commitments](#submit-your-own-commitments)** — set the price yourself; wait for someone to fill it.
+- **[Create a contest](#create-a-contest)** — advanced. Mainnet only, requires LINK.
+
+After matching or submitting, see **[After the game: score, settle, claim](#after-the-game-score-settle-claim)** to collect winnings.
+
+The longer manual playbook at [`MANUAL_INTEGRATION_TESTING.md`](./MANUAL_INTEGRATION_TESTING.md) covers full release validation; you don't need it.
 
 ## Philosophy
 
@@ -20,7 +26,21 @@ Ospex never asks for your private key. You manage your wallet entirely via Found
 
 This guide assumes Polygon mainnet (chain id 137). For Polygon Amoy testnet substitute `chainId=80002`. Note: contest creation works on mainnet only — Amoy script approvals aren't shipped.
 
-## 1. Install the CLI
+## Vocabulary
+
+If you've used a sportsbook before, here's how Ospex's protocol terms map to the more familiar ones. The Ospex vocabulary matches the on-chain struct names; you'll see both in the wild.
+
+| Sportsbook            | Ospex          | Notes |
+|-----------------------|----------------|-------|
+| game / event          | contest        | A specific scheduled game (Padres @ Cardinals, 2026-05-08). |
+| market / line         | speculation    | A bettable line on a contest (moneyline, -3.5 spread, over 8.5 total). |
+| open offer / order    | commitment     | A signed EIP-712 order on the orderbook. |
+| placed bet            | position       | Your filled bet on chain (created when a commitment is matched). |
+| take the other side   | match          | Fill an existing commitment as the taker. |
+
+The rest of this guide uses the Ospex terms.
+
+## Install the CLI
 
 Distribution is via [GitHub releases](https://github.com/ospex-org/ospex-sdk/releases). Once a release is tagged, download `ospex-sdk-<ver>.tgz` and `ospex-cli-<ver>.tgz` from the release page, then skip to the **Install** step below — substitute the downloaded paths in the `yarn add` command.
 
@@ -51,7 +71,7 @@ You install **both** tarballs in the same `yarn add` command. The CLI uses the S
 
 The rest of the guide writes `ospex` for the binary; substitute `npx ospex` until it's on your PATH.
 
-## 2. Create or import a wallet via Foundry
+## Create or import a wallet via Foundry
 
 **Brand-new wallet** — Foundry generates the key in memory and never displays it. The first arg is the keystores *directory*; the second is the file name:
 
@@ -80,7 +100,7 @@ Either way, Foundry now owns an encrypted v3 keystore at `~/.foundry/keystores/o
 
 Fund the printed address with POL (gas), USDC (your stake), and — if you plan to create a contest — LINK.
 
-## 3. Configure Ospex
+## Configure Ospex
 
 ```bash
 ospex init
@@ -91,44 +111,109 @@ Answer the prompts:
 - **Network** — `137` for mainnet, `80002` for Amoy.
 - **API URL** — accept the default (production).
 - **RPC URL** — paste your Alchemy / Infura / QuickNode URL.
-- **Keystore path** — paste `~/.foundry/keystores/ospex-test` (or whatever name you used in step 2). Leading `~/` is expanded.
+- **Keystore path** — paste `~/.foundry/keystores/ospex-test` (or whatever name you used in the previous step). Leading `~/` is expanded.
 
 The values land in `~/.ospex/config.json`. From this point on, every Ospex command uses your Foundry keystore — no env vars, no shell-profile editing.
 
 If you'd rather not persist the keystore path (e.g. you're scripting against multiple wallets), leave it blank at the prompt and instead `export OSPEX_KEYSTORE_PATH=…` in the shell where you run Ospex. Env var beats config file when both are set.
 
-## 4. Sanity check
+## Verify readiness
 
 ```bash
-ospex health                      # Should report ok: true.
-ospex contests list --hours 168   # Should list upcoming contests.
-ospex wallet address              # Prompts for the Foundry passphrase. Prints your address.
+ospex doctor
 ```
 
-If `ospex wallet address` prompts you and prints the same address Foundry showed you in step 2, the wiring is correct. (Foundry-produced keystores omit the top-level `address` field, so Ospex derives it via the passphrase. Keystores produced by the legacy `ospex wallet import` flow include the field and skip the prompt.)
+Reports network status, balances (POL/USDC/LINK), allowances, and a "Ready to" matrix. Exit 0 means you can match commitments; the report's bottom **Next step** line points at exactly the command that unlocks the next capability when something's missing.
 
-## 5. Place a commitment
-
-Find an upcoming contest:
+Re-run after each step in the path sections below to confirm progress; it's also the canonical agent guard:
 
 ```bash
-ospex contests list --hours 168
+ospex doctor && ospex commitments match $hash
 ```
 
-Check current upstream market reference odds for the contest. These are not Ospex liquidity — but they're useful as a starting reference for the `--odds` you'll pass to `commitments submit`:
+If `ospex doctor` prompts you for the Foundry passphrase to derive your address, that's expected on fresh setups — pass `--address <0x…>` to inspect any wallet read-only without touching the keystore.
+
+---
+
+## Match an existing commitment
+
+The shortest path to your first bet — three or four commands once setup is done.
+
+### 1. Set up approvals
+
+One-line bulk approve, with sensible defaults:
+
+```bash
+ospex approvals setup --risk-usdc 50 --yes
+```
+
+This approves **PositionModule** for 50 USDC (your bet risk pool — the contract pulls from this allowance when one of your commitments is matched). When `--risk-usdc` is set alone, a small `--fee-usdc` budget is auto-included so the next match doesn't trigger a mid-bet approval prompt for the lazy speculation creation fee; pass `--fee-usdc 0` to opt out, or run `ospex approvals show` to verify what landed.
+
+### 2. Find a commitment
+
+```bash
+ospex contests list --hours 168                    # upcoming contests in the next week
+ospex commitments list --contest-id <contestId>    # open orderbook for one contest
+```
+
+The hash column in the output truncates to 8 hex chars (`0xe900c6dd…`). The truncated form is enough — every command that takes a commitment hash also accepts a unique 0x-prefixed prefix.
+
+(Optional) See current upstream reference odds for a contest:
 
 ```bash
 ospex odds show <contestId>
 ```
 
-Output shows all three markets (moneyline / spread / total) in both American and decimal odds, with a relative "last updated" stamp. Pass `--json` for a single JSON envelope (suitable for piping into a script). On Ospex you set your own price — these reference odds are a sanity check, not a required match.
+These are NOT Ospex liquidity — they're a sanity-check from external markets, not a price you need to match.
 
-> **`show` vs `watch`**: `ospex odds show` is the user-facing one-shot snapshot — single round-trip, exits. `ospex odds watch` is the agent-facing streaming primitive — opens a Realtime channel, prints line-delimited JSON in `--json` mode, runs until SIGINT. Use `show` to decide a price; use `watch` to react to upstream odds moves over time.
-
-Submit a commitment in domain language — pick a side, decimal odds, and decimal USDC risk:
+### 3. Match it
 
 ```bash
-# Moneyline, away side, 2.50 odds, $1 stake
+ospex commitments match 0xe900c6dd
+```
+
+Renders a preview block showing both **taker risk** (what you risk) and **maker fill** (how much of the maker's order you fill) — at +260 odds, e.g., a taker risking 1.6 USDC fully fills a maker risking 1 USDC; both numbers are visible so you can verify the trade. Self-matches surface a warning. If the commitment is on a not-yet-created speculation, the preview discloses the lazy creation fee (split 50/50 between maker and taker).
+
+Confirm with Enter (or `y`) to sign and send. The CLI prompts for your Foundry passphrase once; the resulting position appears in `ospex positions status <yourAddress>`.
+
+To take a partial fill, pass `--risk-usdc <n>`:
+
+```bash
+ospex commitments match 0xe900c6dd --risk-usdc 0.5
+```
+
+Pass `--yes` to skip the confirmation prompt for scripted use; pass `--json` (without `--yes`) to emit the preview envelope without signing.
+
+That's the bettor loop. After the game finishes, jump to [After the game](#after-the-game-score-settle-claim).
+
+---
+
+## Submit your own commitments
+
+Set the price yourself; wait for a taker to fill the other side. The maker path uses the same setup, plus a slightly bigger USDC budget if you plan to keep multiple commitments in flight.
+
+### 1. Set up approvals
+
+Same one-liner as the bettor path; size the risk budget for the total liability you're willing to have on the orderbook at once:
+
+```bash
+ospex approvals setup --risk-usdc 200 --yes
+```
+
+### 2. Pick a price
+
+```bash
+ospex odds show <contestId>
+```
+
+Shows all three markets (moneyline / spread / total) in both American and decimal odds with a relative "last updated" stamp. Pass `--json` for a single envelope you can pipe.
+
+> **`show` vs `watch`**: `show` is the user-facing one-shot snapshot; `watch` opens a Realtime channel and prints line-delimited JSON, runs until SIGINT. Use `show` to decide a price; use `watch` to react to upstream odds moves over time.
+
+### 3. Submit a commitment
+
+```bash
+# Moneyline, 2.50 odds, $1 stake
 ospex commitments submit \
   --speculation <speculationId> \
   --side lakers \
@@ -141,8 +226,7 @@ ospex commitments submit \
   --side lakers \
   --odds 2.50 --risk-usdc 1
 
-# Spread, home side at -3.5, $25 stake at 1.91 odds, by --contest (line implicit
-# from the unique speculation, or pass --line to lazy-create on first match)
+# Spread, home side at -3.5, $25 stake at 1.91 odds
 ospex commitments submit \
   --contest <contestId> --market spread \
   --side padres --line -3.5 \
@@ -173,12 +257,15 @@ Outcomes:
 Submit? [Y/n]
 ```
 
-(The `odds` line in the preview shows both decimal and American formats — `2.50 decimal / +150 american  [oddsTick=250]` — so the value you signed is unambiguous regardless of which format you typed.)
+(The `odds` line shows both decimal and American formats so the value you signed is unambiguous regardless of which format you typed.)
 
+Confirm with Enter (or `y`) and the CLI signs and posts the EIP-712 commitment. The hash plus `status: open` prints. List your active orders with:
 
-Confirm with Enter (or `y`) and the CLI signs (one Foundry passphrase prompt, even if a USDC approval has to land first), posts the EIP-712 commitment, and prints the hash plus `status: open`.
+```bash
+ospex commitments list --maker <yourAddress>
+```
 
-If the speculation doesn't yet exist (no prior matches on this `(contestId, scorer, lineTicks)` tuple), the preview also surfaces the per-side speculation creation fee — paid only if YOUR commitment turns out to be the first match:
+If the speculation hasn't been created yet (no prior matches on this `(contestId, scorer, lineTicks)` tuple), the preview surfaces the per-side speculation creation fee — paid only if YOUR commitment turns out to be the first match:
 
 ```
 speculation:  not yet created — lazily created on first match
@@ -188,72 +275,49 @@ speculation:  not yet created — lazily created on first match
               counterparty; not pulled if a prior match already created the speculation)
 ```
 
-If a USDC approval is required, the CLI shows the required-vs-current allowance and asks two short questions per row — first a Y/N consent, then the amount (which you can type as a number or `max` for unlimited):
-
-```
-USDC approval needed (commitment risk).
-  Required: 1 USDC
-  Approved: 0 USDC
-
-The PositionModule contract pulls this USDC from your wallet when this
-commitment matches on-chain. ...
-  Spender: 0x0DCd… (PositionModule)
-Allow PositionModule to spend USDC from your wallet? [Y/n]
-Amount in USDC (number, or "max" for unlimited) [1]
-```
-
-For a **lazy** commitment (no prior match has triggered speculation creation), the CLI also runs a second approval row for the maker's half of the speculation creation fee — `0.25 USDC` to TreasuryModule, pulled at match-time only IF this commitment is the one that triggers creation. The same TreasuryModule allowance covers contest-creation fees, so any leftover from `ospex contests create` already counts toward this requirement and the second row is skipped.
-
-```
-USDC approval needed (lazy speculation creation fee).
-  Required: 0.25 USDC
-  Approved: 0 USDC
-
-The TreasuryModule contract pulls this USDC from your wallet ONLY if your
-commitment is the first to match this speculation. ...
-  Spender: 0xCB56… (TreasuryModule)
-Allow TreasuryModule to spend USDC from your wallet? [Y/n]
-Amount in USDC (number, or "max" for unlimited) [0.25]
-```
-
-Default at the amount prompt is exactly the required amount — you opt in to a buffer (or `max`) only if you choose. Non-interactive submits (`--yes`) use the exact required amount unless you also pass `--approve-max`.
-
-**Flag conventions:**
+### Key flags
 
 - **`--side`** — team name, last-token nickname (`lakers`), or any alias (`LAL`) for moneyline / spread; `over` or `under` for total.
-- **`--odds`** — decimal odds (`"2.50"`, `"1.91"`) **or** American odds with an explicit sign (`"+150"`, `"-110"`). Format is detected from the input shape:
+- **`--odds`** — decimal (`"2.50"`, `"1.91"`) **or** American with an explicit sign (`"+150"`, `"-110"`). Format detected from input shape:
   - signed integer (no decimal point) → American
   - decimal with no sign → decimal
   - both signed AND decimal (`"+101.0"`) → ambiguous, rejected
   - integer with neither sign nor decimal point (`"101"`) → ambiguous, rejected — use `"+101"` for American or `"101.0"` for decimal
 
-  Protocol bound is `1.01 ≤ decimal ≤ 101.00`, equivalent to American `[-10000, -100]` ∪ `[+100, +10000]`. The preview block echoes both formats so you can verify before signing; negative-American values round to the protocol's 2-decimal precision (e.g. `-113` → decimal `1.88` → re-displayed as `-114`).
+  Protocol bound is `1.01 ≤ decimal ≤ 101.00`, equivalent to American `[-10000, -100]` ∪ `[+100, +10000]`. The preview echoes both formats so you can verify before signing; negative-American values round to the protocol's 2-decimal precision (e.g. `-113` → decimal `1.88` → re-displayed as `-114`).
 - **`--risk-usdc`** — decimal USDC string. `1`, `0.001`, `25`. Must be a multiple of `$0.0001` per the contract's lot-size rule.
-- **`--line`** — selected-side displayed line for spread / total. `--side padres --line -3.5` means "Padres -3.5" regardless of whether Padres are home or away; the resolver inverts to the protocol's away-side ticks under the hood. **Omit for `--market moneyline`** — moneyline is line-less, and the SDK errors (`OspexValidationError: --line is not valid for moneyline markets`) if `--line` is passed there.
+- **`--line`** — selected-side displayed line for spread / total. `--side padres --line -3.5` means "Padres -3.5" regardless of whether Padres are home or away; the resolver inverts to the protocol's away-side ticks under the hood. **Omit for `--market moneyline`** — moneyline is line-less, and the SDK errors if `--line` is passed there.
 - **`--yes`** skips the confirmation prompt and signs/posts. **`--json`** is output-format only and pairs with `--yes`:
   - `--json` alone → emits `SubmitPreviewEnvelope` (preview only, **no signing**). Use case: an agent inspects the resolved tuple before deciding whether to commit.
   - `--yes --json` → signs/posts and emits `SubmitJsonResult` (preview + result).
   - Any non-interactive run that would sign without `--yes` errors out rather than hanging on a prompt.
-- **`--expiry`** — when the signed commitment stops being matchable. Three accepted forms; the parser detects from the input shape:
-  - **duration** — `30m`, `4h`, `1d`, `1w` (suffix-letter; `s`/`m`/`h`/`d`/`w`). Sets expiry to `now + duration`.
-  - **ISO-8601 / RFC3339** — `2026-05-09T20:00:00Z`, `2026-05-09T15:00:00-05:00`. Use `Z` or an explicit `±HH:MM` offset; avoid timezone abbreviations like `CST`/`CDT` (parser-dependent).
-  - **unix-seconds** — `1715299200` (decimal-digits-only).
+- **`--expiry`** — when the signed commitment stops being matchable. Three accepted forms:
+  - **duration** — `30m`, `4h`, `1d`, `1w`. Sets expiry to `now + duration`.
+  - **ISO-8601 / RFC3339** — `2026-05-09T20:00:00Z`. Use `Z` or an explicit `±HH:MM` offset.
+  - **unix-seconds** — `1715299200`.
 
-  **Default**: contest's scheduled match time. A pregame commitment expires at tip-off by default — this protects you from a stale pregame price being filled minutes after the game starts. If you actually want post-start exposure (live betting), pass `--expiry` explicitly; the preview block surfaces a warning when `expiry > matchTime`.
+  **Default**: contest's scheduled match time. A pregame commitment expires at tip-off by default — this protects you from a stale pregame price being filled minutes after the game starts. If you want post-start exposure, pass `--expiry` explicitly; the preview block warns when `expiry > matchTime`. If the contest has no match time on file, the default falls back to `now + 1h`. If the match time has already passed, omitting `--expiry` errors out — pass it explicitly to opt into a live commitment. Validation: `now < expiry ≤ now + 1y` (protocol cap).
+- **`--approve-max`** — non-interactive shortcut, only applied with `--yes`. Sends an unlimited USDC approval if approval is needed. Without it, `--yes` defaults to the exact required amount. Ignored in interactive mode (the CLI prompts for the approval amount; type `max` if you want unlimited at that step). Mostly redundant once you've run `ospex approvals setup` up front.
 
-  Edge cases: if the contest has no match time on file, the default falls back to `now + 1h` and the preview labels it `source=missing-match-time-fallback`. If the contest's match time has already passed, omitting `--expiry` errors out — pass it explicitly to opt into a live commitment.
+### Cancel a commitment
 
-  Validation: `now < expiry ≤ now + 1y` (protocol cap).
-
-- **`--approve-max`** — non-interactive shortcut, **only applied with `--yes`**. When set alongside `--yes`, an unlimited USDC approval is sent if approval is needed; without it, `--yes` defaults to the exact required amount. **Ignored in interactive mode** — there the CLI prompts for the approval amount (default exact-required) and you type `max` if you want unlimited at that step. The previous "policy in the preview block" language was removed when the flow split into a confirm-then-approve sequence; the amount choice now lives at the dedicated approval prompt, not in the preview header.
-
-You can see your commitment on the orderbook (replace `<yourAddress>` with the address Foundry printed in step 2):
+Off-chain cancel (cheap, no gas):
 
 ```bash
-ospex commitments list --maker <yourAddress>
+ospex commitments cancel 0xe900c6dd
 ```
 
-If you've piped scripts in mind: `ospex wallet address --json` emits machine-readable JSON on stdout (`{"address":"0x..."}`) while the passphrase prompt goes to stderr, so `ospex wallet address --json | jq -r .address` works cleanly.
+Authoritative on-chain cancel (gas, can't be undone):
+
+```bash
+ospex commitments cancel-onchain 0xe900c6dd
+```
+
+Bulk cancel everything from your wallet on one speculation:
+
+```bash
+ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks>
+```
 
 ### Advanced: `commitments submit-raw` (escape hatch)
 
@@ -265,40 +329,81 @@ ospex commitments submit-raw 42 0xd846… 0 upper 250 1000
 
 Same arguments mirror the on-chain `OspexCommitment` struct. No preview block, no resolver. Use the high-level form unless you have a specific reason not to.
 
-## Matching as a taker
+---
 
-When somebody else has posted a commitment you'd like to take the other side of, the discovery path runs through `commitments list`:
+## Create a contest
 
-```bash
-# 1. Find an open commitment.
-ospex commitments list --contest-id <contestId>
-```
+Permissionless contest creation. Anyone can create a contest, but it requires LINK (for the Chainlink Functions verification call) and a small USDC fee, and it's mainnet-only. **Skip this section if you just want to bet** — the bettor and maker paths above don't need any of this.
 
-The table truncates the hash column to its first 8 hex chars (`0xe900c6dd…`). That truncated form is enough to identify the commitment — the CLI accepts a unique 0x-prefixed hex prefix as input to every command that takes a commitment hash (`show`, `match`, `cancel`, `cancel-onchain`). Pass `--full-hash` if you'd rather see the full 32-byte form in the table.
+### 1. Set up the operator-grade approvals
 
-```bash
-# 2. Preview the match without signing. Either the prefix from step 1
-#    or the full hash works.
-ospex commitments match 0xe900c6dd
-```
-
-The CLI renders a confirmation block with both the **taker risk** and the **maker fill** — at +260, e.g., a taker risking 1.6 USDC fully fills a maker risking 1 USDC; the preview shows both numbers so you can verify both sides of the fill. Self-matches surface a warning. If the commitment is on a not-yet-created speculation, the preview discloses the speculation creation fee (split 50/50 between maker and taker; full fee on a self-match).
+Add LINK + Oracle approval on top of the bettor setup:
 
 ```bash
-# 3. Confirm the prompt to send. Or pass --yes to skip.
-ospex commitments match 0xe900c6dd --yes
+ospex approvals setup --risk-usdc 200 --fee-usdc 5 --link 2 --yes
 ```
 
-`--risk-usdc` is the **taker** desired risk / max outlay. The matching engine derives the maker fill from this and the maker's odds:
+This approves PositionModule (bets), TreasuryModule (contest creation + lazy spec creation fees), and OracleModule (LINK for Chainlink Functions). `ospex approvals show` will reflect all three.
+
+### 2. Pick a game
 
 ```bash
-# Take only 0.5 USDC of risk (a partial fill).
-ospex commitments match 0xe900c6dd --risk-usdc 0.5 --yes
+ospex games list --sport mlb --hours 24
 ```
 
-### Agent / scripting flow
+Look for a row whose `creatable` column is `yes`. You can pass either the gameId (the stable UUID) or the slug — the resolver accepts both:
 
-Agents skip the human flow entirely:
+```bash
+ospex contests create --game-id <pasted-gameId>
+ospex contests create --game stl-sd-2026-05-08      # alias: slug or UUID
+```
+
+The slug is mutable (the writer renames doubleheaders), so for anything you persist between sessions stick with `--game-id`. Multiple matches or no match fail closed.
+
+### 3. (Optional) Submit the first commitment
+
+Once `contests create` returns a `contestId`, the writer populates current_odds within ~30s. You can use those reference odds as a starting price for your first commitment on the new contest — see [Submit your own commitments](#submit-your-own-commitments).
+
+`ospex contests create` waits for the Chainlink Functions verification callback by default and prints the new `contestId` only after `contestStatus=Verified` lands on chain (typically 10–30s). Pass `--no-wait` if you'd rather get the txHash immediately and poll separately with `ospex contests wait-verified <contestId>` — useful for scripted flows.
+
+The three external IDs the contract requires (rundown / sportspage / jsonodds) are resolved server-side from the gameId; you never deal with them directly. Operator-side details on the M4 pipeline live in the SDK's CLAUDE.md.
+
+---
+
+## After the game: score, settle, claim
+
+Once the underlying game ends, three permissionless on-chain steps move funds back to the winners. Anyone can run any of them — they're not gated to the maker / taker / contest creator.
+
+### 1. Score the contest
+
+```bash
+ospex contests score <contestId>
+```
+
+Submits an `OracleModule.scoreContestFromOracle` tx. Burns LINK + Chainlink Functions; usually whoever cares about settling first runs this. (If you only ever bet on contests other people created, you may never need to do this — operators or other players typically score them.)
+
+### 2. Settle each scored speculation
+
+```bash
+ospex settle <speculationId>
+```
+
+After `score` lands, each speculation's outcome is resolved. `settle` writes that outcome to chain so positions can be claimed.
+
+### 3. Claim winning positions
+
+```bash
+ospex claim-all                                    # sweep every claimable position on this wallet
+ospex claim <speculationId> --type upper|lower    # one specific position
+```
+
+`ospex positions status <yourAddress>` shows what's `active`, `claimable`, or `pendingSettle` (a winner waiting on `settle`) at any time. `claim-all` is the day-to-day shortcut; the typed form is for one-off claims when you want to be explicit.
+
+---
+
+## Agent / scripting flow
+
+Agents skip the human flow entirely. The pattern is the same for every write command — `--json` alone is preview-only; `--yes --json` is execute + emit result envelope.
 
 ```bash
 # Discover a candidate.
@@ -311,9 +416,19 @@ ospex commitments match "$HASH" --json
 ospex commitments match "$HASH" --yes --json
 ```
 
-`--json` alone is preview-only — no transaction is signed or sent. The signer may briefly unlock to derive the taker address (for the `selfMatch` flag and the allowance preflight), which mirrors how `commitments submit --json` works; on a non-TTY run with no cached session, the underlying passphrase prompt fails. Pre-cache a session via `ospex wallet unlock` (15-min TTL) if you need preview-only output from a script. `--yes --json` runs the full flow and emits `{ schemaVersion, preview, result: { txHash, status, blockNumber, takerRiskWei6, fillMakerRiskWei6 } }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
+`--json` alone is preview-only — no transaction is signed or sent. The signer may briefly unlock to derive the taker address (for the `selfMatch` flag and the allowance preflight), which mirrors how `commitments submit --json` works; on a non-TTY run with no cached session, the underlying passphrase prompt fails. Pre-cache a session via `ospex wallet unlock` (15-min TTL) if you need preview-only output from a script. `--yes --json` runs the full flow and emits `{ schemaVersion, preview, result }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
 
-`--approve-max` is the non-interactive shortcut for unlimited USDC approval; without it, `--yes` approves the exact amount needed.
+`--approve-max` is the non-interactive shortcut for unlimited USDC approval; without it, `--yes` approves the exact amount needed. (Mostly redundant if the agent runs `ospex approvals setup --risk-usdc <n> --yes` once during init.)
+
+For machine-readable wallet/readiness state:
+
+```bash
+ospex wallet address --json | jq -r .address      # passphrase prompt goes to stderr
+ospex doctor --address $WALLET --json             # full readiness envelope
+ospex approvals show --address $WALLET --json
+```
+
+---
 
 ## What's next
 
@@ -323,6 +438,9 @@ The CLI separates **one-shot user actions** (request → reply → exits) from *
 
 | Goal | Command |
 |---|---|
+| Check setup readiness for a wallet | `ospex doctor [--address <addr>]` |
+| Bulk-approve USDC + LINK budgets | `ospex approvals setup --risk-usdc <n> [--fee-usdc <n>] [--link <n>]` |
+| Inspect approvals for any wallet | `ospex approvals show [--address <addr>]` |
 | See current upstream reference odds for a contest | `ospex odds show <contestId>` |
 | Take an open commitment as the counterparty | `ospex commitments match <hash-or-prefix>` |
 | See your active and claimable positions | `ospex positions status <yourAddress>` |
@@ -341,30 +459,7 @@ The CLI separates **one-shot user actions** (request → reply → exits) from *
 
 The full command reference is in the [README](../README.md).
 
-## Creating a contest (advanced, mainnet-only)
-
-Anyone can create a contest — the protocol is permissionless. It's not part of the typical betting flow, but if you want to seed your own market:
-
-```bash
-# 1. Find a game you'd like to make a contest for.
-ospex games list --sport mlb --hours 24
-
-# 2. Pick a row whose `creatable` column is `yes`. You can pass either
-#    the gameId (the stable UUID) or the slug — the resolver accepts both.
-ospex contests create --game-id <pasted-gameId>
-ospex contests create --game stl-sd-2026-05-08      # alias: slug or UUID
-
-# 3. (Optional) See the upstream reference odds for the contest you just
-#    created. The writer populates current_odds within ~30s; you can use
-#    these as a starting price when you submit the first commitment.
-ospex odds show <contestId>
-```
-
-`--game` resolves a slug via `client.games.resolveGameId(input)`. The slug is mutable (the writer renames doubleheaders), so for anything you persist between sessions stick with `--game-id`. Multiple matches or no match fail closed.
-
-`ospex contests create` waits for the Chainlink Functions verification callback by default and prints the new `contestId` only after `contestStatus=Verified` lands on chain (typically 10–30 s). Pass `--no-wait` if you'd rather get the txHash immediately and poll separately with `ospex contests wait-verified <contestId>` — useful for scripted flows.
-
-It burns real LINK + a USDC fee on every call. The SDK pre-flights LINK→OracleModule and USDC→TreasuryModule allowances and prompts for them on demand. The three external IDs the contract requires (rundown / sportspage / jsonodds) are resolved server-side from the gameId; you never deal with them directly. Operator-side details on the M4 pipeline live in the SDK CLAUDE.md.
+---
 
 ## Troubleshooting
 
@@ -375,5 +470,7 @@ It burns real LINK + a USDC fee on every call. The SDK pre-flights LINK→Oracle
 **`OspexAllowanceError: insufficient allowance`** — `ospex commitments submit` (high-level) prompts for an approval and runs it before signing, so this should be rare. Interactive runs default the amount prompt to the exact-required value — type `max` instead if you want unlimited. Non-interactive runs (`--yes`) default to exact-required; pass `--approve-max` alongside `--yes` for unlimited. For scripted flows that approve out-of-band, run `ospex approvals setup --risk-usdc <n>` (decimal USDC) for the multi-spender path, or `ospex commitments approve <decimal-usdc|max>` for the single-spender shortcut (use `commitments approve-raw <wei6>` if you already have 6-decimal-units integers). If you're creating contests, the LINK and USDC allowances target different modules (OracleModule and TreasuryModule, respectively); the CLI prompts on demand.
 
 **`OspexChainError: <selector>`** — a transaction reverted. The selector usually decodes to a known contract error (e.g., `MatchingModule__NonceMustIncrease`). Read the printed reason; if unclear, file an issue with the tx hash.
+
+**`ospex doctor` says "Core API unreachable"** — every Ospex write goes through the public API (commitment posting, contest script approvals). Wallet state on-chain is fine; retry shortly. If it persists, the API may be temporarily down.
 
 **Public RPC errors / 401s** — you're using a public Polygon RPC. Switch to Alchemy / Infura / QuickNode in `ospex init`.
