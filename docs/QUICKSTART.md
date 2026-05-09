@@ -123,7 +123,7 @@ If you'd rather not persist the keystore path (e.g. you're scripting against mul
 ospex doctor
 ```
 
-Reports network status, balances (POL/USDC/LINK), allowances, and a "Ready to" matrix. Exit 0 means you can match commitments; the report's bottom **Next step** line points at exactly the command that unlocks the next capability when something's missing.
+Reports network status, balances (POL/USDC/LINK), allowances, and a "Ready to" matrix. Exit 0 means the wallet is **baseline-ready** to match commitments; each specific match still preflights exact balance, allowance, expiry, and fee requirements at submit/match time. The report's bottom **Next step** line points at exactly the command that unlocks the next capability when something's missing.
 
 Re-run after each step in the path sections below to confirm progress; it's also the canonical agent guard:
 
@@ -147,7 +147,7 @@ One-line bulk approve, with sensible defaults:
 ospex approvals setup --risk-usdc 50 --yes
 ```
 
-This approves **PositionModule** for 50 USDC (your bet risk pool — the contract pulls from this allowance when one of your commitments is matched). When `--risk-usdc` is set alone, a small `--fee-usdc` budget is auto-included so the next match doesn't trigger a mid-bet approval prompt for the lazy speculation creation fee; pass `--fee-usdc 0` to opt out, or run `ospex approvals show` to verify what landed.
+This approves **PositionModule** for 50 USDC (your bet risk pool — the contract pulls from this allowance both when you match someone else's commitment and when one of your own commitments is filled). When `--risk-usdc` is set alone, a small `--fee-usdc` budget is auto-included so the next match doesn't trigger a mid-bet approval prompt for the lazy speculation creation fee; pass `--fee-usdc 0` to opt out, or run `ospex approvals show` to verify what landed.
 
 ### 2. Find a commitment
 
@@ -172,7 +172,7 @@ These are NOT Ospex liquidity — they're a sanity-check from external markets, 
 ospex commitments match 0xe900c6dd
 ```
 
-Renders a preview block showing both **taker risk** (what you risk) and **maker fill** (how much of the maker's order you fill) — at +260 odds, e.g., a taker risking 1.6 USDC fully fills a maker risking 1 USDC; both numbers are visible so you can verify the trade. Self-matches surface a warning. If the commitment is on a not-yet-created speculation, the preview discloses the lazy creation fee (split 50/50 between maker and taker).
+Renders a preview block showing both **taker risk** (what you risk) and **maker fill** (how much of the maker's order you fill) — at +260 odds, e.g., a taker risking 1.6 USDC fully fills a maker risking 1 USDC; both numbers are visible so you can verify the trade. Self-matches surface a warning. If the commitment is on a not-yet-created speculation, the preview discloses the lazy creation fee (split 50/50 between maker and taker; if maker and taker are the same wallet, that wallet effectively covers both halves).
 
 Confirm with Enter (or `y`) to sign and send. The CLI prompts for your Foundry passphrase once; the resulting position appears in `ospex positions status <yourAddress>`.
 
@@ -403,7 +403,7 @@ ospex claim <speculationId> --type upper|lower    # one specific position
 
 ## Agent / scripting flow
 
-Agents skip the human flow entirely. The pattern is the same for every write command — `--json` alone is preview-only; `--yes --json` is execute + emit result envelope.
+Agents skip the human flow where commands provide explicit preview/execute modes. For **preview-capable flows** (`commitments submit`, `commitments match`, `approvals setup`), `--json` alone is preview-only and `--yes --json` executes and emits the result envelope. For **other write commands** (`contests score`, `settle`, `claim`, `claim-all`, `commitments cancel`, `commitments cancel-onchain`), `--json` is only an output format and the command may still send a transaction — check the command help and use `--dry-run` where available (e.g. `claim-all --dry-run`).
 
 ```bash
 # Discover a candidate.
@@ -416,7 +416,7 @@ ospex commitments match "$HASH" --json
 ospex commitments match "$HASH" --yes --json
 ```
 
-`--json` alone is preview-only — no transaction is signed or sent. The signer may briefly unlock to derive the taker address (for the `selfMatch` flag and the allowance preflight), which mirrors how `commitments submit --json` works; on a non-TTY run with no cached session, the underlying passphrase prompt fails. Pre-cache a session via `ospex wallet unlock` (15-min TTL) if you need preview-only output from a script. `--yes --json` runs the full flow and emits `{ schemaVersion, preview, result }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
+For `commitments match --json` specifically: no transaction is signed or sent. The signer may briefly unlock to derive the taker address (for the `selfMatch` flag and the allowance preflight), which mirrors how `commitments submit --json` works; on a non-TTY run with no cached session, the underlying passphrase prompt fails. Pre-cache a session via `ospex wallet unlock` (15-min TTL) if you need preview-only output from a script. `--yes --json` runs the full flow and emits `{ schemaVersion, preview, result }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
 
 `--approve-max` is the non-interactive shortcut for unlimited USDC approval; without it, `--yes` approves the exact amount needed. (Mostly redundant if the agent runs `ospex approvals setup --risk-usdc <n> --yes` once during init.)
 
