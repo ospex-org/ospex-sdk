@@ -171,6 +171,21 @@ export interface PreviewRaw {
   speculationKey: string;
 }
 
+/**
+ * Discriminator for what an approval is FOR. The CLI uses this to
+ * dispatch to the correct SDK approve method (`approve` for
+ * commitment-risk, `approveCreationFee` for the lazy-creation-fee row)
+ * and to label the row in the renderer. Adding a new value here
+ * requires a corresponding case in the CLI's approval-loop dispatcher.
+ *
+ *   - 'commitment-risk'     — USDC → PositionModule. Always present.
+ *   - 'lazy-creation-fee'   — USDC → TreasuryModule. Present only when
+ *                             `speculation.mode === 'lazy'` (i.e. the
+ *                             maker may pay 0.25 USDC of the protocol
+ *                             speculation creation fee at match time).
+ */
+export type ApprovalPurpose = 'commitment-risk' | 'lazy-creation-fee';
+
 export interface PreviewApproval {
   token: 'USDC' | 'LINK';
   spender: string;
@@ -178,6 +193,18 @@ export interface PreviewApproval {
   required: string;
   current: string;
   needsApproval: boolean;
+  /**
+   * Why this approval row exists. Use to label the row in the renderer
+   * (the CLI prints "(commitment risk)" / "(lazy creation fee)" after
+   * the spender so users running both rows see what each one is for)
+   * AND to dispatch to the correct SDK approve method (commitment-risk
+   * → `client.commitments.approve`; lazy-creation-fee →
+   * `client.commitments.approveCreationFee`). Pre-PR-B preview models
+   * had no `purpose` field and only ever produced one row; consumers
+   * pinning on the wire shape should treat the field as new and
+   * default-handle unknown values.
+   */
+  purpose: ApprovalPurpose;
 }
 
 export interface PreviewOutcome {

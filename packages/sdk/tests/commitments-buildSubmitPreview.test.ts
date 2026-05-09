@@ -49,6 +49,8 @@ const baseArgs = (overrides: Partial<BuildSubmitPreviewArgs> = {}): BuildSubmitP
   expirySource: 'default-match-time' as const,
   matchTimeSec: 1778281200n,
   makerCreationFeeWei6: 250_000n, // canonical mainnet per-side share (0.25 USDC)
+  treasuryModuleAddress: '0x'.padEnd(42, '4') as `0x${string}`,
+  treasuryUsdcCurrentAllowanceWei6: 0n,
   nonce: 17_000_000_001n,
   positionModuleAddress: PM,
   usdcCurrentAllowanceWei6: 0n,
@@ -155,8 +157,13 @@ describe('buildSubmitPreview — raw EIP-712 block', () => {
 });
 
 describe('buildSubmitPreview — approvals', () => {
-  it('flags needsApproval when current USDC allowance < required risk', () => {
-    const p = buildSubmitPreview(baseArgs({ usdcCurrentAllowanceWei6: 0n }));
+  it('existing speculation: single PositionModule row, flags needsApproval when allowance < risk', () => {
+    const p = buildSubmitPreview(
+      baseArgs({
+        speculation: { mode: 'existing', speculationId: '999' },
+        usdcCurrentAllowanceWei6: 0n,
+      }),
+    );
     expect(p.approvals).toHaveLength(1);
     expect(p.approvals[0]).toMatchObject({
       token: 'USDC',
@@ -164,11 +171,86 @@ describe('buildSubmitPreview — approvals', () => {
       required: '1000000',
       current: '0',
       needsApproval: true,
+      purpose: 'commitment-risk',
     });
   });
-  it('flags needsApproval=false when allowance is sufficient', () => {
-    const p = buildSubmitPreview(baseArgs({ usdcCurrentAllowanceWei6: 1_000_000n }));
+
+  it('existing speculation: needsApproval=false when allowance sufficient', () => {
+    const p = buildSubmitPreview(
+      baseArgs({
+        speculation: { mode: 'existing', speculationId: '999' },
+        usdcCurrentAllowanceWei6: 1_000_000n,
+      }),
+    );
     expect(p.approvals[0]?.needsApproval).toBe(false);
+  });
+
+  it('lazy speculation: adds a second TreasuryModule row for the creation fee', () => {
+    // PositionModule allowance covers risk; TreasuryModule allowance
+    // is short → second row's needsApproval=true.
+    const p = buildSubmitPreview(
+      baseArgs({
+        speculation: { mode: 'lazy', speculationId: null, speculationKey: '0xabcd' },
+        usdcCurrentAllowanceWei6: 1_000_000n, // covers risk
+        treasuryUsdcCurrentAllowanceWei6: 0n, // short on treasury
+        makerCreationFeeWei6: 250_000n,
+      }),
+    );
+    expect(p.approvals).toHaveLength(2);
+    expect(p.approvals[0]).toMatchObject({
+      purpose: 'commitment-risk',
+      spender: PM,
+      needsApproval: false,
+    });
+    expect(p.approvals[1]).toMatchObject({
+      purpose: 'lazy-creation-fee',
+      required: '250000',
+      current: '0',
+      needsApproval: true,
+    });
+  });
+
+  it('lazy speculation with sufficient treasury allowance: row present, needsApproval=false', () => {
+    const p = buildSubmitPreview(
+      baseArgs({
+        speculation: { mode: 'lazy', speculationId: null, speculationKey: '0xabcd' },
+        usdcCurrentAllowanceWei6: 1_000_000n,
+        treasuryUsdcCurrentAllowanceWei6: 250_000n, // exactly the required amount
+        makerCreationFeeWei6: 250_000n,
+      }),
+    );
+    expect(p.approvals).toHaveLength(2);
+    expect(p.approvals[1]?.needsApproval).toBe(false);
+  });
+
+  it('lazy with both allowances short: BOTH rows flagged needsApproval=true', () => {
+    const p = buildSubmitPreview(
+      baseArgs({
+        speculation: { mode: 'lazy', speculationId: null, speculationKey: '0xabcd' },
+        usdcCurrentAllowanceWei6: 0n,
+        treasuryUsdcCurrentAllowanceWei6: 0n,
+        makerCreationFeeWei6: 250_000n,
+      }),
+    );
+    expect(p.approvals).toHaveLength(2);
+    expect(p.approvals[0]?.needsApproval).toBe(true);
+    expect(p.approvals[1]?.needsApproval).toBe(true);
+  });
+
+  it('lazy with makerCreationFeeWei6=0n: omits the second row entirely (future-chain disabled fee)', () => {
+    // A future chain might disable the speculation creation fee. In
+    // that case, the lazy commit doesn't need a TreasuryModule row at
+    // all — the row would just be visual noise.
+    const p = buildSubmitPreview(
+      baseArgs({
+        speculation: { mode: 'lazy', speculationId: null, speculationKey: '0xabcd' },
+        usdcCurrentAllowanceWei6: 0n,
+        treasuryUsdcCurrentAllowanceWei6: 0n,
+        makerCreationFeeWei6: 0n,
+      }),
+    );
+    expect(p.approvals).toHaveLength(1);
+    expect(p.approvals[0]?.purpose).toBe('commitment-risk');
   });
 });
 

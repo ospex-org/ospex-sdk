@@ -57,6 +57,7 @@ import {
   OspexValidationError,
   usdcDecimalToWei6,
   wei6ToDecimalUSDC,
+  type ApprovalPurpose,
   type HighLevelSubmitArgs,
   type SubmitParent,
 } from '@ospex/sdk';
@@ -171,21 +172,33 @@ export const commitmentsSubmitCommand = new Command('submit')
       }
     }
 
-    // 6. Run approval if needed. The flow mirrors the contests-create
-    //    handler: an approval-required block (required vs current,
-    //    spender + token addresses, plain-language description) +
-    //    two prompts — Allow Y/N, then Amount-with-"max"-fallback.
+    // 6. Run approvals if needed. The preview's `approvals[]` may
+    //    carry up to TWO short-allowance rows for a lazy commit:
     //
-    //    Non-interactive (--yes): no prompts — uses --approve-max for
-    //    unlimited or the exact required amount otherwise. Both flags
-    //    stay supported for scripted flows; the interactive path no
-    //    longer mentions --approve-max in any inline-suggestion line
-    //    (the flag exists, but suggesting it nudges users toward
-    //    unlimited approval as a default, which we don't want).
-    const needsApproval = preview.approvals.find((a) => a.needsApproval);
-    if (needsApproval !== undefined && needsApproval.token === 'USDC') {
-      const requiredWei6 = BigInt(needsApproval.required);
-      const currentWei6 = BigInt(needsApproval.current);
+    //      - 'commitment-risk'    (USDC → PositionModule)  — always
+    //                             present in approvals[]; needsApproval
+    //                             true when allowance < riskAmount.
+    //      - 'lazy-creation-fee'  (USDC → TreasuryModule)  — present
+    //                             only for `speculation.mode === 'lazy'`;
+    //                             needsApproval true when TreasuryModule
+    //                             allowance < the maker's half of the
+    //                             speculation creation fee
+    //                             (250000 wei6 on Polygon mainnet).
+    //
+    //    For each short row we run the contests-create-style prompts
+    //    (Allow Y/N, then Amount with "max" fallback) and dispatch to
+    //    the matching SDK approve method by `purpose`. Multiple
+    //    approvals run sequentially — order is the order in
+    //    approvals[] (commitment-risk first, lazy-creation-fee second
+    //    for lazy commits).
+    //
+    //    Non-interactive (--yes) skips the prompts entirely:
+    //    --approve-max → unlimited; otherwise → the exact required
+    //    amount on each row.
+    for (const row of preview.approvals) {
+      if (!row.needsApproval || row.token !== 'USDC') continue;
+      const requiredWei6 = BigInt(row.required);
+      const currentWei6 = BigInt(row.current);
       let approveAmount: bigint | 'max';
 
       if (skipPrompt) {
@@ -193,22 +206,20 @@ export const commitmentsSubmitCommand = new Command('submit')
       } else {
         const requiredHuman = wei6ToDecimalUSDC(requiredWei6);
         const currentHuman = wei6ToDecimalUSDC(currentWei6);
+        const copy = approvalCopy(row.purpose);
         process.stderr.write(
-          `\nUSDC approval needed (commitment risk).\n` +
+          `\nUSDC approval needed (${copy.headerLabel}).\n` +
             `  Required: ${requiredHuman} USDC\n` +
             `  Approved: ${currentHuman} USDC\n` +
-            `\nThe PositionModule contract pulls this USDC from your wallet when this\n` +
-            `commitment matches on-chain. This is a standard ERC-20 \`approve\` — your tokens\n` +
-            `stay in your wallet until a counterparty matches. Approve more than the minimum\n` +
-            `if you want to skip this prompt on future submits.\n` +
-            `  Spender: ${needsApproval.spender} (PositionModule)\n`,
+            `\n${copy.description}\n` +
+            `  Spender: ${row.spender} (${copy.moduleName})\n`,
         );
         const allow = await promptYesNo(
-          `Allow PositionModule to spend USDC from your wallet?`,
+          `Allow ${copy.moduleName} to spend USDC from your wallet?`,
           true,
         );
         if (!allow) {
-          process.stderr.write('Approval declined; submit cancelled.\n');
+          process.stderr.write(`Approval declined; submit cancelled.\n`);
           process.exit(130);
         }
         const choice = await promptValue(
@@ -239,8 +250,14 @@ export const commitmentsSubmitCommand = new Command('submit')
         approveAmount === 'max'
           ? 'unlimited'
           : `${wei6ToDecimalUSDC(approveAmount)} USDC (${approveAmount} wei6)`;
-      process.stderr.write(`Approving USDC → ${needsApproval.spender} (${display})...\n`);
-      const approveResult = await client.commitments.approve(approveAmount);
+      process.stderr.write(`Approving USDC → ${row.spender} (${display})...\n`);
+      // Dispatch on `purpose`. Two paths for now (commitment-risk →
+      // PositionModule; lazy-creation-fee → TreasuryModule); a future
+      // ApprovalPurpose value would need a corresponding case here.
+      const approveResult =
+        row.purpose === 'lazy-creation-fee'
+          ? await client.commitments.approveCreationFee(approveAmount)
+          : await client.commitments.approve(approveAmount);
       process.stderr.write(
         `approve tx: ${approveResult.txHash} (status ${approveResult.receipt.status})\n`,
       );
@@ -320,5 +337,50 @@ function parseParent(opts: z.infer<typeof optionsSchema>): SubmitParent {
     contestId: opts.contest as string,
     market: opts.market,
     ...(opts.line !== undefined ? { line: opts.line } : {}),
+  };
+}
+
+interface ApprovalCopy {
+  /** Short label rendered in parens after "USDC approval needed" */
+  headerLabel: string;
+  /** Module name used in the spender label and the Allow-Y/N prompt */
+  moduleName: string;
+  /** Plain-language paragraph explaining when this allowance is consumed */
+  description: string;
+}
+
+/**
+ * Per-purpose copy for the approval-required block. Keep both arms in
+ * sync with `ApprovalPurpose`; adding a new purpose value in the SDK
+ * requires extending this switch (the call site falls back to the
+ * generic commitment-risk copy on unknown values, so an unhandled
+ * future purpose still renders something — but that's a regression
+ * smell to catch in code review, not the intended path).
+ */
+function approvalCopy(purpose: ApprovalPurpose): ApprovalCopy {
+  if (purpose === 'lazy-creation-fee') {
+    return {
+      headerLabel: 'lazy speculation creation fee',
+      moduleName: 'TreasuryModule',
+      description:
+        `The TreasuryModule contract pulls this USDC from your wallet ONLY if your\n` +
+        `commitment is the first to match this speculation (i.e. the match that triggers\n` +
+        `lazy creation). If a prior match already created the speculation by the time\n` +
+        `your commitment is filled, no fee is charged. Approve more than the minimum\n` +
+        `if you want a buffer for future lazy commits — the same allowance covers\n` +
+        `contest-creation fees too, so any leftover from \`ospex contests create\` already\n` +
+        `counts toward this requirement.`,
+    };
+  }
+  // 'commitment-risk' — the canonical PositionModule allowance for
+  // the maker's risk amount.
+  return {
+    headerLabel: 'commitment risk',
+    moduleName: 'PositionModule',
+    description:
+      `The PositionModule contract pulls this USDC from your wallet when this\n` +
+      `commitment matches on-chain. This is a standard ERC-20 \`approve\` — your tokens\n` +
+      `stay in your wallet until a counterparty matches. Approve more than the minimum\n` +
+      `if you want to skip this prompt on future submits.`,
   };
 }

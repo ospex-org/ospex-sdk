@@ -102,9 +102,19 @@ export interface BuildSubmitPreviewArgs {
    */
   matchTimeSec: bigint | null;
   nonce: bigint;
-  // Allowance preflight (the only token relevant to commit submit is USDC)
+  // Allowance preflight (the only token relevant to commit submit is USDC).
+  // Two spenders matter:
+  //   - PositionModule pulls the maker's `riskAmount` at match time
+  //     (the safeTransferFrom in PositionModule.recordFill).
+  //   - TreasuryModule pulls the maker's HALF of the protocol's
+  //     speculation-creation fee on the FIRST match of a lazy spec
+  //     (TreasuryModule.processSplitFee). For non-lazy commits this
+  //     never fires, so the second allowance row is omitted from the
+  //     `approvals[]` output.
   positionModuleAddress: Hex;
   usdcCurrentAllowanceWei6: bigint;
+  treasuryModuleAddress: Hex;
+  treasuryUsdcCurrentAllowanceWei6: bigint;
 }
 
 export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview {
@@ -153,6 +163,11 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
     matchTimeUnixSec: args.matchTimeSec !== null ? args.matchTimeSec.toString() : null,
   };
 
+  // Always include the PositionModule (commitment-risk) approval row.
+  // Add a second row for the lazy creation fee ONLY when this commit
+  // would trigger lazy speculation creation on its first match — a
+  // non-lazy commit never pays the fee, so the row would just be
+  // visual noise.
   const approvals: PreviewApproval[] = [
     {
       token: 'USDC',
@@ -160,8 +175,19 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
       required: args.riskWei6.toString(),
       current: args.usdcCurrentAllowanceWei6.toString(),
       needsApproval: args.usdcCurrentAllowanceWei6 < args.riskWei6,
+      purpose: 'commitment-risk',
     },
   ];
+  if (args.speculation.mode === 'lazy' && args.makerCreationFeeWei6 > 0n) {
+    approvals.push({
+      token: 'USDC',
+      spender: args.treasuryModuleAddress,
+      required: args.makerCreationFeeWei6.toString(),
+      current: args.treasuryUsdcCurrentAllowanceWei6.toString(),
+      needsApproval: args.treasuryUsdcCurrentAllowanceWei6 < args.makerCreationFeeWei6,
+      purpose: 'lazy-creation-fee',
+    });
+  }
 
   const contest: PreviewContest = {
     contestId: args.contestId.toString(),

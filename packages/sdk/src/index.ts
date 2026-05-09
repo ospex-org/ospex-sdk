@@ -106,6 +106,7 @@ export type {
   PreviewEconomics,
   PreviewExpiry,
   PreviewRaw,
+  ApprovalPurpose,
   PreviewApproval,
   PreviewOutcome,
   ExpirySource,

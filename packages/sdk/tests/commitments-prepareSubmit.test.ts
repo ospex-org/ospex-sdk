@@ -65,12 +65,36 @@ function buildSigner(): Signer {
   } as unknown as Signer;
 }
 
-function buildPublicClient(opts: { allowance?: bigint; nonceFloor?: bigint } = {}): unknown {
+function buildPublicClient(
+  opts: {
+    allowance?: bigint;
+    /**
+     * Optional override for TreasuryModule USDC allowance.
+     * When unspecified, every `allowance(...)` read returns `allowance`
+     * (back-compat with tests written before the lazy-creation-fee
+     * preflight added a 2nd spender). When set, the mock dispatches
+     * by `args[1]` (the spender) so PositionModule and TreasuryModule
+     * return distinct values. The dispatching arm matches against the
+     * test fixture's ADDRESSES.treasuryModule (last byte `b` per the
+     * padEnd, all-lower-case for case-insensitive comparison).
+     */
+    treasuryAllowance?: bigint;
+    nonceFloor?: bigint;
+  } = {},
+): unknown {
   const allowance = opts.allowance ?? 0n;
+  const treasuryAllowance = opts.treasuryAllowance;
   const nonceFloor = opts.nonceFloor ?? 0n;
+  const treasuryAddress = ADDRESSES.treasuryModule.toLowerCase();
   return {
-    readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
-      if (functionName === 'allowance') return allowance;
+    readContract: vi.fn(async ({ functionName, args }: { functionName: string; args: readonly unknown[] }) => {
+      if (functionName === 'allowance') {
+        if (treasuryAllowance !== undefined && typeof args[1] === 'string') {
+          const spender = (args[1] as string).toLowerCase();
+          return spender === treasuryAddress ? treasuryAllowance : allowance;
+        }
+        return allowance;
+      }
       if (functionName === 's_minNonces') return nonceFloor;
       throw new Error(`unexpected readContract: ${functionName}`);
     }),
@@ -125,12 +149,14 @@ function buildContext({
   spec,
   contest,
   allowance,
+  treasuryAllowance,
   nonceFloor,
   aliases,
 }: {
   spec?: SpeculationDetail;
   contest?: Contest;
   allowance?: bigint;
+  treasuryAllowance?: bigint;
   nonceFloor?: bigint;
   aliases?: TeamAlias[];
 }): CommitmentsContext {
@@ -152,9 +178,12 @@ function buildContext({
     requireSigner: () => buildSigner(),
     getChainId: () => 137,
     getAddresses: () => ADDRESSES,
-    requireChainClient: () => buildPublicClient({ allowance, nonceFloor }) as ReturnType<
-      CommitmentsContext['requireChainClient']
-    >,
+    requireChainClient: () =>
+      buildPublicClient({
+        allowance,
+        ...(treasuryAllowance !== undefined ? { treasuryAllowance } : {}),
+        nonceFloor,
+      }) as ReturnType<CommitmentsContext['requireChainClient']>,
     nonceCounter: new NonceCounter(),
     getContestsApi: () => contestsApi,
     getSpeculationsApi: () => speculationsApi,
@@ -837,5 +866,119 @@ describe('prepareSubmit — afterMatchTime warning flag', () => {
     const preview = await prepareSubmit(ctx, speculationArgs());
     expect(preview.expiry.afterMatchTime).toBe(false);
     expect(preview.expiry.source).toBe('default-match-time');
+  });
+});
+
+// ── TreasuryModule (lazy creation fee) allowance preflight ──────────
+
+describe('prepareSubmit — TreasuryModule allowance preflight (PR B)', () => {
+  it('lazy commit + sufficient PositionModule + zero TreasuryModule → 2-row approvals[], lazy row needsApproval=true', async () => {
+    // --contest path with no existing speculation → lazy mode. Maker
+    // has covered the risk via PositionModule but never touched
+    // TreasuryModule for this wallet, so the lazy creation fee row
+    // is short and the preview tells the user.
+    const contest = buildContest({ speculations: [] });
+    const ctx = buildContext({
+      contest,
+      allowance: 1_000_000n, // PositionModule covers the 1 USDC risk
+      treasuryAllowance: 0n,  // TreasuryModule has nothing
+    });
+    const preview = await prepareSubmit(ctx, {
+      parent: { kind: 'contest', contestId: '42', market: 'moneyline' },
+      side: 'lakers',
+      odds: '2.50',
+      riskUsdc: '1',
+    });
+    expect(preview.market.speculation.mode).toBe('lazy');
+    expect(preview.approvals).toHaveLength(2);
+    expect(preview.approvals[0]).toMatchObject({
+      purpose: 'commitment-risk',
+      needsApproval: false,
+    });
+    expect(preview.approvals[1]).toMatchObject({
+      purpose: 'lazy-creation-fee',
+      required: '250000', // 0.25 USDC = canonical mainnet maker share
+      current: '0',
+      needsApproval: true,
+    });
+  });
+
+  it('lazy commit + sufficient TreasuryModule allowance → lazy row present, needsApproval=false', async () => {
+    const contest = buildContest({ speculations: [] });
+    const ctx = buildContext({
+      contest,
+      allowance: 1_000_000n,
+      treasuryAllowance: 250_000n, // exactly meets the lazy fee
+    });
+    const preview = await prepareSubmit(ctx, {
+      parent: { kind: 'contest', contestId: '42', market: 'moneyline' },
+      side: 'lakers',
+      odds: '2.50',
+      riskUsdc: '1',
+    });
+    expect(preview.approvals).toHaveLength(2);
+    expect(preview.approvals[1]?.needsApproval).toBe(false);
+  });
+
+  it('lazy commit with both allowances short → BOTH rows flagged needsApproval', async () => {
+    const contest = buildContest({ speculations: [] });
+    const ctx = buildContext({
+      contest,
+      allowance: 0n,
+      treasuryAllowance: 0n,
+    });
+    const preview = await prepareSubmit(ctx, {
+      parent: { kind: 'contest', contestId: '42', market: 'moneyline' },
+      side: 'lakers',
+      odds: '2.50',
+      riskUsdc: '1',
+    });
+    expect(preview.approvals).toHaveLength(2);
+    expect(preview.approvals[0]?.needsApproval).toBe(true);
+    expect(preview.approvals[1]?.needsApproval).toBe(true);
+  });
+
+  it('existing speculation → no TreasuryModule preflight, no lazy-creation-fee row', async () => {
+    // The --speculation path always points at an existing speculation.
+    // Once the speculation exists, no creation fee is charged on
+    // future matches, so the SDK skips the TreasuryModule allowance
+    // read entirely (preview.approvals is single-row).
+    const ctx = buildContext({ allowance: 1_000_000n, treasuryAllowance: 0n });
+    const preview = await prepareSubmit(ctx, speculationArgs());
+    expect(preview.market.speculation.mode).toBe('existing');
+    expect(preview.approvals).toHaveLength(1);
+    expect(preview.approvals[0]?.purpose).toBe('commitment-risk');
+  });
+
+  it('--contest with matching existing speculation → no TreasuryModule preflight', async () => {
+    // --contest can resolve to either lazy (no spec) or existing (spec
+    // already created from a prior match). Existing → no fee → no
+    // TreasuryModule row.
+    const contest = buildContest({
+      speculations: [
+        {
+          speculationId: '100',
+          contestId: '42',
+          type: 'moneyline',
+          lineTicks: 0,
+          line: 0,
+          speculationStatus: 0,
+        },
+      ],
+    });
+    const ctx = buildContext({
+      contest,
+      allowance: 1_000_000n,
+      treasuryAllowance: 0n,
+    });
+    const preview = await prepareSubmit(ctx, {
+      parent: { kind: 'contest', contestId: '42', market: 'moneyline' },
+      side: 'lakers',
+      odds: '2.50',
+      riskUsdc: '1',
+    });
+    expect(preview.market.speculation.mode).toBe('existing');
+    expect(preview.approvals).toHaveLength(1);
+    expect(preview.approvals[0]?.purpose).toBe('commitment-risk');
   });
 });
