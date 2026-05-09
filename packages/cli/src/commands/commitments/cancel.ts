@@ -27,8 +27,11 @@ const optionsSchema = z.object({
 });
 
 export const commitmentsCancelCommand = new Command('cancel')
-  .description('Off-chain cancel via signed DELETE. Add --also-onchain for an authoritative cancel.')
-  .argument('<hash>', '0x-prefixed 32-byte commitment hash')
+  .description(
+    'Off-chain cancel via signed DELETE. Add --also-onchain for an authoritative cancel. ' +
+      'Accepts a full hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars).',
+  )
+  .argument('<hash-or-prefix>', 'full commitment hash, or unique 0x-prefixed hex prefix')
   .option(
     '--also-onchain',
     'after the DELETE, also call MatchingModule.cancelCommitment on chain (recommended)',
@@ -36,7 +39,6 @@ export const commitmentsCancelCommand = new Command('cancel')
   .option('--json', 'output as JSON')
   .action(async (hashArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
-    const hash = hashArg as Hex;
     const wantsOnchain = opts.alsoOnchain === true;
 
     // The off-chain DELETE only needs a signer (for the EIP-712 cancel
@@ -45,6 +47,18 @@ export const commitmentsCancelCommand = new Command('cancel')
       requiresSigner: true,
       requiresChain: wantsOnchain,
     });
+
+    // Cancel scope: only live commitments (open + partially_filled).
+    // Cancelling a cancelled row is a no-op; resolving a non-live row
+    // here surfaces a "no match within scope" error which is clearer
+    // than letting the API return success on a row that wasn't open.
+    const commitment = await client.commitments.resolveByPrefix(hashArg, {
+      status: ['open', 'partially_filled'],
+    });
+    const hash = commitment.commitmentHash as Hex;
+    if (commitment.commitmentHash.toLowerCase() !== hashArg.toLowerCase()) {
+      process.stderr.write(`Resolved ${hashArg} → ${commitment.commitmentHash}\n`);
+    }
 
     const offChainResult = await client.commitments.cancel(hash);
 

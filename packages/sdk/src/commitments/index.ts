@@ -34,7 +34,14 @@ import {
 } from './cancelOnchain.js';
 import { getNonceFloor, type GetNonceFloorArgs } from './getNonceFloor.js';
 import { match, type MatchArgs, type MatchResult } from './match.js';
+import { matchFromPreview } from './matchFromPreview.js';
+import { prepareMatch, type PrepareMatchArgs } from './prepareMatch.js';
 import { prepareSubmit } from './prepareSubmit.js';
+import {
+  resolveByPrefix,
+  type ResolveByPrefixOptions,
+} from './resolveByPrefix.js';
+import type { MatchPreview } from '../types/matchPreview.js';
 import {
   raiseMinNonce,
   type RaiseMinNonceArgs,
@@ -125,6 +132,47 @@ export class Commitments {
     return match(this.ctx, hash, opts);
   }
 
+  /**
+   * Resolve high-level match args into a structured preview without
+   * signing or sending. The CLI uses this to render the confirmation
+   * prompt; agents use it to inspect the resolved tuple (sides,
+   * economics, approvals, lazy-creation-fee state, warnings) before
+   * submitting.
+   *
+   * Caller passes `{ hash }` for fresh resolution OR `{ commitment }`
+   * when the row was already fetched (e.g. by `resolveByPrefix`) — the
+   * second form avoids a redundant `/v1/commitments/:hash` round trip.
+   */
+  prepareMatch(args: PrepareMatchArgs): Promise<MatchPreview> {
+    return prepareMatch(this.ctx, args);
+  }
+
+  /**
+   * Sign + send a previously-prepared match. Always re-fetches the
+   * commitment + contest immediately before sending and re-checks
+   * allowance on chain — agents move fast and a sub-second-old preview
+   * can hide a status flip / fill / nonce bump. Diverging state
+   * throws `OspexValidationError({ field })` so the caller can
+   * re-prepare and re-confirm.
+   */
+  matchFromPreview(preview: MatchPreview): Promise<MatchResult> {
+    return matchFromPreview(this.ctx, preview);
+  }
+
+  /**
+   * Resolve a full EIP-712 commitment hash OR a unique 0x-prefixed
+   * hex prefix (≥ 8 hex chars after `0x`) to a single `Commitment`.
+   * Used by the CLI to make the truncated hash in `commitments list`
+   * actionable — `match`, `cancel`, `cancel-onchain`, `show` all
+   * accept either form.
+   */
+  resolveByPrefix(
+    input: string,
+    options: ResolveByPrefixOptions = {},
+  ): Promise<Commitment> {
+    return resolveByPrefix(this.ctx, input, options);
+  }
+
   approve(amount: ApproveArgs): Promise<ApproveResult> {
     return approve(this.ctx, amount);
   }
@@ -174,5 +222,11 @@ export type {
 export type { CancelOnchainResult } from './cancelOnchain.js';
 export type { GetNonceFloorArgs } from './getNonceFloor.js';
 export type { MatchArgs, MatchResult } from './match.js';
+export type { PrepareMatchArgs } from './prepareMatch.js';
+export type {
+  ResolveByPrefixOptions,
+  StatusFilter,
+} from './resolveByPrefix.js';
+export { MIN_PREFIX_HEX_LEN, PAGE_LIMIT } from './resolveByPrefix.js';
 export type { RaiseMinNonceArgs, RaiseMinNonceResult } from './raiseMinNonce.js';
 export type { RawSubmitArgs, SubmitResult } from './submitRaw.js';

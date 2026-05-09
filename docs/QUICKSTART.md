@@ -265,6 +265,56 @@ ospex commitments submit-raw 42 0xd846… 0 upper 250 1000
 
 Same arguments mirror the on-chain `OspexCommitment` struct. No preview block, no resolver. Use the high-level form unless you have a specific reason not to.
 
+## Matching as a taker
+
+When somebody else has posted a commitment you'd like to take the other side of, the discovery path runs through `commitments list`:
+
+```bash
+# 1. Find an open commitment.
+ospex commitments list --contest-id <contestId>
+```
+
+The table truncates the hash column to its first 8 hex chars (`0xe900c6dd…`). That truncated form is enough to identify the commitment — the CLI accepts a unique 0x-prefixed hex prefix as input to every command that takes a commitment hash (`show`, `match`, `cancel`, `cancel-onchain`). Pass `--full-hash` if you'd rather see the full 32-byte form in the table.
+
+```bash
+# 2. Preview the match without signing. Either the prefix from step 1
+#    or the full hash works.
+ospex commitments match 0xe900c6dd
+```
+
+The CLI renders a confirmation block with both the **taker risk** and the **maker fill** — at +260, e.g., a taker risking 1.6 USDC fully fills a maker risking 1 USDC; the preview shows both numbers so you can verify both sides of the fill. Self-matches surface a warning. If the commitment is on a not-yet-created speculation, the preview discloses the speculation creation fee (split 50/50 between maker and taker; full fee on a self-match).
+
+```bash
+# 3. Confirm the prompt to send. Or pass --yes to skip.
+ospex commitments match 0xe900c6dd --yes
+```
+
+`--risk-usdc` is the **taker** desired risk / max outlay. The matching engine derives the maker fill from this and the maker's odds:
+
+```bash
+# Take only 0.5 USDC of risk (a partial fill).
+ospex commitments match 0xe900c6dd --risk-usdc 0.5 --yes
+```
+
+### Agent / scripting flow
+
+Agents skip the human flow entirely:
+
+```bash
+# Discover a candidate.
+HASH=$(ospex commitments list --contest-id 8 --json | jq -r '.[0].commitmentHash')
+
+# Preview without signing — inspect the resolved tuple, fee profile, warnings.
+ospex commitments match "$HASH" --json
+
+# When ready, execute. --yes --json emits the result envelope.
+ospex commitments match "$HASH" --yes --json
+```
+
+`--json` alone is preview-only — no transaction is signed or sent. The signer may briefly unlock to derive the taker address (for the `selfMatch` flag and the allowance preflight), which mirrors how `commitments submit --json` works; on a non-TTY run with no cached session, the underlying passphrase prompt fails. Pre-cache a session via `ospex wallet unlock` (15-min TTL) if you need preview-only output from a script. `--yes --json` runs the full flow and emits `{ schemaVersion, preview, result: { txHash, status, blockNumber, takerRiskWei6, fillMakerRiskWei6 } }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
+
+`--approve-max` is the non-interactive shortcut for unlimited USDC approval; without it, `--yes` approves the exact amount needed.
+
 ## What's next
 
 The CLI separates **one-shot user actions** (request → reply → exits) from **streaming / agent primitives** (subscribe → events → runs until SIGINT). Most day-to-day usage lives in the first table; the second is what an automated agent would build on.
@@ -274,10 +324,10 @@ The CLI separates **one-shot user actions** (request → reply → exits) from *
 | Goal | Command |
 |---|---|
 | See current upstream reference odds for a contest | `ospex odds show <contestId>` |
-| Take an open commitment as the counterparty | `ospex commitments match <hash>` |
+| Take an open commitment as the counterparty | `ospex commitments match <hash-or-prefix>` |
 | See your active and claimable positions | `ospex positions status <yourAddress>` |
-| Cancel an open commitment off-chain | `ospex commitments cancel <hash>` |
-| Cancel authoritatively on-chain | `ospex commitments cancel-onchain <hash>` |
+| Cancel an open commitment off-chain | `ospex commitments cancel <hash-or-prefix>` |
+| Cancel authoritatively on-chain | `ospex commitments cancel-onchain <hash-or-prefix>` |
 | Bulk-cancel all your orders on a speculation | `ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks>` |
 | Claim a winning position after settlement | `ospex claim <speculationId> --type upper\|lower` |
 | Claim everything claimable for a wallet | `ospex claim-all` |

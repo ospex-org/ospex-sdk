@@ -1,28 +1,31 @@
 /**
- * `ospex commitments show <hash>` — single-row lookup by EIP-712
- * commitment hash. Thin wrapper around `client.commitments.get(hash)`,
- * which itself wraps `GET /v1/commitments/:hash`.
+ * `ospex commitments show <hash-or-prefix>` — single-row lookup. Accepts
+ * either the full EIP-712 hash OR a unique 0x-prefixed hex prefix
+ * (≥ 8 hex chars after 0x). The prefix path resolves over ALL statuses
+ * (`status: 'any'`) — `show` is a read, no constraint on whether the
+ * commitment is still live.
  */
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { getClient } from '../../lib/client.js';
 import { formatOutput } from '../../lib/format.js';
-import type { Hex } from '@ospex/sdk';
 
 const optionsSchema = z.object({ json: z.boolean().optional() });
-const HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 
 export const commitmentsShowCommand = new Command('show')
-  .description('Show a single commitment by EIP-712 hash.')
-  .argument('<hash>', '0x-prefixed 32-byte commitment hash')
+  .description('Show a single commitment by full hash or unique 0x-prefixed prefix (≥ 8 hex chars).')
+  .argument('<hash-or-prefix>', 'full commitment hash, or unique 0x-prefixed hex prefix')
   .option('--json', 'output as JSON')
   .action(async (hashArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
-    if (!HASH_PATTERN.test(hashArg)) {
-      throw new Error('hash must be a 0x-prefixed 32-byte hex string');
-    }
     const client = await getClient({ requiresSigner: false });
-    const commitment = await client.commitments.get(hashArg as Hex);
+    // 'any' status — show is a read, resolves cancelled/expired/invalidated rows too.
+    const commitment = await client.commitments.resolveByPrefix(hashArg, {
+      status: 'any',
+    });
+    if (commitment.commitmentHash.toLowerCase() !== hashArg.toLowerCase()) {
+      process.stderr.write(`Resolved ${hashArg} → ${commitment.commitmentHash}\n`);
+    }
 
     if (opts.json === true) {
       formatOutput(commitment, { json: true });

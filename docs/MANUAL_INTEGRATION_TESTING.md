@@ -108,7 +108,9 @@ The flow that proves funds actually move. Irreplaceable; this section is **non-n
 |---|---|---|---|
 | 5.1 | Both wallets A and B have allowance set (4.1 covered A; repeat for B). | Both `allowance` calls return `2^256-1` on Polygonscan. | Approve flow on a second wallet. |
 | 5.2 | Wallet A: `ospex commitments submit-raw ...` (fresh inputs). Capture hash. | Hash printed. | Same as 4.2. |
-| 5.3 | Wallet B: `ospex commitments match <hashFromA>` | If allowance was missing, prompts to approve, prints both tx hashes; otherwise prints just the match tx hash. | `commitments.get(hash)` + match math + tx broadcast. |
+| 5.3 | Wallet B: `ospex commitments match <hashFromA>` (or its 0x+8hex prefix) | Preview block prints to stderr with both `taker risks` and `maker fill` lines; prompt to confirm. After Y, if allowance was missing prompts to approve, prints both tx hashes; otherwise prints just the match tx hash. | Prefix resolution + `prepareMatch` preview + match math + tx broadcast. |
+| 5.3a | Wallet B: `ospex commitments match <prefixFromA> --json` (no `--yes`) | Preview JSON envelope on stdout (`{ schemaVersion: 1, preview: {...} }`); no transaction sent. (The signer may unlock once to derive the taker address — same as `commitments submit --json`. To skip the passphrase prompt, pre-cache a session via `ospex wallet unlock`.) The "Resolved <prefix> → <fullHash>" echo (if prefix used) appears on stderr only — `... --json | jq .` parses cleanly. | `--json`-alone = preview-only (no tx); cached-session non-interactive mode. |
+| 5.3b | Wallet B: `ospex commitments match <prefixFromA> --yes --json` | Result envelope on stdout (`{ schemaVersion: 1, preview: {...}, result: { txHash, status, blockNumber, takerRiskWei6, fillMakerRiskWei6 } }`). | `--yes --json` = execute + emit. |
 | 5.4 | `cast call <MatchingModuleAmoy> "s_filledRisk(bytes32)(uint256)" <hashFromA> --rpc-url <rpcUrl>` | Non-zero, equal to `fillMakerRisk` from the match tx | Contract observed the fill. |
 | 5.5 | `cast call <PositionModuleAmoy> "getPosition(uint256,address,uint8)(uint256,uint256,address,uint32,bool,uint8)" <speculationId> <walletA> <makerPositionType> --rpc-url <rpcUrl>` (verify exact signature against `IPositionModule.sol`) | Position with `riskAmount = fillMakerRisk` | Maker side recorded. |
 | 5.6 | Same as 5.5 for wallet B with the **opposite** `positionType` | Position with `riskAmount = takerRisk` | Taker side recorded. |
@@ -128,11 +130,28 @@ Verifies the SDK's takerRisk math against the contract's revert-or-exact-fill ru
 | # | Step | Expected | Validates |
 |---|---|---|---|
 | 6.1 | Wallet A submits a 1000-unit commitment at oddsTick=200 (2.00). | `ospex commitments submit-raw ... 200 1000` succeeds. | — |
-| 6.2 | Wallet B: `ospex commitments match <hash> --risk 400` | Match succeeds; `commitments list` shows `filled_risk_amount` of 400 (taker side risks 400 = (400×100)/(200-100) → makerFill 400, takerRisk 400). | Partial-fill math + indexer projection. |
-| 6.3 | Wallet B again: `ospex commitments match <hash> --risk 600` | Commitment now `filled`. | Remaining-capacity match. |
-| 6.4 | `ospex commitments match <hash> --risk 100` (any wallet) | SDK throws `OspexValidationError` ("commitment has no remaining capacity") OR contract reverts `CommitmentFullyFilled` and SDK surfaces `OspexChainError`. | Fully-filled guard. |
+| 6.2 | Wallet B: `ospex commitments match <hash> --risk-usdc 0.000400 --yes` | Match succeeds; `commitments list` shows `filled_risk_amount` of 400 wei6 = 0.000400 USDC (taker side risks 400 = (400×100)/(200-100) → makerFill 400, takerRisk 400). | Partial-fill math + indexer projection + `--risk-usdc` decimal parsing. |
+| 6.3 | Wallet B again: `ospex commitments match <hash> --risk-usdc 0.000600 --yes` | Commitment now `filled`. | Remaining-capacity match. |
+| 6.4 | `ospex commitments match <hash> --risk-usdc 0.000100 --yes` (any wallet) | SDK throws `OspexValidationError` ("commitment has no remaining capacity") OR contract reverts `CommitmentFullyFilled` and SDK surfaces `OspexChainError`. | Fully-filled guard. |
 
 For other oddsTicks the math differs — work it through with `(takerDesired × 100 + (oddsTick - 100) - 1) / (oddsTick - 100)` to get the rounded maker fill.
+
+---
+
+## Section 6.5 — M2 match preview + lazy creation fee
+
+Verifies the `commitments match` preview block, the lazy-creation-fee approval row, and the maker-allowance warning.
+
+| # | Step | Expected | Validates |
+|---|---|---|---|
+| 6.5.1 | Wallet A: submit a fresh commitment on a contest where NO speculation exists yet at the chosen `(market, lineTicks)`. Capture hash. | `ospex commitments submit ...` succeeds. | Sets up a lazy-mode preview target. |
+| 6.5.2 | Wallet B: `ospex commitments match <hash> --json` (no `--yes`) | JSON envelope on stdout. `preview.speculation.mode === 'lazy'`. `preview.approvals` has TWO entries — one `commitment-risk` (PositionModule) and one `lazy-creation-fee` (TreasuryModule). `preview.speculation.lazyCreation.takerShareWei6` equals one half of the total fee (250000n on Polygon mainnet/Amoy). | Lazy detection + lazy-creation-fee approval row + per-side fee math. |
+| 6.5.3 | Wallet A: `ospex commitments match <hashFromOwnSubmit> --json` (self-match attempt) | `preview.selfMatch === true`; `preview.warnings` includes `'self-match'`. `preview.speculation.lazyCreation.takerShareWei6` equals the FULL fee (500000n) — same wallet pays both halves of `TreasuryModule.processSplitFee`. | Self-match flag + full-fee allowance for the same-wallet case. |
+| 6.5.4 | Revoke wallet A's TreasuryModule allowance to 0 (`ospex commitments approve 0` against TreasuryModule, or via Polygonscan write-contract). Then Wallet B: `ospex commitments match <hashFromA> --json` | `preview.warnings` includes `'maker-treasury-allowance-insufficient'`; `preview.speculation.lazyCreation.makerTreasuryAllowanceSufficient === false`. The renderer prints "⚠ maker's TreasuryModule allowance ... below the maker's share". | Maker-allowance warning surfaces before signing so the taker doesn't waste gas on a guaranteed revert. |
+| 6.5.5 | Match wallet B's commitment (full fill) so the speculation is now created. Then Wallet A submits a new commitment on the SAME `(market, lineTicks)` and Wallet B previews `--json`. | `preview.speculation.mode === 'existing'`; `preview.approvals` has ONLY ONE entry (`commitment-risk`); no lazy creation fee row. | Existing-mode detection after the spec is created on chain. |
+| 6.5.6 | `echo "" \| ospex commitments match <hash>` (non-TTY without `--yes`) | Errors out with "--yes is required for non-interactive runs of `commitments match`"; no signer unlock, no tx. The early guard fires BEFORE the keystore passphrase prompt would otherwise fail on hidden stdin. | Non-TTY refusal contract — friendly error. |
+| 6.5.7 | `ospex commitments match 0x` and `ospex commitments match 0xabc` | "prefix must be 0x followed by at least 8 hex chars" error. | Min-prefix-length validation. |
+| 6.5.8 | Two open commitments share the same first 8 hex chars (rare but defensive — to test, find any two with overlapping prefix or list filtered to wallet A). `ospex commitments match <sharedPrefix>`. | "ambiguous prefix `<input>`; matches `<hashA>`, `<hashB>`" error listing both candidate full hashes. | Ambiguity detection. |
 
 ---
 
