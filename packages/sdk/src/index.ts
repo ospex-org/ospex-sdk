@@ -169,3 +169,15 @@ export type {
   LazyCreationFee,
   BuildMatchPreviewArgs,
 } from './types/matchPreview.js';
+
+// Approvals snapshot — used by `ospex approvals show`, the upcoming
+// `ospex doctor`, and any consumer that needs a readiness view of the
+// configured wallet's USDC + LINK allowances against Ospex modules.
+export type {
+  AllowanceEntry,
+  ApprovalSpender,
+  ApprovalsSnapshot,
+  LinkAllowances,
+  ReadApprovalsArgs,
+  UsdcAllowances,
+} from './approvals/index.js';

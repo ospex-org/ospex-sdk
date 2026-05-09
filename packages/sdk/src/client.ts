@@ -25,6 +25,7 @@ import { ProtocolApi } from './api/protocol.js';
 import { SpeculationsApi } from './api/speculations.js';
 import { TeamsApi } from './api/teams.js';
 import { createReadClient } from './chain/client.js';
+import { Approvals } from './approvals/index.js';
 import { Commitments } from './commitments/index.js';
 import { NonceCounter } from './commitments/context.js';
 import { Contests } from './contests/index.js';
@@ -82,6 +83,7 @@ export interface OspexClientOptions {
 }
 
 export class OspexClient {
+  readonly approvals: Approvals;
   readonly commitments: Commitments;
   readonly contests: Contests;
   readonly games: Games;
@@ -161,6 +163,13 @@ export class OspexClient {
     this.positions = new Positions({
       api: this.api,
       positionsApi,
+      requireSigner: () => this.signer(),
+      getChainId: () => this._chainId,
+      getAddresses: () => this._addresses,
+      requireChainClient: () => this.requirePublicClient(),
+    });
+
+    this.approvals = new Approvals({
       requireSigner: () => this.signer(),
       getChainId: () => this._chainId,
       getAddresses: () => this._addresses,

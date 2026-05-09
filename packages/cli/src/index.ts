@@ -13,6 +13,7 @@ import { OspexError } from '@ospex/sdk';
 
 import { healthCommand } from './commands/health.js';
 import { initCommand } from './commands/init.js';
+import { approvalsShowCommand } from './commands/approvals/show.js';
 import { commitmentsListCommand } from './commands/commitments/list.js';
 import { commitmentsApproveCommand } from './commands/commitments/approve.js';
 import { commitmentsSubmitCommand } from './commands/commitments/submit.js';
@@ -92,6 +93,12 @@ function makeProgram(): Command {
   wallet.addCommand(walletLockCommand);
   wallet.addCommand(walletAddressCommand);
   program.addCommand(wallet);
+
+  const approvals = new Command('approvals').description(
+    'Inspect and manage USDC + LINK approvals against Ospex modules.',
+  );
+  approvals.addCommand(approvalsShowCommand);
+  program.addCommand(approvals);
 
   return program;
 }
