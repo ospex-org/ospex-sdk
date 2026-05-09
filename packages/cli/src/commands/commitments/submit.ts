@@ -17,7 +17,18 @@
  *                            ambiguous and rejected — use "+101" / "-101"
  *                            for American or "101.0" for decimal.
  *   --risk-usdc <decimal>    e.g. "1" or "0.001"
- *   --expiry <iso-or-unix>   default 24h from now
+ *   --expiry <value>         when the signed commitment stops being
+ *                            matchable. Three accepted forms:
+ *                              - duration:    "30m" / "4h" / "1d" / "1w"
+ *                              - ISO-8601:    "2026-05-09T20:00:00Z"
+ *                                             "2026-05-09T15:00:00-05:00"
+ *                              - unix-seconds: "1715299200"
+ *                            Default: contest's scheduled match time.
+ *                            Pregame commitments expire at tip-off by
+ *                            default — protects against stale pregame
+ *                            odds being filled after start. To allow
+ *                            post-start matching, pass --expiry
+ *                            explicitly (the preview shows a warning).
  *   --nonce <bigint>         override the SDK's nonce strategy
  *   --yes                    skip the [Y/n] prompt
  *   --json                   emit machine-readable JSON. Behavior pairs
@@ -77,7 +88,10 @@ export const commitmentsSubmitCommand = new Command('submit')
     'decimal (e.g. "2.50", "1.91") or American with explicit sign (e.g. "+150", "-110"). Plain integers without a sign or decimal point are ambiguous and rejected.',
   )
   .option('--risk-usdc <decimal>', 'decimal USDC risk (e.g. 1 or 0.001)')
-  .option('--expiry <iso-or-unix>', 'expiry timestamp; default 24h from now')
+  .option(
+    '--expiry <value>',
+    'duration ("30m", "4h", "1d", "1w"), ISO-8601 ("2026-05-09T20:00:00Z"), or unix-seconds. Default: contest match time.',
+  )
   .option('--nonce <bigint>', 'override the SDK nonce strategy')
   .option('--yes', 'skip the confirmation prompt')
   .option(

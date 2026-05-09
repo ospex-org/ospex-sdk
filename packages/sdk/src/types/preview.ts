@@ -28,6 +28,68 @@ export type SpeculationMode =
 /** Three-valued outcome result on a single condition row. */
 export type OutcomeResult = 'win' | 'lose' | 'push';
 
+/**
+ * How `expiry` was determined. Visible in the preview and `--json`
+ * output so consumers (and humans glancing at the preview block) can
+ * tell at a glance whether the value came from the user, the contest's
+ * scheduled match time, or a fallback path.
+ *
+ *   - 'default-match-time'           — user did not pass --expiry; we
+ *                                       defaulted to the contest's
+ *                                       scheduled match time exactly.
+ *                                       (Pregame commitments expire at
+ *                                       tip-off by default — protects
+ *                                       users from stale pregame odds
+ *                                       being filled after start.)
+ *   - 'missing-match-time-fallback'  — user did not pass --expiry AND
+ *                                       contest.matchTime was missing /
+ *                                       invalid, so we fell back to
+ *                                       now + 1h. Loud annotation so
+ *                                       the user notices.
+ *   - 'user-iso'                     — user passed an ISO-8601 / RFC3339
+ *                                       string (e.g. '2026-05-09T20:00:00Z').
+ *   - 'user-unix'                    — user passed a unix-seconds value.
+ *   - 'user-relative'                — user passed a duration string
+ *                                       like '30m', '4h', '1d', '1w';
+ *                                       expiry = now + duration.
+ */
+export type ExpirySource =
+  | 'default-match-time'
+  | 'missing-match-time-fallback'
+  | 'user-iso'
+  | 'user-unix'
+  | 'user-relative';
+
+/**
+ * Provenance + safety metadata for the canonical signed expiry. The
+ * signed value lives in `PreviewRaw.expiry` (string unix-sec); this
+ * block carries the metadata the renderer / `--json` consumers need
+ * to surface it back to the user.
+ */
+export interface PreviewExpiry {
+  /** Canonical signed value as unix-seconds string (mirrors raw.expiry). */
+  unixSec: string;
+  /** Human-readable ISO-8601 form (UTC, e.g. '2026-05-09T20:00:00Z'). */
+  iso: string;
+  source: ExpirySource;
+  /**
+   * True if the chosen expiry is strictly later than the contest's
+   * scheduled match time. The default (`source = default-match-time`)
+   * sets expiry to matchTime exactly, so this is false in the default
+   * case. It can only be true when the user explicitly opted in to a
+   * post-start expiry — live-betting exposure is intentional. The CLI
+   * renderer surfaces a warning line in this case.
+   */
+  afterMatchTime: boolean;
+  /**
+   * Contest's scheduled match time as unix-seconds string. Null when
+   * the contest had no matchTime (in which case `source` is
+   * `missing-match-time-fallback`). Useful for the
+   * `expiry > matchTime` UI computation.
+   */
+  matchTimeUnixSec: string | null;
+}
+
 /** What the user is risking + receiving + the protocol-level numerics. */
 export interface PreviewEconomics {
   oddsTick: number;
@@ -130,6 +192,12 @@ export interface SubmitPreview {
   market: PreviewMarket;
   side: PreviewSide;
   economics: PreviewEconomics;
+  /**
+   * Provenance + safety metadata for the canonical signed expiry. The
+   * raw signed value remains in `raw.expiry`; this block answers
+   * "where did that value come from?" + "is it after match start?".
+   */
+  expiry: PreviewExpiry;
   raw: PreviewRaw;
   approvals: PreviewApproval[];
   outcomes: PreviewOutcome[];
@@ -201,7 +269,22 @@ export interface HighLevelSubmitArgs {
   odds: string;
   /** Decimal USDC as string, e.g. "1" or "0.001". */
   riskUsdc: string;
-  /** ISO-8601 or unix-seconds. Default 24h from now. */
+  /**
+   * Expiry input. Three accepted forms (detection is by shape):
+   *   - duration: "30m", "4h", "1d", "1w" (suffix-letter)
+   *   - ISO-8601 / RFC3339: "2026-05-09T20:00:00Z" or "...-05:00"
+   *   - unix-seconds: "1715299200"
+   *
+   * Default (omitted): the contest's scheduled match time exactly —
+   * pregame commitments expire at tip-off so a stale price can't be
+   * filled after the game starts. If matchTime is missing or invalid,
+   * falls back to `now + 1h` (the preview annotates this as
+   * `source = 'missing-match-time-fallback'`); if matchTime is already
+   * past, the SDK throws — pass `expiry` explicitly to opt into a
+   * live/post-start commitment.
+   *
+   * Validation: `now < expiry ≤ now + 1y` (protocol cap).
+   */
   expiry?: string | number;
   /** Explicit nonce override. */
   nonce?: bigint;

@@ -40,7 +40,14 @@ export function renderPreview(preview: SubmitPreview, out: NodeJS.WritableStream
   out.write(
     `${INDENT}to win:       ${preview.economics.profitUSDC} USDC  (return = ${preview.economics.returnUSDC} USDC)\n`,
   );
-  out.write(`${INDENT}expiry:       ${formatExpiry(preview.raw.expiry)}\n`);
+  out.write(
+    `${INDENT}expiry:       ${formatExpiry(preview.expiry.unixSec)}  [source=${preview.expiry.source}]\n`,
+  );
+  if (preview.expiry.afterMatchTime) {
+    out.write(
+      `${INDENT}              ⚠ expiry is after contest match time — this commitment can remain matchable after start\n`,
+    );
+  }
 
   if (preview.market.speculation.mode === 'lazy') {
     out.write(

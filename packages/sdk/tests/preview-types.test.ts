@@ -17,6 +17,18 @@
 import { describe, expect, it } from 'vitest';
 import type { SubmitJsonResult, SubmitPreviewEnvelope } from '../src/types/preview.js';
 import type { SubmitResult } from '../src/commitments/submitRaw.js';
+// Root-importability check (Hermes PR #31 review): consumers must be
+// able to bring in the new expiry types from the package barrel
+// without reaching into internal subpaths. If either type is dropped
+// from the root export list, this import fails at compile time.
+import type {
+  ExpirySource as RootExpirySource,
+  PreviewExpiry as RootPreviewExpiry,
+} from '../src/index.js';
+import type {
+  ExpirySource as InternalExpirySource,
+  PreviewExpiry as InternalPreviewExpiry,
+} from '../src/types/preview.js';
 
 // Compile-time identity: SubmitJsonResult['result'] === SubmitResult.
 type AssertEqual<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2
@@ -35,6 +47,18 @@ type _EnvelopeSchemaVersionLiteral = AssertEqual<SubmitPreviewEnvelope['schemaVe
 const _envelopeSchemaVersionLiteral: _EnvelopeSchemaVersionLiteral = true;
 void _envelopeSchemaVersionLiteral;
 
+// Root export identity for the new expiry types — the type at the
+// root barrel must be the same type as the one in the internal
+// preview module. If someone re-types the root export by accident
+// (e.g. `export type ExpirySource = string`), this fails to compile.
+type _RootExpirySourceMatches = AssertEqual<RootExpirySource, InternalExpirySource>;
+const _rootExpirySourceMatches: _RootExpirySourceMatches = true;
+void _rootExpirySourceMatches;
+
+type _RootPreviewExpiryMatches = AssertEqual<RootPreviewExpiry, InternalPreviewExpiry>;
+const _rootPreviewExpiryMatches: _RootPreviewExpiryMatches = true;
+void _rootPreviewExpiryMatches;
+
 describe('SubmitJsonResult schema contract', () => {
   it('locks schemaVersion to literal 1', () => {
     // Runtime sanity check that mirrors the compile-time assertions.
@@ -45,6 +69,13 @@ describe('SubmitJsonResult schema contract', () => {
   it("result type structurally matches SubmitResult — see _ResultMatches type assertion above", () => {
     // The work is done at compile time; this case exists so the test
     // runner reports the assertion in `yarn test` output.
+    expect(true).toBe(true);
+  });
+
+  it('ExpirySource and PreviewExpiry are importable from the package root', () => {
+    // Compile-time check above (`_RootExpirySourceMatches` /
+    // `_RootPreviewExpiryMatches`); this case surfaces it in the
+    // runtime test output.
     expect(true).toBe(true);
   });
 });
