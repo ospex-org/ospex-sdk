@@ -1,15 +1,17 @@
 /**
- * Pure formatters for `client.approvals.read()` snapshots — used by
- * `ospex approvals show` for both human and JSON output, and (later) by
- * `ospex doctor` for its allowances section.
+ * Pure formatters for `client.approvals.read()` snapshots and
+ * `buildSetupPlan()` plans. Used by `ospex approvals show` and
+ * `ospex approvals setup`, and (later) by `ospex doctor` for its
+ * allowances section.
  *
  * The rendering is intentionally isolated from the command wiring so
- * the test suite can exercise it on synthetic snapshots without
- * spinning up a chain client.
+ * the test suite can exercise it on synthetic data without spinning
+ * up a chain client.
  */
 
 import { formatUnits } from 'viem';
 import type { ApprovalsSnapshot } from '@ospex/sdk';
+import type { PlanItem, SetupPlan } from './approvalsPlan.js';
 
 const INDENT = '  ';
 const MAX_UINT256 = (1n << 256n) - 1n;
@@ -101,7 +103,146 @@ export function renderApprovalsSnapshot(
       `${INDENT}${''.padEnd(16)}                    (only needed if you create or score contests)\n`,
     );
   }
-  out.write('\n');
+  out.write('\nRun `ospex approvals setup` to add or change.\n');
+}
+
+// ── Setup plan render ──────────────────────────────────────────────
+
+export interface JsonSetupPlanItem {
+  spenderModule: PlanItem['spenderModule'];
+  spender: string;
+  token: PlanItem['token'];
+  tokenAddress: string;
+  decimals: number;
+  purpose: string;
+  currentRaw: string;
+  currentFormatted: string;
+  autoIncluded: boolean;
+  action:
+    | { kind: 'send'; targetRaw: string; targetFormatted: string; targetIsMax: boolean }
+    | { kind: 'skip-already-approved'; targetRaw: string; targetFormatted: string }
+    | { kind: 'skip-not-requested' };
+}
+
+export interface JsonSetupPlan {
+  schemaVersion: 1;
+  owner: string;
+  chainId: number;
+  willSendCount: number;
+  items: JsonSetupPlanItem[];
+}
+
+export function setupPlanToJson(plan: SetupPlan): JsonSetupPlan {
+  return {
+    schemaVersion: 1,
+    owner: plan.owner,
+    chainId: plan.chainId,
+    willSendCount: plan.willSendCount,
+    items: plan.items.map(planItemToJson),
+  };
+}
+
+function planItemToJson(item: PlanItem): JsonSetupPlanItem {
+  const base = {
+    spenderModule: item.spenderModule,
+    spender: item.spender,
+    token: item.token,
+    tokenAddress: item.tokenAddress,
+    decimals: item.decimals,
+    purpose: item.purpose,
+    currentRaw: item.currentRaw.toString(),
+    currentFormatted: formatUnits(item.currentRaw, item.decimals),
+    autoIncluded: item.autoIncluded,
+  };
+
+  if (item.action.kind === 'send') {
+    return {
+      ...base,
+      action: {
+        kind: 'send',
+        targetRaw: item.action.targetRaw.toString(),
+        targetFormatted: formatUnits(item.action.targetRaw, item.decimals),
+        targetIsMax: item.action.targetIsMax,
+      },
+    };
+  }
+  if (item.action.kind === 'skip-already-approved') {
+    return {
+      ...base,
+      action: {
+        kind: 'skip-already-approved',
+        targetRaw: item.action.targetRaw.toString(),
+        targetFormatted: formatUnits(item.action.targetRaw, item.decimals),
+      },
+    };
+  }
+  return { ...base, action: { kind: 'skip-not-requested' } };
+}
+
+export function renderSetupPlan(plan: SetupPlan, out: NodeJS.WritableStream): void {
+  out.write(`\nApproval setup plan for ${plan.owner}  (${networkLabel(plan.chainId)})\n\n`);
+
+  let usdcExposureRaw = 0n;
+  for (const item of plan.items) {
+    out.write(renderPlanItemLine(item));
+    if (item.action.kind === 'send' && item.token === 'USDC') {
+      usdcExposureRaw += item.action.targetRaw;
+    }
+  }
+
+  if (plan.willSendCount === 0) {
+    out.write('\nNothing to do — all requested approvals already in place.\n');
+    return;
+  }
+
+  if (usdcExposureRaw > 0n) {
+    const exposure = isMaxAllowance(usdcExposureRaw)
+      ? 'unlimited (max) USDC'
+      : `${padDecimal(formatUnits(usdcExposureRaw, 6), 6)} USDC`;
+    out.write(`\nMax USDC exposure across new approvals: ${exposure}\n`);
+  }
+  out.write(`Sends ${plan.willSendCount} ${plan.willSendCount === 1 ? 'tx' : 'txs'} from ${plan.owner}.\n`);
+}
+
+function renderPlanItemLine(item: PlanItem): string {
+  const moduleLabel = moduleDisplayName(item.spenderModule).padEnd(16);
+  const tokenLabel = item.token;
+  if (item.action.kind === 'send') {
+    const amount = item.action.targetIsMax
+      ? `unlimited (max) ${tokenLabel}`
+      : `${formatTokenAmount(item.action.targetRaw, item.decimals, tokenLabel)}`;
+    const head = `${INDENT}Send  ${moduleLabel}  →  ${amount.padEnd(24)}${item.purpose}`;
+    const sub: string[] = [];
+    if (item.autoIncluded) {
+      sub.push(
+        `${INDENT}                              (auto-included alongside --risk-usdc; pass --fee-usdc 0 to skip)`,
+      );
+    }
+    if (item.currentRaw > 0n) {
+      sub.push(
+        `${INDENT}                              currently ${formatTokenAmount(item.currentRaw, item.decimals, tokenLabel)} approved`,
+      );
+    }
+    return [head, ...sub].join('\n') + '\n';
+  }
+  if (item.action.kind === 'skip-already-approved') {
+    const cur = formatTokenAmount(item.currentRaw, item.decimals, tokenLabel);
+    const tgt = formatTokenAmount(item.action.targetRaw, item.decimals, tokenLabel);
+    return `${INDENT}Skip  ${moduleLabel}     ${item.purpose}  —  already at ${cur} (≥ requested ${tgt})\n`;
+  }
+  return `${INDENT}Skip  ${moduleLabel}     ${item.purpose}  —  not requested\n`;
+}
+
+function formatTokenAmount(raw: bigint, decimals: number, tokenLabel: string): string {
+  if (isMaxAllowance(raw)) return `unlimited (max) ${tokenLabel}`;
+  if (decimals === 6) return `${padDecimal(formatUnits(raw, 6), 6)} ${tokenLabel}`;
+  return `${trimDecimal(formatUnits(raw, decimals), 6)} ${tokenLabel}`;
+}
+
+function moduleDisplayName(spender: PlanItem['spenderModule']): string {
+  if (spender === 'positionModule') return 'PositionModule';
+  if (spender === 'treasuryModule') return 'TreasuryModule';
+  return 'OracleModule';
 }
 
 function serializeEntry(spender: string, raw: bigint, decimals: number): JsonAllowanceEntry {

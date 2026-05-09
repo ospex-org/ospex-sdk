@@ -14,6 +14,7 @@ import { OspexError } from '@ospex/sdk';
 import { healthCommand } from './commands/health.js';
 import { initCommand } from './commands/init.js';
 import { approvalsShowCommand } from './commands/approvals/show.js';
+import { approvalsSetupCommand } from './commands/approvals/setup.js';
 import { commitmentsListCommand } from './commands/commitments/list.js';
 import { commitmentsApproveCommand } from './commands/commitments/approve.js';
 import { commitmentsSubmitCommand } from './commands/commitments/submit.js';
@@ -98,6 +99,7 @@ function makeProgram(): Command {
     'Inspect and manage USDC + LINK approvals against Ospex modules.',
   );
   approvals.addCommand(approvalsShowCommand);
+  approvals.addCommand(approvalsSetupCommand);
   program.addCommand(approvals);
 
   return program;
