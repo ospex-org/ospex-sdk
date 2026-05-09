@@ -87,10 +87,11 @@ function makeBalances(overrides: {
 }
 
 describe('computeReadiness', () => {
-  it('reports yes for matching when POL + USDC + PositionModule are all present', () => {
+  it('reports yes for matching when API + POL + USDC + PositionModule are all present', () => {
     const r = computeReadiness({
       approvals: makeApprovals({ positionModule: 50_000_000n }),
       balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
+      apiOk: true,
     });
     expect(r.matchCommitments.ok).toBe(true);
     expect(r.matchCommitments.reasons).toEqual([]);
@@ -100,6 +101,7 @@ describe('computeReadiness', () => {
     const r = computeReadiness({
       approvals: makeApprovals(),
       balances: makeBalances(),
+      apiOk: true,
     });
     expect(r.matchCommitments.ok).toBe(false);
     expect(r.matchCommitments.reasons).toEqual([
@@ -113,6 +115,7 @@ describe('computeReadiness', () => {
     const r = computeReadiness({
       approvals: makeApprovals({ positionModule: 50_000_000n }),
       balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
+      apiOk: true,
     });
     expect(r.submitCommitments.ok).toBe(true);
   });
@@ -124,6 +127,7 @@ describe('computeReadiness', () => {
         treasuryModule: 5_000_000n,
       }),
       balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
+      apiOk: true,
     });
     expect(r.createContests.ok).toBe(false);
     expect(r.createContests.reasons).toContain('no LINK balance');
@@ -142,24 +146,88 @@ describe('computeReadiness', () => {
         usdc: 10_000_000n,
         link: 2n * 10n ** 18n,
       }),
+      apiOk: true,
     });
     expect(r.matchCommitments.ok).toBe(true);
     expect(r.submitCommitments.ok).toBe(true);
     expect(r.createContests.ok).toBe(true);
   });
 
-  it('any positive native balance counts as gas-ok (no minimum threshold)', () => {
+  // Was: "any positive native balance counts as gas-ok (no minimum
+  // threshold)". Hermes flagged that as inconsistent with the
+  // renderer's "(no gas — no tx will land)" annotation on the same
+  // balance. The doctor must not contradict itself: if the renderer
+  // calls a balance dust, readiness must also call it dust.
+  it('a 1-wei POL balance fails matching (below the 1e14 wei gas floor)', () => {
     const r = computeReadiness({
       approvals: makeApprovals({ positionModule: 1n }),
       balances: makeBalances({ native: 1n, usdc: 1n }),
+      apiOk: true,
+    });
+    expect(r.matchCommitments.ok).toBe(false);
+    expect(r.matchCommitments.reasons).toContain('no POL balance for gas');
+  });
+
+  it('a 0.0001 POL (= 1e14 wei) balance crosses the gas floor and passes', () => {
+    const r = computeReadiness({
+      approvals: makeApprovals({ positionModule: 1n }),
+      balances: makeBalances({ native: 100_000_000_000_000n, usdc: 1n }),
+      apiOk: true,
     });
     expect(r.matchCommitments.ok).toBe(true);
+  });
+
+  // Symmetric to the POL fix — Hermes's "consider" suggestion. A wallet
+  // with sub-µLINK from misdirected dust looks like "0 LINK" in the
+  // renderer; createContests must not be reported ready.
+  it('a 1-wei LINK balance fails createContests (below the 1e12 wei dust floor)', () => {
+    const r = computeReadiness({
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+        oracleModule: 1n,
+      }),
+      balances: makeBalances({
+        native: 10n ** 18n,
+        usdc: 10_000_000n,
+        link: 1n,
+      }),
+      apiOk: true,
+    });
+    expect(r.createContests.ok).toBe(false);
+    expect(r.createContests.reasons).toContain('no LINK balance');
+    // Sanity: matching is still ok — LINK doesn't gate the bettor path.
+    expect(r.matchCommitments.ok).toBe(true);
+  });
+
+  // Hermes blocking finding #1: apiOk=false must flip every capability
+  // because every Ospex write goes through core-api.
+  it('apiOk=false fails all three capabilities even with healthy chain state', () => {
+    const r = computeReadiness({
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+        oracleModule: 2n * 10n ** 18n,
+      }),
+      balances: makeBalances({
+        native: 10n ** 18n,
+        usdc: 10_000_000n,
+        link: 2n * 10n ** 18n,
+      }),
+      apiOk: false,
+    });
+    expect(r.matchCommitments.ok).toBe(false);
+    expect(r.submitCommitments.ok).toBe(false);
+    expect(r.createContests.ok).toBe(false);
+    expect(r.matchCommitments.reasons).toContain('Core API unreachable');
+    expect(r.submitCommitments.reasons).toContain('Core API unreachable');
+    expect(r.createContests.reasons).toContain('Core API unreachable');
   });
 });
 
 describe('pickNextSuggestion', () => {
   it('points at funding POL when native balance is zero', () => {
-    const inputs = { approvals: makeApprovals(), balances: makeBalances() };
+    const inputs = { approvals: makeApprovals(), balances: makeBalances(), apiOk: true };
     const r = computeReadiness(inputs);
     const sug = pickNextSuggestion(inputs, r);
     expect(sug?.text).toMatch(/POL/);
@@ -170,6 +238,7 @@ describe('pickNextSuggestion', () => {
     const inputs = {
       approvals: makeApprovals(),
       balances: makeBalances({ native: 10n ** 18n }),
+      apiOk: true,
     };
     const r = computeReadiness(inputs);
     const sug = pickNextSuggestion(inputs, r);
@@ -180,6 +249,7 @@ describe('pickNextSuggestion', () => {
     const inputs = {
       approvals: makeApprovals(),
       balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
+      apiOk: true,
     };
     const r = computeReadiness(inputs);
     const sug = pickNextSuggestion(inputs, r);
@@ -194,6 +264,7 @@ describe('pickNextSuggestion', () => {
         treasuryModule: 5_000_000n,
       }),
       balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
+      apiOk: true,
     };
     const r = computeReadiness(inputs);
     const sug = pickNextSuggestion(inputs, r);
@@ -213,9 +284,34 @@ describe('pickNextSuggestion', () => {
         usdc: 10_000_000n,
         link: 2n * 10n ** 18n,
       }),
+      apiOk: true,
     };
     const r = computeReadiness(inputs);
     expect(pickNextSuggestion(inputs, r)).toBeNull();
+  });
+
+  // Hermes blocking finding #1: when API is down, surface that as the
+  // top-priority issue rather than ranking local fixes that the user
+  // would re-do once API recovers.
+  it('returns the API-unreachable suggestion when apiOk=false (overrides everything)', () => {
+    const inputs = {
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+        oracleModule: 2n * 10n ** 18n,
+      }),
+      balances: makeBalances({
+        native: 10n ** 18n,
+        usdc: 10_000_000n,
+        link: 2n * 10n ** 18n,
+      }),
+      apiOk: false,
+    };
+    const r = computeReadiness(inputs);
+    const sug = pickNextSuggestion(inputs, r);
+    expect(sug?.text).toMatch(/Core API/);
+    // No actionable command — the user can't fix a remote outage.
+    expect(sug?.command).toBeUndefined();
   });
 });
 
@@ -271,6 +367,32 @@ describe('buildDoctorReport (JSON envelope)', () => {
     expect(report.ready.matchCommitments.ok).toBe(true);
     expect(report.ready.createContests.ok).toBe(false);
     expect(report.suggestion?.audience).toBe('operator');
+  });
+
+  // Wiring regression: buildDoctorReport must pass apiOk through to
+  // computeReadiness. A previous version showed apiOk in the report
+  // header but didn't gate readiness on it, so an unreachable API
+  // could still report "ready to match: yes" — Hermes flagged this on
+  // PR #39 review.
+  it('apiOk=false flips every capability in the embedded readiness matrix', () => {
+    const report = buildDoctorReport({
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+        oracleModule: 2n * 10n ** 18n,
+      }),
+      balances: makeBalances({
+        native: 10n ** 18n,
+        usdc: 10_000_000n,
+        link: 2n * 10n ** 18n,
+      }),
+      apiOk: false,
+    });
+    expect(report.api.ok).toBe(false);
+    expect(report.ready.matchCommitments.ok).toBe(false);
+    expect(report.ready.submitCommitments.ok).toBe(false);
+    expect(report.ready.createContests.ok).toBe(false);
+    expect(report.suggestion?.text).toMatch(/Core API/);
   });
 });
 

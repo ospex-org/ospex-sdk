@@ -18,6 +18,24 @@ import type { ApprovalsSnapshot, BalancesSnapshot } from '@ospex/sdk';
 
 const INDENT = '  ';
 
+// "Effectively zero" thresholds — the same values the human renderer
+// uses to flag balances that LOOK like zero but technically aren't.
+// Sharing them with `computeReadiness` keeps the contract consistent
+// (Hermes flagged the prior mismatch on PR #39 review): the doctor
+// must not say "ready to match" for a wallet whose POL balance the
+// same report annotates as "no gas — no tx will land".
+//
+//   POL_GAS_FLOOR_WEI:  1e14 wei = 0.0001 POL. Below this you can't
+//                       fund any realistic Polygon tx (even a simple
+//                       approve burns ~1.5e15 wei = 0.0015 POL).
+//   LINK_DUST_FLOOR_WEI: 1e12 wei = 1 µLINK. Below this the renderer
+//                       displays "0 LINK". A real Chainlink Functions
+//                       call costs ~1 LINK so this is a generous
+//                       lower bound — anything below it definitely
+//                       won't fund a contest creation.
+const POL_GAS_FLOOR_WEI = 100_000_000_000_000n;
+const LINK_DUST_FLOOR_WEI = 1_000_000_000_000n;
+
 // ── Readiness ──────────────────────────────────────────────────────
 
 export interface Capability {
@@ -35,31 +53,47 @@ export interface Readiness {
 interface ReadinessInputs {
   approvals: ApprovalsSnapshot;
   balances: BalancesSnapshot;
+  /**
+   * Whether the Core API liveness probe succeeded. Fed in alongside
+   * the chain snapshots because every Ospex write depends on the API:
+   * `commitments.match` resolves the commitment via core-api before
+   * signing; `commitments.submit` POSTs the EIP-712 payload to
+   * core-api; `contests.create` fetches script approvals from
+   * core-api. apiOk=false flips every capability to false and the
+   * agent guard `ospex doctor && ospex commitments match` correctly
+   * blocks. Hermes flagged the prior omission on PR #39 review.
+   */
+  apiOk: boolean;
 }
 
 /**
- * Capability matrix from the wallet snapshots. The thresholds are
- * deliberately generous: any non-zero balance and any non-zero
- * allowance pass. The doctor surfaces the SHAPE of readiness — actual
- * sufficiency for a specific bet size is enforced at submit/match
- * time by the SDK's allowance preflight.
+ * Capability matrix from the wallet snapshots. Thresholds match the
+ * renderer's "effectively zero" cutoffs (POL_GAS_FLOOR_WEI,
+ * LINK_DUST_FLOOR_WEI) so the doctor can never both flag a balance
+ * as no-gas/dust AND report a capability as ready. apiOk=false flips
+ * every capability to false because every Ospex write goes through
+ * core-api.
+ *
+ * The doctor surfaces the SHAPE of readiness, not exact sufficiency
+ * for a specific bet size — that's enforced at submit/match time by
+ * the SDK's allowance preflight.
  */
-export function computeReadiness({ approvals, balances }: ReadinessInputs): Readiness {
-  const hasGas = balances.native > 0n;
+export function computeReadiness({ approvals, balances, apiOk }: ReadinessInputs): Readiness {
+  const hasGas = balances.native >= POL_GAS_FLOOR_WEI;
   const hasUsdc = balances.usdc > 0n;
-  const hasLink = balances.link > 0n;
+  const hasLink = balances.link >= LINK_DUST_FLOOR_WEI;
   const positionApproved = approvals.usdc.allowances.positionModule.raw > 0n;
   const treasuryApproved = approvals.usdc.allowances.treasuryModule.raw > 0n;
   const oracleApproved = approvals.link.allowances.oracleModule.raw > 0n;
 
   // Matching as a taker pulls USDC from PositionModule, so the gating
-  // primitives are: POL (gas), USDC (balance), PositionModule (allowance).
-  // TreasuryModule is conditionally needed for lazy spec creation
-  // fees, but the maker side pays the bigger half and a missing
-  // allowance only blocks the user when they happen to be the first
-  // match on a fresh speculation key. Surface it as a soft warning,
-  // not a hard blocker for matching.
+  // primitives are: API up, POL (gas), USDC (balance), PositionModule
+  // (allowance). TreasuryModule is conditionally needed for lazy spec
+  // creation fees, but the maker side pays the bigger half and a
+  // missing allowance only blocks the user when they happen to be the
+  // first match on a fresh speculation key.
   const matchReasons: string[] = [];
+  if (!apiOk) matchReasons.push('Core API unreachable');
   if (!hasGas) matchReasons.push('no POL balance for gas');
   if (!hasUsdc) matchReasons.push('no USDC balance');
   if (!positionApproved) matchReasons.push('PositionModule USDC not approved');
@@ -68,13 +102,14 @@ export function computeReadiness({ approvals, balances }: ReadinessInputs): Read
   // commitment that lazily creates a speculation pulls the maker's
   // half of the speculation creation fee from TreasuryModule, but
   // that's only an issue when the commitment ends up being the first
-  // match on its key — and the SDK preflights it on submit. Same
-  // soft-warning treatment as the match path.
+  // match on its key — and the SDK preflights it on submit.
   const submitReasons: string[] = [...matchReasons];
 
-  // Creating contests requires LINK + Oracle for the Chainlink
-  // Functions call, plus USDC + Treasury for the creation fee.
+  // Creating contests requires API up (script approvals are served
+  // from core-api), LINK + Oracle for the Chainlink Functions call,
+  // plus USDC + Treasury for the creation fee.
   const createReasons: string[] = [];
+  if (!apiOk) createReasons.push('Core API unreachable');
   if (!hasGas) createReasons.push('no POL balance for gas');
   if (!hasLink) createReasons.push('no LINK balance');
   if (!oracleApproved) createReasons.push('OracleModule LINK not approved');
@@ -99,18 +134,30 @@ export interface Suggestion {
 
 /**
  * Pick at most one actionable follow-up. Ranked by what unlocks the
- * most basic capability first (matching = bettor's path; everything
- * else is operator territory). Returns `null` when nothing
- * matching-related is missing — the user's already a working bettor.
+ * most basic capability first: API up (nothing else matters if it's
+ * down), then POL → USDC → PositionModule approval → operator hints.
+ * Returns `null` when the bettor path is fully ready and the operator
+ * path is also satisfied.
  */
 export function pickNextSuggestion(
   inputs: ReadinessInputs,
   readiness: Readiness,
 ): Suggestion | null {
-  const { balances, approvals } = inputs;
+  const { apiOk, balances, approvals } = inputs;
   const positionApproved = approvals.usdc.allowances.positionModule.raw > 0n;
 
-  if (balances.native === 0n) {
+  if (!apiOk) {
+    // No actionable command — the user can't fix a remote outage.
+    // Surface the situation so they don't try to fix something
+    // local that isn't actually broken.
+    return {
+      text:
+        'Core API is unreachable. Wallet state on-chain is fine; retry shortly. ' +
+        'If this persists, the API may be temporarily down.',
+      audience: 'bettor',
+    };
+  }
+  if (balances.native < POL_GAS_FLOOR_WEI) {
     return {
       text: 'Fund this wallet with POL for gas before any tx can land.',
       audience: 'bettor',
@@ -174,8 +221,8 @@ export interface DoctorReportInputs extends ReadinessInputs {
 
 export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport {
   const { approvals, balances, apiOk } = inputs;
-  const readiness = computeReadiness({ approvals, balances });
-  const suggestion = pickNextSuggestion({ approvals, balances }, readiness);
+  const readiness = computeReadiness({ approvals, balances, apiOk });
+  const suggestion = pickNextSuggestion({ approvals, balances, apiOk }, readiness);
   const symbol = nativeSymbol(balances.chainId);
   return {
     schemaVersion: 1,
@@ -257,9 +304,10 @@ export function renderDoctorReport(
   // LINK balance is below display precision — not strictly raw === 0.
   // Address 0x..01 on mainnet has 6.45e-7 LINK from misdirected dust;
   // raw is non-zero but visually it's "0 LINK", so the check has to
-  // mirror what the user actually sees. A bigint compare against
-  // 1e12 wei (= 1 µLINK) is the cheap "effectively zero" threshold.
-  const linkEffectivelyZero = BigInt(report.balances.link.raw) < 1_000_000_000_000n;
+  // mirror what the user actually sees. The same threshold gates
+  // `computeReadiness` so the doctor never says "ready to create
+  // contests" with a balance the renderer flagged as dust.
+  const linkEffectivelyZero = BigInt(report.balances.link.raw) < LINK_DUST_FLOOR_WEI;
   out.write(
     `${INDENT}${'LINK'.padEnd(8)} ${formatLinkRow(report.balances.link)}` +
       (linkEffectivelyZero ? '    (only needed for contest creation/scoring)' : '') +
@@ -299,10 +347,10 @@ function formatCapability(c: Capability): string {
 
 function formatNative(b: JsonDoctorReport['balances']['native']): string {
   // Same "below display precision = effectively zero" pattern as the
-  // LINK annotation. Threshold 1e14 wei (= 0.0001 POL) is well below
-  // any realistic tx-gas cost on Polygon, so anything below it is
-  // definitely not enough to land a single tx.
-  const effectivelyZero = BigInt(b.raw) < 100_000_000_000_000n;
+  // LINK annotation, sharing POL_GAS_FLOOR_WEI with computeReadiness
+  // so the doctor never says "ready to match" while annotating the
+  // POL balance as "no gas — no tx will land".
+  const effectivelyZero = BigInt(b.raw) < POL_GAS_FLOOR_WEI;
   return `${b.formatted} ${b.symbol}` + (effectivelyZero ? '    (no gas — no tx will land)' : '');
 }
 
