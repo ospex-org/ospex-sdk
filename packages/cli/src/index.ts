@@ -13,6 +13,7 @@ import { OspexError } from '@ospex/sdk';
 
 import { healthCommand } from './commands/health.js';
 import { initCommand } from './commands/init.js';
+import { doctorCommand } from './commands/doctor.js';
 import { approvalsShowCommand } from './commands/approvals/show.js';
 import { approvalsSetupCommand } from './commands/approvals/setup.js';
 import { commitmentsListCommand } from './commands/commitments/list.js';
@@ -48,6 +49,7 @@ function makeProgram(): Command {
     .version('0.1.0');
 
   program.addCommand(healthCommand);
+  program.addCommand(doctorCommand);
   program.addCommand(initCommand);
 
   const commitments = new Command('commitments').description(

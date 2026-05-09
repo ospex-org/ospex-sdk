@@ -104,8 +104,8 @@ export function renderApprovalsSnapshot(
     );
   }
   out.write(
-    '\nRun `ospex approvals setup` to add or increase approvals.\n' +
-      '(Existing higher approvals are not reduced by `setup`.)\n',
+    '\nRun `ospex approvals setup` to add or increase approvals (does not lower).\n' +
+      'For balances + readiness, run `ospex doctor`.\n',
   );
 }
 

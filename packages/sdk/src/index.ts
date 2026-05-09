@@ -170,9 +170,9 @@ export type {
   BuildMatchPreviewArgs,
 } from './types/matchPreview.js';
 
-// Approvals snapshot — used by `ospex approvals show`, the upcoming
-// `ospex doctor`, and any consumer that needs a readiness view of the
-// configured wallet's USDC + LINK allowances against Ospex modules.
+// Approvals snapshot — used by `ospex approvals show`, `ospex doctor`,
+// and any consumer that needs a readiness view of the configured
+// wallet's USDC + LINK allowances against Ospex modules.
 export type {
   AllowanceEntry,
   ApprovalSpender,
@@ -181,3 +181,7 @@ export type {
   ReadApprovalsArgs,
   UsdcAllowances,
 } from './approvals/index.js';
+
+// Balances snapshot — wallet-centric POL / USDC / LINK reads. Pairs
+// with the approvals snapshot for `ospex doctor`'s readiness view.
+export type { BalancesSnapshot, ReadBalancesArgs } from './balances/index.js';
