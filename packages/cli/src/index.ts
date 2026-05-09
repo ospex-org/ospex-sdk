@@ -18,6 +18,7 @@ import { approvalsShowCommand } from './commands/approvals/show.js';
 import { approvalsSetupCommand } from './commands/approvals/setup.js';
 import { commitmentsListCommand } from './commands/commitments/list.js';
 import { commitmentsApproveCommand } from './commands/commitments/approve.js';
+import { commitmentsApproveRawCommand } from './commands/commitments/approve-raw.js';
 import { commitmentsSubmitCommand } from './commands/commitments/submit.js';
 import { commitmentsSubmitRawCommand } from './commands/commitments/submit-raw.js';
 import { commitmentsMatchCommand } from './commands/commitments/match.js';
@@ -58,6 +59,7 @@ function makeProgram(): Command {
   commitments.addCommand(commitmentsListCommand);
   commitments.addCommand(commitmentsShowCommand);
   commitments.addCommand(commitmentsApproveCommand);
+  commitments.addCommand(commitmentsApproveRawCommand);
   commitments.addCommand(commitmentsSubmitCommand);
   commitments.addCommand(commitmentsSubmitRawCommand);
   commitments.addCommand(commitmentsMatchCommand);
