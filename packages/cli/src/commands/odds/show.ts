@@ -235,4 +235,3 @@ function elapsedSince(iso: string): { text: string } | null {
   const days = Math.round(hours / 24);
   return { text: `${days}d` };
 }
-
