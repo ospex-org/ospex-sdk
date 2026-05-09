@@ -188,7 +188,7 @@ speculation:  not yet created — lazily created on first match
               counterparty; not pulled if a prior match already created the speculation)
 ```
 
-If a USDC approval is required, the CLI shows the required-vs-current allowance and asks two short questions — first a Y/N consent, then the amount (which you can type as a number or `max` for unlimited):
+If a USDC approval is required, the CLI shows the required-vs-current allowance and asks two short questions per row — first a Y/N consent, then the amount (which you can type as a number or `max` for unlimited):
 
 ```
 USDC approval needed (commitment risk).
@@ -200,6 +200,20 @@ commitment matches on-chain. ...
   Spender: 0x0DCd… (PositionModule)
 Allow PositionModule to spend USDC from your wallet? [Y/n]
 Amount in USDC (number, or "max" for unlimited) [1]
+```
+
+For a **lazy** commitment (no prior match has triggered speculation creation), the CLI also runs a second approval row for the maker's half of the speculation creation fee — `0.25 USDC` to TreasuryModule, pulled at match-time only IF this commitment is the one that triggers creation. The same TreasuryModule allowance covers contest-creation fees, so any leftover from `ospex contests create` already counts toward this requirement and the second row is skipped.
+
+```
+USDC approval needed (lazy speculation creation fee).
+  Required: 0.25 USDC
+  Approved: 0 USDC
+
+The TreasuryModule contract pulls this USDC from your wallet ONLY if your
+commitment is the first to match this speculation. ...
+  Spender: 0xCB56… (TreasuryModule)
+Allow TreasuryModule to spend USDC from your wallet? [Y/n]
+Amount in USDC (number, or "max" for unlimited) [0.25]
 ```
 
 Default at the amount prompt is exactly the required amount — you opt in to a buffer (or `max`) only if you choose. Non-interactive submits (`--yes`) use the exact required amount unless you also pass `--approve-max`.

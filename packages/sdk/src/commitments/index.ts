@@ -16,7 +16,12 @@ import type { CommitmentsContext } from './context.js';
 import type { Commitment, CommitmentsListOptions } from '../types/commitment.js';
 import type { Hex } from '../types/signer.js';
 import type { HighLevelSubmitArgs, SubmitPreview } from '../types/preview.js';
-import { approve, type ApproveArgs, type ApproveResult } from './approve.js';
+import {
+  approve,
+  approveCreationFee,
+  type ApproveArgs,
+  type ApproveResult,
+} from './approve.js';
 import { cancel, type CancelResult } from './cancel.js';
 import {
   cancelAllOnSpeculation,
@@ -122,6 +127,17 @@ export class Commitments {
 
   approve(amount: ApproveArgs): Promise<ApproveResult> {
     return approve(this.ctx, amount);
+  }
+
+  /**
+   * Approve TreasuryModule for USDC — covers the maker's half of the
+   * lazy speculation creation fee (0.25 USDC on Polygon mainnet) that
+   * is pulled at the first match of a `(contestId, scorer, lineTicks)`
+   * key. See `commitments/approve.ts` file header for the spender
+   * dichotomy.
+   */
+  approveCreationFee(amount: ApproveArgs): Promise<ApproveResult> {
+    return approveCreationFee(this.ctx, amount);
   }
 
   cancel(hash: Hex): Promise<CancelResult> {

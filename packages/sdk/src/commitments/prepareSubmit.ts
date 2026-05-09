@@ -224,8 +224,23 @@ export async function prepareSubmit(
   const maker = (await signer.getAddress()).toLowerCase() as Hex;
 
   const publicClient = ctx.requireChainClient();
-  const [usdcAllowance, nonceFloor] = await Promise.all([
+  // Two USDC allowance reads when this is a lazy commit:
+  //   - PositionModule: covers the maker's risk at match time (always
+  //     pulled from the maker on every fill).
+  //   - TreasuryModule: covers the maker's HALF of the protocol's
+  //     speculation creation fee (`processSplitFee`), which fires
+  //     ONLY on the first match of a `(contestId, scorer, lineTicks)`
+  //     key — i.e. exactly when speculation.mode === 'lazy'. If the
+  //     speculation already exists at submit time we skip the second
+  //     read; no fee is charged by the contract on subsequent matches.
+  // The reads run in parallel with the nonce-floor lookup; gating on
+  // lazy-mode is correctness, not perf.
+  const isLazy = speculation.mode === 'lazy';
+  const [usdcAllowance, treasuryUsdcAllowance, nonceFloor] = await Promise.all([
     readAllowance(publicClient, addresses.usdc as Hex, maker, addresses.positionModule as Hex),
+    isLazy
+      ? readAllowance(publicClient, addresses.usdc as Hex, maker, addresses.treasuryModule as Hex)
+      : Promise.resolve(0n),
     readNonceFloor(publicClient, addresses.matchingModule as Hex, maker, speculationKey),
   ]);
 
@@ -284,6 +299,8 @@ export async function prepareSubmit(
     nonce,
     positionModuleAddress: addresses.positionModule as Hex,
     usdcCurrentAllowanceWei6: usdcAllowance,
+    treasuryModuleAddress: addresses.treasuryModule as Hex,
+    treasuryUsdcCurrentAllowanceWei6: treasuryUsdcAllowance,
   });
 }
 
