@@ -28,6 +28,14 @@ import type { Contest, SpeculationDetail } from '../src/types/contest.js';
 import type { TeamAlias } from '../src/commitments/resolveSide.js';
 import type { SubmitPreview, HighLevelSubmitArgs } from '../src/types/preview.js';
 
+// Match time used in test fixtures — 30 days from now, so it's always
+// within the protocol's 1-year-from-now cap regardless of when the test
+// suite runs. Avoids fixtures rotting (the previous "2026-05-08" string
+// was written when 2026 was the future). 30 days is comfortably past
+// "now + 1d" so explicit-duration --expiry tests can verify they DON'T
+// equal the default match-time path.
+const FIXTURE_MATCH_TIME_ISO = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
 const MAKER = '0x'.padEnd(42, 'a') as Hex;
 const ADDRESSES = {
   matchingModule: '0x'.padEnd(42, '1') as Hex,
@@ -85,7 +93,7 @@ function buildSpec(overrides: Partial<SpeculationDetail> = {}): SpeculationDetai
       awayTeamId: 'lakers-uuid',
       homeTeamId: 'nuggets-uuid',
       sport: 'nba',
-      matchTime: '2026-05-08T02:00:00Z',
+      matchTime: FIXTURE_MATCH_TIME_ISO,
       status: 'verified',
     },
     ...overrides,
@@ -99,7 +107,7 @@ function buildContest(overrides: Partial<Contest> = {}): Contest {
     homeTeam: 'Denver Nuggets',
     sport: 'nba',
     sportId: 1,
-    matchTime: '2026-05-08T02:00:00Z',
+    matchTime: FIXTURE_MATCH_TIME_ISO,
     status: 'verified',
     awayTeamId: 'lakers-uuid',
     homeTeamId: 'nuggets-uuid',
@@ -666,4 +674,168 @@ describe('submitPrepared — NONCE_TOO_LOW propagation', () => {
   });
 });
 
-void {} as OspexValidationError; // keep the import live for future tests
+// ── Expiry: defaults, durations, matchTime guard, source annotation ──
+
+describe('prepareSubmit — expiry defaults (no --expiry passed)', () => {
+  it('matchTime 3h away → expiry equals matchTime exactly (default-match-time source)', async () => {
+    const matchTimeMs = Date.now() + 3 * 60 * 60 * 1000;
+    const matchTimeIso = new Date(matchTimeMs).toISOString();
+    const expectedSec = BigInt(Math.floor(matchTimeMs / 1000));
+    const spec = buildSpec({ contest: { ...buildSpec().contest, matchTime: matchTimeIso } });
+    const ctx = buildContext({ spec, allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs());
+    expect(preview.expiry.unixSec).toBe(expectedSec.toString());
+    expect(preview.expiry.source).toBe('default-match-time');
+    expect(preview.expiry.afterMatchTime).toBe(false);
+  });
+
+  it('matchTime 20m away → expiry equals matchTime exactly, NOT now + 1h', async () => {
+    // Hermes' specific concern: a "1h floor" would push expiry past match
+    // start for games that tip off in <60 minutes. The default rule has
+    // NO floor — short windows must stay short.
+    const matchTimeMs = Date.now() + 20 * 60 * 1000; // 20 minutes from now
+    const matchTimeIso = new Date(matchTimeMs).toISOString();
+    const expectedSec = BigInt(Math.floor(matchTimeMs / 1000));
+    const spec = buildSpec({ contest: { ...buildSpec().contest, matchTime: matchTimeIso } });
+    const ctx = buildContext({ spec, allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs());
+    expect(preview.expiry.unixSec).toBe(expectedSec.toString());
+    expect(preview.expiry.source).toBe('default-match-time');
+    // Sanity: the chosen expiry is well under 1h from now (proves no floor).
+    const oneHourFromNowSec = BigInt(Math.floor(Date.now() / 1000) + 3600);
+    expect(BigInt(preview.expiry.unixSec) < oneHourFromNowSec).toBe(true);
+  });
+
+  it('matchTime already past → throws and tells the user to pass --expiry explicitly', async () => {
+    const matchTimePastIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const spec = buildSpec({ contest: { ...buildSpec().contest, matchTime: matchTimePastIso } });
+    const ctx = buildContext({ spec, allowance: 1_000_000n });
+    await expect(prepareSubmit(ctx, speculationArgs())).rejects.toThrow(
+      /match time has already passed/,
+    );
+    await expect(prepareSubmit(ctx, speculationArgs())).rejects.toThrow(
+      /Pass --expiry explicitly/,
+    );
+  });
+
+  it('matchTime missing/empty → falls back to now + 1h with missing-match-time-fallback source', async () => {
+    const spec = buildSpec({ contest: { ...buildSpec().contest, matchTime: '' } });
+    const ctx = buildContext({ spec, allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs());
+    expect(preview.expiry.source).toBe('missing-match-time-fallback');
+    const expirySec = BigInt(preview.expiry.unixSec);
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    // Within ±10s of now+1h (to absorb test-timing jitter).
+    expect(expirySec - (nowSec + 3600n) >= -10n && expirySec - (nowSec + 3600n) <= 10n).toBe(true);
+    // matchTimeUnixSec is null when matchTime was missing/invalid.
+    expect(preview.expiry.matchTimeUnixSec).toBeNull();
+  });
+
+  it('matchTime invalid (not a parseable date) → falls back to now + 1h', async () => {
+    const spec = buildSpec({ contest: { ...buildSpec().contest, matchTime: 'not-a-date' } });
+    const ctx = buildContext({ spec, allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs());
+    expect(preview.expiry.source).toBe('missing-match-time-fallback');
+    expect(preview.expiry.matchTimeUnixSec).toBeNull();
+  });
+});
+
+describe('prepareSubmit — explicit --expiry: durations', () => {
+  it('30m → expiry equals now + 30 minutes, source=user-relative', async () => {
+    const ctx = buildContext({ allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs({ expiry: '30m' }));
+    const expirySec = BigInt(preview.expiry.unixSec);
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    expect(expirySec - (nowSec + 1800n) >= -10n && expirySec - (nowSec + 1800n) <= 10n).toBe(true);
+    expect(preview.expiry.source).toBe('user-relative');
+  });
+
+  it('accepts 4h, 1d, 1w as duration units', async () => {
+    const cases: Array<[string, bigint]> = [
+      ['4h', 4n * 3600n],
+      ['1d', 86400n],
+      ['1w', 604800n],
+    ];
+    for (const [input, expectedOffsetSec] of cases) {
+      const ctx = buildContext({ allowance: 1_000_000n });
+      const preview = await prepareSubmit(ctx, speculationArgs({ expiry: input }));
+      const expirySec = BigInt(preview.expiry.unixSec);
+      const nowSec = BigInt(Math.floor(Date.now() / 1000));
+      const drift = expirySec - (nowSec + expectedOffsetSec);
+      expect(drift >= -10n && drift <= 10n).toBe(true);
+      expect(preview.expiry.source).toBe('user-relative');
+    }
+  });
+
+  it('rejects malformed durations (0m, 30x, 4hh)', async () => {
+    const ctx = buildContext({ allowance: 1_000_000n });
+    // Zero magnitude — the duration shape matches but value is invalid.
+    await expect(prepareSubmit(ctx, speculationArgs({ expiry: '0m' }))).rejects.toThrow(
+      /magnitude must be > 0/,
+    );
+    // Unknown unit — falls through to ISO parser, which rejects.
+    await expect(prepareSubmit(ctx, speculationArgs({ expiry: '30x' }))).rejects.toThrow(
+      /Invalid --expiry/,
+    );
+    // Repeated unit char — same fall-through.
+    await expect(prepareSubmit(ctx, speculationArgs({ expiry: '4hh' }))).rejects.toThrow(
+      /Invalid --expiry/,
+    );
+  });
+});
+
+describe('prepareSubmit — explicit --expiry: ISO + unix still work', () => {
+  it('ISO-8601 with Z → source=user-iso, matches the parsed timestamp', async () => {
+    // Pick something safely in the future and within 1y of now.
+    const futureMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    const futureIso = new Date(futureMs).toISOString();
+    const expectedSec = BigInt(Math.floor(futureMs / 1000));
+    const ctx = buildContext({ allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs({ expiry: futureIso }));
+    expect(preview.expiry.unixSec).toBe(expectedSec.toString());
+    expect(preview.expiry.source).toBe('user-iso');
+  });
+
+  it('ISO-8601 with explicit ±HH:MM offset → source=user-iso', async () => {
+    // Same instant in -05:00 wall clock. To express the UTC instant
+    // T as a -05:00 ISO string, the wall-clock value is T - 5h
+    // (because "15:00 in a tz 5h behind UTC" = "20:00 UTC").
+    const futureMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    const expectedSec = BigInt(Math.floor(futureMs / 1000));
+    const offsetIso = new Date(futureMs - 5 * 60 * 60 * 1000)
+      .toISOString()
+      .replace('Z', '-05:00');
+    const ctx = buildContext({ allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs({ expiry: offsetIso }));
+    expect(preview.expiry.source).toBe('user-iso');
+    expect(preview.expiry.unixSec).toBe(expectedSec.toString());
+  });
+
+  it('unix-seconds string → source=user-unix', async () => {
+    const expectedSec = BigInt(Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60);
+    const ctx = buildContext({ allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs({ expiry: expectedSec.toString() }));
+    expect(preview.expiry.unixSec).toBe(expectedSec.toString());
+    expect(preview.expiry.source).toBe('user-unix');
+  });
+});
+
+describe('prepareSubmit — afterMatchTime warning flag', () => {
+  it('explicit --expiry past matchTime → afterMatchTime=true', async () => {
+    // matchTime 1h from now, --expiry 1d → expiry well past match start.
+    const matchTimeMs = Date.now() + 60 * 60 * 1000;
+    const matchTimeIso = new Date(matchTimeMs).toISOString();
+    const spec = buildSpec({ contest: { ...buildSpec().contest, matchTime: matchTimeIso } });
+    const ctx = buildContext({ spec, allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs({ expiry: '1d' }));
+    expect(preview.expiry.afterMatchTime).toBe(true);
+    expect(preview.expiry.source).toBe('user-relative');
+  });
+
+  it('default (matchTime exactly) → afterMatchTime=false', async () => {
+    const ctx = buildContext({ allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs());
+    expect(preview.expiry.afterMatchTime).toBe(false);
+    expect(preview.expiry.source).toBe('default-match-time');
+  });
+});

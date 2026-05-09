@@ -194,6 +194,17 @@ Confirm with Enter (or `y`) and the CLI signs (one Foundry passphrase prompt, ev
   - `--json` alone → emits `SubmitPreviewEnvelope` (preview only, **no signing**). Use case: an agent inspects the resolved tuple before deciding whether to commit.
   - `--yes --json` → signs/posts and emits `SubmitJsonResult` (preview + result).
   - Any non-interactive run that would sign without `--yes` errors out rather than hanging on a prompt.
+- **`--expiry`** — when the signed commitment stops being matchable. Three accepted forms; the parser detects from the input shape:
+  - **duration** — `30m`, `4h`, `1d`, `1w` (suffix-letter; `s`/`m`/`h`/`d`/`w`). Sets expiry to `now + duration`.
+  - **ISO-8601 / RFC3339** — `2026-05-09T20:00:00Z`, `2026-05-09T15:00:00-05:00`. Use `Z` or an explicit `±HH:MM` offset; avoid timezone abbreviations like `CST`/`CDT` (parser-dependent).
+  - **unix-seconds** — `1715299200` (decimal-digits-only).
+
+  **Default**: contest's scheduled match time. A pregame commitment expires at tip-off by default — this protects you from a stale pregame price being filled minutes after the game starts. If you actually want post-start exposure (live betting), pass `--expiry` explicitly; the preview block surfaces a warning when `expiry > matchTime`.
+
+  Edge cases: if the contest has no match time on file, the default falls back to `now + 1h` and the preview labels it `source=missing-match-time-fallback`. If the contest's match time has already passed, omitting `--expiry` errors out — pass it explicitly to opt into a live commitment.
+
+  Validation: `now < expiry ≤ now + 1y` (protocol cap).
+
 - **`--approve-max`** opts into unlimited USDC approval when an approval is needed before signing. The default is to approve **exactly the required amount** for this submit — explicit and one-shot rather than open-ended. Pass `--approve-max` when you'd rather grant a single unlimited approval and avoid future approval prompts; the CLI surfaces the policy in the preview block before the prompt either way.
 
 You can see your commitment on the orderbook (replace `<yourAddress>` with the address Foundry printed in step 2):

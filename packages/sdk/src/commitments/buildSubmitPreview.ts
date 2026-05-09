@@ -32,9 +32,11 @@ import { pushPossible } from './pushPossible.js';
 import type { ResolveSideResult } from './resolveSide.js';
 import type { MarketType } from '../types/odds.js';
 import type {
+  ExpirySource,
   PreviewApproval,
   PreviewContest,
   PreviewEconomics,
+  PreviewExpiry,
   PreviewMarket,
   PreviewOutcome,
   PreviewRaw,
@@ -71,6 +73,15 @@ export interface BuildSubmitPreviewArgs {
   chainId: number;
   matchingModuleAddress: Hex;
   expirySec: bigint;
+  /** Provenance of the chosen expiry — see prepareSubmit's parseExpiry. */
+  expirySource: ExpirySource;
+  /**
+   * Contest match time as unix-seconds bigint, or null when missing/
+   * invalid. Used here to decide whether to set
+   * `expiry.afterMatchTime` (live-betting flag) and to populate
+   * `expiry.matchTimeUnixSec`.
+   */
+  matchTimeSec: bigint | null;
   nonce: bigint;
   // Allowance preflight (the only token relevant to commit submit is USDC)
   positionModuleAddress: Hex;
@@ -113,6 +124,14 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
     expiry: args.expirySec.toString(),
     nonce: args.nonce.toString(),
     speculationKey,
+  };
+
+  const expiry: PreviewExpiry = {
+    unixSec: args.expirySec.toString(),
+    iso: new Date(Number(args.expirySec) * 1000).toISOString(),
+    source: args.expirySource,
+    afterMatchTime: args.matchTimeSec !== null && args.expirySec > args.matchTimeSec,
+    matchTimeUnixSec: args.matchTimeSec !== null ? args.matchTimeSec.toString() : null,
   };
 
   const approvals: PreviewApproval[] = [
@@ -164,7 +183,7 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
 
   const outcomes = buildOutcomes(args, profitWei6);
 
-  return { contest, market, side, economics, raw, approvals, outcomes };
+  return { contest, market, side, economics, expiry, raw, approvals, outcomes };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

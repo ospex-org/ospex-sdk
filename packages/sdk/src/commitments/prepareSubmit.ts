@@ -40,6 +40,7 @@ import { deriveSpeculationKey } from '../chain/eip712.js';
 import { OspexValidationError } from '../errors.js';
 import type { CommitmentsContext } from './context.js';
 import type {
+  ExpirySource,
   HighLevelSubmitArgs,
   SpeculationMode,
   SubmitPreview,
@@ -48,8 +49,35 @@ import type { MarketType } from '../types/odds.js';
 import type { Hex } from '../types/signer.js';
 import type { Contest, SpeculationDetail } from '../types/contest.js';
 
-const DEFAULT_EXPIRY_OFFSET_SEC = 24n * 60n * 60n;
+/**
+ * Fallback used only when contest.matchTime is missing or invalid AND
+ * the user did not pass --expiry. Marked with `source =
+ * missing-match-time-fallback` in the preview so the user can tell.
+ *
+ * NOTE: There is intentionally NO general "1h floor" applied to the
+ * default. If the contest's match time is, say, 20 minutes from now,
+ * the default expiry is 20 minutes from now — exactly at tip-off —
+ * not 1 hour from now (which would push expiry past start and create
+ * exactly the live-after-pregame-fill risk the default is designed
+ * to avoid). Users wanting post-start exposure must opt in via an
+ * explicit --expiry.
+ */
+const MISSING_MATCH_TIME_FALLBACK_SEC = 60n * 60n;
 const ONE_YEAR_SEC = 365n * 24n * 60n * 60n;
+
+/**
+ * Suffix-letter durations accepted by `--expiry` (e.g. "30m", "4h",
+ * "1d", "1w"). Values must be a positive integer; "0m", "30x", "4hh"
+ * all reject.
+ */
+const DURATION_RE = /^(\d+)([smhdw])$/;
+const DURATION_UNIT_SEC: Record<string, bigint> = {
+  s: 1n,
+  m: 60n,
+  h: 3600n,
+  d: 86400n,
+  w: 604800n,
+};
 
 interface ResolvedParent {
   /** When `--speculation` was used, the fully-resolved speculation. */
@@ -207,15 +235,16 @@ export async function prepareSubmit(
   }
 
   // ── 9. Expiry ───────────────────────────────────────────────────
-  const expirySec = parseExpiry(args.expiry, nowSec);
-
-  // ── 10. Build preview ──────────────────────────────────────────
   const sportFinal = parent.pinnedSpeculation
     ? parent.pinnedSpeculation.contest.sport
     : parent.contest!.sport;
   const matchTime = parent.pinnedSpeculation
     ? parent.pinnedSpeculation.contest.matchTime
     : parent.contest!.matchTime;
+  const matchTimeSec = parseMatchTimeToUnixSec(matchTime);
+  const { expirySec, source } = parseExpiry(args.expiry, nowSec, matchTimeSec);
+
+  // ── 10. Build preview ──────────────────────────────────────────
   const awayTeam = resolverContext.awayTeam;
   const homeTeam = resolverContext.homeTeam;
   return buildSubmitPreview({
@@ -238,6 +267,8 @@ export async function prepareSubmit(
     chainId,
     matchingModuleAddress: addresses.matchingModule as Hex,
     expirySec,
+    expirySource: source,
+    matchTimeSec,
     nonce,
     positionModuleAddress: addresses.positionModule as Hex,
     usdcCurrentAllowanceWei6: usdcAllowance,
@@ -345,27 +376,102 @@ async function resolveParent(
 }
 
 /**
- * Resolve the user-supplied expiry (ISO-8601 string OR unix-seconds
- * number/string) to a unix-seconds bigint. Validates the protocol's
- * 1-year-out cap and rejects past timestamps.
+ * Convert a contest matchTime (ISO-8601 string from the API) to a
+ * unix-seconds bigint, or null when missing/invalid. The bigint is
+ * what `parseExpiry` compares against; null forces the
+ * missing-matchTime branch.
  */
-function parseExpiry(input: string | number | undefined, nowSec: bigint): bigint {
+function parseMatchTimeToUnixSec(matchTime: string | undefined | null): bigint | null {
+  if (matchTime === undefined || matchTime === null || matchTime === '') return null;
+  const ms = Date.parse(matchTime);
+  if (Number.isNaN(ms)) return null;
+  return BigInt(Math.floor(ms / 1000));
+}
+
+interface ParsedExpiry {
+  expirySec: bigint;
+  source: ExpirySource;
+}
+
+/**
+ * Resolve the canonical signed expiry plus its provenance.
+ *
+ * Default rule when `input === undefined`:
+ *
+ *   1. matchTime is in the future  → expiry = matchTime exactly
+ *      (source = 'default-match-time'). No floor, no offset.
+ *   2. matchTime is missing/invalid → expiry = now + 1h
+ *      (source = 'missing-match-time-fallback').
+ *   3. matchTime is in the past    → throws — user must pass --expiry
+ *      explicitly to opt into a live/post-start commitment.
+ *
+ * User-provided values:
+ *
+ *   - duration string ('30m', '4h', '1d', '1w') → now + duration
+ *     (source = 'user-relative')
+ *   - decimal-digits-only string                → unix seconds
+ *     (source = 'user-unix')
+ *   - anything else                             → ISO-8601 / RFC3339
+ *     (source = 'user-iso')
+ *
+ * All paths run through the same future + 1-year-cap validation.
+ */
+function parseExpiry(
+  input: string | number | undefined,
+  nowSec: bigint,
+  matchTimeSec: bigint | null,
+): ParsedExpiry {
   let expirySec: bigint;
+  let source: ExpirySource;
+
   if (input === undefined) {
-    expirySec = nowSec + DEFAULT_EXPIRY_OFFSET_SEC;
+    if (matchTimeSec === null) {
+      // Match time is missing or invalid — fall back to a short window
+      // and label the source loudly so the user notices.
+      expirySec = nowSec + MISSING_MATCH_TIME_FALLBACK_SEC;
+      source = 'missing-match-time-fallback';
+    } else if (matchTimeSec <= nowSec) {
+      // Match time is in the past — the safe-by-default rule (expiry
+      // = matchTime) would already be invalid. Refuse to silently
+      // create live exposure; require explicit opt-in.
+      throw new OspexValidationError(
+        `Cannot default --expiry: contest's scheduled match time has already passed ` +
+          `(matchTime=${matchTimeSec}, now=${nowSec}). Pass --expiry explicitly if you ` +
+          `intentionally want a live/post-start commitment (e.g. --expiry 30m).`,
+      );
+    } else {
+      // Default case — expire exactly at scheduled match time. No
+      // floor, no offset; if the game starts in 5 minutes, the
+      // commitment expires in 5 minutes.
+      expirySec = matchTimeSec;
+      source = 'default-match-time';
+    }
   } else if (typeof input === 'number') {
     expirySec = BigInt(Math.floor(input));
-  } else if (/^[0-9]+$/.test(input)) {
-    expirySec = BigInt(input);
+    source = 'user-unix';
   } else {
-    const ms = Date.parse(input);
-    if (Number.isNaN(ms)) {
-      throw new OspexValidationError(
-        `Invalid --expiry "${input}". Use ISO-8601 (2026-05-09T20:00:00Z) or unix-seconds.`,
-      );
+    const durationOffset = parseDurationToSec(input);
+    if (durationOffset !== null) {
+      expirySec = nowSec + durationOffset;
+      source = 'user-relative';
+    } else if (/^[0-9]+$/.test(input)) {
+      expirySec = BigInt(input);
+      source = 'user-unix';
+    } else {
+      const ms = Date.parse(input);
+      if (Number.isNaN(ms)) {
+        throw new OspexValidationError(
+          `Invalid --expiry "${input}". Accepted forms: ` +
+            `ISO-8601 / RFC3339 ("2026-05-09T20:00:00Z" or "...-05:00"), ` +
+            `unix-seconds ("1715299200"), ` +
+            `or a duration ("30m", "4h", "1d", "1w").`,
+        );
+      }
+      expirySec = BigInt(Math.floor(ms / 1000));
+      source = 'user-iso';
     }
-    expirySec = BigInt(Math.floor(ms / 1000));
   }
+
   if (expirySec <= nowSec) {
     throw new OspexValidationError(
       `--expiry must be in the future (got ${expirySec}, now ${nowSec}).`,
@@ -376,5 +482,31 @@ function parseExpiry(input: string | number | undefined, nowSec: bigint): bigint
       `--expiry must be within 1 year of now (got ${expirySec}, max ${nowSec + ONE_YEAR_SEC}).`,
     );
   }
-  return expirySec;
+  return { expirySec, source };
+}
+
+/**
+ * Parse a relative-duration string ("30m", "4h", "1d", "1w") to a
+ * non-negative bigint of seconds. Returns null when the string isn't
+ * a duration (so the caller can fall through to other format
+ * detectors); throws when the shape matches a duration but the value
+ * is invalid (e.g. "0m").
+ */
+function parseDurationToSec(input: string): bigint | null {
+  const match = DURATION_RE.exec(input);
+  if (!match) return null;
+  const magnitude = BigInt(match[1]!);
+  if (magnitude === 0n) {
+    throw new OspexValidationError(
+      `Invalid --expiry duration "${input}": magnitude must be > 0 (e.g. "30m", "4h", "1d", "1w").`,
+    );
+  }
+  const unit = match[2]!;
+  const seconds = DURATION_UNIT_SEC[unit];
+  if (seconds === undefined) {
+    // Defensive: the regex only allows [smhdw]; this branch is
+    // unreachable but keeps the type-check honest.
+    throw new OspexValidationError(`Invalid --expiry duration unit "${unit}".`);
+  }
+  return magnitude * seconds;
 }
