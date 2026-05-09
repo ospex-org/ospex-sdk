@@ -56,10 +56,16 @@ ospex commitments submit \                                   # by --contest, lin
   --contest <id> --market spread --side padres --line -3.5 --odds 1.91 --risk-usdc 25
 ospex commitments submit-raw <contestId> <scorer> <lineTicks> upper 250 1000  # protocol escape hatch
 
-ospex commitments match <commitment-hash>                    # match an existing maker commitment
-ospex commitments cancel <commitment-hash>                   # off-chain cancel via signed DELETE
-ospex commitments cancel <commitment-hash> --also-onchain    # off-chain DELETE + authoritative on-chain cancel (M2.5)
-ospex commitments cancel-onchain <commitment-hash>           # on-chain cancel only (M2.5)
+# Match an existing maker commitment as the taker. Renders a preview block
+# before signing; pass --yes to skip the prompt. Accepts a full hash OR a
+# unique 0x-prefixed hex prefix (≥ 8 hex chars after 0x).
+#   --json alone          → emit the MatchPreviewEnvelope (preview only)
+#   --yes --json          → execute and emit the MatchJsonResult envelope
+#   --risk-usdc <decimal> → taker desired risk (decimal USDC); default = full fill
+ospex commitments match <hash-or-prefix>                     # interactive; preview + confirm + send
+ospex commitments cancel <hash-or-prefix>                    # off-chain cancel via signed DELETE
+ospex commitments cancel <hash-or-prefix> --also-onchain     # off-chain DELETE + authoritative on-chain cancel (M2.5)
+ospex commitments cancel-onchain <hash-or-prefix>            # on-chain cancel only (M2.5)
 ospex commitments cancel-all --contest-id <id> \             # bulk-cancel via raiseMinNonce (M2.5)
   --scorer <addr> --line <ticks> [--dry-run]
 ospex commitments nonce-floor --maker <addr> \               # read on-chain nonce floor (M2.5)

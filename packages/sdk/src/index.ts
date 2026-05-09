@@ -138,3 +138,34 @@ export {
   buildSubmitPreview,
   type BuildSubmitPreviewArgs,
 } from './commitments/buildSubmitPreview.js';
+export {
+  buildMatchPreview,
+} from './commitments/buildMatchPreview.js';
+export {
+  MIN_PREFIX_HEX_LEN,
+  PAGE_LIMIT,
+} from './commitments/resolveByPrefix.js';
+export type {
+  PrepareMatchArgs,
+  ResolveByPrefixOptions,
+  StatusFilter,
+} from './commitments/index.js';
+
+// Match-flow preview model — parallels SubmitPreview but for the taker
+// side. CLI and agents render `MatchPreview`; `--json` emits the
+// envelope; `--yes --json` emits the result envelope.
+export type {
+  MatchPreview,
+  MatchPreviewEnvelope,
+  MatchJsonResult,
+  MatchPreviewWarning,
+  MatchPreviewContest,
+  MatchPreviewMarket,
+  MatchPreviewSide,
+  MatchPreviewOdds,
+  MatchPreviewEconomics,
+  MatchPreviewExpiry,
+  MatchPreviewSpeculation,
+  LazyCreationFee,
+  BuildMatchPreviewArgs,
+} from './types/matchPreview.js';
