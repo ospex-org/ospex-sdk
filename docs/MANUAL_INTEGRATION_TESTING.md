@@ -88,7 +88,7 @@ Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end bef
 
 | # | Command | Expected | Validates |
 |---|---|---|---|
-| 4.1 | `ospex commitments approve max --yes` | tx submitted, receipt confirmed; verify on Amoy Polygonscan that `allowance(walletA, PositionModule)` is `2^256-1` | Signer + chain client + ERC20 ABI + USDC + PositionModule address resolution. (The `--yes` skips the confirmation prompt added in PR #40 — interactive runs render a preview block before sending.) |
+| 4.1 | `ospex commitments approve max --yes` | tx submitted, receipt confirmed; verify on Amoy Polygonscan that `allowance(walletA, PositionModule)` is `2^256-1` | Signer + chain client + ERC20 ABI + USDC + PositionModule address resolution. (`--yes` skips the confirmation prompt; interactive runs render a preview block before sending.) |
 | 4.2 | `ospex commitments submit-raw <contestId> <scorerAddr> <lineTicks> upper 250 1000` | Prints commitment hash + `status: open` | Nonce-floor read + EIP-712 typed-data + sign + hash + POST + idempotency. (Raw form is used here because the test exercises the canonical-tuple surface directly; production users should prefer the high-level `submit`.) |
 | 4.3 | `ospex commitments list --maker <walletA>` | Row appears with `status='open'` and the right risk/odds | Indexer-free read path. |
 | 4.4 | Re-run 4.2 with **identical** inputs | Same commitment hash returned, no duplicate row | Server-side dedup on hash. |
