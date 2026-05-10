@@ -35,7 +35,7 @@ Initial public release.
 - `ospex odds {show, watch}` — one-shot snapshot + Realtime stream (line-delimited JSON in `--json` mode).
 - `ospex leaderboard show`.
 - `ospex wallet {import, address, unlock, lock}` — legacy session-cache path.
-- Every command supports `--json` for machine-readable output. See [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) for the stable agent contract.
+- Most commands support `--json` for machine-readable output; the interactive setup / wallet-management flows (`init`, `wallet import`, `wallet unlock`, `wallet lock`) do not. See [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) for the stable agent contract.
 
 ### Documentation
 
