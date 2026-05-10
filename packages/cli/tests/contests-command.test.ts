@@ -49,12 +49,12 @@ describe('makeContestsCommand', () => {
   });
 
   it('create --no-wait registers as a negate option mapping to attribute `wait`', () => {
-    // Regression test for review3.md issue 1: the zod schema for
-    // `create` previously read `noWait`, but commander's --no-X
-    // convention writes the attribute as `wait` (default true). The
-    // mismatch silently dropped the flag and the command always
-    // waited. This test pins the option to the commander convention
-    // so a future schema rename has to update both ends.
+    // Regression: the zod schema for `create` previously read
+    // `noWait`, but commander's --no-X convention writes the
+    // attribute as `wait` (default true). The mismatch silently
+    // dropped the flag and the command always waited. This test
+    // pins the option to the commander convention so a future
+    // schema rename has to update both ends.
     const root = makeContestsCommand();
     const create = root.commands.find((c) => c.name() === 'create');
     expect(create).toBeDefined();

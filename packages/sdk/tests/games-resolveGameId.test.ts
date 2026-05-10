@@ -44,7 +44,7 @@ describe('resolveGameId', () => {
     expect(out).toEqual({ gameId: upper, source: 'uuid', game: null });
   });
 
-  it('passes whitespace-padded UUIDs through after trim (review7 nit)', async () => {
+  it('passes whitespace-padded UUIDs through after trim', async () => {
     const listGames = vi.fn(async () => [] as Game[]);
     const out = await resolveGameId(`  ${UUID_A}  `, { listGames });
     expect(out).toEqual({ gameId: UUID_A, source: 'uuid', game: null });
@@ -90,7 +90,7 @@ describe('resolveGameId', () => {
     );
   });
 
-  it('rejects empty / whitespace-only / non-string input (review7 nit)', async () => {
+  it('rejects empty / whitespace-only / non-string input', async () => {
     const listGames = vi.fn(async () => [] as Game[]);
     await expect(resolveGameId('', { listGames })).rejects.toThrow(OspexValidationError);
     await expect(resolveGameId('   ', { listGames })).rejects.toThrow(OspexValidationError);

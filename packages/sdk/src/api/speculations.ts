@@ -58,9 +58,9 @@ function toContext(body: SpeculationParentContextBody): SpeculationParentContext
     contestId: body.contestId,
     awayTeam: body.awayTeam,
     homeTeam: body.homeTeam,
-    // Defensive on missing fields: a stale core-api deploy without
-    // PR #15 returns no team_id keys; coerce to null so downstream
-    // resolver code can treat both states identically.
+    // Defensive on missing fields: a core-API version that predates
+    // the team-UUID join returns no team_id keys; coerce to null so
+    // downstream resolver code can treat both states identically.
     awayTeamId: body.awayTeamId ?? null,
     homeTeamId: body.homeTeamId ?? null,
     sport: body.sport,

@@ -178,7 +178,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex wallet lock` | Deletes the cached unlocked key. |
 | `ospex wallet address` | Prints the keystore's address. Foundry-produced keystores omit the top-level `address` field, so the passphrase is requested in that case. |
 
-Every command supports `--json` for machine-readable output. See [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) for the stable JSON envelope shapes and which commands are preview-bearing vs. output-format-only.
+Most commands support `--json` for machine-readable output. The interactive setup / wallet-management commands — `init`, `wallet import`, `wallet unlock`, `wallet lock` — do not, because they're stateful prompt flows. See [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) for the stable JSON envelope shapes and which commands are preview-bearing vs. output-format-only.
 
 ## Wallet security
 

@@ -2,11 +2,9 @@
  * Resolve a free-form `--side` input into a canonical
  * `(positionType, role, resolutionSource)` tuple.
  *
- * Algorithm — see PROPOSAL §4 in the parent ospex-matched-pairs/.
- *
  * For totals: input must be `over`/`under` (and a few obvious
  * alternates). Returns Upper/Lower per the OspexTypes convention
- * (Upper=0=away/over, Lower=1=home/under per OspexTypes.sol:106-108).
+ * (Upper=0=away/over, Lower=1=home/under).
  *
  * For moneyline / spread: input is matched against the contest's two
  * team strings using these strategies, in order, returning on first hit:

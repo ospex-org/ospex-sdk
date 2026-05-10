@@ -871,7 +871,7 @@ describe('prepareSubmit — afterMatchTime warning flag', () => {
 
 // ── TreasuryModule (lazy creation fee) allowance preflight ──────────
 
-describe('prepareSubmit — TreasuryModule allowance preflight (PR B)', () => {
+describe('prepareSubmit — TreasuryModule allowance preflight', () => {
   it('lazy commit + sufficient PositionModule + zero TreasuryModule → 2-row approvals[], lazy row needsApproval=true', async () => {
     // --contest path with no existing speculation → lazy mode. Maker
     // has covered the risk via PositionModule but never touched

@@ -125,9 +125,9 @@ export interface ContestBody {
   scoredAt?: string | null;
   voidedAt?: string | null;
   /**
-   * Team UUIDs from `teams` resolved via the games-row join, added in
-   * core-api PR #15. Detail-endpoint-only. Null when the contest has
-   * no JSONOdds linkage or the games row is missing — the SDK
+   * Team UUIDs from `teams`, resolved server-side via the games-row
+   * join. Detail-endpoint-only. Null when the contest has no
+   * JSONOdds linkage or the games row is missing — the SDK
    * resolver falls back to exact + nickname matching in that case.
    */
   awayTeamId?: string | null;
@@ -145,7 +145,7 @@ export interface SpeculationParentContextBody {
   awayTeam: string;
   homeTeam: string;
   /**
-   * Team UUIDs added in core-api PR #15. Null when the contest has no
+   * Team UUIDs from the games-row join. Null when the contest has no
    * JSONOdds linkage — the SDK resolver scopes alias matching to these
    * when both are non-null and falls back to exact + nickname otherwise.
    */

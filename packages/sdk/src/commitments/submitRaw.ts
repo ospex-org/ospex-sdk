@@ -1,14 +1,14 @@
 /**
  * `commitments.submitRaw(args)` — the protocol-level escape hatch. Sign
- * an EIP-712 OspexCommitment and POST it to ospex-core-api using the
+ * an EIP-712 OspexCommitment and POST it to the core API using the
  * literal `(contestId, scorer, lineTicks, positionType, oddsTick,
  * riskAmount)` tuple the contract takes. No resolver, no preview block.
  *
  * Most callers should reach for the high-level `commitments.submit`
- * (lands in PR C) which accepts domain-language inputs (`--side lakers
- * --odds 2.50 --risk-usdc 1`) and renders an explicit win/lose/push
- * preview before signing. `submitRaw` is preserved for tests, debugging,
- * and advanced operators who already hold canonical protocol values.
+ * which accepts domain-language inputs (`--side lakers --odds 2.50
+ * --risk-usdc 1`) and renders an explicit win/lose/push preview before
+ * signing. `submitRaw` is preserved for tests, debugging, and advanced
+ * operators who already hold canonical protocol values.
  *
  * Pipeline:
  *   1. Validate inputs
@@ -50,9 +50,9 @@ import type { Hex } from '../types/signer.js';
 void CANCEL_COMMITMENT_TYPES;
 
 /**
- * Canonical protocol-level submit args. Renamed from `SubmitArgs` in
- * PR B; the high-level `submit(HighLevelSubmitArgs)` lives on the
- * Commitments class separately (PR C).
+ * Canonical protocol-level submit args. The high-level
+ * `submit(HighLevelSubmitArgs)` lives on the Commitments class
+ * separately and orchestrates around this raw entry point.
  */
 export interface RawSubmitArgs {
   contestId: bigint;
