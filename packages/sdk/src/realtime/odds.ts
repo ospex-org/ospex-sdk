@@ -5,9 +5,8 @@
  * to the user's `onChange` / `onRefresh` handlers.
  *
  * The Realtime payload includes the OLD row only because the table is
- * declared `REPLICA IDENTITY FULL` — see ospex-indexer/migrations.
- * Without that, oldRow is empty `{}` and every update would classify
- * as 'change' (initial-state fallback).
+ * declared `REPLICA IDENTITY FULL`. Without that, oldRow is empty `{}`
+ * and every update would classify as 'change' (initial-state fallback).
  */
 
 import type {

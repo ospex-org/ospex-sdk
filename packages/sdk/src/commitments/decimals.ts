@@ -202,7 +202,7 @@ export function americanOddsToTick(input: string): number {
     // Reject before the math runs. Otherwise large negative magnitudes
     // round their resulting tick up to MIN_ODDS_TICK (decimal 1.01 =
     // American -10000) and silently accept a price the user did not
-    // type — see ospex-org/ospex-sdk PR #30 review.
+    // type.
     throw new OspexValidationError(
       `American odds magnitude must be ≤ ${MAX_AMERICAN_MAGNITUDE}, got "${input}". ` +
         `Protocol range is decimal 1.01–101.00, equivalent to American ` +

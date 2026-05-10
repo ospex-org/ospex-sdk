@@ -4,9 +4,9 @@
  * `Contest` is what `client.contests.list` and `client.contests.get`
  * return — the off-chain projected view of an on-chain Contest paired
  * with the array of Speculations (single bettable lines) registered
- * against it. The shape mirrors the `Contest` struct in
- * `ospex-foundry-matched-pairs/src/core/OspexTypes.sol`, plus the
- * teams / sport / matchTime fields the indexer joins from upstream.
+ * against it. The shape mirrors the on-chain `Contest` struct
+ * (`OspexTypes.sol`), plus the teams / sport / matchTime fields the
+ * indexer joins from upstream.
  *
  * `Speculation` is the embedded per-line entity. Mirrors the on-chain
  * `Speculation` struct.
@@ -58,8 +58,7 @@ export interface Speculation {
  * Small parent contest context attached by `client.speculations.get`.
  * The common "what game is this on?" question — source hashes /
  * lifecycle timestamps stay on the contest detail endpoint. Team
- * UUIDs added in core-api PR #15 (resolved via the games-row join);
- * null when no game linkage exists.
+ * UUIDs come from the games-row join; null when no game linkage exists.
  */
 export interface SpeculationParentContext {
   contestId: string;
@@ -143,9 +142,9 @@ export interface Contest {
   voidedAt?: string | null;
   /**
    * Team UUIDs from `teams`, resolved server-side via the games-row
-   * join (added in core-api PR #15). Detail-endpoint-only. Null when
-   * the contest has no JSONOdds linkage or the games row is missing.
-   * Consumed by the SDK resolver layer to scope alias matching.
+   * join. Detail-endpoint-only. Null when the contest has no
+   * JSONOdds linkage or the games row is missing. Consumed by the
+   * SDK resolver layer to scope alias matching.
    */
   awayTeamId?: string | null;
   homeTeamId?: string | null;

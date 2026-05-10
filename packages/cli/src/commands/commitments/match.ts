@@ -104,7 +104,7 @@ export const commitmentsMatchCommand = new Command('match')
     // hint. `--json` alone (preview-only for agents) is allowed past
     // this guard — it may still hit the hidden-input error if no
     // session is cached, but that is a separate, documented condition
-    // unrelated to the no-confirmation case Hermes flagged.
+    // unrelated to the missing-confirmation case this guard exists for.
     if (!skipPrompt && !wantJson && !isInteractive) {
       throw new OspexValidationError(
         '--yes is required for non-interactive runs of `commitments match`. Re-run with --yes.',

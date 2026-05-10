@@ -6,8 +6,7 @@
  *
  * Gas estimation uses the public client's `estimateGas` plus a small
  * cushion (10%) to absorb the slight delta between estimation and
- * inclusion. Polygon Amoy in particular under-estimates frequently
- * (per `ospex-foundry-matched-pairs/docs/DEPLOYMENT.md:214`).
+ * inclusion. Polygon Amoy in particular under-estimates frequently.
  */
 
 import { type Hash, type Hex as ViemHex, type PublicClient } from 'viem';

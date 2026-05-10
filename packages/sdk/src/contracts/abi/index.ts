@@ -1,8 +1,8 @@
 /**
- * ABI re-exports. Module artifacts are full Foundry outputs (refresh by
- * copying from `ospex-foundry-matched-pairs/out/<Module>.sol/<Module>.json`).
- * The ERC-20 ABI is hand-written for viem-friendly `as const` typing and
- * is reused for LINK token interactions (balanceOf / allowance / approve).
+ * ABI re-exports. Module artifacts are full Foundry outputs, refreshed
+ * from the contracts repo on every redeploy. The ERC-20 ABI is
+ * hand-written for viem-friendly `as const` typing and is reused for
+ * LINK token interactions (balanceOf / allowance / approve).
  */
 
 import contestModuleArtifact from './ContestModule.json' with { type: 'json' };

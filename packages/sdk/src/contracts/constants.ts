@@ -12,10 +12,10 @@ import type { ChainId } from '../types/protocol.js';
  * match via `TreasuryModule.processSplitFee`. Once the speculation
  * exists, no further matches incur this fee.
  *
- * Source: `ospex-foundry-matched-pairs/script/DeployPolygon.s.sol:91`
- * (= 500000 wei6 = 0.50 USDC) and `DeployAmoy.s.sol:81` (same value).
- * The deploy-script comment annotates this as CONFIGURABLE; refresh
- * the table on any redeploy that changes it.
+ * Sourced from the contracts repo's deploy scripts (= 500000 wei6 =
+ * 0.50 USDC on both mainnet and Amoy). The deploy-script comment
+ * annotates this as CONFIGURABLE; refresh this table on any redeploy
+ * that changes it.
  */
 export const SPECULATION_CREATION_FEE_WEI6: Record<ChainId, bigint> = {
   137: 500_000n,
@@ -25,10 +25,10 @@ export const SPECULATION_CREATION_FEE_WEI6: Record<ChainId, bigint> = {
 /**
  * Per-chain per-side share of the speculation creation fee — what
  * one party (maker OR taker) pays when their match triggers lazy
- * creation. The contract computes `firstHalf = total / 2`
- * (TreasuryModule.sol:224); for the canonical 500000 total, both
- * halves are equal. Mirrored here rather than computed at call sites
- * so the value is visible in code review next to its source.
+ * creation. The contract computes `firstHalf = total / 2` in
+ * `TreasuryModule.processSplitFee`; for the canonical 500000 total,
+ * both halves are equal. Mirrored here rather than computed at call
+ * sites so the value is visible in code review next to its source.
  */
 export const SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6: Record<ChainId, bigint> = {
   137: 250_000n,
@@ -57,7 +57,7 @@ export const OSPEX_FUNCTIONS_CALLBACK_GAS_MAX: Record<ChainId, number> = {
  * Default Chainlink Functions callback gas limit for OracleModule requests.
  * Picked to match the router cap on every supported chain so every request
  * is accepted; the verify / score / market-update scripts the protocol
- * ships fit comfortably under it (lovable runs the same value).
+ * ships fit comfortably under it.
  *
  * Operators can pass a smaller value via `args.gasLimit` to economize on
  * subscription LINK draw. Larger values are rejected client-side against
@@ -76,11 +76,10 @@ export const OSPEX_DEFAULT_GAS_LIMIT = 300_000 as const;
  * TreasuryModule, three EIP-712 signature verifications, contest
  * record creation, and a Chainlink Functions request submit — and
  * `eth_estimateGas` is unreliable in this region across some Polygon
- * RPCs (Infura strips revert data, public RPCs hit state-history
- * issues per `ospex-foundry-matched-pairs/docs/DEPLOYMENT.md`). We
- * adopt lovable's tested ceilings and bypass estimateGas for these
- * specific txs. EIP-1559 refunds the unused portion, so paying the
- * ceiling cost is bounded by actual consumption.
+ * RPCs (Infura strips revert data; public RPCs hit state-history
+ * issues). These ceilings are empirically tested and bypass
+ * estimateGas for these specific txs. EIP-1559 refunds the unused
+ * portion, so paying the ceiling cost is bounded by actual consumption.
  */
 export const OSPEX_CREATE_CONTEST_TX_GAS = 2_000_000n as const;
 export const OSPEX_SCORE_CONTEST_TX_GAS = 1_000_000n as const;
@@ -90,7 +89,7 @@ export const OSPEX_SCORE_CONTEST_TX_GAS = 1_000_000n as const;
  *   - Polygon mainnet: linkDenominator = 200 → 0.005 LINK
  *   - Polygon Amoy:    linkDenominator = 250 → 0.004 LINK
  *
- * Source: ospex-foundry-matched-pairs/script/{DeployPolygon,DeployAmoy}.s.sol
+ * Sourced from the contracts repo's deploy scripts.
  */
 export const LINK_PAYMENT_PER_CALL_WEI: Record<ChainId, bigint> = {
   137: 5_000_000_000_000_000n,
@@ -102,9 +101,9 @@ export const LINK_PAYMENT_PER_CALL_WEI: Record<ChainId, bigint> = {
  * "shared" default. Operators may pass their own subscription id at call
  * time; this is the fallback when none is supplied.
  *
- * Mainnet 191 is owned by the protocol deployer. Whether OracleModule is
- * a registered consumer of 191 is checked via runtime pre-flight (or
- * surfaced as a Chainlink router revert at submit time).
+ * Mainnet 191 is the protocol-maintained shared subscription. Whether
+ * OracleModule is a registered consumer of 191 is checked via runtime
+ * pre-flight (or surfaced as a Chainlink router revert at submit time).
  *
  * Amoy has no protocol-shared subscription — operators must always pass
  * their own. SDK throws OspexSubscriptionError when subscriptionId is
@@ -118,9 +117,8 @@ export const OSPEX_SHARED_SUBSCRIPTION_ID: Record<ChainId, bigint | null> = {
 /**
  * The EIP-712 signer authorized to sign ScriptApproval structs that
  * OracleModule.createContestFromOracle accepts. Immutable per
- * OracleModule deployment.
- *
- * Source: ospex-foundry-matched-pairs/script/{DeployPolygon,DeployAmoy}.s.sol.
+ * OracleModule deployment. Sourced from the contracts repo's deploy
+ * scripts; rotation requires a redeploy.
  */
 export const APPROVED_SIGNER_BY_CHAIN: Record<ChainId, `0x${string}`> = {
   137: '0xfd6C7Fc1F182de53AA636584f1c6B80d9D885886',
@@ -128,13 +126,10 @@ export const APPROVED_SIGNER_BY_CHAIN: Record<ChainId, `0x${string}`> = {
 };
 
 /**
- * Default ospex-api-server URL — exposes POST /api/get-encrypted-secrets
- * for Chainlink Functions encrypted secrets retrieval.
- *
- * `secrets.ospex.org` is the protocol-stable alias for the underlying
- * Heroku app `ospex-api` (verified responding with a valid encrypted
- * payload on 2026-05-03). Prefer the alias in code so a Heroku app
- * rename / migration doesn't ripple into the SDK.
+ * Default URL for the protocol's secrets API — exposes
+ * `POST /api/get-encrypted-secrets` for Chainlink Functions encrypted
+ * secrets retrieval. `secrets.ospex.org` is a protocol-stable alias so
+ * an underlying-deployment migration doesn't ripple into the SDK.
  */
 export const OSPEX_API_SERVER_URL = 'https://secrets.ospex.org' as const;
 

@@ -138,11 +138,11 @@ export const commitmentsSubmitCommand = new Command('submit')
     //    fetches, allowance + nonce reads. No signing yet.
     const preview = await client.commitments.prepareSubmit(args);
 
-    // 2. `--json` alone (no --yes) is the preview-only mode per
-    //    PROPOSAL §6.2 — emit the SubmitPreviewEnvelope and exit
-    //    without prompting or signing. Use case: an agent inspects
-    //    the resolved tuple before deciding whether to run the
-    //    actual submit (`--yes --json`).
+    // 2. `--json` alone (no --yes) is the preview-only mode — emit
+    //    the SubmitPreviewEnvelope and exit without prompting or
+    //    signing. Use case: an agent inspects the resolved tuple
+    //    before deciding whether to run the actual submit
+    //    (`--yes --json`).
     if (wantJson && !skipPrompt) {
       formatOutput({ schemaVersion: 1, preview }, { json: true });
       return;

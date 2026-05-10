@@ -1,15 +1,14 @@
 /**
  * EIP-712 typed-data definitions and helpers for Ospex commitments.
  *
- * Source of truth for the schema is the contract typehash at
- * `ospex-foundry-matched-pairs/src/modules/MatchingModule.sol:43-56`.
- * The R4 OspexCommitment has nine fields; any 10-field schema (with
- * `contributionAmount`) is the legacy R3 layout and will fail
+ * Source of truth for the schema is the contract typehash on
+ * `MatchingModule`. The OspexCommitment has nine fields; any 10-field
+ * schema (with `contributionAmount`) is a legacy layout and will fail
  * verification on chain.
  *
  * The `verifyingContract` for the domain is the MatchingModule, NOT
- * OspexCore. This is the single most common new-integrator bug per
- * the eip712-commitments skill — keep it pinned here.
+ * OspexCore. This is the single most common new-integrator bug —
+ * keep it pinned here.
  */
 
 import { encodeAbiParameters, hashTypedData, keccak256 } from 'viem';

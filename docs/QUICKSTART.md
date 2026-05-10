@@ -366,7 +366,7 @@ Once `contests create` returns a `contestId`, the writer populates current_odds 
 
 `ospex contests create` waits for the Chainlink Functions verification callback by default and prints the new `contestId` only after `contestStatus=Verified` lands on chain (typically 10–30s). Pass `--no-wait` if you'd rather get the txHash immediately and poll separately with `ospex contests wait-verified <contestId>` — useful for scripted flows.
 
-The three external IDs the contract requires (rundown / sportspage / jsonodds) are resolved server-side from the gameId; you never deal with them directly. Operator-side details on the M4 pipeline live in the SDK's CLAUDE.md.
+The three external IDs the contract requires (rundown / sportspage / jsonodds) are resolved server-side from the gameId; you never deal with them directly.
 
 ---
 

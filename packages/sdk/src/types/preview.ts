@@ -6,9 +6,8 @@
  *
  * Lock the contract early — once market-maker bots start consuming
  * the JSON output, the schema is part of the public SDK surface.
- *
- * See `docs/PROPOSAL.md` §6.2 in the parent ospex-matched-pairs/ root
- * for the full design rationale.
+ * Drift is policed by `schemaVersion: 1` and the agent integration
+ * contract in `docs/AGENT_CONTRACT.md`.
  */
 
 import type { MarketType } from './odds.js';
@@ -41,14 +40,11 @@ export type SpeculationMode =
        * — a different spender from the `riskAmount` (which goes to
        * `PositionModule`). The CLI surfaces this in the preview so
        * the maker isn't surprised by a +0.25 USDC charge at match
-       * time. NOTE: as of this PR, the SDK's allowance preflight
-       * still only checks PositionModule; a follow-up will preflight
-       * the TreasuryModule allowance for lazy commitments and
-       * surface a second `approvals[]` row when both are short.
-       * Until then, a maker submitting a lazy commit with insufficient
-       * TreasuryModule allowance will not be blocked at submit time;
-       * the first match will revert with `ERC20InsufficientAllowance`
-       * against TreasuryModule.
+       * time. The match-side preview includes a separate
+       * `lazy-creation-fee` approval row (and a
+       * `maker-treasury-allowance-insufficient` warning when the
+       * maker's TreasuryModule allowance is short), so a taker can
+       * abort before signing rather than wait for an on-chain revert.
        */
       makerCreationFeeUSDC: string;
     };
@@ -294,7 +290,6 @@ export interface SubmitJsonResult {
  * - Con: slightly more verbose at call sites — `{ parent: { kind: 'speculation', speculationId: 123 } }`
  *   vs. `{ speculationId: 123 }`.
  *
- * Public-API decision logged in PROPOSAL.md §6.1 (post-PR-A revision).
  * The wire/JSON `--json` envelope shape is unaffected — this is a
  * TypeScript-only ergonomic.
  */

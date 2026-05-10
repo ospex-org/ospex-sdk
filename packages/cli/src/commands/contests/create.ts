@@ -4,11 +4,10 @@
  *    row's `jsonodds_id`). The SDK fetches `/v1/games/:gameId`,
  *    extracts the three external IDs the contract requires, and builds
  *    the on-chain tx. Users never deal with the three IDs directly.
- *  - `--game <slug-or-id>` is the resolver-friendly alias added in
- *    PR D. UUID inputs are passed through; slug inputs are resolved
- *    against `games.slug` for the configured network. Multiple
- *    matches or no match fail closed. `--game-id` remains canonical
- *    forever.
+ *  - `--game <slug-or-id>` is the resolver-friendly alias. UUID inputs
+ *    are passed through; slug inputs are resolved against `games.slug`
+ *    for the configured network. Multiple matches or no match fail
+ *    closed. `--game-id` remains canonical forever.
  *  - On OspexAllowanceError: prompt to approve the right (token, spender)
  *    pair and retry. Both LINK→OracleModule and USDC→TreasuryModule may
  *    be missing on a fresh wallet, so the call site loops up to two
@@ -102,10 +101,9 @@ export const contestCreateCommand = new Command('create')
         ];
         process.stderr.write(lines.join('\n'));
 
-        // Consent rule (PROPOSAL §2.4 / review8): --yes is the
-        // consent flag, --json is output format only. They are
-        // orthogonal — --json alone DOES NOT auto-consent. Match
-        // the same contract `commitments submit` uses.
+        // Consent rule: --yes is the consent flag; --json is output
+        // format only. They are orthogonal — --json alone DOES NOT
+        // auto-consent. Same contract as `commitments submit`.
         const skipPrompt = opts.yes === true;
         const isInteractive = process.stdin.isTTY === true;
         if (!skipPrompt && !isInteractive) {

@@ -119,8 +119,8 @@ describe('commitments match — command structure', () => {
 
   it('--risk-usdc help text describes it as taker desired risk / max outlay', () => {
     const help = commitmentsMatchCommand.helpInformation();
-    // Crucial UX disambiguation per Hermes feedback — the flag means
-    // the taker's risk, NOT the maker risk to fill.
+    // Crucial UX disambiguation — the flag means the taker's risk,
+    // NOT the maker risk to fill.
     expect(help.toLowerCase()).toMatch(/taker desired risk/);
     expect(help.toLowerCase()).toMatch(/max outlay/);
   });
@@ -134,7 +134,7 @@ describe('commitments match — command structure', () => {
 });
 
 describe('commitments match — preview renderer (existing speculation)', () => {
-  it('renders BOTH takerRisk AND fillMakerRisk lines — Hermes #smaller-feedback', () => {
+  it('renders BOTH takerRisk AND fillMakerRisk lines', () => {
     const preview = buildExisting();
     const out = captureRender(preview);
     expect(out).toMatch(/taker risks:\s+\d+\.\d{6}\s+USDC/);

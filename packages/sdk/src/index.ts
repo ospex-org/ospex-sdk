@@ -91,8 +91,8 @@ export type {
   GamesListOptions,
 } from './types/index.js';
 
-// Resolver-layer surface (PR A) — preview model + high-level submit args
-// + the resolver primitives. CLI and external agents render text from
+// Resolver-layer surface — preview model + high-level submit args + the
+// resolver primitives. CLI and external agents render text from
 // SubmitPreview; --json emits SubmitPreviewEnvelope / SubmitJsonResult.
 export type {
   SubmitPreview,

@@ -154,10 +154,10 @@ describe('computeReadiness', () => {
   });
 
   // Was: "any positive native balance counts as gas-ok (no minimum
-  // threshold)". Hermes flagged that as inconsistent with the
-  // renderer's "(no gas — no tx will land)" annotation on the same
-  // balance. The doctor must not contradict itself: if the renderer
-  // calls a balance dust, readiness must also call it dust.
+  // threshold)". Reverted as inconsistent with the renderer's
+  // "(no gas — no tx will land)" annotation on the same balance.
+  // The doctor must not contradict itself: if the renderer calls a
+  // balance dust, readiness must also call it dust.
   it('a 1-wei POL balance fails matching (below the 1e14 wei gas floor)', () => {
     const r = computeReadiness({
       approvals: makeApprovals({ positionModule: 1n }),
@@ -177,9 +177,9 @@ describe('computeReadiness', () => {
     expect(r.matchCommitments.ok).toBe(true);
   });
 
-  // Symmetric to the POL fix — Hermes's "consider" suggestion. A wallet
-  // with sub-µLINK from misdirected dust looks like "0 LINK" in the
-  // renderer; createContests must not be reported ready.
+  // Symmetric to the POL fix. A wallet with sub-µLINK from misdirected
+  // dust looks like "0 LINK" in the renderer; createContests must not
+  // be reported ready.
   it('a 1-wei LINK balance fails createContests (below the 1e12 wei dust floor)', () => {
     const r = computeReadiness({
       approvals: makeApprovals({
@@ -200,8 +200,8 @@ describe('computeReadiness', () => {
     expect(r.matchCommitments.ok).toBe(true);
   });
 
-  // Hermes blocking finding #1: apiOk=false must flip every capability
-  // because every Ospex write goes through core-api.
+  // apiOk=false must flip every capability because every Ospex write
+  // goes through the core API.
   it('apiOk=false fails all three capabilities even with healthy chain state', () => {
     const r = computeReadiness({
       approvals: makeApprovals({
@@ -290,9 +290,9 @@ describe('pickNextSuggestion', () => {
     expect(pickNextSuggestion(inputs, r)).toBeNull();
   });
 
-  // Hermes blocking finding #1: when API is down, surface that as the
-  // top-priority issue rather than ranking local fixes that the user
-  // would re-do once API recovers.
+  // When the API is down, surface that as the top-priority issue
+  // rather than ranking local fixes that the user would re-do once
+  // the API recovers.
   it('returns the API-unreachable suggestion when apiOk=false (overrides everything)', () => {
     const inputs = {
       approvals: makeApprovals({
@@ -372,8 +372,7 @@ describe('buildDoctorReport (JSON envelope)', () => {
   // Wiring regression: buildDoctorReport must pass apiOk through to
   // computeReadiness. A previous version showed apiOk in the report
   // header but didn't gate readiness on it, so an unreachable API
-  // could still report "ready to match: yes" — Hermes flagged this on
-  // PR #39 review.
+  // could still report "ready to match: yes".
   it('apiOk=false flips every capability in the embedded readiness matrix', () => {
     const report = buildDoctorReport({
       approvals: makeApprovals({

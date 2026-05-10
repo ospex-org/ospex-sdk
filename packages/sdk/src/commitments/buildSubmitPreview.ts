@@ -5,10 +5,10 @@
  * with computed economics, the full EIP-712 raw block, allowance
  * deltas, and the explicit win/lose/push outcome rows.
  *
- * No I/O — no API calls, no RPC. The orchestrator (`prepareSubmit`,
- * landing in PR C) is responsible for fetching contest detail,
- * speculation detail, allowances, and the maker's nonce, then calling
- * this with everything pre-fetched.
+ * No I/O — no API calls, no RPC. The orchestrator (`prepareSubmit`)
+ * is responsible for fetching contest detail, speculation detail,
+ * allowances, and the maker's nonce, then calling this with
+ * everything pre-fetched.
  *
  * Outcome generation:
  *   - moneyline: two rows (win / lose). No push.
