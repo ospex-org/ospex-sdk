@@ -100,38 +100,60 @@ A non-TTY run that requires a signer with no cached session AND wants `--json` o
 
 ## 3. CLI: the `--yes` contract
 
-`--yes` skips the human confirmation prompt. It is **required for non-interactive runs of any signing command**:
+`--yes` skips the human confirmation prompt. It is **required for non-interactive runs of preview-bearing signing commands** — the commands that render a confirmation prompt before signing. Specifically:
 
-```
-ospex commitments approve 5
-ospex commitments submit --speculation 42 --side lakers --odds 2.50 --risk-usdc 1
-ospex commitments match 0xe900c6dd
-ospex approvals setup --risk-usdc 50
-ospex contests create --game-id <id>
-```
+- `ospex commitments submit`
+- `ospex commitments match`
+- `ospex commitments approve`
+- `ospex commitments approve-raw`
+- `ospex approvals setup`
+- `ospex contests create --game <slug-or-uuid>` *(only when the value resolves to a slug that maps to multiple games — UUID input via `--game-id` does not enforce the guard)*
 
-Without `--yes`, these commands check `process.stdin.isTTY` and refuse to proceed when it's false rather than hang forever on a never-answered prompt:
+These commands check `process.stdin.isTTY` and refuse to proceed when it's false rather than hang forever on a never-answered prompt:
 
 ```
 OspexValidationError: --yes is required for non-interactive runs of `<command>`. Re-run with --yes.
 ```
 
-**`--yes` does not auto-approve approvals.** When `--yes` is set and an allowance is short, the command defaults to the **exact required** USDC amount, not unlimited. Pass `--approve-max` alongside `--yes` if you want unlimited.
+**Other write commands sign and send WITHOUT requiring `--yes`** — including `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`, `positions claim`, `positions claim-all`, `positions settle`, `contests score`, and `contests create --game-id <uuid>`. For these, `--json` is an *output format only*, not a preview gate; the command may still send a transaction. Use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
 
-**`--yes` is one-time consent.** Each invocation prompts (or confirms via `--yes`) once. There is no global "trust this agent for the next N minutes" mode — keep your call sites explicit.
+**`--yes` does not auto-approve approvals.** When `--yes` is set on a preview-bearing command and an allowance is short, the command defaults to the **exact required** USDC amount, not unlimited. Pass `--approve-max` alongside `--yes` if you want unlimited.
+
+**`--yes` is one-time consent.** Each invocation confirms via `--yes` once. There is no global "trust this agent for the next N minutes" mode — keep your call sites explicit.
 
 ---
 
 ## 4. CLI: the streaming contract (`ospex odds watch`)
 
-`ospex odds watch <contestId> --json` is the agent-facing streaming primitive. Output format (one object per line, NDJSON):
+`ospex odds watch <contestId> --json` is the agent-facing streaming primitive. Each event is emitted via `JSON.stringify({ kind, ...odds })` where `odds` is an `OddsSnapshot` from [`packages/sdk/src/types/odds.ts`](../packages/sdk/src/types/odds.ts). One object per line, NDJSON.
 
-```jsonl
-{"kind":"change","contestId":"...","jsonoddsId":"...","market":"spread","line":"-3.5","awayOddsAmerican":"+150","homeOddsAmerican":"-180","changedAt":"2026-05-09T20:00:00Z"}
-{"kind":"change","contestId":"...","market":"moneyline",...}
+### Wire shape per line
+
+```ts
+interface WatchEvent {
+  kind: 'change' | 'refresh';
+  // ...the spread of OddsSnapshot:
+  jsonoddsId: string;
+  market: 'moneyline' | 'spread' | 'total';
+  network: 'polygon' | 'amoy';
+  line: number | null;                  // spread/total threshold; null for moneyline
+  awayOddsAmerican: number | null;
+  homeOddsAmerican: number | null;
+  upstreamLastUpdated: string;          // ISO-8601
+  pollCapturedAt: string;               // ISO-8601
+  changedAt: string;                    // ISO-8601
+}
 ```
 
-Promises:
+`line` and the two `*OddsAmerican` fields are **numbers**, not strings — `-3.5`, `150`, `-180`. `null` when not populated. Example line (formatted for legibility — actual output is single-line):
+
+```jsonl
+{"kind":"change","jsonoddsId":"abc-123","market":"spread","network":"polygon","line":-3.5,"awayOddsAmerican":150,"homeOddsAmerican":-180,"upstreamLastUpdated":"2026-05-09T19:55:00Z","pollCapturedAt":"2026-05-09T19:59:30Z","changedAt":"2026-05-09T20:00:00Z"}
+```
+
+> **Note.** The `OddsSnapshot` shape is shared across all three markets and uses `awayOddsAmerican`/`homeOddsAmerican` even for `total` events. The `ospex odds show` command (below) uses richer market-specific shapes that name `over`/`under` explicitly.
+
+### Promises
 
 - **Each line is independently parseable JSON.** No multi-line objects.
 - `kind` is `'change'` (default) or `'refresh'` (only emitted when `--include-refreshes` is set).
@@ -139,13 +161,37 @@ Promises:
 - The `--json` mode writes **only** payload lines to stdout. The "Watching contest …, Ctrl+C to stop" banner is on stderr.
 - A contest with no upstream linkage (`jsonoddsId === null`) exits `1` with a single stderr message — do not retry; this contest cannot be watched.
 
-Non-promises:
+### Non-promises
 
 - **No automatic reconnection logic** beyond what the underlying Supabase Realtime client provides. If you need durable subscriptions across long network gaps, wrap the command in your own supervisor that re-spawns on non-zero exit.
 - **No replay of missed events.** If the channel drops, events arriving during the gap are lost. Re-poll a snapshot via `ospex odds show <contestId>` if you need a known-good baseline.
 - **No ordering guarantee across markets.** A `spread` change for contest X may arrive before a `moneyline` change for contest X even if upstream ordered them the other way. Order is reliable per-channel, not across channels.
 
-`ospex odds show <contestId>` is the one-shot equivalent — same data shape, single line per market, exits after emitting.
+### One-shot equivalent: `ospex odds show <contestId> --json`
+
+`odds show` is **not NDJSON** and **not the same shape as `odds watch`**. It emits a **single envelope**:
+
+```ts
+interface OddsShowEnvelope {
+  contest: {
+    contestId: string;
+    awayTeam: string;
+    homeTeam: string;
+    sport: string;
+    matchTime: string;          // ISO-8601
+    jsonoddsId: string | null;
+  };
+  odds: {
+    moneyline: MoneylineOdds | null;   // { market: 'moneyline', awayOddsAmerican, homeOddsAmerican, ...timestamps }
+    spread:    SpreadOdds    | null;   // { market: 'spread',    awayLine, homeLine, awayOddsAmerican, homeOddsAmerican, ...timestamps }
+    total:     TotalOdds     | null;   // { market: 'total',     line, overOddsAmerican, underOddsAmerican, ...timestamps }
+  };
+}
+```
+
+Each market entry uses an explicit, market-specific shape (over/under named directly for `total`; both labelled lines for `spread`). Authoritative source: [`packages/sdk/src/types/odds.ts`](../packages/sdk/src/types/odds.ts).
+
+Use `odds show` to decide a price *now*; use `odds watch` to react to changes over time.
 
 ---
 
@@ -238,8 +284,9 @@ The SDK's threat model is "the host machine is honest, the user's wallet is sove
 
 | Surface | Promise |
 |---|---|
-| Private keys | The SDK **never** asks for a private key, never logs one, and never persists one. Signing is delegated to a `Signer` interface (typed-data + raw-tx). |
-| `KeystoreSigner` | Decrypts a v3 keystore (Foundry- or ethers-produced) on every signature. The decrypted private key lives in a JS variable for the duration of the call only. |
+| Private keys (SDK) | The SDK never asks for a raw private key in its public `Signer` interface, never logs one, and never persists one. Signing is delegated to whichever `Signer` you supply (typed-data + raw-tx). |
+| `KeystoreSigner` | `KeystoreSigner.unlock(json, passphrase)` decrypts a v3 keystore (Foundry- or ethers-produced) **once** and stores a `viem.PrivateKeyAccount` on the signer instance. Subsequent `signTypedData` / `signTransaction` calls reuse that account — they do **not** re-decrypt. The decrypted material lives for the lifetime of the `KeystoreSigner` instance, not "the duration of the call". `KeystoreSigner.fromPrivateKey(pk)` constructs from a raw key directly (no decrypt). |
+| **CLI session cache (`ospex wallet unlock`)** | Writes the **decrypted private key** to `~/.ospex/session` as plain JSON, mode `0600`, 15-minute TTL (parent dir mode `0700`). Mode `0600` makes the file unreadable by *other* users on the host but does NOT protect against any process running as the same user — those can read it for the duration of the unlock. The Foundry-keystore path with no `wallet unlock` (each signature re-prompts for the passphrase via a fresh `KeystoreSigner.unlock`) avoids this trade-off entirely; the legacy session-cache path is kept for backwards compatibility but is not the recommended posture. |
 | RPC URL | **Caller-supplied.** No public-RPC default; `ospex init` prompts for one. The SDK uses the URL only as a viem `PublicClient` transport. |
 | Supabase URL + anon key | Lazy-fetched from `GET /v1/config/public` on the first Realtime call, OR caller-supplied via `OspexClient` constructor. The anon key is the **publishable** key — never the service-role key. |
 | Chainlink Functions encrypted secrets | Fetched from a public alias (`secrets.ospex.org`) and passed verbatim into `OracleModule.createContestFromOracle`. The SDK never sees the plaintext. |
@@ -282,7 +329,9 @@ Two consequences:
 1. **One client per signing identity per process.** Two `OspexClient` instances on the same wallet in the same process will collide on the unix-second floor and produce identical nonces, leading to one of the submits failing with a duplicate-hash 409 from the API. Concrete pattern: spawn one `OspexClient` per worker, share it across all submits from that worker.
 2. **Clients across processes need coordination.** An external `nonceProvider` injection is on the M2.5 deferred list. Until then, agents distributing submits across hosts must serialize nonce assignment themselves — typically by routing all submits for a given `(maker, speculationKey)` through a single host.
 
-`commitments.cancelAllOnSpeculation` raises the on-chain nonce floor, which **invalidates every commitment with `nonce < newMinNonce`**. Use this carefully: it doesn't just cancel, it pre-emptively rejects all such commitments at match time on chain. After the call, your client's per-instance `lastInProcess` counter is unchanged — re-issued commitments after a bulk cancel will still have monotonically higher nonces.
+`commitments.cancelAllOnSpeculation` (and the underlying `commitments.raiseMinNonce`) raises the on-chain nonce floor, which **invalidates every commitment with `nonce < newMinNonce`**. Use this carefully: it doesn't just cancel, it pre-emptively rejects all such commitments at match time on chain.
+
+After the on-chain call returns, the SDK calls `nonceCounter.observe(maker, speculationKey, newMinNonce)` so the per-instance counter is bumped to at least `newMinNonce`. Subsequent submits in the same process pick a nonce strictly above the new floor without an extra `eth_call` to refresh from chain — but a *different* process / `OspexClient` instance will not see the bump until it reads the on-chain floor.
 
 ---
 
@@ -364,6 +413,7 @@ If you observe a runtime difference between this contract and the SDK:
    - Error codes: [`packages/sdk/src/errors.ts`](../packages/sdk/src/errors.ts)
    - Submit envelope: [`packages/sdk/src/types/preview.ts`](../packages/sdk/src/types/preview.ts)
    - Match envelope: [`packages/sdk/src/types/matchPreview.ts`](../packages/sdk/src/types/matchPreview.ts)
+   - Odds wire shapes (watch + show): [`packages/sdk/src/types/odds.ts`](../packages/sdk/src/types/odds.ts)
    - Public types barrel: [`packages/sdk/src/types/index.ts`](../packages/sdk/src/types/index.ts)
 3. The integration playbook (which exercises every promise here against the live testnet) is [`MANUAL_INTEGRATION_TESTING.md`](./MANUAL_INTEGRATION_TESTING.md).
 
@@ -373,11 +423,13 @@ If you observe a runtime difference between this contract and the SDK:
 
 ```
 schemaVersion === 1                    Locked envelope contract
---json alone                           Preview only, no signing/tx
---yes --json                           Execute and emit
---yes for non-TTY                      Required for signing commands
---json on stdout                       Always parseable; logs go to stderr
-NDJSON for `odds watch`                One JSON object per line, SIGINT clean exit
+--json alone (preview-bearing cmds)    Preview only, no signing/tx (submit, match, approvals setup)
+--json (other write cmds)              Output format only — may still send a tx (cancel, claim, settle, …)
+--yes --json                           Execute and emit (preview-bearing cmds)
+--yes for non-TTY                      Required only for preview-bearing commands (see §3)
+--json on stdout                       Always parseable; logs/prompts go to stderr
+NDJSON for `odds watch`                One JSON object per line, numbers (not strings) for line/odds, SIGINT clean exit
+single envelope for `odds show`        NOT NDJSON; { contest, odds: { moneyline, spread, total } }
 err.code                               Switch on this for routing
 err.reason                             Switch on this for fine dispatch (chain/script-approval/subscription)
 schemaVersion: 2                       Will signal a breaking envelope change (not before v1.0.0)
