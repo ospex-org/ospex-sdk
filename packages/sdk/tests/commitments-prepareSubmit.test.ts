@@ -719,9 +719,9 @@ describe('prepareSubmit — expiry defaults (no --expiry passed)', () => {
   });
 
   it('matchTime 20m away → expiry equals matchTime exactly, NOT now + 1h', async () => {
-    // Hermes' specific concern: a "1h floor" would push expiry past match
-    // start for games that tip off in <60 minutes. The default rule has
-    // NO floor — short windows must stay short.
+    // A "1h floor" would push expiry past match start for games that
+    // tip off in <60 minutes. The default rule has NO floor — short
+    // windows must stay short.
     const matchTimeMs = Date.now() + 20 * 60 * 1000; // 20 minutes from now
     const matchTimeIso = new Date(matchTimeMs).toISOString();
     const expectedSec = BigInt(Math.floor(matchTimeMs / 1000));

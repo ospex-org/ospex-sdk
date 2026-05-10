@@ -4,11 +4,11 @@
  * paying for an EIP-712 sign or an RPC roundtrip.
  *
  * Bounds are taken from:
- *   - oddsTick: MatchingModule.sol:60-63 (MIN_ODDS=101, MAX_ODDS=10100)
- *   - lot size: MatchingModule.sol:59 + :473-475 (riskAmount % 100 == 0)
- *   - expiry upper bound: ospex-core-api/src/middleware/eip712Auth.ts:188-195 (1 year)
+ *   - oddsTick:  MatchingModule  (MIN_ODDS=101, MAX_ODDS=10100)
+ *   - lot size:  MatchingModule  (riskAmount % 100 == 0)
+ *   - expiry upper bound: 1 year (enforced by the API on POST)
  *
- * The 1-year expiry cap is a core-api constraint, not an on-chain one;
+ * The 1-year expiry cap is an API-side constraint, not an on-chain one;
  * enforcing it here surfaces a clean error instead of letting the
  * server reject the POST.
  */

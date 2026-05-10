@@ -18,8 +18,7 @@
  * opt out. The rule is deliberately scoped to the casual-bettor
  * shape — a user who sets `--link` is in operator territory and
  * should be explicit about every dimension; a surprise USDC approval
- * alongside a contest-creation setup would be a financial-UX bug
- * (Hermes flagged the looser rule on PR #38 review).
+ * alongside a contest-creation setup would be a financial-UX bug.
  *
  * Skip rule: if the wallet already has at least the requested allowance
  * for a given spender, the planner emits a `skip-already-approved`

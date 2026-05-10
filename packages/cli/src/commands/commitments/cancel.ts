@@ -8,9 +8,8 @@
  *
  * `--also-onchain`: after the DELETE succeeds, additionally call
  * `MatchingModule.cancelCommitment(commitment)` on chain so the cancel
- * is authoritative. This is the safest pattern (per
- * `ospex-core-api/docs/CANCEL_FLOW.md`) — strongly recommended any time
- * the maker truly wants to revoke an unmatched commitment.
+ * is authoritative — strongly recommended any time the maker truly
+ * wants to revoke an unmatched commitment.
  */
 
 import { Command } from '@commander-js/extra-typings';

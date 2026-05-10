@@ -158,7 +158,7 @@ describe('buildSetupPlan — auto-include rule', () => {
   // ONLY dimension). A user passing --risk-usdc + --link is in
   // operator territory and should be explicit about every dimension —
   // surprise USDC approvals next to a contest-creation setup is a
-  // financial-UX bug. Hermes flagged the prior looser rule on PR #38.
+  // financial-UX bug.
   it('does NOT auto-include fee when --risk-usdc + --link are set together', () => {
     const plan = buildSetupPlan({ riskUsdc: '50', link: '2' }, makeSnapshot());
     const treasury = plan.items.find((i) => i.spenderModule === 'treasuryModule')!;
@@ -369,7 +369,6 @@ describe('setup envelope shape', () => {
   // Regression: the JSON contract for `--json` (preview) and
   // `--yes --json` (executed) must be { schemaVersion, plan, [results] }
   // — schemaVersion at the envelope level, NOT inside the plan body.
-  // Hermes flagged a flat-shape variant on PR #38 review.
   it('preview envelope shape: { schemaVersion: 1, plan: {...} }', () => {
     const plan = buildSetupPlan({ riskUsdc: '50' }, makeSnapshot());
     const env = buildSetupPreviewEnvelope(plan);

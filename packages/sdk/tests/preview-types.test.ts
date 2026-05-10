@@ -1,12 +1,10 @@
 /**
  * Type-level guard tests for the SubmitJsonResult contract.
  *
- * Hermes' PR #21 review flagged that we lock `schemaVersion: 1` on
- * `SubmitJsonResult`, but the original PR's `result` field shape
- * `{ hash: string; status: string }` did NOT match the SDK's actual
- * `SubmitResult` (`{ hash: Hex; commitment: Commitment }`). That
- * would have shipped a public schema disagreeing with what
- * `commitments.submit` returns.
+ * We lock `schemaVersion: 1` on `SubmitJsonResult`, so the wire shape
+ * must agree with the SDK's actual `SubmitResult` (which is
+ * `{ hash: Hex; commitment: Commitment }`) — otherwise we'd ship a
+ * public schema that disagrees with what `commitments.submit` returns.
  *
  * These tests use compile-time type assertions to guarantee any
  * future drift is caught before merge — if `SubmitResult` grows a
@@ -17,10 +15,10 @@
 import { describe, expect, it } from 'vitest';
 import type { SubmitJsonResult, SubmitPreviewEnvelope } from '../src/types/preview.js';
 import type { SubmitResult } from '../src/commitments/submitRaw.js';
-// Root-importability check (Hermes PR #31 review): consumers must be
-// able to bring in the new expiry types from the package barrel
-// without reaching into internal subpaths. If either type is dropped
-// from the root export list, this import fails at compile time.
+// Root-importability check: consumers must be able to bring in the
+// new expiry types from the package barrel without reaching into
+// internal subpaths. If either type is dropped from the root export
+// list, this import fails at compile time.
 import type {
   ExpirySource as RootExpirySource,
   PreviewExpiry as RootPreviewExpiry,

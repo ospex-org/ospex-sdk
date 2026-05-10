@@ -372,7 +372,7 @@ export interface GamesListBody {
  *                The writer's away/home → over/under storage convention
  *                is hidden at the API boundary.
  *
- * See `ospex-core-api/src/v1/odds.ts` for the server-side mapping.
+ * The away/home → over/under remapping for `total` happens server-side at the API boundary.
  */
 interface OddsTimestampsBody {
   upstreamLastUpdated: string;

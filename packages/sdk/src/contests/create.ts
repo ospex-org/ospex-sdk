@@ -9,7 +9,7 @@
  *  3. Fetch script approvals (cached).
  *  4. Resolve verify JS source (caller override or fetch from approvals.verify.sourceUrl).
  *  5. Hash-verify the source against approvals.verify.scriptHash. Refuse on mismatch.
- *  6. Resolve encrypted secrets URL (caller override or ospex-api-server).
+ *  6. Resolve encrypted secrets URL (caller override or the secrets API).
  *  7. Pre-flight LINK + USDC balance + allowance.
  *  8. Build calldata and submit.
  *  9. Parse `ContestCreated` event from the receipt for the assigned contestId.
@@ -66,7 +66,7 @@ export interface CreateContestArgs {
   subscriptionId?: bigint;
   /** Defaults to OSPEX_DEFAULT_GAS_LIMIT (300_000 — Polygon Functions Router cap). */
   gasLimit?: number;
-  /** Skip the ospex-api-server fetch when provided. */
+  /** Skip the secrets-API fetch when provided. */
   encryptedSecretsUrls?: Hex;
   /** Skip the GitHub source fetch when provided. */
   verifySource?: string;

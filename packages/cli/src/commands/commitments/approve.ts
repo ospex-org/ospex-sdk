@@ -7,9 +7,8 @@
  *
  * Argument is human-readable USDC ("5", "0.25", "max"). The raw-wei6
  * form lives at `ospex commitments approve-raw` for parity with the
- * `submit` / `submit-raw` precedent — Vince's review on PR #38 was
- * explicit that the human form should be the default everywhere and
- * any 6-decimal-units form should be a clearly distinct command.
+ * `submit` / `submit-raw` precedent — the human form is the default
+ * everywhere; any 6-decimal-units form is a clearly distinct command.
  *
  * A confirmation prompt + preview is shown before signing because
  * this is a money-moving op; pass `--yes` to skip. Old scripts

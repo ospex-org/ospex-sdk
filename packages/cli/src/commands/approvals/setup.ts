@@ -106,8 +106,7 @@ export const approvalsSetupCommand = new Command('setup')
 
     // Pre-parse flag amounts BEFORE any signer/chain interaction, so a
     // typo'd `--risk-usdc not-a-number` errors out without first
-    // prompting for the keystore passphrase. Hermes flagged the
-    // opposite ordering on PR #38 review. The result is discarded —
+    // prompting for the keystore passphrase. The result is discarded —
     // buildSetupPlan re-parses internally — and parseLinkInput /
     // parseUsdcInput throw on bad shape.
     if (opts.riskUsdc !== undefined) parseUsdcInput(opts.riskUsdc);

@@ -22,8 +22,8 @@ export interface ContestsContext {
   getAddresses(): OspexAddresses;
   requireChainClient(): PublicClient;
   /**
-   * Override for the ospex-api-server URL (encrypted secrets). Tests
-   * pass a stub; production uses the verified Heroku URL from
+   * Override for the secrets-API URL (encrypted Chainlink Functions
+   * secrets). Tests pass a stub; production uses the default URL from
    * `contracts/constants.ts`.
    */
   apiServerUrl?: string;

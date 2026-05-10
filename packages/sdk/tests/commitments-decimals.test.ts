@@ -147,10 +147,10 @@ describe('americanOddsToTick', () => {
 
   it('rejects magnitudes above 10000 BEFORE rounding', () => {
     // The original implementation accepted values like -15000 by silently
-    // rounding the resulting decimal back up to 1.01 = -10000 American
-    // (PR #30 review by Hermes). The strict pre-math check now rejects
-    // any |American| > 10000 with a clear error rather than letting the
-    // user sign a materially different price than they typed.
+    // rounding the resulting decimal back up to 1.01 = -10000 American.
+    // The strict pre-math check now rejects any |American| > 10000 with
+    // a clear error rather than letting the user sign a materially
+    // different price than they typed.
     expect(() => americanOddsToTick('+10001')).toThrow(/magnitude must be ≤ 10000/);
     expect(() => americanOddsToTick('-10001')).toThrow(/magnitude must be ≤ 10000/);
     expect(() => americanOddsToTick('-15000')).toThrow(/magnitude must be ≤ 10000/);
@@ -219,10 +219,9 @@ describe('parseOddsInput — dual-format with strict disambiguation', () => {
   });
 
   it('ambiguous-integer error suggests valid examples (not raw input)', () => {
-    // Per Hermes' PR #30 review: for `--odds 2`, the prior message
-    // suggested `+2` for American — invalid because magnitude must
-    // be ≥ 100. The error must use static valid examples that work
-    // regardless of the user's input.
+    // For `--odds 2`, an earlier message suggested `+2` for American —
+    // invalid because magnitude must be ≥ 100. The error must use
+    // static valid examples that work regardless of the user's input.
     let message = '';
     try {
       parseOddsInput('2');

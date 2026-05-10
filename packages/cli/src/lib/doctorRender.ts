@@ -20,10 +20,9 @@ const INDENT = '  ';
 
 // "Effectively zero" thresholds — the same values the human renderer
 // uses to flag balances that LOOK like zero but technically aren't.
-// Sharing them with `computeReadiness` keeps the contract consistent
-// (Hermes flagged the prior mismatch on PR #39 review): the doctor
-// must not say "ready to match" for a wallet whose POL balance the
-// same report annotates as "no gas — no tx will land".
+// Sharing them with `computeReadiness` keeps the contract consistent:
+// the doctor must not say "ready to match" for a wallet whose POL
+// balance the same report annotates as "no gas — no tx will land".
 //
 //   POL_GAS_FLOOR_WEI:  1e14 wei = 0.0001 POL. Below this you can't
 //                       fund any realistic Polygon tx (even a simple
@@ -61,7 +60,7 @@ interface ReadinessInputs {
    * core-api; `contests.create` fetches script approvals from
    * core-api. apiOk=false flips every capability to false and the
    * agent guard `ospex doctor && ospex commitments match` correctly
-   * blocks. Hermes flagged the prior omission on PR #39 review.
+   * blocks.
    */
   apiOk: boolean;
 }

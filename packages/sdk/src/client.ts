@@ -68,8 +68,7 @@ export interface OspexClientOptions {
    *
    * Use Alchemy / Infura / QuickNode in production. Public RPCs
    * (`polygon-rpc.com`, `rpc-amoy.polygon.technology`) are flaky and
-   * `polygon-rpc.com` returns 401 since 2026-03 — see
-   * `ospex-foundry-matched-pairs/docs/DEPLOYMENT.md`.
+   * `polygon-rpc.com` has been returning 401 since 2026-03.
    */
   rpcUrl?: string;
   /**

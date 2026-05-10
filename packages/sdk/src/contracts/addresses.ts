@@ -1,22 +1,18 @@
 /**
  * On-chain contract addresses per network. Sourced from the canonical
- * deployment artifacts in `ospex-foundry-matched-pairs`:
+ * deployment artifacts in the contracts repo and refreshed on every
+ * redeploy. Mainnet is the production target; Amoy is for integration
+ * testing.
  *
- *   - Polygon mainnet: docs/deployment/POLYGON_MAINNET_R4.md
- *   - Polygon Amoy:    broadcast/DeployAmoy.s.sol/80002/run-latest.json
- *
- * Refresh on contract redeploy. Mainnet is the production target; Amoy
- * is for integration testing.
- *
- * Active SDK consumers as of M3:
- *   - MatchingModule — commitments.match (M2)
- *   - PositionModule — commitments.{submit,match} allowance, positions.claim (M3)
- *   - SpeculationModule — positions.settleSpeculation (M3)
- *   - OspexCore — read-only event-log address filter for receipt parsing (M3)
- *   - USDC — allowance + transfer
+ * Active SDK consumers:
+ *   - MatchingModule  — commitments.match
+ *   - PositionModule  — commitments.{submit,match} allowance, positions.claim
+ *   - SpeculationModule — positions.settleSpeculation
+ *   - OspexCore       — read-only event-log address filter for receipt parsing
+ *   - USDC            — allowance + transfer
  *
  * The other modules (LeaderboardModule, SecondaryMarketModule, etc.)
- * are stored here for future milestones.
+ * are stored here for future surface area.
  */
 
 import type { ChainId } from '../types/protocol.js';

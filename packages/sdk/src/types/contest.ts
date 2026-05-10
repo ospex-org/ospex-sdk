@@ -4,9 +4,9 @@
  * `Contest` is what `client.contests.list` and `client.contests.get`
  * return — the off-chain projected view of an on-chain Contest paired
  * with the array of Speculations (single bettable lines) registered
- * against it. The shape mirrors the `Contest` struct in
- * `ospex-foundry-matched-pairs/src/core/OspexTypes.sol`, plus the
- * teams / sport / matchTime fields the indexer joins from upstream.
+ * against it. The shape mirrors the on-chain `Contest` struct
+ * (`OspexTypes.sol`), plus the teams / sport / matchTime fields the
+ * indexer joins from upstream.
  *
  * `Speculation` is the embedded per-line entity. Mirrors the on-chain
  * `Speculation` struct.

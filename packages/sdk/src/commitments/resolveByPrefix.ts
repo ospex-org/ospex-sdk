@@ -18,11 +18,11 @@
  * + `includeExpired: true`. We never omit `status` — the API defaults
  * to `open,partially_filled` and would silently narrow the search.
  *
- * TODO (follow-up, cross-repo): add a `commitmentHashPrefix` query
- * parameter to `ospex-core-api` `GET /v1/commitments` so the resolver
- * can rely on server-side filtering with deterministic ambiguity
- * detection. Until then, the limit-and-fail-fast strategy below
- * defends against pagination silently missing matches.
+ * TODO (follow-up): add a `commitmentHashPrefix` query parameter to
+ * `GET /v1/commitments` server-side so the resolver can rely on
+ * server-side filtering with deterministic ambiguity detection. Until
+ * then, the limit-and-fail-fast strategy below defends against
+ * pagination silently missing matches.
  */
 
 import { CommitmentsApi } from '../api/commitments.js';

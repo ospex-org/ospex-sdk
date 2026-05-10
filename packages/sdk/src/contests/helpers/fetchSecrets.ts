@@ -1,12 +1,11 @@
 /**
- * Fetches a fresh encrypted Chainlink Functions secrets URL from
- * ospex-api-server (`POST /api/get-encrypted-secrets`). The server
- * stores a pre-encrypted blob in env vars and returns it verbatim —
- * there's no per-request encryption.
+ * Fetches a fresh encrypted Chainlink Functions secrets URL from the
+ * protocol-maintained secrets endpoint (`POST /api/get-encrypted-secrets`).
+ * The server stores a pre-encrypted blob and returns it verbatim — there's
+ * no per-request encryption.
  *
- * Default URL `https://secrets.ospex.org` (protocol-stable alias for
- * the Heroku app `ospex-api`). Override via ContestsContext.apiServerUrl
- * when running locally / in tests.
+ * Default URL `https://secrets.ospex.org`. Override via
+ * `ContestsContext.apiServerUrl` when running locally / in tests.
  */
 import { OspexAPIError } from '../../errors.js';
 import { OSPEX_API_SERVER_URL } from '../../contracts/constants.js';
@@ -29,7 +28,7 @@ export async function fetchEncryptedSecrets(ctx: ContestsContext): Promise<Hex> 
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     });
   } catch (err) {
-    throw new OspexAPIError(`Failed to reach ospex-api-server at ${url}.`, {
+    throw new OspexAPIError(`Failed to reach the secrets API at ${url}.`, {
       path: '/api/get-encrypted-secrets',
       cause: err,
     });
@@ -37,7 +36,7 @@ export async function fetchEncryptedSecrets(ctx: ContestsContext): Promise<Hex> 
 
   if (!response.ok) {
     throw new OspexAPIError(
-      `ospex-api-server returned HTTP ${response.status} ${response.statusText}.`,
+      `Secrets API returned HTTP ${response.status} ${response.statusText}.`,
       { status: response.status, path: '/api/get-encrypted-secrets' },
     );
   }
@@ -46,7 +45,7 @@ export async function fetchEncryptedSecrets(ctx: ContestsContext): Promise<Hex> 
   try {
     body = (await response.json()) as SecretsBody;
   } catch (err) {
-    throw new OspexAPIError('ospex-api-server returned an invalid JSON body.', {
+    throw new OspexAPIError('Secrets API returned an invalid JSON body.', {
       path: '/api/get-encrypted-secrets',
       cause: err,
     });
@@ -55,7 +54,7 @@ export async function fetchEncryptedSecrets(ctx: ContestsContext): Promise<Hex> 
   const value = body.encryptedSecretsUrls;
   if (typeof value !== 'string' || !/^0x[0-9a-fA-F]+$/.test(value)) {
     throw new OspexAPIError(
-      'ospex-api-server returned a missing or malformed encryptedSecretsUrls field.',
+      'Secrets API returned a missing or malformed encryptedSecretsUrls field.',
       { path: '/api/get-encrypted-secrets' },
     );
   }

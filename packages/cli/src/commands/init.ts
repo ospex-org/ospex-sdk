@@ -2,10 +2,10 @@
  * `ospex init` — interactive setup that writes `~/.ospex/config.json`.
  *
  * The most important prompt is the RPC URL: every chain operation needs
- * one, public Polygon RPCs are flaky (`polygon-rpc.com` returns 401
- * since 2026-03 per ospex-foundry-matched-pairs/docs/DEPLOYMENT.md), and
- * the SDK deliberately has no public-RPC default. We require an explicit
- * value and recommend Alchemy / Infura / QuickNode in the prompt.
+ * one, public Polygon RPCs are flaky (`polygon-rpc.com` has been
+ * returning 401 since 2026-03), and the SDK deliberately has no
+ * public-RPC default. We require an explicit value and recommend
+ * Alchemy / Infura / QuickNode in the prompt.
  *
  * The keystore path prompt persists the bring-your-own-Foundry-keystore
  * pointer so users don't have to `export OSPEX_KEYSTORE_PATH=…` in every

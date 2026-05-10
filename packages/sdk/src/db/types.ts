@@ -1,8 +1,8 @@
 /**
  * Internal DB row types — only the tables / columns the SDK actually
  * consumes via Supabase Realtime. Hand-written to mirror the live
- * schema (`ospex-indexer/schema/live.sql`); refresh when those tables
- * change. Not exported from the package.
+ * indexer schema; refresh when those tables change. Not exported
+ * from the package.
  */
 
 export type DBNetwork = 'polygon' | 'amoy';
