@@ -4,6 +4,9 @@ dist/
 .env.local
 *.log
 
+# Built tarballs (release artifacts; produced by `yarn workspace … pack`)
+*.tgz
+
 # Editor
 .vscode/
 .idea/
