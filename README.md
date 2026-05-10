@@ -1,30 +1,45 @@
 # Ospex SDK + CLI
 
-TypeScript SDK and command-line interface for the [Ospex](https://ospex.org) protocol — zero-vig peer-to-peer sports prediction on Polygon. M2 ships the EIP-712 signed-commitment surface (`submit`, `match`, `approve`, `cancel`) on top of the M1 read-side. Position lifecycle (claims, payouts) is M3.
+TypeScript SDK and command-line interface for the [Ospex](https://ospex.org) protocol — a zero-vig peer-to-peer sports prediction protocol on Polygon. The SDK and CLI cover reads (contests, speculations, commitments, positions, leaderboard, odds, games), EIP-712 signed-commitment submission/match/cancel, on-chain cancel + bulk-cancel, contest creation and scoring, position settlement and claims, and Realtime odds via Supabase channels.
 
 This repo is a Yarn 1 workspaces monorepo with two packages:
 
 - [`@ospex/sdk`](./packages/sdk) — the public TypeScript SDK.
 - [`@ospex/cli`](./packages/cli) — the `ospex` binary, built on top of the SDK.
 
+> **Experimental software.** Ospex is experimental, ships without warranty, and involves financial risk. You control your own wallet and approvals; transactions are final. See [Disclaimers](#disclaimers) below before using on mainnet.
+
 > Building an agent / programmatic integration? See [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) for the stable JSON envelopes, error-code catalog, idempotency rules, and the Realtime contract.
 
-## Quick start (CLI)
+## Install
 
-For the minimum-friction zero-to-commitment walkthrough, see [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). Short version below.
-
-For local development from this repo (workspace-link puts `ospex` on your PATH for dev iteration):
+Distribution is via [GitHub Releases](https://github.com/ospex-org/ospex-sdk/releases) — **not** npm. Each release attaches two tarballs (`ospex-sdk-<ver>.tgz`, `ospex-cli-<ver>.tgz`); install **both in the same `yarn add` call** in your working directory:
 
 ```bash
-yarn install
+mkdir my-ospex && cd my-ospex
+yarn init -y
+yarn add file:./ospex-sdk-<ver>.tgz file:./ospex-cli-<ver>.tgz
+npx ospex --version
+```
+
+The CLI uses the SDK at runtime but does not declare it as a regular dependency — yarn 1's `file:` resolver would treat the SDK reference as a registry lookup and fail. Always install both tarballs together.
+
+For local development from a clone of this repo (workspace-link puts `ospex` on your PATH for dev iteration):
+
+```bash
+yarn install --frozen-lockfile
 yarn workspace @ospex/sdk build
 yarn workspace @ospex/cli build
 yarn workspace @ospex/cli link
 ```
 
-End users install via the tarball flow in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md), not this dev-mode link.
+End users install via the tarball flow above; the dev-mode link is for working on the SDK/CLI itself.
 
-Wallet — Ospex never asks for your private key. Set up Foundry's keystore (Ospex reads it via a path you tell it about during `ospex init`):
+The full bettor / maker / operator walkthrough is at [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). The release runbook (how a new version is built and tagged) is at [`docs/RELEASING.md`](./docs/RELEASING.md).
+
+## Wallet model
+
+Ospex never asks for your private key. Set up Foundry's keystore — Ospex reads it via a path you tell it about during `ospex init`:
 
 ```bash
 mkdir -p ~/.foundry/keystores
@@ -32,62 +47,19 @@ cast wallet new ~/.foundry/keystores ospex-test    # Foundry generates the key, 
                                                    # — or `cast wallet import ospex-test` for an existing key
 ```
 
-Configure and read:
+Then configure and start reading:
 
 ```bash
 ospex init                                 # one-time prompts for chainId, apiUrl, rpcUrl, keystorePath
-ospex health                               # liveness probe
+ospex doctor                               # readiness probe (balances, allowances, "Ready to" matrix)
+ospex health                               # API liveness
 ospex contests list --hours 168            # upcoming contests
-ospex contests show <contestId>            # one contest with its full orderbook
-ospex speculations list --contest <id>     # bettable lines under a contest
-ospex speculations show <speculationId>    # one speculation with its orderbook + parent contest
-ospex wallet address                       # prompts for Foundry passphrase, prints the address
-ospex odds show <contestId>                # one-shot snapshot of upstream reference odds
-ospex odds watch <contestId>               # streaming subscription (line-delimited JSON with --json)
-
-# Chain writes — require ospex init + a configured keystore
-ospex approvals setup --risk-usdc 50                         # blessed multi-spender path (also auto-includes a small fee budget)
-ospex commitments approve 5                                  # single-spender shortcut: PositionModule for 5 USDC (decimal)
-ospex commitments approve max                                # …or unlimited
-ospex commitments approve-raw 5000000                        # raw 6-decimal-units form for power users / scripts
-
-# High-level submit (domain-language inputs + win/lose/push preview).
-# Interactive: prompts for an amount with the exact-required value as default;
-# type "max" at that prompt for unlimited. Non-interactive (--yes): exact-required
-# by default, or pass --approve-max alongside --yes for unlimited.
-ospex commitments submit \                                   # high-level path (recommended)
-  --speculation <id> --side lakers --odds 2.50 --risk-usdc 1
-ospex commitments submit \                                   # by --contest, line lazy-creates if absent
-  --contest <id> --market spread --side padres --line -3.5 --odds 1.91 --risk-usdc 25
-ospex commitments submit-raw <contestId> <scorer> <lineTicks> upper 250 1000  # protocol escape hatch
-
-# Match an existing maker commitment as the taker. Renders a preview block
-# before signing; pass --yes to skip the prompt. Accepts a full hash OR a
-# unique 0x-prefixed hex prefix (≥ 8 hex chars after 0x).
-#   --json alone          → emit the MatchPreviewEnvelope (preview only)
-#   --yes --json          → execute and emit the MatchJsonResult envelope
-#   --risk-usdc <decimal> → taker desired risk (decimal USDC); default = full fill
-ospex commitments match <hash-or-prefix>                     # interactive; preview + confirm + send
-ospex commitments cancel <hash-or-prefix>                    # off-chain cancel via signed DELETE
-ospex commitments cancel <hash-or-prefix> --also-onchain     # off-chain DELETE + authoritative on-chain cancel (M2.5)
-ospex commitments cancel-onchain <hash-or-prefix>            # on-chain cancel only (M2.5)
-ospex commitments cancel-all --contest-id <id> \             # bulk-cancel via raiseMinNonce (M2.5)
-  --scorer <addr> --line <ticks> [--dry-run]
-ospex commitments nonce-floor --maker <addr> \               # read on-chain nonce floor (M2.5)
-  --contest-id <id> --scorer <addr> --line <ticks>
+ospex commitments match 0xe900c6dd         # take an existing commitment as the taker
 ```
 
-Distribution is via [GitHub releases](https://github.com/ospex-org/ospex-sdk/releases) — download both tarballs from the latest release and install with the tarball flow in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). The workspace-link flow above is for local development from this repo.
+See **[Wallet security](#wallet-security)** below for the full trust model.
 
-## Quick start (SDK)
-
-Install via [GitHub releases](https://github.com/ospex-org/ospex-sdk/releases) — download `ospex-sdk-<ver>.tgz` and:
-
-```bash
-yarn add file:./ospex-sdk-<ver>.tgz
-```
-
-Until the first release is tagged, build the tarball locally from a clone of this repo (`yarn workspace @ospex/sdk build && yarn workspace @ospex/sdk pack --filename ospex-sdk.tgz`) and `yarn add file:/abs/path/to/ospex-sdk/packages/sdk/ospex-sdk.tgz`.
+## SDK usage
 
 ```typescript
 import { OspexClient } from '@ospex/sdk';
@@ -98,15 +70,13 @@ const client = new OspexClient();
 const contests = await client.contests.list({ sport: 'nba', hours: 24 });
 const contest = await client.contests.get(contestId);
 const speculations = await client.speculations.list({ contestId });
-const speculation = await client.speculations.get(speculationId);
 const orderbook = await client.commitments.list({ speculationId });
-const commitment = await client.commitments.get(commitmentHash);
 const positions = await client.positions.byAddress('0x…');
 const status = await client.positions.status('0x…');
 const board = await client.leaderboard.active();
 const info = await client.protocol.info();
 
-// Realtime — opens a Supabase channel under the hood. The first call
+// Realtime odds — opens a Supabase channel under the hood. The first call
 // lazily fetches /v1/config/public to obtain Realtime credentials.
 const sub = await client.odds.subscribe(
   { jsonoddsId, market: 'spread' },
@@ -135,10 +105,10 @@ Defaults point at production. Override anything via the constructor:
 
 ```typescript
 new OspexClient({
-  apiUrl: 'https://staging-api.example',  // defaults to ospex-core-api production URL
+  apiUrl: 'https://staging-api.example',  // defaults to the production core-api URL
   supabaseUrl: '…',                       // optional override; otherwise lazy-fetched
   supabaseAnonKey: '…',                   // optional override; otherwise lazy-fetched
-  signer: myCustomSigner,                 // required for any M2 write
+  signer: myCustomSigner,                 // required for any chain write
   rpcUrl: 'https://polygon-mainnet.g.alchemy.com/v2/<key>', // required for chain ops
   chainId: 137,                           // 137 (mainnet) or 80002 (amoy); default 137
   timeoutMs: 10_000,
@@ -151,7 +121,7 @@ The keystore location follows the same precedence: `OSPEX_KEYSTORE_PATH` env var
 
 ### About `rpcUrl`
 
-Every chain operation (`commitments.submit`, `match`, `approve`) needs an RPC URL — the SDK uses it to read allowance and nonce floor, and to broadcast signed transactions. **Use Alchemy, Infura, or QuickNode in production.** The public Polygon RPCs (`polygon-rpc.com`, `rpc-amoy.polygon.technology`) are rate-limited and prone to drops, and `polygon-rpc.com` has been returning 401 since 2026-03 (per [`ospex-foundry-matched-pairs/docs/DEPLOYMENT.md`](../ospex-foundry-matched-pairs/docs/DEPLOYMENT.md)).
+Every chain operation (`commitments.submit`, `match`, `approve`) needs an RPC URL — the SDK uses it to read allowance and nonce floor, and to broadcast signed transactions. **Use Alchemy, Infura, or QuickNode in production.** The public Polygon RPCs (`polygon-rpc.com`, `rpc-amoy.polygon.technology`) are rate-limited and prone to drops, and `polygon-rpc.com` has been returning 401 since 2026-03.
 
 There is intentionally no public-RPC default. `ospex init` requires you to enter a value.
 
@@ -161,7 +131,7 @@ Both maker and taker must approve **`PositionModule`** (NOT MatchingModule) for 
 
 ### Sovereign cancel — off-chain DELETE vs. on-chain cancel
 
-Off-chain `commitments.cancel(hash)` (DELETE `/v1/commitments/:hash`) marks the row cancelled in the API so the relay stops surfacing it. It does **not** prevent a taker who already holds the signed payload from matching the commitment — the contract still treats it as valid until `s_cancelledCommitments[hash]` flips on chain. For an authoritative cancel, use `commitments.cancelOnchain(hash)` (M2.5) which calls `MatchingModule.cancelCommitment(commitment)` directly. The CLI's `commitments cancel <hash> --also-onchain` runs both in sequence — the recommended pattern.
+Off-chain `commitments.cancel(hash)` (DELETE `/v1/commitments/:hash`) marks the row cancelled in the API so the relay stops surfacing it. It does **not** prevent a taker who already holds the signed payload from matching the commitment — the contract still treats it as valid until `s_cancelledCommitments[hash]` flips on chain. For an authoritative cancel, use `commitments.cancelOnchain(hash)` which calls `MatchingModule.cancelCommitment(commitment)` directly. The CLI's `commitments cancel <hash> --also-onchain` runs both in sequence — the recommended pattern.
 
 For bulk cancel ("revoke every order I have on this speculation"), `commitments.cancelAllOnSpeculation({ contestId, scorer, lineTicks })` raises the maker's on-chain nonce floor so all sub-floor commitments become unmatchable in a single tx. The default `newMinNonce` is computed from `max(onChainFloor, lastInProcess, supabaseMaxStored) + 1` — override via the optional `newMinNonce` arg. The contract has no `AlreadyCancelled` revert path; calling `cancelOnchain` on a hash that's already cancelled is a no-op success, so don't infer "first cancel" from tx success.
 
@@ -170,39 +140,45 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | Command | What it does |
 |---|---|
 | `ospex init` | Interactive setup — writes `~/.ospex/config.json` (rpcUrl, chainId, apiUrl, keystorePath). |
-| `ospex health` | Hits `/healthz` and prints liveness info. |
+| `ospex doctor [--address <addr>]` | Readiness probe — balances, allowances, network status, "Ready to" matrix, next-step suggestion. |
+| `ospex health` | API liveness probe. |
 | `ospex contests list [--sport --status --hours --limit --offset]` | Lists upcoming contests with their speculations. |
 | `ospex contests show <contestId>` | One contest with its full orderbook. |
-| `ospex games list [--sport --hours --creatable-only]` | List upcoming games on the schedule. Default shows every upcoming game; the `creatable` column flags which rows can be passed to `contests create --game-id`. Pass `--creatable-only` to narrow to those creatable rows. `--all` is preserved as a deprecated no-op alias of the new default. |
-| `ospex contests create --game-id <id>` (or `--game <slug-or-id>`) | Submit `OracleModule.createContestFromOracle` (M4). `gameId` is the stable id from `ospex games list`; the SDK resolves the three external IDs server-side. `--game` is a resolver alias accepting either the slug or a UUID. |
-| `ospex contests score <contestId>` | Submit `OracleModule.scoreContestFromOracle` (M4). |
-| `ospex contests wait-verified <contestId>` | Poll until the contest reaches Verified state (M4). |
+| `ospex contests create --game-id <id>` (or `--game <slug-or-id>`) | Submit `OracleModule.createContestFromOracle`. `gameId` is the stable id from `ospex games list`; the SDK resolves the three external IDs server-side. `--game` is a resolver alias accepting either a slug or a UUID. Mainnet only. |
+| `ospex contests score <contestId>` | Submit `OracleModule.scoreContestFromOracle`. |
+| `ospex contests wait-verified <contestId>` | Poll until the contest reaches Verified state. |
 | `ospex contests scripts` | Show the EIP-712 script approvals (debug). |
+| `ospex games list [--sport --hours --creatable-only]` | Upcoming games on the schedule. The `creatable` column flags rows that can be passed to `contests create --game-id`; pass `--creatable-only` to narrow to those rows. |
 | `ospex speculations list [--contest --sport --status --limit --offset]` | List speculations across one or more contests. |
 | `ospex speculations show <speculationId>` | One speculation with its orderbook + parent contest context. |
-| `ospex commitments show <hash-or-prefix>` | Single commitment lookup. Accepts a full EIP-712 hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars). Resolves over all statuses (cancelled / expired rows included). |
-| `ospex commitments list [... --speculation <id> ...]` | Existing list extended with `--speculation` filter. |
-| `ospex commitments list [--maker --scorer --contest-id --status …]` | Lists commitments. Defaults to `open,partially_filled` and active rows. |
-| `ospex commitments approve <decimal-usdc\|max>` | Approve PositionModule for USDC (M2). Argument is decimal USDC (`5`, `0.25`) or `max`. Renders a confirmation prompt before signing; pass `--yes` to skip. For raw 6-decimal-units, use `commitments approve-raw`. The blessed multi-spender path is `ospex approvals setup --risk-usdc <n>`. |
-| `ospex commitments approve-raw <wei6\|max>` | Same as `approve` but takes a raw 6-decimal-units integer (e.g. `5000000` = 5 USDC). Power-user / scripted-flow shortcut; otherwise prefer `approve`. |
-| `ospex commitments submit [--speculation\|--contest --market --line] --side --odds --risk-usdc [--expiry --nonce --yes --json --approve-max]` | High-level submit. Domain-language inputs (`--side lakers --odds 2.50 --risk-usdc 1`) + a win/lose/push preview before signing. `--json` alone = preview only (no signing); `--yes --json` = preview + post-submit result. Interactive flow asks for the approval amount with exact-required as the default — type `max` for unlimited. Non-interactive (`--yes`) defaults to exact-required; pass `--approve-max` alongside `--yes` for unlimited. |
-| `ospex commitments submit-raw <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>` | Protocol-level escape hatch — same canonical-tuple form as the original `submit`. Use when you already have raw protocol values; otherwise prefer `submit`. |
-| `ospex commitments match <hash-or-prefix> [--risk-usdc <decimal>] [--yes --json --approve-max]` | Take a commitment as the taker (M2). Renders a preview with both `taker risks` and `maker fill` lines before signing; pass `--yes` to skip the prompt. Accepts a full hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars). `--risk-usdc` is the **taker** desired risk / max outlay in decimal USDC (e.g. `--risk-usdc 0.5`); default is full fill. `--json` alone = preview only (no tx); `--yes --json` = preview + post-submit result. |
-| `ospex commitments cancel <hash-or-prefix> [--also-onchain]` | Off-chain cancel via signed DELETE (M2). With `--also-onchain` (M2.5) additionally calls `MatchingModule.cancelCommitment` for an authoritative cancel. |
-| `ospex commitments cancel-onchain <hash-or-prefix>` | On-chain cancel only — `MatchingModule.cancelCommitment(commitment)` (M2.5). Authoritative; cannot be reverted off-chain. |
-| `ospex commitments cancel-all --contest-id --scorer --line [--new-min-nonce] [--dry-run]` | Bulk-cancel every open commitment from this maker on one speculation by raising the on-chain nonce floor (M2.5). |
-| `ospex commitments nonce-floor --maker --contest-id --scorer --line` | Read the current on-chain `s_minNonces[maker][specKey]` (M2.5). |
+| `ospex commitments show <hash-or-prefix>` | Single commitment lookup. Accepts a full hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars). Resolves over all statuses. |
+| `ospex commitments list [--maker --scorer --contest-id --speculation --status …]` | Lists commitments. Defaults to `open,partially_filled` and active rows. |
+| `ospex commitments approve <decimal-usdc\|max>` | Approve PositionModule for USDC. Argument is decimal USDC (`5`, `0.25`) or `max`. Renders a confirmation prompt before signing; pass `--yes` to skip. For raw 6-decimal-units, use `commitments approve-raw`. The blessed multi-spender path is `ospex approvals setup --risk-usdc <n>`. |
+| `ospex commitments approve-raw <wei6\|max>` | Same as `approve` but takes a raw 6-decimal-units integer (`5000000` = 5 USDC). |
+| `ospex commitments submit [--speculation\|--contest --market --line] --side --odds --risk-usdc [--expiry --nonce --yes --json --approve-max]` | High-level submit. Domain-language inputs (`--side lakers --odds 2.50 --risk-usdc 1`) + a win/lose/push preview before signing. `--json` alone = preview only (no signing); `--yes --json` = preview + post-submit result. |
+| `ospex commitments submit-raw <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>` | Protocol-level escape hatch — same canonical-tuple form. Use when you already have raw protocol values; otherwise prefer `submit`. |
+| `ospex commitments match <hash-or-prefix> [--risk-usdc <decimal>] [--yes --json --approve-max]` | Take a commitment as the taker. Renders a preview with both `taker risks` and `maker fill` lines before signing; pass `--yes` to skip the prompt. `--json` alone = preview only (no tx); `--yes --json` = preview + post-submit result. |
+| `ospex commitments cancel <hash-or-prefix> [--also-onchain]` | Off-chain cancel via signed DELETE. With `--also-onchain` additionally calls `MatchingModule.cancelCommitment` for an authoritative cancel. |
+| `ospex commitments cancel-onchain <hash-or-prefix>` | On-chain cancel only. Authoritative; cannot be reverted off-chain. |
+| `ospex commitments cancel-all --contest-id --scorer --line [--new-min-nonce] [--dry-run]` | Bulk-cancel every open commitment from this maker on one speculation by raising the on-chain nonce floor. |
+| `ospex commitments nonce-floor --maker --contest-id --scorer --line` | Read the current on-chain `s_minNonces[maker][specKey]`. |
+| `ospex approvals setup [--risk-usdc <n>] [--fee-usdc <n>] [--link <n>] [--yes --json]` | One-shot multi-spender approval orchestration (PositionModule / TreasuryModule / OracleModule). Recommended baseline. |
+| `ospex approvals show [--address <addr>]` | Read-only allowance snapshot for a wallet. |
 | `ospex positions list <address>` | Position history for an address. |
-| `ospex positions status <address>` | Active vs. claimable categorization. |
+| `ospex positions status <address>` | Three-bucket categorization: active / pendingSettle / claimable. |
+| `ospex positions history <address>` | Full claim/settlement history. |
+| `ospex positions claim <speculationId> --type upper\|lower` | Claim one specific winning position. |
+| `ospex positions claim-all [--address <addr>] [--dry-run]` | Sweep every claimable position for a wallet (settles where needed). |
+| `ospex positions settle <speculationId>` | Permissionlessly settle a scored speculation. |
 | `ospex leaderboard show` | Top entries on the active leaderboard. |
 | `ospex odds show <contestId> [--json]` | One-shot snapshot of upstream reference odds (moneyline / spread / total) for a contest's underlying game. Both American and decimal odds; `--json` emits a single envelope. Use this to decide a commitment price. |
 | `ospex odds watch <contestId> [--json --include-refreshes]` | Streams Realtime upstream odds change events. Line-delimited JSON in `--json` mode — agent-facing. Use `odds show` for a one-shot snapshot; `watch` is for reacting to changes over time. |
-| `ospex wallet import [--force]` | Encrypts a private key into `~/.ospex/keystore.json`. |
-| `ospex wallet unlock` | Caches the decrypted key for 15 minutes in `~/.ospex/session`. |
+| `ospex wallet import [--force]` | Encrypts a private key into `~/.ospex/keystore.json` (legacy path). |
+| `ospex wallet unlock` | Caches the decrypted key for 15 minutes in `~/.ospex/session` (legacy path). |
 | `ospex wallet lock` | Deletes the cached unlocked key. |
-| `ospex wallet address` | Prints the keystore's address. Skips decryption if the keystore JSON includes a top-level `address`; Foundry-produced keystores omit it, so the passphrase is requested in that case. |
+| `ospex wallet address` | Prints the keystore's address. Foundry-produced keystores omit the top-level `address` field, so the passphrase is requested in that case. |
 
-Every command supports `--json` for machine-readable output.
+Every command supports `--json` for machine-readable output. See [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) for the stable JSON envelope shapes and which commands are preview-bearing vs. output-format-only.
 
 ## Wallet security
 
@@ -212,31 +188,53 @@ Every command supports `--json` for machine-readable output.
 
 What 0600 actually buys you: the session file is unreadable by *other* users on the host. **Any process running as the same user can still read it while the session is unlocked.** OS-keychain integration (DPAPI / Keychain / libsecret) is out of scope. The Foundry path avoids the session-cache trade-off entirely — each write prompts for the passphrase and the key is never persisted in cleartext.
 
-## Roadmap
-
-- **M1**: reads, wallet plumbing, Realtime odds. No on-chain writes.
-- **M2 (this release)**: `commitments.{submit, match, approve, cancel}`, contract ABIs under `packages/sdk/src/contracts/abi/`, `rpcUrl` required for chain operations, allowance prompts in the CLI.
-- **M2.5**: on-chain `cancelCommitment` + `raiseMinNonce` (bulk cancel-by-speculation) — sovereign cancel that blocks even takers who already hold the signed payload. Adds `cancelOnchain`, `raiseMinNonce`, `cancelAllOnSpeculation`, `getNonceFloor` to `client.commitments`; CLI mirrors with `cancel-onchain`, `cancel-all`, `nonce-floor`, plus `--also-onchain` on the existing `cancel`. Recommended pattern (per `ospex-core-api/docs/CANCEL_FLOW.md`): off-chain DELETE *and* on-chain cancel — DELETE stops new takers, on-chain cancel stops takers who already have the payload.
-- **M3**: Position lifecycle (claims, payouts), event-driven matches.
-- **M4**: Contest creation surface for ops tooling.
-
-## Testing & validation
-
-Unit tests run via `yarn workspace @ospex/sdk test`. The most important one is the EIP-712 hash vector test in [`tests/chain-eip712.test.ts`](./packages/sdk/tests/chain-eip712.test.ts) — it pins the SDK's typed-data declaration against the contract's `COMMITMENT_TYPEHASH` and cross-validates with ethers, so any drift in field order or types fails CI before a single bad commitment hits the wire.
-
-Integration coverage is a documented manual flow at [`docs/MANUAL_INTEGRATION_TESTING.md`](./docs/MANUAL_INTEGRATION_TESTING.md). Walk all eight sections (15-20 minutes against Polygon Amoy) before tagging a release.
+For the full SDK-level trust-boundary description (how `KeystoreSigner` holds decrypted material in memory, what the SDK never does), see [`docs/AGENT_CONTRACT.md` §7](./docs/AGENT_CONTRACT.md).
 
 ## Architecture notes
 
-- `@ospex/sdk` reads protocol state through `ospex-core-api` (no direct Supabase queries). It only opens Supabase channels for Realtime odds.
+- `@ospex/sdk` reads protocol state through the public Ospex core API (no direct Supabase queries). It only opens Supabase channels for Realtime odds.
 - The SDK fetches `GET /v1/config/public` on its first Realtime call to obtain the publishable Supabase URL + anon key. This means clients don't need to track a key that may rotate.
-- All chain interactions go through `viem`. Keystore encrypt/decrypt uses `ethers` v6 — both libraries co-exist intentionally; the spec for M1 explicitly approves this.
+- All chain interactions go through `viem`. Keystore encrypt/decrypt uses `ethers` v6 — both libraries co-exist intentionally for this scope.
 - The SDK has no `network` parameter. The API decides which chain it speaks to; the SDK reads what it returns.
 
-## Repository setup
+## Testing & validation
 
-This repo lives next to the rest of the Ospex stack at `~/Documents/solidity/ospex-matched-pairs/ospex-sdk/`. The relevant context (production URLs, indexer schema, contract addresses) lives in sibling repos. See `CLAUDE.md` for the source-of-truth pointers.
+Unit tests run via `yarn test`. The most important one is the EIP-712 hash vector test in [`packages/sdk/tests/chain-eip712.test.ts`](./packages/sdk/tests/chain-eip712.test.ts) — it pins the SDK's typed-data declaration against the contract's `COMMITMENT_TYPEHASH` and cross-validates with ethers, so any drift in field order or types fails CI before a single bad commitment hits the wire.
+
+Integration coverage is a documented manual flow at [`docs/MANUAL_INTEGRATION_TESTING.md`](./docs/MANUAL_INTEGRATION_TESTING.md). Walk it (15-20 minutes against Polygon Amoy) before tagging a release.
+
+CI runs install / build / typecheck / test on every PR — see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
+
+## Roadmap
+
+Out of the current public surface, deferred work:
+
+- **Realtime matches and positions.** Supabase channels for `MatchExecuted` and `POSITION_CLAIMED` / `SPECULATION_SETTLED` rows. Today, agents poll.
+- **Cross-process nonce coordination.** A pluggable `nonceProvider` for callers distributing submits across hosts. Today, callers serialize per `(maker, speculationKey)` themselves.
+- **Read-only nonce-floor endpoint.** A `GET /v1/makers/:address/nonce-floor` API path so callers without an RPC URL can read the floor without an `eth_call`.
+- **Bulk on-chain claim.** Multicall3-based bulk claim flow.
+- **Polygon Amoy script approvals for contest creation.** Today, M4 surfaces (`contests create`, `contests score`) work on mainnet only.
+- **Secondary-market position UX.** SecondaryMarketModule integration.
+
+Contributions welcome on any of these — see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+
+## Disclaimers
+
+By using this SDK and CLI you acknowledge:
+
+- **Experimental software.** Ospex is experimental and ships **without warranty**, express or implied. See [`LICENSE`](./LICENSE).
+- **Sole control of your wallet.** You — and only you — control your private key, your approvals, and your transactions. The SDK never asks for or persists a raw private key in its public interface. The legacy CLI session cache (`ospex wallet unlock`) writes a decrypted private key to `~/.ospex/session` for 15 minutes; the recommended Foundry-keystore path avoids this.
+- **Financial risk.** Wagering, approvals, and on-chain transactions carry financial risk. Approvals can be exploited by malicious frontends or scripts; bugs in this SDK could cause loss of funds. Approve only the amount you're willing to risk; revoke approvals you no longer need. Use the public `ospex doctor` and `ospex approvals show` commands to audit your wallet's exposure at any time.
+- **No guarantees.** No guarantee of liquidity, settlement timing, odds accuracy, indexer projection latency, RPC availability, or profit. The protocol settles via Chainlink Functions on a best-effort basis; outages happen.
+- **Local law compliance.** You are responsible for complying with the laws of your jurisdiction. This software does not enforce geofencing, KYC, or any other regulatory check. Don't use it where you shouldn't.
+- **Not financial or legal advice.** Nothing in this repository constitutes financial, legal, or tax advice.
+
+Smart-contract security issues should go through the contracts repo. SDK / CLI security issues — see [`SECURITY.md`](./SECURITY.md).
+
+## Contributing
+
+PRs and issue reports welcome. See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the dev workflow and conventions.
 
 ## License
 
-MIT.
+[MIT](./LICENSE).
