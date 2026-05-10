@@ -376,25 +376,37 @@ Explicit non-guarantees, listed so you don't accidentally depend on them:
 
 ## 12. Versioning + migration
 
-The SDK follows **semver** with the following interpretation:
+The SDK follows **semver** with the following interpretation of each kind of bump:
 
 - **Patch** (`0.1.0` → `0.1.1`): bug fixes only. No new public API surface.
-- **Minor** (`0.1.x` → `0.2.0`): additive — new commands, new SDK methods, new error reasons, new optional envelope fields. Existing pinned shapes still resolve. Agents pinned to `^0.1.0` get these automatically.
+- **Minor** (`0.1.x` → `0.2.0`): intended-additive — new commands, new SDK methods, new error reasons, new optional envelope fields. Pre-1.0 reserves the right to ship a breaking change in a minor bump if the audit demands it; release notes will call out any break explicitly, and every effort will be made to deprecate first.
 - **Major** (`0.x` → `1.x`, then `1.x` → `2.x`): breaking changes possible. Includes any `schemaVersion` bump.
 
-Pre-1.0 (`0.x.y`) reserves the right to make breaking changes in a minor bump if the audit mandates it, but every effort will be made to deprecate first.
+### Pinning under pre-1.0 (caret behavior)
 
-When you pin in your agent's manifest, pin to a minor:
+npm/yarn caret semantics for pre-1.0 packages **lock the 0.x line**: `^0.1.0` resolves to `>=0.1.0 <0.2.0`, NOT `>=0.1.0 <1.0.0`. So caret-pinning to `^0.1.0` gives you patch updates within the 0.1 line and **does not** float to 0.2.0. Verify yourself:
 
-```jsonc
-// good: gets patches and additive minors
-"@ospex/sdk": "^0.1.0",
-
-// fragile: blocks even patch fixes
-"@ospex/sdk": "0.1.0",
+```sh
+npx semver -r '^0.1.0' 0.1.1 0.2.0
+# 0.1.1
 ```
 
-For the CLI installed via tarball, pin in the same `package.json`:
+Bumping to a new minor is therefore an explicit opt-in — change the manifest to `^0.2.0` and re-install after reading the release notes. This is the right shape for pre-1.0 anyway, since pre-1.0 minors are not guaranteed to be additive.
+
+```jsonc
+// good: gets patches within the 0.1 line
+"@ospex/sdk": "^0.1.0",
+
+// opt into the next minor deliberately after reading migration notes
+"@ospex/sdk": "^0.2.0",
+
+// fragile: blocks even patch fixes
+"@ospex/sdk": "0.1.0"
+```
+
+Once the SDK reaches `1.0.0`, caret pinning will float across additive minors as the typical post-1.0 semver convention (`^1.2.3` resolves to `>=1.2.3 <2.0.0`).
+
+For the CLI installed via tarball, pin the exact tarball path:
 
 ```jsonc
 "@ospex/cli": "file:./vendor/ospex-cli-0.1.0.tgz"
