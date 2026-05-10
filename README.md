@@ -7,6 +7,8 @@ This repo is a Yarn 1 workspaces monorepo with two packages:
 - [`@ospex/sdk`](./packages/sdk) — the public TypeScript SDK.
 - [`@ospex/cli`](./packages/cli) — the `ospex` binary, built on top of the SDK.
 
+> Building an agent / programmatic integration? See [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) for the stable JSON envelopes, error-code catalog, idempotency rules, and the Realtime contract.
+
 ## Quick start (CLI)
 
 For the minimum-friction zero-to-commitment walkthrough, see [`docs/QUICKSTART.md`](./docs/QUICKSTART.md). Short version below.
