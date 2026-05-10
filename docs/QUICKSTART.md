@@ -403,6 +403,8 @@ ospex claim <speculationId> --type upper|lower    # one specific position
 
 ## Agent / scripting flow
 
+> The full integration contract — JSON envelope shapes, typed error codes, idempotency rules, and what's stable across releases — lives in [`AGENT_CONTRACT.md`](./AGENT_CONTRACT.md). Read it before depending on any output shape in production.
+
 Agents skip the human flow where commands provide explicit preview/execute modes. For **preview-capable flows** (`commitments submit`, `commitments match`, `approvals setup`), `--json` alone is preview-only and `--yes --json` executes and emits the result envelope. For **other write commands** (`contests score`, `settle`, `claim`, `claim-all`, `commitments cancel`, `commitments cancel-onchain`), `--json` is only an output format and the command may still send a transaction — check the command help and use `--dry-run` where available (e.g. `claim-all --dry-run`).
 
 ```bash
