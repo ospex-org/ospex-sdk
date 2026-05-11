@@ -60,14 +60,13 @@ yarn workspace @ospex/cli pack --filename ospex-cli.tgz
 ```bash
 cd /path/to/your/working-dir
 yarn init -y                                          # creates a minimal package.json
-yarn add file:/abs/path/to/ospex-sdk/packages/sdk/ospex-sdk.tgz \
-         file:/abs/path/to/ospex-sdk/packages/cli/ospex-cli.tgz
+yarn add ./ospex-sdk-<ver>.tgz ./ospex-cli-<ver>.tgz  # pass the tarball paths directly
 npx ospex --version
 ```
 
-(For the GitHub-release flow, swap the paths above for the downloaded tarballs — e.g. `file:./ospex-sdk-0.1.0.tgz`.)
+Pass the tarball paths directly (don't use the `file:` prefix); yarn 1 detects the `.tgz` extension and installs them as local packages. `npm install ./ospex-sdk-<ver>.tgz ./ospex-cli-<ver>.tgz` works equivalently if you'd rather use npm.
 
-You install **both** tarballs in the same `yarn add` command. The CLI uses the SDK at runtime but doesn't list it as a regular dependency — yarn 1 has a quirk that turns a transitive `@ospex/sdk` reference into a registry lookup, and we distribute through GitHub releases rather than npm by design.
+You install **both** tarballs in the same `yarn add` command. The CLI uses the SDK at runtime but doesn't list it as a regular dependency — yarn 1 would otherwise turn the transitive `@ospex/sdk` reference into a registry lookup and fail. We distribute through GitHub releases by design.
 
 The rest of the guide writes `ospex` for the binary; substitute `npx ospex` until it's on your PATH.
 

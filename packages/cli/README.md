@@ -14,7 +14,7 @@ ospex commitments match 0xe900c6dd
 This package ships via [GitHub Releases](https://github.com/ospex-org/ospex-sdk/releases), not npm. Download both `ospex-sdk-<ver>.tgz` and `ospex-cli-<ver>.tgz` from the latest release and install in the same `yarn add` call:
 
 ```sh
-yarn add file:./ospex-sdk-<ver>.tgz file:./ospex-cli-<ver>.tgz
+yarn add ./ospex-sdk-<ver>.tgz ./ospex-cli-<ver>.tgz
 ```
 
 The CLI uses the SDK at runtime but does not declare it as a regular dependency — yarn 1's `file:` resolver would treat the SDK reference as an npm registry lookup and fail. Always install both tarballs together.
