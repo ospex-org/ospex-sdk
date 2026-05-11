@@ -45,13 +45,17 @@ The two tarballs land at:
 - `packages/sdk/ospex-sdk-<ver>.tgz`
 - `packages/cli/ospex-cli-<ver>.tgz`
 
-Smoke-test from a fresh working directory:
+Smoke-test from a fresh working directory. Copy the two tarballs out
+of the repo first so the install command stays short and avoids any
+absolute-path quoting quirks (notably with yarn 1 on Windows / Git
+Bash, where `file:` URLs misparse):
 
 ```sh
 mkdir /tmp/ospex-release-smoke && cd /tmp/ospex-release-smoke
+cp /path/to/ospex-sdk/packages/sdk/ospex-sdk-<ver>.tgz .
+cp /path/to/ospex-sdk/packages/cli/ospex-cli-<ver>.tgz .
 yarn init -y
-yarn add file:/abs/path/to/ospex-sdk/packages/sdk/ospex-sdk-<ver>.tgz \
-         file:/abs/path/to/ospex-sdk/packages/cli/ospex-cli-<ver>.tgz
+yarn add ./ospex-sdk-<ver>.tgz ./ospex-cli-<ver>.tgz
 npx ospex --version
 npx ospex health
 ```

@@ -18,11 +18,11 @@ Distribution is via [GitHub Releases](https://github.com/ospex-org/ospex-sdk/rel
 ```bash
 mkdir my-ospex && cd my-ospex
 yarn init -y
-yarn add file:./ospex-sdk-<ver>.tgz file:./ospex-cli-<ver>.tgz
+yarn add ./ospex-sdk-<ver>.tgz ./ospex-cli-<ver>.tgz
 npx ospex --version
 ```
 
-The CLI uses the SDK at runtime but does not declare it as a regular dependency — yarn 1's `file:` resolver would treat the SDK reference as a registry lookup and fail. Always install both tarballs together.
+The CLI uses the SDK at runtime but does not declare it as a regular dependency — without both tarballs in the same install call, yarn 1 would try to resolve `@ospex/sdk` from the npm registry and fail. Always install both together. Pass tarball paths directly (don't use the `file:` prefix); yarn 1 detects the `.tgz` extension. `npm install` works equivalently.
 
 For local development from a clone of this repo (workspace-link puts `ospex` on your PATH for dev iteration):
 

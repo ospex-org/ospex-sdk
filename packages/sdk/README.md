@@ -20,7 +20,7 @@ import { KeystoreSigner } from '@ospex/sdk/signers/keystore';
 This package ships via [GitHub Releases](https://github.com/ospex-org/ospex-sdk/releases), not npm. Download `ospex-sdk-<ver>.tgz` from the latest release and:
 
 ```sh
-yarn add file:./ospex-sdk-<ver>.tgz
+yarn add ./ospex-sdk-<ver>.tgz
 ```
 
 ## Documentation
