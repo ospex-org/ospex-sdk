@@ -14,7 +14,8 @@
     "./signers/keystore": {
       "types": "./dist/signers/keystore.d.ts",
       "import": "./dist/signers/keystore.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",

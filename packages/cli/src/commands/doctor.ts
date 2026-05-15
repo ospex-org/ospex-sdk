@@ -24,14 +24,23 @@
 
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
+import type {
+  ApprovalsSnapshot,
+  BalancesSnapshot,
+  OspexClient,
+} from '@ospex/sdk';
 import { checkPasswordFilePermissions } from '@ospex/sdk/signers/keystore';
 import { formatOutput } from '../lib/format.js';
 import { getClient } from '../lib/client.js';
 import {
   buildDoctorReport,
   renderDoctorReport,
+  type DoctorReportInputs,
 } from '../lib/doctorRender.js';
-import { resolveWalletAddress } from '../lib/walletAddress.js';
+import {
+  resolveWalletAddress,
+  WalletAddressUnresolvedError,
+} from '../lib/walletAddress.js';
 import { expandTilde, loadConfigFile } from '../lib/config.js';
 
 const optionsSchema = z.object({
@@ -53,27 +62,39 @@ export const doctorCommand = new Command('doctor')
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
     await runPasswordFilePermissionGate(opts.strict === true);
-    const owner = await resolveWalletAddress(opts.address);
-    const client = await getClient({ requiresChain: true });
 
-    // Fan out every read in parallel — none depend on each other and
-    // the doctor's whole pitch is "give me everything in one trip."
-    // The health check is independent of the chain reads, so let it
-    // fail soft: a flaky API shouldn't bubble up as the doctor's exit.
-    const [healthResult, approvals, balances] = await Promise.all([
-      client.health.check().then(
-        () => ({ ok: true }),
-        () => ({ ok: false }),
-      ),
-      client.approvals.read({ owner }),
-      client.balances.read({ owner }),
-    ]);
+    // No-prompt guarantee: in --json mode or when stdin isn't a TTY,
+    // the doctor must never block on hidden-input read. Address
+    // resolution that would otherwise require an unlock throws
+    // structured instead — the doctor catches it and emits
+    // `signer.address_known: fail` rather than hanging.
+    const noPrompt = opts.json === true || process.stdin.isTTY !== true;
 
-    const report = buildDoctorReport({
-      approvals,
-      balances,
-      apiOk: healthResult.ok,
-    });
+    let owner: `0x${string}` | null = null;
+    let signerAddressError: string | undefined;
+    try {
+      owner = await resolveWalletAddress(opts.address, { noPrompt });
+    } catch (err) {
+      if (err instanceof WalletAddressUnresolvedError) {
+        owner = null;
+        signerAddressError = err.message;
+      } else {
+        throw err;
+      }
+    }
+
+    const inputs = await fetchDoctorInputs(owner);
+    const reportInputs: DoctorReportInputs = {
+      apiOk: inputs.apiOk,
+      approvals: inputs.approvals,
+      balances: inputs.balances,
+      signerAddress: owner,
+      ...(inputs.balancesError !== undefined ? { balancesError: inputs.balancesError } : {}),
+      ...(inputs.approvalsError !== undefined ? { approvalsError: inputs.approvalsError } : {}),
+      ...(signerAddressError !== undefined ? { signerAddressError } : {}),
+    };
+
+    const report = buildDoctorReport(reportInputs);
 
     if (opts.json === true) {
       formatOutput(report, { json: true });
@@ -83,6 +104,128 @@ export const doctorCommand = new Command('doctor')
 
     process.exit(report.ready.matchCommitments.ok ? 0 : 1);
   });
+
+interface FetchedInputs {
+  apiOk: boolean;
+  balances: BalancesSnapshot | null;
+  balancesError?: string;
+  approvals: ApprovalsSnapshot | null;
+  approvalsError?: string;
+}
+
+interface SafeReadResult<T> {
+  value: T | null;
+  error?: string;
+}
+
+/**
+ * Fetch the chain + API snapshots with per-source soft-fail. A flaky
+ * RPC produces `balances: null` (and `balancesError: '<message>'`)
+ * instead of throwing — the report builder turns that into structured
+ * `skip` lines on the affected checks, leaving the rest of the
+ * envelope intact.
+ *
+ * When `owner === null` (no-prompt resolution failed), the chain
+ * reads are skipped — there's no address to query against.
+ */
+async function fetchDoctorInputs(owner: `0x${string}` | null): Promise<FetchedInputs> {
+  if (owner === null) {
+    const healthResult = await probeApiHealth(null);
+    return {
+      apiOk: healthResult.ok,
+      balances: null,
+      approvals: null,
+    };
+  }
+
+  // requiresChain may throw synchronously when no rpcUrl is configured.
+  // Catch it here so the doctor still emits an envelope rather than a
+  // stack trace — PR 2 will add the structured `config.rpc_url` check
+  // that surfaces this as `fail`; for PR 1 we just degrade gracefully.
+  let client: OspexClient;
+  try {
+    client = await getClient({ requiresChain: true });
+  } catch (err) {
+    const apiResult = await probeApiHealth(null);
+    const msg = errorMessage(err);
+    return {
+      apiOk: apiResult.ok,
+      balances: null,
+      approvals: null,
+      balancesError: msg,
+      approvalsError: msg,
+    };
+  }
+
+  const [healthResult, approvalsResult, balancesResult] = await Promise.all([
+    probeApiHealth(client),
+    readApprovalsSafe(client, owner),
+    readBalancesSafe(client, owner),
+  ]);
+
+  const result: FetchedInputs = {
+    apiOk: healthResult.ok,
+    approvals: approvalsResult.value,
+    balances: balancesResult.value,
+  };
+  if (approvalsResult.value === null && approvalsResult.error !== undefined) {
+    result.approvalsError = approvalsResult.error;
+  }
+  if (balancesResult.value === null && balancesResult.error !== undefined) {
+    result.balancesError = balancesResult.error;
+  }
+  return result;
+}
+
+async function probeApiHealth(client: OspexClient | null): Promise<{ ok: boolean }> {
+  if (client === null) {
+    // No client (e.g. rpcUrl missing). Probe the API via a fresh
+    // signer-less client so the health line still reports authoritatively.
+    let healthClient: OspexClient;
+    try {
+      healthClient = await getClient();
+    } catch {
+      return { ok: false };
+    }
+    return healthClient.health.check().then(
+      () => ({ ok: true }),
+      () => ({ ok: false }),
+    );
+  }
+  return client.health.check().then(
+    () => ({ ok: true }),
+    () => ({ ok: false }),
+  );
+}
+
+async function readBalancesSafe(
+  client: OspexClient,
+  owner: `0x${string}`,
+): Promise<SafeReadResult<BalancesSnapshot>> {
+  try {
+    const value = await client.balances.read({ owner });
+    return { value };
+  } catch (err) {
+    return { value: null, error: errorMessage(err) };
+  }
+}
+
+async function readApprovalsSafe(
+  client: OspexClient,
+  owner: `0x${string}`,
+): Promise<SafeReadResult<ApprovalsSnapshot>> {
+  try {
+    const value = await client.approvals.read({ owner });
+    return { value };
+  } catch (err) {
+    return { value: null, error: errorMessage(err) };
+  }
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
 
 /**
  * Check the permissions of the configured password file (env >
