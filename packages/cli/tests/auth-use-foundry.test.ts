@@ -188,6 +188,126 @@ describe('auth use-foundry — happy path with --keystore-path', () => {
   });
 });
 
+describe('auth use-foundry — Hermes PR 49 round 2 (stale foundryKeystoresDir)', () => {
+  it('replaces a stale foundryKeystoresDir with the dir actually used during validation', async () => {
+    // Seed config with a stale empty dir. Real keystore lives elsewhere
+    // (in tmpDir/real). User re-runs use-foundry pointing at the real
+    // dir via env (no --foundry-keystores-dir flag). Before the fix,
+    // the stale dir survived in config and broke the next write.
+    const staleEmptyDir = path.join(tmpDir, 'empty-stale');
+    await fs.mkdir(staleEmptyDir, { recursive: true });
+    await fs.mkdir(path.join(tmpDir, '.ospex'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, 'config.json'),
+      JSON.stringify({ foundryKeystoresDir: staleEmptyDir }) + '\n',
+    );
+
+    const realDir = path.join(tmpDir, 'real');
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.writeFile(path.join(realDir, 'maker-a'), keystoreJson, 'utf8');
+    const pwPath = await writePassFile(PASSPHRASE);
+    process.env.OSPEX_FOUNDRY_KEYSTORES_DIR = realDir;
+
+    await authUseFoundryCommand.parseAsync(
+      ['--account', 'maker-a', '--password-file', pwPath, '--json'],
+      { from: 'user' },
+    );
+
+    const config = await loadConfigFile();
+    // The stale dir is replaced with the effective dir used during
+    // validation (the real dir from the env var).
+    expect(config.foundryKeystoresDir).toBe(realDir);
+    expect(config.foundryAccount).toBe('maker-a');
+    expect(config.expectedAddress?.toLowerCase()).toBe(
+      TEST_ADDRESS.toLowerCase(),
+    );
+  });
+
+  it('--foundry-keystores-dir flag writes the flag value (independent of env)', async () => {
+    const flagDir = path.join(tmpDir, 'flag-dir');
+    await fs.mkdir(flagDir, { recursive: true });
+    await fs.writeFile(path.join(flagDir, 'maker-a'), keystoreJson, 'utf8');
+    const pwPath = await writePassFile(PASSPHRASE);
+
+    // Env points elsewhere — flag should beat env, and the flag value
+    // should be persisted.
+    const envDir = path.join(tmpDir, 'env-dir');
+    await fs.mkdir(envDir, { recursive: true });
+    process.env.OSPEX_FOUNDRY_KEYSTORES_DIR = envDir;
+
+    await authUseFoundryCommand.parseAsync(
+      [
+        '--account',
+        'maker-a',
+        '--password-file',
+        pwPath,
+        '--foundry-keystores-dir',
+        flagDir,
+        '--json',
+      ],
+      { from: 'user' },
+    );
+
+    const config = await loadConfigFile();
+    expect(config.foundryKeystoresDir).toBe(flagDir);
+  });
+
+  it('--keystore-path mode clears any stale foundryKeystoresDir', async () => {
+    // Path mode doesn't use a Foundry dir. Stale --account-mode
+    // values shouldn't survive a switch to path mode.
+    await fs.writeFile(
+      path.join(tmpDir, 'config.json'),
+      JSON.stringify({
+        foundryAccount: 'stale-account',
+        foundryKeystoresDir: '/stale/dir',
+        passwordFile: '/stale/pw',
+      }) + '\n',
+    );
+
+    const ksPath = await writeKeystoreFile('explicit.json');
+    const pwPath = await writePassFile(PASSPHRASE);
+
+    await authUseFoundryCommand.parseAsync(
+      ['--keystore-path', ksPath, '--password-file', pwPath, '--json'],
+      { from: 'user' },
+    );
+
+    const config = await loadConfigFile();
+    expect(config.foundryKeystorePath).toBe(ksPath);
+    expect(config.foundryAccount).toBeUndefined();
+    expect(config.foundryKeystoresDir).toBeUndefined();
+  });
+
+  it('after use-foundry, a follow-up loadSigner() resolves against the same dir validation used', async () => {
+    // The full agent flow: set env, run use-foundry (which persists
+    // env's dir into config), clear env (next shell), call loadSigner.
+    // Without the fix, this would fail because the stale config dir
+    // would survive use-foundry and config would be unusable in the
+    // next shell.
+    const realDir = path.join(tmpDir, 'real');
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.writeFile(path.join(realDir, 'maker-a'), keystoreJson, 'utf8');
+    const pwPath = await writePassFile(PASSPHRASE);
+
+    // Initial setup uses env to point at the real dir.
+    process.env.OSPEX_FOUNDRY_KEYSTORES_DIR = realDir;
+    await authUseFoundryCommand.parseAsync(
+      ['--account', 'maker-a', '--password-file', pwPath, '--json'],
+      { from: 'user' },
+    );
+
+    // Simulate a fresh shell — env is no longer set.
+    delete process.env.OSPEX_FOUNDRY_KEYSTORES_DIR;
+
+    // loadSigner must still work using only the persisted config.
+    const { loadSigner } = await import('../src/lib/client.js');
+    const signer = await loadSigner();
+    expect((await signer.getAddress()).toLowerCase()).toBe(
+      TEST_ADDRESS.toLowerCase(),
+    );
+  });
+});
+
 describe('auth use-foundry — validation errors', () => {
   it('rejects --account + --keystore-path together', async () => {
     await writeKeystoreFile('maker-c');

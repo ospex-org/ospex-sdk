@@ -24,16 +24,19 @@
  * to silently follow). The default is to pin — agent safety wins.
  */
 
+import path from 'node:path';
 import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { OspexValidationError } from '@ospex/sdk';
 import {
   KeystoreSigner,
+  resolveKeystoreSource,
   type FromFoundryAccountArgs,
   type FromKeystoreFileArgs,
 } from '@ospex/sdk/signers/keystore';
 import { formatOutput } from '../../lib/format.js';
 import {
+  expandTilde,
   loadConfigFile,
   saveConfigFile,
   type CliConfigFile,
@@ -87,15 +90,33 @@ export const authUseFoundryCommand = new Command('use-foundry')
     // Validate by unlocking once. The SDK helper throws clear errors
     // for missing files, wrong passphrase, etc. — failing here is
     // strictly better than failing on the next bet.
+    //
+    // For --account mode we first call `resolveKeystoreSource` so we
+    // know the EFFECTIVE Foundry directory used during validation
+    // (flag > OSPEX_FOUNDRY_KEYSTORES_DIR > FOUNDRY_DIR/keystores >
+    // ~/.foundry/keystores). That same directory then gets persisted
+    // to config — without this step, a re-run without
+    // `--foundry-keystores-dir` could silently leave a stale
+    // `config.foundryKeystoresDir` in place, breaking the next no-
+    // flag write (Hermes PR 49 round 2 blocker).
     let signer: KeystoreSigner;
+    let effectiveFoundryKeystoresDir: string | undefined;
     if (opts.account !== undefined) {
+      const dirArg =
+        opts.foundryKeystoresDir !== undefined
+          ? expandTilde(opts.foundryKeystoresDir)
+          : undefined;
+      const source = await resolveKeystoreSource({
+        account: opts.account,
+        ...(dirArg !== undefined ? { foundryKeystoresDir: dirArg } : {}),
+      });
+      effectiveFoundryKeystoresDir = path.dirname(source.keystorePath);
+
       const args: FromFoundryAccountArgs = {
         account: opts.account,
         passwordFile: opts.passwordFile,
+        foundryKeystoresDir: effectiveFoundryKeystoresDir,
       };
-      if (opts.foundryKeystoresDir !== undefined) {
-        args.foundryKeystoresDir = opts.foundryKeystoresDir;
-      }
       signer = await KeystoreSigner.fromFoundryAccount(args);
     } else if (opts.keystorePath !== undefined) {
       const args: FromKeystoreFileArgs = {
@@ -128,14 +149,19 @@ export const authUseFoundryCommand = new Command('use-foundry')
     if (opts.account !== undefined) {
       next.foundryAccount = opts.account;
       delete next.foundryKeystorePath;
+      // Persist the same dir validation used (computed above). This
+      // overrides any stale config value so the next no-flag write
+      // resolves against the same source we just validated.
+      next.foundryKeystoresDir = effectiveFoundryKeystoresDir as string;
     } else {
       next.foundryKeystorePath = opts.keystorePath as string;
       delete next.foundryAccount;
+      // --keystore-path mode: the Foundry directory is irrelevant for
+      // signer resolution. Clear any stale value left over from a
+      // previous --account-mode setup.
+      delete next.foundryKeystoresDir;
     }
     next.passwordFile = opts.passwordFile;
-    if (opts.foundryKeystoresDir !== undefined) {
-      next.foundryKeystoresDir = opts.foundryKeystoresDir;
-    }
 
     // `--no-pin-address` sets pinAddress to false; otherwise default
     // is to pin.
