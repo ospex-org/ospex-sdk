@@ -198,6 +198,33 @@ function parseEnvChainId(raw: string | undefined): 137 | 80002 | undefined {
   return undefined;
 }
 
+/**
+ * Expected chain ID for the SDK + its provenance. Mirrors
+ * `resolveCliConfig`'s precedence ladder but returns the *source* too,
+ * so `ospex doctor` can surface whether the user explicitly chose a
+ * chain or fell through to the mainnet default. Default is 137 —
+ * matching the SDK's runtime default — so a wallet pointed at Amoy
+ * without `OSPEX_CHAIN_ID` set will fail `network.chain_id_match`
+ * loudly rather than silently accept the wrong chain.
+ *
+ * `source` is stable enum the JSON envelope exposes. New values may
+ * be added (forward-compatible).
+ */
+export type ExpectedChainIdSource = 'env-OSPEX_CHAIN_ID' | 'config' | 'default';
+
+export interface ResolvedExpectedChainId {
+  value: 137 | 80002;
+  source: ExpectedChainIdSource;
+}
+
+export async function resolveExpectedChainId(): Promise<ResolvedExpectedChainId> {
+  const envValue = parseEnvChainId(process.env.OSPEX_CHAIN_ID);
+  if (envValue !== undefined) return { value: envValue, source: 'env-OSPEX_CHAIN_ID' };
+  const file = await loadConfigFile();
+  if (file.chainId !== undefined) return { value: file.chainId, source: 'config' };
+  return { value: 137, source: 'default' };
+}
+
 export function isFileNotFound(err: unknown): boolean {
   return (
     typeof err === 'object' &&

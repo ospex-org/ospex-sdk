@@ -38,10 +38,21 @@ import {
   type DoctorReportInputs,
 } from '../lib/doctorRender.js';
 import {
+  probeContractsDeployed,
+  probeRpc,
+  type ContractCheckResult,
+  type RpcProbeResult,
+} from '../lib/doctorProbe.js';
+import {
   resolveWalletAddress,
   WalletAddressUnresolvedError,
 } from '../lib/walletAddress.js';
-import { expandTilde, loadConfigFile } from '../lib/config.js';
+import {
+  expandTilde,
+  loadConfigFile,
+  resolveCliConfig,
+  resolveExpectedChainId,
+} from '../lib/config.js';
 
 const optionsSchema = z.object({
   address: z.string().optional(),
@@ -83,12 +94,35 @@ export const doctorCommand = new Command('doctor')
       }
     }
 
-    const inputs = await fetchDoctorInputs(owner);
+    const expectedChainId = await resolveExpectedChainId();
+    const cliConfig = await resolveCliConfig();
+    const rpcUrl = cliConfig.rpcUrl;
+    const rpcUrlMissing = rpcUrl === undefined || rpcUrl === '';
+
+    // PR 2: probe RPC + contracts in parallel before chain reads. This
+    // moves the "is the RPC actually working and pointing at the right
+    // chain?" check out of an unhandled exception path and into the
+    // structured `connectivity.rpc` / `network.chain_id_match` /
+    // `network.contracts_deployed` lines.
+    let rpcProbe: RpcProbeResult | null = null;
+    let contractCheck: ContractCheckResult | null = null;
+    if (!rpcUrlMissing) {
+      [rpcProbe, contractCheck] = await Promise.all([
+        probeRpc(rpcUrl),
+        probeContractsDeployed(rpcUrl, expectedChainId.value),
+      ]);
+    }
+
+    const inputs = await fetchDoctorInputs(owner, rpcUrlMissing, rpcProbe);
     const reportInputs: DoctorReportInputs = {
       apiOk: inputs.apiOk,
       approvals: inputs.approvals,
       balances: inputs.balances,
       signerAddress: owner,
+      expectedChainId,
+      rpcProbe,
+      contractCheck,
+      rpcUrlMissing,
       ...(inputs.balancesError !== undefined ? { balancesError: inputs.balancesError } : {}),
       ...(inputs.approvalsError !== undefined ? { approvalsError: inputs.approvalsError } : {}),
       ...(signerAddressError !== undefined ? { signerAddressError } : {}),
@@ -119,17 +153,34 @@ interface SafeReadResult<T> {
 }
 
 /**
- * Fetch the chain + API snapshots with per-source soft-fail. A flaky
- * RPC produces `balances: null` (and `balancesError: '<message>'`)
- * instead of throwing — the report builder turns that into structured
- * `skip` lines on the affected checks, leaving the rest of the
- * envelope intact.
+ * Fetch the chain + API snapshots with per-source soft-fail.
  *
- * When `owner === null` (no-prompt resolution failed), the chain
- * reads are skipped — there's no address to query against.
+ * Skip-cascade rules:
+ *   - `owner === null` → no address to query, skip all chain reads.
+ *   - `rpcUrlMissing` or `rpcProbe.ok === false` → skip all chain reads.
+ *     The probe-driven `connectivity.rpc` check is the authoritative
+ *     signal; downstream balance/allowance checks declare it as a
+ *     `dependsOn`.
+ *   - Otherwise, attempt the reads even on chain mismatch — the values
+ *     are from the actual chain and the `network.chain_id_match` check
+ *     surfaces the discrepancy by downgrading those reads to `warn`.
+ *
+ * The API health probe runs regardless of RPC state — it's
+ * independent and a flaky API shouldn't bubble up alongside an RPC
+ * issue.
  */
-async function fetchDoctorInputs(owner: `0x${string}` | null): Promise<FetchedInputs> {
-  if (owner === null) {
+async function fetchDoctorInputs(
+  owner: `0x${string}` | null,
+  rpcUrlMissing: boolean,
+  rpcProbe: RpcProbeResult | null,
+): Promise<FetchedInputs> {
+  const canChainRead =
+    owner !== null &&
+    !rpcUrlMissing &&
+    rpcProbe !== null &&
+    rpcProbe.ok;
+
+  if (!canChainRead) {
     const healthResult = await probeApiHealth(null);
     return {
       apiOk: healthResult.ok,
@@ -138,10 +189,11 @@ async function fetchDoctorInputs(owner: `0x${string}` | null): Promise<FetchedIn
     };
   }
 
-  // requiresChain may throw synchronously when no rpcUrl is configured.
-  // Catch it here so the doctor still emits an envelope rather than a
-  // stack trace — PR 2 will add the structured `config.rpc_url` check
-  // that surfaces this as `fail`; for PR 1 we just degrade gracefully.
+  // canChainRead implies owner !== null; satisfy the type narrowing.
+  const resolvedOwner = owner as `0x${string}`;
+
+  // getClient may still throw synchronously on other config issues
+  // (e.g. a malformed apiUrl). Defensive — degrade rather than crash.
   let client: OspexClient;
   try {
     client = await getClient({ requiresChain: true });
@@ -159,8 +211,8 @@ async function fetchDoctorInputs(owner: `0x${string}` | null): Promise<FetchedIn
 
   const [healthResult, approvalsResult, balancesResult] = await Promise.all([
     probeApiHealth(client),
-    readApprovalsSafe(client, owner),
-    readBalancesSafe(client, owner),
+    readApprovalsSafe(client, resolvedOwner),
+    readBalancesSafe(client, resolvedOwner),
   ]);
 
   const result: FetchedInputs = {
