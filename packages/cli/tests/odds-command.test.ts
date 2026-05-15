@@ -38,6 +38,18 @@ describe('ospex odds', () => {
     expect(show.helpInformation()).toMatch(/<contestId>/);
   });
 
+  it('show subcommand exposes --market and lists the three values', () => {
+    const root = makeOddsCommand();
+    const show = root.commands.find((c) => c.name() === 'show');
+    expect(show).toBeDefined();
+    if (show === undefined) return;
+    const help = show.helpInformation();
+    expect(help).toMatch(/--market/);
+    expect(help).toMatch(/moneyline/);
+    expect(help).toMatch(/spread/);
+    expect(help).toMatch(/total/);
+  });
+
   it('watch subcommand still has --include-refreshes (back-compat)', () => {
     const root = makeOddsCommand();
     const watch = root.commands.find((c) => c.name() === 'watch');
