@@ -394,41 +394,42 @@ function checkNetworkContractsDeployed(inputs: NormalizedChecksInputs): CheckRes
       details: inputs.contractCheck.reason,
     };
   }
-  const { checked, missing, partial } = inputs.contractCheck;
-  const data = { checked, missing, partial };
-  if (missing.length === 0 && !partial) {
+  const { checked, missing, unknown } = inputs.contractCheck;
+  const data = { checked, missing, unknown };
+  // Confirmed missing wins — it's a definite deployment problem.
+  if (missing.length > 0) {
     return {
       id: 'network.contracts_deployed',
       label: 'Expected contracts deployed on this RPC',
-      status: 'ok',
+      status: 'fail',
       blockingFor: [...ALL_CAPABILITIES],
+      details: `missing bytecode at: ${missing.join(', ')}`,
+      remediation:
+        'This RPC does not have the SDK-expected Ospex contracts deployed. ' +
+        'Check that rpcUrl points at the right environment (mainnet vs Amoy vs local fork).',
       data,
+      error: { code: 'contract_not_deployed', retryable: false },
     };
   }
-  // Partial probe (some getBytecode calls errored) → warn rather than
-  // hard fail, since we couldn't conclude they're missing. Full miss
-  // is a real fail.
-  if (partial && missing.length === 0) {
+  // Lookup errors with no confirmed-missing → warn, not fail. We
+  // genuinely don't know if those contracts are deployed; surfacing
+  // it as a hard fail would over-claim.
+  if (unknown.length > 0) {
     return {
       id: 'network.contracts_deployed',
       label: 'Expected contracts deployed on this RPC',
       status: 'warn',
       blockingFor: [...ALL_CAPABILITIES],
-      details: 'some bytecode lookups failed — could not confirm all contracts',
+      details: `bytecode lookup failed for: ${unknown.join(', ')} (could not confirm deployment)`,
       data,
     };
   }
   return {
     id: 'network.contracts_deployed',
     label: 'Expected contracts deployed on this RPC',
-    status: 'fail',
+    status: 'ok',
     blockingFor: [...ALL_CAPABILITIES],
-    details: `missing bytecode at: ${missing.join(', ')}`,
-    remediation:
-      'This RPC does not have the SDK-expected Ospex contracts deployed. ' +
-      'Check that rpcUrl points at the right environment (mainnet vs Amoy vs local fork).',
     data,
-    error: { code: 'contract_not_deployed', retryable: false },
   };
 }
 

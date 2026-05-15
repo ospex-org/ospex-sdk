@@ -334,24 +334,35 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
   const allowancesBlock =
     inputs.approvals === null ? null : buildAllowancesBlock(inputs.approvals);
 
-  let readiness: Readiness;
+  // `ready` is always derived from `summary.byCapability` so it
+  // reflects every check — PR 1 (api/balances/allowances) AND PR 2+
+  // (rpc/chain/contracts/signer). The exit code reads from
+  // `ready.matchCommitments.ok`, so this guarantees the legacy guard
+  // agrees with the structured per-capability view. Hermes PR 53
+  // blocker #1: pre-fix `computeReadiness` only saw PR 1 conditions,
+  // so a `network.contracts_deployed: fail` could leave the doctor
+  // exiting 0 even though every other PR 2 surface said no.
+  const readiness = readinessFromSummary(summary);
+
   let suggestion: Suggestion | null;
   if (inputs.approvals !== null && inputs.balances !== null) {
-    readiness = computeReadiness({
-      approvals: inputs.approvals,
-      balances: inputs.balances,
-      apiOk: inputs.apiOk,
-    });
+    // PR 1 picker has fine-grained domain knowledge ("fund POL" before
+    // "approve USDC", etc.) that the structured-check enumeration
+    // can't match. Keep it for the happy snapshot path. We pass the
+    // SUMMARY-derived readiness through so the picker sees the same
+    // truth as `report.ready`.
     suggestion = pickNextSuggestion(
       { approvals: inputs.approvals, balances: inputs.balances, apiOk: inputs.apiOk },
       readiness,
     );
+    // Fallback: if PR 1 didn't fire a suggestion but matchCommitments
+    // is still blocked (necessarily by a PR 2+ structured check),
+    // surface the first blocking check's remediation so the user has
+    // a concrete next step instead of a silent envelope.
+    if (suggestion === null && !readiness.matchCommitments.ok) {
+      suggestion = structuredBlockSuggestion(checks);
+    }
   } else {
-    // Degraded path: the v2 `summary.byCapability` is authoritative;
-    // `ready` mirrors it for back-compat. No actionable next-step
-    // suggestion when chain reads failed — the user can't fix RPC by
-    // running a CLI command.
-    readiness = readinessFromSummary(summary);
     suggestion = degradedSuggestion(inputs);
   }
 
@@ -472,6 +483,34 @@ function checkIdToReason(id: CheckId): string {
     case 'allowances.link_oracle':
       return 'OracleModule LINK not approved';
   }
+}
+
+/**
+ * Surface the first failing structured check as a suggestion. Used as
+ * a fallback when the PR 1 picker has nothing to say (API/balances/
+ * allowances are all fine) but `matchCommitments` is still blocked —
+ * which means a PR 2+ check (RPC, chain id, contracts, etc.) is at
+ * fault. Without this, an agent gets a silent `Next step:` section
+ * even though the structured envelope says something is wrong.
+ */
+function structuredBlockSuggestion(checks: CheckResult[]): Suggestion | null {
+  // First non-ok check that blocks matchCommitments. Iteration order
+  // matches the `runDoctorChecks` declared order (config → connectivity
+  // → network → signer → balances → allowances), so the most fundamental
+  // issue is reported first by construction.
+  const blocking = checks.find(
+    (c) =>
+      c.blockingFor.includes('matchCommitments') &&
+      (c.status === 'fail' || c.status === 'warn' || c.status === 'skip'),
+  );
+  if (blocking === undefined) return null;
+  const text =
+    blocking.remediation !== undefined
+      ? blocking.remediation
+      : `Resolve check \`${blocking.id}\`${
+          blocking.details !== undefined ? ` — ${blocking.details}` : ''
+        }.`;
+  return { text, audience: 'bettor' };
 }
 
 function degradedSuggestion(inputs: DoctorReportInputs): Suggestion | null {

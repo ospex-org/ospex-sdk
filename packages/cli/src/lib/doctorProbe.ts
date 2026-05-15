@@ -95,16 +95,27 @@ export async function probeRpc(
 export interface ContractCodeEntry {
   name: string;
   address: `0x${string}`;
-  hasCode: boolean;
+  /**
+   * `true`  — RPC returned non-empty bytecode at this address.
+   * `false` — RPC returned empty `0x` (contract intentionally not deployed).
+   * `null`  — bytecode lookup errored (timeout, transport failure) and we
+   *           don't know whether it's deployed. Distinguished so the
+   *           `checkNetworkContractsDeployed` classifier can warn on
+   *           unknown rather than hard-fail on confirmed-missing.
+   */
+  hasCode: boolean | null;
 }
 
 export interface ContractCheckSuccess {
-  ok: boolean; // false when any contract is missing
+  /** True iff every expected contract was *confirmed* deployed —
+   *  no `missing`, no `unknown`. Strict so a single failed lookup
+   *  doesn't masquerade as a clean ok. */
+  ok: boolean;
   checked: ContractCodeEntry[];
+  /** Names whose bytecode lookup returned `0x` (confirmed empty). */
   missing: string[];
-  /** True if any individual `getBytecode` call failed — agents can
-   *  treat partial probes differently from clean fails. */
-  partial: boolean;
+  /** Names whose bytecode lookup errored — could be either way. */
+  unknown: string[];
 }
 
 export interface ContractCheckUnavailable {
@@ -168,26 +179,33 @@ export async function probeContractsDeployed(
   });
 
   // Per-address try/catch so a single failed lookup doesn't blank the
-  // whole report. A partial result is more useful than nothing.
+  // whole report. The "lookup failed" case is preserved as
+  // `hasCode: null` (not `false`) so the classifier can warn on
+  // unknown rather than misclassify it as a confirmed-missing failure
+  // — that was the Hermes PR 53 blocker #2 bug.
   const settled = await Promise.allSettled(
-    targets.map(async (t) => {
+    targets.map(async (t): Promise<ContractCodeEntry> => {
       const code = await client.getBytecode({ address: t.address });
       return { ...t, hasCode: code !== undefined && code !== '0x' };
     }),
   );
 
-  let partial = false;
   const checked: ContractCodeEntry[] = settled.map((res, i) => {
     if (res.status === 'fulfilled') return res.value;
-    partial = true;
-    // Treat lookup failure as "couldn't determine" — surface as
-    // hasCode=false so the user is alerted; the `partial` flag
-    // distinguishes "we know it's missing" from "we couldn't ask".
-    return { ...targets[i]!, hasCode: false };
+    // Lookup errored — we genuinely don't know the deployment state.
+    // Mark as `null` so the classifier treats it as advisory (warn),
+    // not confirmed-missing (fail).
+    return { ...targets[i]!, hasCode: null };
   });
 
-  const missing = checked.filter((c) => !c.hasCode).map((c) => c.name);
-  return { ok: missing.length === 0, checked, missing, partial };
+  const missing = checked.filter((c) => c.hasCode === false).map((c) => c.name);
+  const unknown = checked.filter((c) => c.hasCode === null).map((c) => c.name);
+  return {
+    ok: missing.length === 0 && unknown.length === 0,
+    checked,
+    missing,
+    unknown,
+  };
 }
 
 // ── helpers ───────────────────────────────────────────────────────────

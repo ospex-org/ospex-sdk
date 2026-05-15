@@ -117,7 +117,7 @@ const HAPPY_CONTRACT_CHECK: ContractCheckResult = {
     { name: 'OspexCore', address: '0xECD12Af197FBF4C9F706B5Eb11a19c40Cfd643db', hasCode: true },
   ],
   missing: [],
-  partial: false,
+  unknown: [],
 };
 
 const HAPPY_EXPECTED_CHAIN_ID = { value: 137 as const, source: 'env-OSPEX_CHAIN_ID' as const };
@@ -531,7 +531,7 @@ describe('PR 2: network.contracts_deployed check', () => {
           { name: 'PositionModule', address: POSITION_MODULE, hasCode: false },
         ],
         missing: ['PositionModule'],
-        partial: false,
+        unknown: [],
       },
     });
     const c = findCheck(checks, 'network.contracts_deployed');
@@ -555,7 +555,12 @@ describe('PR 2: network.contracts_deployed check', () => {
     expect(c.dependsOn).toEqual(['network.chain_id_match']);
   });
 
-  it('warn on a partial probe — some bytecode lookups errored without confirming missing', () => {
+  // Real-probe shape: a lookup that errored sets hasCode=null and
+  // adds the name to `unknown` (NOT `missing`). The check must warn
+  // (lookup advisory) rather than fail (confirmed missing). Hermes
+  // PR 53 blocker #2 — the prior implementation collapsed both into
+  // hasCode:false + missing[], so the real probe path always failed.
+  it('warn when a lookup errored — distinguishes unknown from confirmed missing', () => {
     const checks = runDoctorChecks({
       apiOk: true,
       balances: null,
@@ -567,14 +572,16 @@ describe('PR 2: network.contracts_deployed check', () => {
         ok: false,
         checked: [
           { name: 'USDC', address: USDC, hasCode: true },
-          { name: 'LINK', address: LINK, hasCode: false }, // lookup failed → hasCode=false but counted as partial
+          { name: 'LINK', address: LINK, hasCode: null }, // lookup errored
         ],
         missing: [],
-        partial: true,
+        unknown: ['LINK'],
       },
     });
     const c = findCheck(checks, 'network.contracts_deployed');
     expect(c.status).toBe('warn');
+    expect(c.details).toMatch(/LINK/);
+    expect(c.error).toBeUndefined();
   });
 });
 
@@ -618,6 +625,123 @@ describe('PR 2: chain-mismatch cascade on balances + allowances', () => {
       expect(c.status).toBe('skip');
       expect(c.dependsOn).toEqual(['connectivity.rpc']);
     }
+  });
+});
+
+// Hermes PR 53 blocker #1. The legacy `ready` matrix and the exit
+// code must agree with `summary.byCapability` even when balances and
+// approvals are populated (happy snapshot path). Pre-fix the doctor
+// computed `ready` via the PR 1-only `computeReadiness`, which
+// ignored the new chain/protocol checks — so a passing balance
+// reading would mask a `network.contracts_deployed: fail`.
+describe('PR 2: ready/exit agree with summary even on happy snapshot path', () => {
+  it('network.contracts_deployed: fail flips ready.matchCommitments.ok to false', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+        oracleModule: 2n * 10n ** 18n,
+      }),
+      balances: makeBalances({
+        native: 10n ** 18n,
+        usdc: 10_000_000n,
+        link: 2n * 10n ** 18n,
+      }),
+      signerAddress: OWNER,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      rpcProbe: HAPPY_RPC_PROBE,
+      // Chain matches, balances + allowances are fine, but
+      // PositionModule has no bytecode on this RPC.
+      contractCheck: {
+        ok: false,
+        checked: [
+          { name: 'PositionModule', address: POSITION_MODULE, hasCode: false },
+        ],
+        missing: ['PositionModule'],
+        unknown: [],
+      },
+      meta: STUB_META,
+    });
+    expect(report.ready.matchCommitments.ok).toBe(false);
+    expect(report.summary.byCapability.matchCommitments.ok).toBe(false);
+    expect(report.summary.byCapability.matchCommitments.blockingChecks).toContain(
+      'network.contracts_deployed',
+    );
+    // Reasons list (legacy surface) must mention the new check too.
+    expect(report.ready.matchCommitments.reasons.join(', ')).toMatch(/contracts/);
+  });
+
+  it('network.chain_id_match: fail flips ready.matchCommitments.ok to false', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+      }),
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
+      signerAddress: OWNER,
+      expectedChainId: { value: 137, source: 'env-OSPEX_CHAIN_ID' },
+      rpcProbe: { ...HAPPY_RPC_PROBE, chainId: 80002 },
+      contractCheck: HAPPY_CONTRACT_CHECK,
+      meta: STUB_META,
+    });
+    expect(report.ready.matchCommitments.ok).toBe(false);
+    expect(report.summary.byCapability.matchCommitments.blockingChecks).toContain(
+      'network.chain_id_match',
+    );
+  });
+
+  it('happy chain + happy balances → ready.matchCommitments.ok is true (positive control)', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+        oracleModule: 2n * 10n ** 18n,
+      }),
+      balances: makeBalances({
+        native: 10n ** 18n,
+        usdc: 10_000_000n,
+        link: 2n * 10n ** 18n,
+      }),
+      signerAddress: OWNER,
+      meta: STUB_META,
+      ...HAPPY_CHAIN_PROBES,
+    });
+    expect(report.ready.matchCommitments.ok).toBe(true);
+    expect(report.ready.createContests.ok).toBe(true);
+  });
+
+  it('PR 2 fallback suggestion fires when matchCommitments is blocked but PR 1 picker has nothing', () => {
+    // PR 1 picker conditions all satisfied (API ok, POL/USDC funded,
+    // PositionModule approved) — without the fallback, suggestion
+    // would be null even though contracts_deployed says no-go.
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+        oracleModule: 2n * 10n ** 18n,
+      }),
+      balances: makeBalances({
+        native: 10n ** 18n,
+        usdc: 10_000_000n,
+        link: 2n * 10n ** 18n,
+      }),
+      signerAddress: OWNER,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      rpcProbe: HAPPY_RPC_PROBE,
+      contractCheck: {
+        ok: false,
+        checked: [{ name: 'OspexCore', address: '0xECD12Af197FBF4C9F706B5Eb11a19c40Cfd643db', hasCode: false }],
+        missing: ['OspexCore'],
+        unknown: [],
+      },
+      meta: STUB_META,
+    });
+    expect(report.suggestion).not.toBeNull();
+    expect(report.suggestion?.text).toMatch(/.+/);
   });
 });
 

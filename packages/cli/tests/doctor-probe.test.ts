@@ -11,6 +11,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { probeContractsDeployed, probeRpc } from '../src/lib/doctorProbe.js';
+import { runDoctorChecks } from '../src/lib/doctorChecks.js';
 
 // Mock the viem transport. The probes pass `http(rpcUrl, { timeout })`
 // → we replace that with a fetch mock so we control responses without
@@ -183,8 +184,9 @@ describe('probeContractsDeployed', () => {
     if ('unavailable' in result) throw new Error('unreachable');
     expect(result.ok).toBe(true);
     expect(result.missing).toEqual([]);
+    expect(result.unknown).toEqual([]);
     expect(result.checked.length).toBeGreaterThan(0);
-    expect(result.partial).toBe(false);
+    for (const c of result.checked) expect(c.hasCode).toBe(true);
   });
 
   it('returns ok=false with data.missing when a contract has empty bytecode', async () => {
@@ -204,10 +206,18 @@ describe('probeContractsDeployed', () => {
     if ('unavailable' in result) throw new Error('unreachable');
     expect(result.ok).toBe(false);
     expect(result.missing).toContain('PositionModule');
-    expect(result.partial).toBe(false);
+    expect(result.unknown).toEqual([]);
+    // Confirmed missing entry has hasCode === false (not null).
+    const positionEntry = result.checked.find((c) => c.name === 'PositionModule');
+    expect(positionEntry?.hasCode).toBe(false);
   });
 
-  it('marks partial=true when individual getCode lookups fail', async () => {
+  // Hermes PR 53 blocker #2: a transport-level failure on individual
+  // getCode lookups must NOT be conflated with confirmed-empty
+  // bytecode. The probe records the failed entry as `hasCode: null`
+  // and adds its name to `unknown[]` (not `missing[]`) so the
+  // downstream classifier warns rather than hard-fails.
+  it('records errored lookups as hasCode=null in `unknown[]`, not in `missing[]`', async () => {
     let calls = 0;
     restore = installFetchMock(({ method }) => {
       if (method === 'eth_getCode') {
@@ -222,8 +232,82 @@ describe('probeContractsDeployed', () => {
     const result = await probeContractsDeployed('https://rpc.example.com', 137);
     expect('unavailable' in result).toBe(false);
     if ('unavailable' in result) throw new Error('unreachable');
-    // partial=true should be set; the failed lookup is treated as
-    // hasCode=false but counted as partial.
-    expect(result.partial).toBe(true);
+    expect(result.unknown.length).toBe(1);
+    expect(result.missing).toEqual([]);
+    // The errored lookup must surface as hasCode === null (not false).
+    const erroredEntry = result.checked.find((c) => c.hasCode === null);
+    expect(erroredEntry).toBeDefined();
+    expect(result.unknown).toContain(erroredEntry!.name);
+    // ok is strict — any uncertainty disqualifies it.
+    expect(result.ok).toBe(false);
+  });
+});
+
+// Integration: pipe the REAL probe output into the REAL check
+// classifier. Catches the class of bug where a hand-built probe shape
+// passes a unit test but the actual probe path produces a different
+// shape that misclassifies. Hermes PR 53 blocker #2 surfaced exactly
+// that gap.
+describe('probeContractsDeployed → checkNetworkContractsDeployed (integration)', () => {
+  const HAPPY_RPC_PROBE = {
+    ok: true as const,
+    urlHost: 'rpc.example.com',
+    durationMs: 1,
+    chainId: 137,
+    blockNumber: 1n,
+    blockTimestamp: BigInt(Math.floor(Date.now() / 1000)),
+    blockAgeSec: 0,
+  };
+
+  it('lookup error on one address → check returns warn (not fail)', async () => {
+    let calls = 0;
+    restore = installFetchMock(({ method }) => {
+      if (method === 'eth_getCode') {
+        calls += 1;
+        if (calls === 2) throw new Error('transient transport error');
+        return '0x6080604052';
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const probe = await probeContractsDeployed('https://rpc.example.com', 137);
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+      expectedChainId: { value: 137, source: 'env-OSPEX_CHAIN_ID' },
+      rpcProbe: HAPPY_RPC_PROBE,
+      contractCheck: probe,
+    });
+    const c = checks.find((r) => r.id === 'network.contracts_deployed');
+    expect(c?.status).toBe('warn');
+    expect(c?.error).toBeUndefined();
+  });
+
+  it('confirmed empty bytecode on one address → check returns fail with contract_not_deployed', async () => {
+    const POSITION_LOWER = '0x0dcd42f8609cd7884ddba3481b03a78dfc88366c';
+    restore = installFetchMock(({ method, params }) => {
+      if (method === 'eth_getCode') {
+        const [address] = params as [string];
+        if (address.toLowerCase() === POSITION_LOWER) return '0x';
+        return '0x6080604052';
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const probe = await probeContractsDeployed('https://rpc.example.com', 137);
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+      expectedChainId: { value: 137, source: 'env-OSPEX_CHAIN_ID' },
+      rpcProbe: HAPPY_RPC_PROBE,
+      contractCheck: probe,
+    });
+    const c = checks.find((r) => r.id === 'network.contracts_deployed');
+    expect(c?.status).toBe('fail');
+    expect(c?.error?.code).toBe('contract_not_deployed');
   });
 });
