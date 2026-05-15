@@ -435,7 +435,14 @@ export function buildSummary(checks: readonly CheckResult[]): SummaryBlock {
   const counts = { ok: 0, warn: 0, fail: 0, skip: 0 };
   for (const c of checks) counts[c.status] += 1;
   const worstStatus = pickWorst(checks.map((c) => c.status));
-  const ok = counts.fail === 0;
+  // `summary.ok` is the strict top-level "can the agent proceed?" boolean.
+  // Requires every check to be `ok` — `warn` (advisory) and `skip` (unknown)
+  // both flip it false. Anything weaker is a false-positive footgun: an
+  // envelope with chain-reads-failed produces 6 `skip` lines and 0 `fail`,
+  // so a `counts.fail === 0` rule would say `ok: true` while every
+  // `byCapability.*.ok` is false and the process exits 1. Hermes PR 52
+  // blocker; the strict semantic also matches `worstStatus === 'ok'`.
+  const ok = worstStatus === 'ok';
 
   const byCapability = ALL_CAPABILITY_IDS.reduce(
     (acc, cap) => {

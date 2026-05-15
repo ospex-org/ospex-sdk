@@ -272,6 +272,34 @@ describe('buildSummary — rollup math', () => {
     // Every capability not-ok because skipped checks block them.
     expect(s.byCapability.matchCommitments.ok).toBe(false);
     expect(s.byCapability.createContests.ok).toBe(false);
+    // summary.ok must also be false — skips must not silently pass the
+    // strict top-level gate (Hermes PR 52 blocker).
+    expect(s.ok).toBe(false);
+  });
+
+  // Hermes PR 52 blocker. The exact repro scenario: `--address` set
+  // and RPC unreachable. The envelope has 2 ok (api + address known)
+  // and 6 skips, no fails. Pre-fix summary.ok was true even though
+  // every byCapability.ok was false and the process exited 1 — false
+  // positive an AI-agent preflight would misread as "safe to act".
+  // The strict semantic ties summary.ok to "every check ok".
+  it('skip-only envelope: summary.ok is false even with zero fails (Hermes PR 52)', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+    });
+    const s = buildSummary(checks);
+    expect(s.counts.fail).toBe(0);
+    expect(s.counts.skip).toBeGreaterThan(0);
+    expect(s.ok).toBe(false);
+    expect(s.worstStatus).toBe('warn');
+    // Consistency: summary.ok agrees with every byCapability.ok being false
+    // and (in the doctor command) the exit-1 path.
+    expect(s.byCapability.matchCommitments.ok).toBe(false);
+    expect(s.byCapability.submitCommitments.ok).toBe(false);
+    expect(s.byCapability.createContests.ok).toBe(false);
   });
 
   it('counts every status accurately', () => {
