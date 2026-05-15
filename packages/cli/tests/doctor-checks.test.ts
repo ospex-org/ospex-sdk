@@ -121,11 +121,19 @@ const HAPPY_CONTRACT_CHECK: ContractCheckResult = {
 };
 
 const HAPPY_EXPECTED_CHAIN_ID = { value: 137 as const, source: 'env-OSPEX_CHAIN_ID' as const };
+const HAPPY_API_URL = { value: 'https://api.ospex.org', source: 'default' as const };
+const HAPPY_RPC_URL = {
+  value: 'https://polygon-mainnet.g.alchemy.com/v2/aaaaaaaaaaaaaaaaaaaa',
+  source: 'env-OSPEX_RPC_URL' as const,
+};
 
 const HAPPY_CHAIN_PROBES = {
   expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
   rpcProbe: HAPPY_RPC_PROBE,
   contractCheck: HAPPY_CONTRACT_CHECK,
+  apiUrl: HAPPY_API_URL,
+  rpcUrl: HAPPY_RPC_URL,
+  apiPublicConfigOk: true,
 };
 
 describe('runDoctorChecks — happy path', () => {
@@ -349,12 +357,13 @@ describe('buildSummary — rollup math', () => {
       balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }), // gas ok, usdc ok, link fail
       approvals: makeApprovals({ positionModule: 50_000_000n }), // position ok, treasury fail, oracle fail
       signerAddress: OWNER, // address ok
-      ...HAPPY_CHAIN_PROBES, // PR 2 probes all ok → 4 more ok
+      ...HAPPY_CHAIN_PROBES, // PR 2+3 probes all ok
     });
     const s = buildSummary(checks);
-    // PR 1: address (1) + balances.native (1) + balances.usdc (1) + allowances.usdc_position (1) = 4 ok
-    // PR 2: config.chain_id_expected + connectivity.rpc + network.chain_id_match + network.contracts_deployed = 4 more ok
-    expect(s.counts.ok).toBe(8);
+    // PR 1: address + balances.native + balances.usdc + allowances.usdc_position = 4 ok
+    // PR 2: config.chain_id_expected + connectivity.rpc + network.chain_id_match + network.contracts_deployed = 4 ok
+    // PR 3: config.api_url + config.rpc_url + connectivity.api_public_config = 3 ok
+    expect(s.counts.ok).toBe(11);
     expect(s.counts.fail).toBe(4); // connectivity.api, balances.link, allowances.usdc_treasury, allowances.link_oracle
     expect(s.counts.skip).toBe(0);
     expect(s.counts.warn).toBe(0);
@@ -455,7 +464,11 @@ describe('PR 2: connectivity.rpc check', () => {
     expect(c.error?.code).toBe('rpc_error');
   });
 
-  it('fail when rpcUrl missing (caller signals it)', () => {
+  // PR 3: `config.rpc_url` is now the canonical signal for "rpcUrl
+  // unset" — `connectivity.rpc` skips with `dependsOn` rather than
+  // duplicating the fail. Two signals for the same condition was
+  // noisy and the dependsOn cascade is the cleaner agent UX.
+  it('skip with dependsOn config.rpc_url when rpcUrl missing', () => {
     const checks = runDoctorChecks({
       apiOk: true,
       balances: null,
@@ -464,10 +477,9 @@ describe('PR 2: connectivity.rpc check', () => {
       expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
       rpcUrlMissing: true,
     });
-    const c = findCheck(checks, 'connectivity.rpc');
-    expect(c.status).toBe('fail');
-    expect(c.details).toMatch(/rpcUrl not configured/);
-    expect(c.remediation).toMatch(/`ospex init`/);
+    const rpc = findCheck(checks, 'connectivity.rpc');
+    expect(rpc.status).toBe('skip');
+    expect(rpc.dependsOn).toEqual(['config.rpc_url']);
   });
 });
 
@@ -742,6 +754,228 @@ describe('PR 2: ready/exit agree with summary even on happy snapshot path', () =
     });
     expect(report.suggestion).not.toBeNull();
     expect(report.suggestion?.text).toMatch(/.+/);
+  });
+});
+
+// ── PR 3: URL provenance + Realtime-bootstrap probe ───────────────────
+
+describe('PR 3: config.api_url check', () => {
+  it('ok with source=default when no env/config supplied', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      apiUrl: { value: 'https://api.ospex.org', source: 'default' },
+    });
+    const c = findCheck(checks, 'config.api_url');
+    expect(c.status).toBe('ok');
+    expect(c.data?.['source']).toBe('default');
+    // Never blocks — API URL has a documented default.
+    expect(c.blockingFor).toEqual([]);
+  });
+
+  it('ok with source=env-OSPEX_API_URL when set via env', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      apiUrl: { value: 'https://staging.api.ospex.org', source: 'env-OSPEX_API_URL' },
+    });
+    const c = findCheck(checks, 'config.api_url');
+    expect(c.status).toBe('ok');
+    expect(c.data?.['source']).toBe('env-OSPEX_API_URL');
+  });
+
+  it('skip when apiUrl input is not supplied (PR 2-era callers)', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+    });
+    const c = findCheck(checks, 'config.api_url');
+    expect(c.status).toBe('skip');
+  });
+});
+
+describe('PR 3: config.rpc_url check', () => {
+  it('ok with source provenance when configured', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      rpcUrl: {
+        value: 'https://polygon-mainnet.g.alchemy.com/v2/abc',
+        source: 'env-OSPEX_RPC_URL',
+      },
+    });
+    const c = findCheck(checks, 'config.rpc_url');
+    expect(c.status).toBe('ok');
+    expect(c.data?.['source']).toBe('env-OSPEX_RPC_URL');
+  });
+
+  it('fail with config_not_set when value is null', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      rpcUrl: { value: null, source: 'unset' },
+    });
+    const c = findCheck(checks, 'config.rpc_url');
+    expect(c.status).toBe('fail');
+    expect(c.error?.code).toBe('config_not_set');
+    expect(c.error?.retryable).toBe(false);
+    expect(c.blockingFor).toEqual([
+      'matchCommitments',
+      'submitCommitments',
+      'createContests',
+    ]);
+    expect(c.remediation).toMatch(/`ospex init`/);
+  });
+
+  it('connectivity.rpc skips with dependsOn config.rpc_url when rpcUrl is unset', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      rpcUrl: { value: null, source: 'unset' },
+    });
+    const rpc = findCheck(checks, 'connectivity.rpc');
+    expect(rpc.status).toBe('skip');
+    expect(rpc.dependsOn).toEqual(['config.rpc_url']);
+  });
+});
+
+describe('PR 3: connectivity.api_public_config check', () => {
+  it('ok when probe returned 2xx', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      apiPublicConfigOk: true,
+    });
+    const c = findCheck(checks, 'connectivity.api_public_config');
+    expect(c.status).toBe('ok');
+    expect(c.blockingFor).toEqual([]); // informational only
+  });
+
+  it('fail with api_error when probe failed — never blocks readiness', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      apiPublicConfigOk: false,
+      apiPublicConfigError: 'HTTP 503',
+    });
+    const c = findCheck(checks, 'connectivity.api_public_config');
+    expect(c.status).toBe('fail');
+    expect(c.error?.code).toBe('api_error');
+    expect(c.error?.retryable).toBe(true);
+    expect(c.blockingFor).toEqual([]);
+    expect(c.details).toBe('HTTP 503');
+  });
+
+  it('skip when probe was not attempted', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+    });
+    const c = findCheck(checks, 'connectivity.api_public_config');
+    expect(c.status).toBe('skip');
+  });
+});
+
+describe('PR 3: config.{apiUrl,rpcUrl} envelope field — UrlField with redaction', () => {
+  it('emits a UrlField with redactedValue, host, fingerprint for apiUrl', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: null,
+      balances: null,
+      signerAddress: OWNER,
+      meta: STUB_META,
+      ...HAPPY_CHAIN_PROBES,
+    });
+    expect(report.config.apiUrl).not.toBeNull();
+    expect(report.config.apiUrl?.source).toBe('default');
+    expect(report.config.apiUrl?.host).toBe('api.ospex.org');
+    expect(report.config.apiUrl?.fingerprint).toMatch(/^sha256:[0-9a-f]{16}$/);
+  });
+
+  it('redacts an Alchemy-style RPC URL in the envelope', () => {
+    const raw = 'https://polygon-mainnet.g.alchemy.com/v2/abcdef0123456789abcdef0123456789';
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: null,
+      balances: null,
+      signerAddress: OWNER,
+      meta: STUB_META,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      apiUrl: HAPPY_API_URL,
+      rpcUrl: { value: raw, source: 'env-OSPEX_RPC_URL' },
+      rpcProbe: HAPPY_RPC_PROBE,
+      contractCheck: HAPPY_CONTRACT_CHECK,
+      apiPublicConfigOk: true,
+    });
+    expect(report.config.rpcUrl).not.toBeNull();
+    expect(report.config.rpcUrl?.redactedValue).toBe(
+      'https://polygon-mainnet.g.alchemy.com/v2/[redacted]',
+    );
+    expect(report.config.rpcUrl?.host).toBe('polygon-mainnet.g.alchemy.com');
+    // The raw value MUST NOT appear in the envelope (the credential
+    // leak Hermes flagged in v2 §10).
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain('abcdef0123456789abcdef0123456789');
+  });
+
+  it('rpcUrl is null in envelope when the URL is unset', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: null,
+      balances: null,
+      signerAddress: OWNER,
+      meta: STUB_META,
+      apiUrl: HAPPY_API_URL,
+      rpcUrl: { value: null, source: 'unset' },
+    });
+    expect(report.config.rpcUrl).toBeNull();
+  });
+
+  it('no raw API key from any URL source leaks into the JSON envelope', () => {
+    // Cover every credential surface the redactor handles: userinfo,
+    // path key, query secret. The serialized envelope must contain
+    // none of the raw secret material.
+    const rawSecrets = [
+      'topsecretpasswordstring',
+      'rawalchemyhexkey0123456789abcdefxx',
+      'querysecretvaluestring',
+    ];
+    const compositeRpcUrl = `https://user:${rawSecrets[0]}@rpc.example.com/v2/${rawSecrets[1]}?apikey=${rawSecrets[2]}`;
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: null,
+      balances: null,
+      signerAddress: OWNER,
+      meta: STUB_META,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      apiUrl: HAPPY_API_URL,
+      rpcUrl: { value: compositeRpcUrl, source: 'env-OSPEX_RPC_URL' },
+      rpcProbe: HAPPY_RPC_PROBE,
+      contractCheck: HAPPY_CONTRACT_CHECK,
+      apiPublicConfigOk: true,
+    });
+    const serialized = JSON.stringify(report);
+    for (const secret of rawSecrets) {
+      expect(serialized, `raw secret "${secret}" must not appear in envelope`).not.toContain(secret);
+    }
   });
 });
 

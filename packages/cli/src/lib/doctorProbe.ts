@@ -20,6 +20,7 @@
 
 import { createPublicClient, http, type Hex } from 'viem';
 import { getAddresses, type ChainId, type OspexAddresses } from '@ospex/sdk';
+import { sanitizeMessageForUrl } from './redact.js';
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -85,7 +86,11 @@ export async function probeRpc(
       ok: false,
       urlHost,
       durationMs: Date.now() - start,
-      error: errorMessage(err),
+      // viem's HttpRequestError includes the raw URL in its message
+      // body. Run every captured error message through the URL
+      // sanitiser so credentials never reach `checks[].details` or
+      // the rendered human output. Hermes PR 54 blocker #1.
+      error: sanitizeMessageForUrl(errorMessage(err), rpcUrl),
     };
   }
 }
@@ -162,7 +167,12 @@ export async function probeContractsDeployed(
   try {
     addresses = getAddresses(expectedChainId as ChainId);
   } catch (err) {
-    return { unavailable: true, reason: errorMessage(err) };
+    // `getAddresses` doesn't see the rpcUrl, but apply the sanitiser
+    // uniformly to defend against future error paths that might.
+    return {
+      unavailable: true,
+      reason: sanitizeMessageForUrl(errorMessage(err), rpcUrl),
+    };
   }
 
   const targets: Array<{ name: string; address: `0x${string}` }> = [

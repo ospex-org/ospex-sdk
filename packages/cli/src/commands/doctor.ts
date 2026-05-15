@@ -43,6 +43,7 @@ import {
   type ContractCheckResult,
   type RpcProbeResult,
 } from '../lib/doctorProbe.js';
+import { sanitizeMessageForUrl } from '../lib/redact.js';
 import {
   resolveWalletAddress,
   WalletAddressUnresolvedError,
@@ -50,8 +51,7 @@ import {
 import {
   expandTilde,
   loadConfigFile,
-  resolveCliConfig,
-  resolveExpectedChainId,
+  resolveCliConfigDetailed,
 } from '../lib/config.js';
 
 const optionsSchema = z.object({
@@ -94,26 +94,27 @@ export const doctorCommand = new Command('doctor')
       }
     }
 
-    const expectedChainId = await resolveExpectedChainId();
-    const cliConfig = await resolveCliConfig();
-    const rpcUrl = cliConfig.rpcUrl;
-    const rpcUrlMissing = rpcUrl === undefined || rpcUrl === '';
+    // PR 3: pull all three configs in one read so the envelope can
+    // surface provenance + the doctor can probe upstream URLs.
+    const cliConfig = await resolveCliConfigDetailed();
+    const { apiUrl, rpcUrl, chainId: expectedChainId } = cliConfig;
+    const rpcUrlValue = rpcUrl.value;
+    const rpcUrlMissing = rpcUrlValue === null;
 
-    // PR 2: probe RPC + contracts in parallel before chain reads. This
-    // moves the "is the RPC actually working and pointing at the right
-    // chain?" check out of an unhandled exception path and into the
-    // structured `connectivity.rpc` / `network.chain_id_match` /
-    // `network.contracts_deployed` lines.
+    // PR 2: probe RPC + contracts in parallel before chain reads.
+    // PR 3: also probe /v1/config/public (Realtime bootstrap) so the
+    // structured `connectivity.api_public_config` line is populated.
     let rpcProbe: RpcProbeResult | null = null;
     let contractCheck: ContractCheckResult | null = null;
-    if (!rpcUrlMissing) {
+    if (!rpcUrlMissing && rpcUrlValue !== null) {
       [rpcProbe, contractCheck] = await Promise.all([
-        probeRpc(rpcUrl),
-        probeContractsDeployed(rpcUrl, expectedChainId.value),
+        probeRpc(rpcUrlValue),
+        probeContractsDeployed(rpcUrlValue, expectedChainId.value),
       ]);
     }
+    const apiPublicConfigResult = await probeApiPublicConfig(apiUrl.value);
 
-    const inputs = await fetchDoctorInputs(owner, rpcUrlMissing, rpcProbe);
+    const inputs = await fetchDoctorInputs(owner, rpcUrlMissing, rpcProbe, rpcUrlValue);
     const reportInputs: DoctorReportInputs = {
       apiOk: inputs.apiOk,
       approvals: inputs.approvals,
@@ -123,9 +124,15 @@ export const doctorCommand = new Command('doctor')
       rpcProbe,
       contractCheck,
       rpcUrlMissing,
+      apiUrl,
+      rpcUrl,
+      apiPublicConfigOk: apiPublicConfigResult.ok,
       ...(inputs.balancesError !== undefined ? { balancesError: inputs.balancesError } : {}),
       ...(inputs.approvalsError !== undefined ? { approvalsError: inputs.approvalsError } : {}),
       ...(signerAddressError !== undefined ? { signerAddressError } : {}),
+      ...(apiPublicConfigResult.error !== undefined
+        ? { apiPublicConfigError: apiPublicConfigResult.error }
+        : {}),
     };
 
     const report = buildDoctorReport(reportInputs);
@@ -147,7 +154,7 @@ interface FetchedInputs {
   approvalsError?: string;
 }
 
-interface SafeReadResult<T> {
+export interface SafeReadResult<T> {
   value: T | null;
   error?: string;
 }
@@ -173,6 +180,7 @@ async function fetchDoctorInputs(
   owner: `0x${string}` | null,
   rpcUrlMissing: boolean,
   rpcProbe: RpcProbeResult | null,
+  rpcUrl: string | null,
 ): Promise<FetchedInputs> {
   const canChainRead =
     owner !== null &&
@@ -199,7 +207,9 @@ async function fetchDoctorInputs(
     client = await getClient({ requiresChain: true });
   } catch (err) {
     const apiResult = await probeApiHealth(null);
-    const msg = errorMessage(err);
+    // Sanitise the getClient error message too — it can mention the
+    // rpcUrl when complaining about a malformed transport config.
+    const msg = sanitizeMessageForUrl(errorMessage(err), rpcUrl);
     return {
       apiOk: apiResult.ok,
       balances: null,
@@ -211,8 +221,8 @@ async function fetchDoctorInputs(
 
   const [healthResult, approvalsResult, balancesResult] = await Promise.all([
     probeApiHealth(client),
-    readApprovalsSafe(client, resolvedOwner),
-    readBalancesSafe(client, resolvedOwner),
+    readApprovalsSafe(client, resolvedOwner, rpcUrl),
+    readBalancesSafe(client, resolvedOwner, rpcUrl),
   ]);
 
   const result: FetchedInputs = {
@@ -250,33 +260,82 @@ async function probeApiHealth(client: OspexClient | null): Promise<{ ok: boolean
   );
 }
 
-async function readBalancesSafe(
+// Exported for regression tests — Hermes PR 54 review #2 specifically
+// targeted this leak surface, so the test asserts the sanitisation
+// happens here rather than higher up the stack.
+export async function readBalancesSafe(
   client: OspexClient,
   owner: `0x${string}`,
+  rpcUrl: string | null,
 ): Promise<SafeReadResult<BalancesSnapshot>> {
   try {
     const value = await client.balances.read({ owner });
     return { value };
   } catch (err) {
-    return { value: null, error: errorMessage(err) };
+    // Hermes PR 54 review #2: the probe path already sanitises its
+    // own errors, but viem's HttpRequestError thrown from the chain
+    // read inside the OspexClient also includes the raw URL in
+    // err.message. That message then lands in `checks[].details` via
+    // `balancesError`. Sanitise here so balance/allowance read
+    // errors don't leak credentials.
+    return {
+      value: null,
+      error: sanitizeMessageForUrl(errorMessage(err), rpcUrl),
+    };
   }
 }
 
-async function readApprovalsSafe(
+export async function readApprovalsSafe(
   client: OspexClient,
   owner: `0x${string}`,
+  rpcUrl: string | null,
 ): Promise<SafeReadResult<ApprovalsSnapshot>> {
   try {
     const value = await client.approvals.read({ owner });
     return { value };
   } catch (err) {
-    return { value: null, error: errorMessage(err) };
+    return {
+      value: null,
+      error: sanitizeMessageForUrl(errorMessage(err), rpcUrl),
+    };
   }
 }
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+const API_PUBLIC_CONFIG_TIMEOUT_MS = 5_000;
+
+/**
+ * Probe `GET <apiUrl>/v1/config/public` to confirm the Realtime
+ * bootstrap endpoint is reachable. Independent of `OspexClient` so it
+ * works even when chain config is broken — this endpoint serves the
+ * publishable Supabase URL + anon key, which Realtime consumers need
+ * before they can subscribe.
+ *
+ * Returns `{ ok: true }` on 2xx and `{ ok: false, error }` on non-2xx
+ * or transport failure. Never throws.
+ */
+async function probeApiPublicConfig(
+  apiUrl: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const endpoint = apiUrl.replace(/\/+$/, '') + '/v1/config/public';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), API_PUBLIC_CONFIG_TIMEOUT_MS);
+  try {
+    const res = await fetch(endpoint, { signal: ctrl.signal });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true };
+  } catch (err) {
+    // Defense-in-depth: a custom apiUrl with auth could appear in
+    // node:fetch error text. Apply the same sanitiser the chain
+    // probes use. Hermes PR 54 blocker #1 extends to this path.
+    return { ok: false, error: sanitizeMessageForUrl(errorMessage(err), endpoint) };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

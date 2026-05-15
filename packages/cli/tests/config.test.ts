@@ -10,6 +10,7 @@ import {
   getSessionPath,
   loadConfigFile,
   resolveCliConfig,
+  resolveCliConfigDetailed,
   saveConfigFile,
 } from '../src/lib/config.js';
 
@@ -20,6 +21,8 @@ const ENV_KEYS = [
   'OSPEX_SUPABASE_URL',
   'OSPEX_SUPABASE_ANON_KEY',
   'OSPEX_KEYSTORE_PATH',
+  'OSPEX_RPC_URL',
+  'OSPEX_CHAIN_ID',
 ];
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -31,6 +34,8 @@ beforeEach(async () => {
   delete process.env.OSPEX_SUPABASE_URL;
   delete process.env.OSPEX_SUPABASE_ANON_KEY;
   delete process.env.OSPEX_KEYSTORE_PATH;
+  delete process.env.OSPEX_RPC_URL;
+  delete process.env.OSPEX_CHAIN_ID;
 });
 
 afterEach(async () => {
@@ -142,5 +147,103 @@ describe('CLI config', () => {
     await fs.writeFile(getConfigPath(), JSON.stringify({ apiUrl: 'x', extra: 'ignored' }));
     const loaded = await loadConfigFile();
     expect(loaded).toEqual({ apiUrl: 'x' });
+  });
+
+  // PR 3: per-field provenance resolver. Same precedence as
+  // `resolveCliConfig` (env > config > default) but also reports
+  // WHICH source supplied the value so the doctor envelope can
+  // explain "why is apiUrl pointed at staging?".
+  describe('resolveCliConfigDetailed', () => {
+    it('apiUrl: env wins over config', async () => {
+      await saveConfigFile({ apiUrl: 'https://from-file' });
+      process.env.OSPEX_API_URL = 'https://from-env';
+      const r = await resolveCliConfigDetailed();
+      expect(r.apiUrl).toEqual({ value: 'https://from-env', source: 'env-OSPEX_API_URL' });
+    });
+
+    it('apiUrl: config wins when env unset', async () => {
+      await saveConfigFile({ apiUrl: 'https://from-file' });
+      const r = await resolveCliConfigDetailed();
+      expect(r.apiUrl).toEqual({ value: 'https://from-file', source: 'config' });
+    });
+
+    it('apiUrl: falls through to default https://api.ospex.org when neither env nor config set', async () => {
+      const r = await resolveCliConfigDetailed();
+      expect(r.apiUrl.value).toBe('https://api.ospex.org');
+      expect(r.apiUrl.source).toBe('default');
+    });
+
+    it('rpcUrl: env wins over config', async () => {
+      await saveConfigFile({ rpcUrl: 'https://from-file/rpc' });
+      process.env.OSPEX_RPC_URL = 'https://from-env/rpc';
+      const r = await resolveCliConfigDetailed();
+      expect(r.rpcUrl).toEqual({ value: 'https://from-env/rpc', source: 'env-OSPEX_RPC_URL' });
+    });
+
+    it('rpcUrl: value=null + source=unset when neither env nor config set', async () => {
+      const r = await resolveCliConfigDetailed();
+      expect(r.rpcUrl).toEqual({ value: null, source: 'unset' });
+    });
+
+    it('chainId: env wins, then config, then default 137', async () => {
+      process.env.OSPEX_CHAIN_ID = '80002';
+      let r = await resolveCliConfigDetailed();
+      expect(r.chainId).toEqual({ value: 80002, source: 'env-OSPEX_CHAIN_ID' });
+
+      delete process.env.OSPEX_CHAIN_ID;
+      await saveConfigFile({ chainId: 80002 });
+      r = await resolveCliConfigDetailed();
+      expect(r.chainId).toEqual({ value: 80002, source: 'config' });
+
+      await saveConfigFile({});
+      r = await resolveCliConfigDetailed();
+      expect(r.chainId).toEqual({ value: 137, source: 'default' });
+    });
+
+    it('empty-string env values are treated as unset', async () => {
+      process.env.OSPEX_API_URL = '';
+      process.env.OSPEX_RPC_URL = '';
+      await saveConfigFile({ apiUrl: 'https://from-file' });
+      const r = await resolveCliConfigDetailed();
+      expect(r.apiUrl.source).toBe('config'); // falls through env=''
+      expect(r.rpcUrl.source).toBe('unset');  // no config either
+    });
+
+    // Hermes PR 54 blocker #3: both resolvers must agree on what
+    // counts as "set". An empty-string `OSPEX_RPC_URL` was treated
+    // as set by `resolveCliConfig` (via `??`) but as unset by
+    // `resolveCliConfigDetailed`. Result was a split-brain doctor
+    // report where `config.rpc_url: ok` and `connectivity.rpc: ok`
+    // but the eventual `getClient()` failed with "No rpcUrl
+    // configured". Aligning to "empty = unset" everywhere.
+    it('resolveCliConfig + resolveCliConfigDetailed agree: empty env falls through to config', async () => {
+      process.env.OSPEX_RPC_URL = '';
+      process.env.OSPEX_API_URL = '';
+      await saveConfigFile({
+        rpcUrl: 'https://from-file/rpc',
+        apiUrl: 'https://from-file/api',
+      });
+
+      const valuesOnly = await resolveCliConfig();
+      const detailed = await resolveCliConfigDetailed();
+
+      expect(valuesOnly.rpcUrl).toBe('https://from-file/rpc');
+      expect(detailed.rpcUrl.value).toBe('https://from-file/rpc');
+      expect(detailed.rpcUrl.source).toBe('config');
+
+      expect(valuesOnly.apiUrl).toBe('https://from-file/api');
+      expect(detailed.apiUrl.value).toBe('https://from-file/api');
+      expect(detailed.apiUrl.source).toBe('config');
+    });
+
+    it('resolveCliConfig + resolveCliConfigDetailed agree: no env + no config → rpc unset', async () => {
+      // Empty string for env, no file entry, no default for rpc.
+      process.env.OSPEX_RPC_URL = '';
+      const valuesOnly = await resolveCliConfig();
+      const detailed = await resolveCliConfigDetailed();
+      expect(valuesOnly.rpcUrl).toBeUndefined();
+      expect(detailed.rpcUrl.value).toBeNull();
+      expect(detailed.rpcUrl.source).toBe('unset');
+    });
   });
 });
