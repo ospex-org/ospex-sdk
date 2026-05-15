@@ -59,6 +59,18 @@
  *      `config.foundryKeystorePath` — mirrors
  *      `mergeIntentFromConfig`'s `explicitMatchesConfigKeystorePath`
  *      branch.
+ *
+ *   4. In the legacy-keystore branch (`config-keystorePath-legacy` /
+ *      `default-legacy`), flag / env / config password sources are
+ *      reported as 'none' — NOT as their configured value — because
+ *      `loadSigner`'s path-3 (`readKeystore` + `promptHidden`) is
+ *      interactive and ignores any lifted `intent.passwordFile`.
+ *      Only `session-cache` produces a real non-interactive unlock
+ *      on the legacy path; everything else collapses to 'would
+ *      prompt'. Hermes PR 50 round-2 caught the regression: a
+ *      legacy `config.keystorePath` + `config.passwordFile` (wallet A)
+ *      with an active session (wallet B) had `auth check` unlocking
+ *      A while real `loadSigner({})` returned B.
  */
 
 import path from 'node:path';
@@ -494,6 +506,37 @@ async function resolvePasswordField(
   config: CliConfigFile,
   keystore: AuthCheckJsonEnvelope['resolution']['keystore'],
 ): Promise<AuthCheckJsonEnvelope['resolution']['password']> {
+  const isLegacyKeystore =
+    keystore.provenance === 'config-keystorePath-legacy' ||
+    keystore.provenance === 'default-legacy';
+
+  if (isLegacyKeystore) {
+    // Hermes PR 50 round-2 blocker: in the legacy-keystore branch,
+    // real `loadSigner` skips path-1 (no explicit source in intent),
+    // checks path-2 (session) next, and only falls back to path-3
+    // (`readKeystore` + `promptHidden`). Path-3 does its own
+    // interactive prompt and IGNORES any `intent.passwordFile`
+    // lifted from flag / env / config — so a legacy setup with
+    // `config.passwordFile` set but an active session for a
+    // different wallet actually unlocks the session's wallet, not
+    // the one `config.passwordFile` would decrypt.
+    //
+    // To stay faithful, only session-cache produces a real
+    // non-interactive unlock here; everything else collapses to
+    // 'none' (would prompt). Surfacing the otherwise-configured
+    // sources as usable would let `--sign-challenge` happily sign
+    // with a wallet that real loadSigner never picks.
+    const session = await readSession();
+    if (session) {
+      return { provenance: 'session-cache', path: null, exists: null };
+    }
+    return { provenance: 'none', path: null, exists: null };
+  }
+
+  // Non-legacy (explicit) keystore source — path-1 of
+  // `resolveSignerByPrecedence` fires, and `mergeIntentFromConfig`
+  // lifts flag / env / config password sources into intent.passwordFile
+  // before it's consumed. Standard precedence: flag > env > config.
   if (intent.passwordFile !== undefined) {
     const p = expandTilde(intent.passwordFile);
     return {
@@ -523,21 +566,6 @@ async function resolvePasswordField(
       path: p,
       exists: await fileExists(p),
     };
-  }
-  // Session cache applies ONLY when the keystore came from a legacy
-  // source. Hermes PR 50 blocker #1: real `loadSigner` skips the
-  // session cache once an explicit signer source (flag / env /
-  // config-foundry*) is resolved — otherwise a `--sign-challenge`
-  // could happily sign with the cached session wallet even though
-  // the agent asked for a specific Foundry account.
-  const sessionApplies =
-    keystore.provenance === 'config-keystorePath-legacy' ||
-    keystore.provenance === 'default-legacy';
-  if (sessionApplies) {
-    const session = await readSession();
-    if (session) {
-      return { provenance: 'session-cache', path: null, exists: null };
-    }
   }
   return { provenance: 'none', path: null, exists: null };
 }

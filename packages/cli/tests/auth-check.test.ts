@@ -1091,3 +1091,180 @@ describe('auth check — Hermes PR 50 blocker #3 (config expectedAddress vs env 
     expect(env.resolution.expectedAddress.provenance).toBe('none');
   });
 });
+
+// ── Hermes PR 50 round 2 — legacy keystore must ignore non-session
+//    password sources (path-3 prompts and discards intent.passwordFile)
+
+describe('auth check — Hermes PR 50 round-2 (legacy keystore ignores non-session password sources)', () => {
+  it("Hermes exact repro: legacy config.keystorePath + config.passwordFile (wallet A) + active session (wallet B) → unlock returns wallet B, NOT wallet A", async () => {
+    // From the round-2 review:
+    //   Setup: legacy `config.keystorePath` + `config.passwordFile`
+    //   point at wallet A, and a fresh legacy session exists for
+    //   wallet B. `auth check` reports green and unlocks wallet A,
+    //   while a real `loadSigner({})` returns the cached session
+    //   wallet B.
+    // After the fix, the walker mirrors loadSigner — path-2 session
+    // wins; config.passwordFile is dropped because real loadSigner's
+    // path-3 promptHidden ignores any lifted intent.passwordFile.
+    const walletA_ks = await writeKeystoreAt(tmpDir, 'legacy-A.json');
+    const walletA_pass = await writePass(PASSPHRASE);
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config: {
+        keystorePath: walletA_ks,
+        passwordFile: walletA_pass,
+      },
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('config-keystorePath-legacy');
+    expect(env.resolution.password.provenance).toBe('session-cache');
+    expect(env.unlock.attempted).toBe(true);
+    expect(env.unlock.succeeded).toBe(true);
+    // Session wallet B, NOT the legacy keystore's wallet A.
+    expect(env.unlock.address?.toLowerCase()).toBe(SESSION_ADDRESS.toLowerCase());
+    expect(env.unlock.address?.toLowerCase()).not.toBe(TEST_ADDRESS.toLowerCase());
+    expect(env.ok).toBe(true);
+  });
+
+  it('legacy config.keystorePath + config.passwordFile + NO session → password.provenance is "none" (real loadSigner ignores config.passwordFile in legacy path-3)', async () => {
+    const walletA_ks = await writeKeystoreAt(tmpDir, 'legacy-A.json');
+    const walletA_pass = await writePass(PASSPHRASE);
+    // No session written — exercises the "no path-2, falls to path-3" case.
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config: {
+        keystorePath: walletA_ks,
+        passwordFile: walletA_pass,
+      },
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('config-keystorePath-legacy');
+    // Real loadSigner's path-3 does its own promptHidden and ignores
+    // any lifted intent.passwordFile — the walker must report 'none'
+    // (would prompt), not 'config-passwordFile' (which would be a
+    // false claim of non-interactive unlock).
+    expect(env.resolution.password.provenance).toBe('none');
+    expect(env.unlock.attempted).toBe(false);
+    expect(env.unlock.skippedReason).toBe('no_non_interactive_password');
+  });
+
+  it('default-legacy + env OSPEX_PASSWORD_FILE + active session → session wins (env ignored in legacy)', async () => {
+    const pwFile = await writePass(PASSPHRASE);
+    process.env.OSPEX_PASSWORD_FILE = pwFile;
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config: {},
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('default-legacy');
+    expect(env.resolution.password.provenance).toBe('session-cache');
+    expect(env.unlock.address?.toLowerCase()).toBe(SESSION_ADDRESS.toLowerCase());
+  });
+
+  it('default-legacy + env OSPEX_PASSWORD_FILE + NO session → password.provenance is "none" (env ignored in legacy path-3)', async () => {
+    const pwFile = await writePass(PASSPHRASE);
+    process.env.OSPEX_PASSWORD_FILE = pwFile;
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config: {},
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('default-legacy');
+    expect(env.resolution.password.provenance).toBe('none');
+  });
+
+  it('default-legacy + flag --password-file + NO session → password.provenance is "none" (flag ignored in legacy path-3)', async () => {
+    const pwFile = await writePass(PASSPHRASE);
+    // No flag --account / --keystore-path, no env, no config.foundry* —
+    // keystore resolves to default-legacy. Real loadSigner's path-1
+    // doesn't fire (no source in intent) and path-3's promptHidden
+    // ignores intent.passwordFile.
+    const env = await buildEnvelope({
+      intent: { passwordFile: pwFile },
+      env: process.env,
+      config: {},
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('default-legacy');
+    expect(env.resolution.password.provenance).toBe('none');
+  });
+
+  it('legacy keystore + config.expectedAddress (wallet A) + session (wallet B) → address_mismatch', async () => {
+    // Real loadSigner: mergeIntentFromConfig lifts the pin, path-2
+    // returns session signer for B, final guard compares A vs B and
+    // throws. The walker must surface the same typed error rather
+    // than greenlighting the session unlock.
+    await writeKeystoreAt(tmpDir, 'keystore.json'); // default-legacy
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config: {
+        // Pin set to wallet A (TEST_ADDRESS), but session is wallet B.
+        expectedAddress: TEST_ADDRESS.toLowerCase(),
+      },
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('default-legacy');
+    expect(env.resolution.expectedAddress.provenance).toBe('config');
+    expect(env.resolution.password.provenance).toBe('session-cache');
+    expect(env.unlock.attempted).toBe(true);
+    expect(env.unlock.succeeded).toBe(false);
+    expect(env.errors.map((e) => e.code)).toContain('address_mismatch');
+    expect(env.ok).toBe(false);
+  });
+
+  it('AFFIRMATIVE: config.foundryAccount + config.passwordFile + active session → uses config.passwordFile, NOT session (explicit source wins)', async () => {
+    // Proves the legacy gate doesn't over-apply: when keystore came
+    // from a foundry-signer config field (which `mergeIntentFromConfig`
+    // lifts into intent.account), path-1 fires and config.passwordFile
+    // IS consumed via the intent lift. Session must be ignored.
+    const accountDir = path.join(tmpDir, 'fdir');
+    await writeKeystoreAt(accountDir, 'maker-a');
+    const pwFile = await writePass(PASSPHRASE);
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config: {
+        foundryAccount: 'maker-a',
+        foundryKeystoresDir: accountDir,
+        passwordFile: pwFile,
+      },
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('config-foundryAccount');
+    expect(env.resolution.password.provenance).toBe('config-passwordFile');
+    expect(env.unlock.attempted).toBe(true);
+    expect(env.unlock.succeeded).toBe(true);
+    // foundryAccount's wallet (A / TEST_ADDRESS), NOT the session (B).
+    expect(env.unlock.address?.toLowerCase()).toBe(TEST_ADDRESS.toLowerCase());
+    expect(env.unlock.address?.toLowerCase()).not.toBe(SESSION_ADDRESS.toLowerCase());
+  });
+});
