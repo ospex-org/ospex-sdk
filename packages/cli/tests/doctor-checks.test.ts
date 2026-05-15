@@ -15,6 +15,7 @@ import {
   type CheckResult,
   type MetaBlock,
 } from '../src/lib/doctorChecks.js';
+import type { ContractCheckResult, RpcProbeResult } from '../src/lib/doctorProbe.js';
 
 const OWNER = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as `0x${string}`;
 const POSITION_MODULE = '0x0DCd42f8609cd7884ddBa3481b03a78dfc88366c' as `0x${string}`;
@@ -90,8 +91,45 @@ function findCheck(checks: CheckResult[], id: string): CheckResult {
   return c;
 }
 
+// PR 2 happy-path probe defaults. Tests that want every check to be
+// `ok` need to supply these — without them the new PR 2 checks
+// (config.chain_id_expected / connectivity.rpc / network.chain_id_match
+// / network.contracts_deployed) correctly skip because they have no
+// probe data to classify.
+const HAPPY_RPC_PROBE: RpcProbeResult = {
+  ok: true,
+  urlHost: 'rpc.example.com',
+  durationMs: 42,
+  chainId: 137,
+  blockNumber: 50_000_000n,
+  blockTimestamp: BigInt(Math.floor(Date.now() / 1000)),
+  blockAgeSec: 2,
+};
+
+const HAPPY_CONTRACT_CHECK: ContractCheckResult = {
+  ok: true,
+  checked: [
+    { name: 'USDC', address: USDC, hasCode: true },
+    { name: 'LINK', address: LINK, hasCode: true },
+    { name: 'PositionModule', address: POSITION_MODULE, hasCode: true },
+    { name: 'TreasuryModule', address: TREASURY_MODULE, hasCode: true },
+    { name: 'OracleModule', address: ORACLE_MODULE, hasCode: true },
+    { name: 'OspexCore', address: '0xECD12Af197FBF4C9F706B5Eb11a19c40Cfd643db', hasCode: true },
+  ],
+  missing: [],
+  unknown: [],
+};
+
+const HAPPY_EXPECTED_CHAIN_ID = { value: 137 as const, source: 'env-OSPEX_CHAIN_ID' as const };
+
+const HAPPY_CHAIN_PROBES = {
+  expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+  rpcProbe: HAPPY_RPC_PROBE,
+  contractCheck: HAPPY_CONTRACT_CHECK,
+};
+
 describe('runDoctorChecks — happy path', () => {
-  it('returns ok for every check when balances + allowances + apiOk are satisfied', () => {
+  it('returns ok for every check when balances + allowances + apiOk + probes are satisfied', () => {
     const checks = runDoctorChecks({
       apiOk: true,
       balances: makeBalances({
@@ -105,6 +143,7 @@ describe('runDoctorChecks — happy path', () => {
         oracleModule: 2n * 10n ** 18n,
       }),
       signerAddress: OWNER,
+      ...HAPPY_CHAIN_PROBES,
     });
     for (const c of checks) {
       expect(c.status, `expected ${c.id} to be ok`).toBe('ok');
@@ -223,6 +262,7 @@ describe('buildSummary — rollup math', () => {
         oracleModule: 2n * 10n ** 18n,
       }),
       signerAddress: OWNER,
+      ...HAPPY_CHAIN_PROBES,
     });
     const s = buildSummary(checks);
     expect(s.ok).toBe(true);
@@ -245,6 +285,7 @@ describe('buildSummary — rollup math', () => {
         treasuryModule: 5_000_000n,
       }),
       signerAddress: OWNER,
+      ...HAPPY_CHAIN_PROBES,
     });
     const s = buildSummary(checks);
     expect(s.byCapability.matchCommitments.ok).toBe(true);
@@ -308,12 +349,462 @@ describe('buildSummary — rollup math', () => {
       balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }), // gas ok, usdc ok, link fail
       approvals: makeApprovals({ positionModule: 50_000_000n }), // position ok, treasury fail, oracle fail
       signerAddress: OWNER, // address ok
+      ...HAPPY_CHAIN_PROBES, // PR 2 probes all ok → 4 more ok
     });
     const s = buildSummary(checks);
-    expect(s.counts.ok).toBe(4); // address, balances.native, balances.usdc, allowances.usdc_position
+    // PR 1: address (1) + balances.native (1) + balances.usdc (1) + allowances.usdc_position (1) = 4 ok
+    // PR 2: config.chain_id_expected + connectivity.rpc + network.chain_id_match + network.contracts_deployed = 4 more ok
+    expect(s.counts.ok).toBe(8);
     expect(s.counts.fail).toBe(4); // connectivity.api, balances.link, allowances.usdc_treasury, allowances.link_oracle
     expect(s.counts.skip).toBe(0);
     expect(s.counts.warn).toBe(0);
+  });
+});
+
+// ── PR 2: chain provenance + RPC probe + contract-code sanity ────────
+
+describe('PR 2: config.chain_id_expected check', () => {
+  it('ok when expected chain id source is env or config', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      expectedChainId: { value: 137, source: 'env-OSPEX_CHAIN_ID' },
+    });
+    const c = findCheck(checks, 'config.chain_id_expected');
+    expect(c.status).toBe('ok');
+    expect(c.data?.['expected']).toBe(137);
+    expect(c.data?.['expectedSource']).toBe('env-OSPEX_CHAIN_ID');
+  });
+
+  it('warns on implicit default — agents should know the chain wasn\'t explicit', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      expectedChainId: { value: 137, source: 'default' },
+    });
+    const c = findCheck(checks, 'config.chain_id_expected');
+    expect(c.status).toBe('warn');
+    expect(c.details).toMatch(/default/);
+    // Warn never blocks a capability — it's purely informational.
+    expect(c.blockingFor).toEqual([]);
+  });
+});
+
+describe('PR 2: connectivity.rpc check', () => {
+  it('ok when probe succeeds — emits chainId/blockNumber/blockAge in data', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      ...HAPPY_CHAIN_PROBES,
+    });
+    const c = findCheck(checks, 'connectivity.rpc');
+    expect(c.status).toBe('ok');
+    expect(c.data?.['chainId']).toBe(137);
+    expect(c.data?.['blockNumber']).toBe('50000000');
+    expect(c.data?.['urlHost']).toBe('rpc.example.com');
+    expect(typeof c.data?.['durationMs']).toBe('number');
+  });
+
+  it('fail with rpc_timeout when probe error mentions timeout', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      rpcProbe: {
+        ok: false,
+        urlHost: 'rpc.example.com',
+        durationMs: 5_001,
+        error: 'request timeout after 5000ms',
+      },
+    });
+    const c = findCheck(checks, 'connectivity.rpc');
+    expect(c.status).toBe('fail');
+    expect(c.error?.code).toBe('rpc_timeout');
+    expect(c.error?.retryable).toBe(true);
+    expect(c.blockingFor).toEqual([
+      'matchCommitments',
+      'submitCommitments',
+      'createContests',
+    ]);
+  });
+
+  it('fail with rpc_error on non-timeout transport error', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      rpcProbe: {
+        ok: false,
+        urlHost: 'rpc.example.com',
+        durationMs: 12,
+        error: 'HTTP 401 Unauthorized',
+      },
+    });
+    const c = findCheck(checks, 'connectivity.rpc');
+    expect(c.status).toBe('fail');
+    expect(c.error?.code).toBe('rpc_error');
+  });
+
+  it('fail when rpcUrl missing (caller signals it)', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      rpcUrlMissing: true,
+    });
+    const c = findCheck(checks, 'connectivity.rpc');
+    expect(c.status).toBe('fail');
+    expect(c.details).toMatch(/rpcUrl not configured/);
+    expect(c.remediation).toMatch(/`ospex init`/);
+  });
+});
+
+describe('PR 2: network.chain_id_match check', () => {
+  it('fail with chain_id_mismatch when RPC reports a different chain than expected', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      expectedChainId: { value: 137, source: 'env-OSPEX_CHAIN_ID' },
+      rpcProbe: { ...HAPPY_RPC_PROBE, chainId: 80002 },
+    });
+    const c = findCheck(checks, 'network.chain_id_match');
+    expect(c.status).toBe('fail');
+    expect(c.error?.code).toBe('chain_id_mismatch');
+    expect(c.data?.['expected']).toBe(137);
+    expect(c.data?.['actual']).toBe(80002);
+  });
+
+  it('skip with dependsOn connectivity.rpc when RPC failed', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      rpcProbe: { ok: false, urlHost: 'h', durationMs: 1, error: 'down' },
+    });
+    const c = findCheck(checks, 'network.chain_id_match');
+    expect(c.status).toBe('skip');
+    expect(c.dependsOn).toEqual(['connectivity.rpc']);
+  });
+});
+
+describe('PR 2: network.contracts_deployed check', () => {
+  it('ok when all expected contracts have bytecode', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      ...HAPPY_CHAIN_PROBES,
+    });
+    const c = findCheck(checks, 'network.contracts_deployed');
+    expect(c.status).toBe('ok');
+  });
+
+  it('fail with contract_not_deployed + data.missing when a contract has no code', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      rpcProbe: HAPPY_RPC_PROBE,
+      contractCheck: {
+        ok: false,
+        checked: [
+          { name: 'USDC', address: USDC, hasCode: true },
+          { name: 'PositionModule', address: POSITION_MODULE, hasCode: false },
+        ],
+        missing: ['PositionModule'],
+        unknown: [],
+      },
+    });
+    const c = findCheck(checks, 'network.contracts_deployed');
+    expect(c.status).toBe('fail');
+    expect(c.error?.code).toBe('contract_not_deployed');
+    expect(c.data?.['missing']).toEqual(['PositionModule']);
+  });
+
+  it('skip on chain mismatch — short-circuits since the cause is upstream', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      expectedChainId: { value: 137, source: 'env-OSPEX_CHAIN_ID' },
+      rpcProbe: { ...HAPPY_RPC_PROBE, chainId: 80002 },
+      contractCheck: HAPPY_CONTRACT_CHECK,
+    });
+    const c = findCheck(checks, 'network.contracts_deployed');
+    expect(c.status).toBe('skip');
+    expect(c.dependsOn).toEqual(['network.chain_id_match']);
+  });
+
+  // Real-probe shape: a lookup that errored sets hasCode=null and
+  // adds the name to `unknown` (NOT `missing`). The check must warn
+  // (lookup advisory) rather than fail (confirmed missing). Hermes
+  // PR 53 blocker #2 — the prior implementation collapsed both into
+  // hasCode:false + missing[], so the real probe path always failed.
+  it('warn when a lookup errored — distinguishes unknown from confirmed missing', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      rpcProbe: HAPPY_RPC_PROBE,
+      contractCheck: {
+        ok: false,
+        checked: [
+          { name: 'USDC', address: USDC, hasCode: true },
+          { name: 'LINK', address: LINK, hasCode: null }, // lookup errored
+        ],
+        missing: [],
+        unknown: ['LINK'],
+      },
+    });
+    const c = findCheck(checks, 'network.contracts_deployed');
+    expect(c.status).toBe('warn');
+    expect(c.details).toMatch(/LINK/);
+    expect(c.error).toBeUndefined();
+  });
+});
+
+describe('PR 2: chain-mismatch cascade on balances + allowances', () => {
+  it('balances downgraded to warn when RPC chain differs from expected (values are suspect)', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
+      approvals: makeApprovals({ positionModule: 50_000_000n }),
+      signerAddress: OWNER,
+      expectedChainId: { value: 137, source: 'env-OSPEX_CHAIN_ID' },
+      // RPC speaks the OTHER chain — readings are real but from the wrong network.
+      rpcProbe: { ...HAPPY_RPC_PROBE, chainId: 80002 },
+      contractCheck: HAPPY_CONTRACT_CHECK,
+    });
+    for (const id of [
+      'balances.native',
+      'balances.usdc',
+      'balances.link',
+      'allowances.usdc_position',
+      'allowances.usdc_treasury',
+      'allowances.link_oracle',
+    ]) {
+      const c = findCheck(checks, id);
+      expect(c.status, `${id} should warn on chain mismatch`).toBe('warn');
+      expect(c.details, `${id} should explain the mismatch`).toMatch(/chain mismatch/);
+    }
+  });
+
+  it('balances skip with dependsOn connectivity.rpc when RPC is down', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      rpcProbe: { ok: false, urlHost: 'h', durationMs: 1, error: 'down' },
+    });
+    for (const id of ['balances.native', 'balances.usdc', 'allowances.usdc_position']) {
+      const c = findCheck(checks, id);
+      expect(c.status).toBe('skip');
+      expect(c.dependsOn).toEqual(['connectivity.rpc']);
+    }
+  });
+});
+
+// Hermes PR 53 blocker #1. The legacy `ready` matrix and the exit
+// code must agree with `summary.byCapability` even when balances and
+// approvals are populated (happy snapshot path). Pre-fix the doctor
+// computed `ready` via the PR 1-only `computeReadiness`, which
+// ignored the new chain/protocol checks — so a passing balance
+// reading would mask a `network.contracts_deployed: fail`.
+describe('PR 2: ready/exit agree with summary even on happy snapshot path', () => {
+  it('network.contracts_deployed: fail flips ready.matchCommitments.ok to false', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+        oracleModule: 2n * 10n ** 18n,
+      }),
+      balances: makeBalances({
+        native: 10n ** 18n,
+        usdc: 10_000_000n,
+        link: 2n * 10n ** 18n,
+      }),
+      signerAddress: OWNER,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      rpcProbe: HAPPY_RPC_PROBE,
+      // Chain matches, balances + allowances are fine, but
+      // PositionModule has no bytecode on this RPC.
+      contractCheck: {
+        ok: false,
+        checked: [
+          { name: 'PositionModule', address: POSITION_MODULE, hasCode: false },
+        ],
+        missing: ['PositionModule'],
+        unknown: [],
+      },
+      meta: STUB_META,
+    });
+    expect(report.ready.matchCommitments.ok).toBe(false);
+    expect(report.summary.byCapability.matchCommitments.ok).toBe(false);
+    expect(report.summary.byCapability.matchCommitments.blockingChecks).toContain(
+      'network.contracts_deployed',
+    );
+    // Reasons list (legacy surface) must mention the new check too.
+    expect(report.ready.matchCommitments.reasons.join(', ')).toMatch(/contracts/);
+  });
+
+  it('network.chain_id_match: fail flips ready.matchCommitments.ok to false', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+      }),
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
+      signerAddress: OWNER,
+      expectedChainId: { value: 137, source: 'env-OSPEX_CHAIN_ID' },
+      rpcProbe: { ...HAPPY_RPC_PROBE, chainId: 80002 },
+      contractCheck: HAPPY_CONTRACT_CHECK,
+      meta: STUB_META,
+    });
+    expect(report.ready.matchCommitments.ok).toBe(false);
+    expect(report.summary.byCapability.matchCommitments.blockingChecks).toContain(
+      'network.chain_id_match',
+    );
+  });
+
+  it('happy chain + happy balances → ready.matchCommitments.ok is true (positive control)', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+        oracleModule: 2n * 10n ** 18n,
+      }),
+      balances: makeBalances({
+        native: 10n ** 18n,
+        usdc: 10_000_000n,
+        link: 2n * 10n ** 18n,
+      }),
+      signerAddress: OWNER,
+      meta: STUB_META,
+      ...HAPPY_CHAIN_PROBES,
+    });
+    expect(report.ready.matchCommitments.ok).toBe(true);
+    expect(report.ready.createContests.ok).toBe(true);
+  });
+
+  it('PR 2 fallback suggestion fires when matchCommitments is blocked but PR 1 picker has nothing', () => {
+    // PR 1 picker conditions all satisfied (API ok, POL/USDC funded,
+    // PositionModule approved) — without the fallback, suggestion
+    // would be null even though contracts_deployed says no-go.
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+        oracleModule: 2n * 10n ** 18n,
+      }),
+      balances: makeBalances({
+        native: 10n ** 18n,
+        usdc: 10_000_000n,
+        link: 2n * 10n ** 18n,
+      }),
+      signerAddress: OWNER,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      rpcProbe: HAPPY_RPC_PROBE,
+      contractCheck: {
+        ok: false,
+        checked: [{ name: 'OspexCore', address: '0xECD12Af197FBF4C9F706B5Eb11a19c40Cfd643db', hasCode: false }],
+        missing: ['OspexCore'],
+        unknown: [],
+      },
+      meta: STUB_META,
+    });
+    expect(report.suggestion).not.toBeNull();
+    expect(report.suggestion?.text).toMatch(/.+/);
+  });
+});
+
+describe('PR 2: config.chainId envelope field', () => {
+  it('records both expected and actual when both resolved', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: null,
+      balances: null,
+      signerAddress: OWNER,
+      meta: STUB_META,
+      ...HAPPY_CHAIN_PROBES,
+    });
+    expect(report.config.chainId).toEqual({
+      expected: 137,
+      actual: 137,
+      ok: true,
+      expectedSource: 'env-OSPEX_CHAIN_ID',
+    });
+  });
+
+  it('ok=false when chains mismatch — agents switch on this directly', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: null,
+      balances: null,
+      signerAddress: OWNER,
+      meta: STUB_META,
+      expectedChainId: { value: 137, source: 'config' },
+      rpcProbe: { ...HAPPY_RPC_PROBE, chainId: 80002 },
+      contractCheck: HAPPY_CONTRACT_CHECK,
+    });
+    expect(report.config.chainId.ok).toBe(false);
+    expect(report.config.chainId.expected).toBe(137);
+    expect(report.config.chainId.actual).toBe(80002);
+    expect(report.config.chainId.expectedSource).toBe('config');
+  });
+
+  it('ok=null when either side is missing — never infer success from a half-record', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: null,
+      balances: null,
+      signerAddress: OWNER,
+      meta: STUB_META,
+      expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
+      // No rpcProbe — actual is unknown.
+    });
+    expect(report.config.chainId.actual).toBeNull();
+    expect(report.config.chainId.ok).toBeNull();
+  });
+
+  it('expectedSource is "unset" when no expected chain id was resolved', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: null,
+      balances: null,
+      signerAddress: OWNER,
+      meta: STUB_META,
+      // No expectedChainId / probe — pure PR 1-era inputs.
+    });
+    expect(report.config.chainId.expectedSource).toBe('unset');
+    expect(report.config.chainId.expected).toBeNull();
   });
 });
 

@@ -15,6 +15,8 @@
 
 import { formatUnits } from 'viem';
 import type { ApprovalsSnapshot, BalancesSnapshot } from '@ospex/sdk';
+import type { ExpectedChainIdSource } from './config.js';
+import type { ContractCheckResult, RpcProbeResult } from './doctorProbe.js';
 import {
   buildMeta,
   buildSummary,
@@ -221,6 +223,21 @@ export interface AllowancesBlock {
   linkOracleModule: { raw: string; formatted: string; spender: string };
 }
 
+// PR 2: `config.chainId` is the first piece of structured config
+// provenance to land on the envelope. PR 3 will add `config.apiUrl`
+// and `config.rpcUrl` (with URL redaction), and PR 4 adds
+// `config.signer`. Each PR is additive — earlier consumers see
+// new fields as optional, not breaking.
+export interface ConfigChainIdField {
+  /** Effective expected chain id; `null` if unresolved. */
+  expected: 137 | 80002 | null;
+  /** What the RPC actually reported; `null` if probe didn't run / failed. */
+  actual: number | null;
+  /** True iff both resolved AND match; null if either side missing. */
+  ok: boolean | null;
+  expectedSource: ExpectedChainIdSource | 'unset';
+}
+
 export interface JsonDoctorReport {
   schemaVersion: 1;
   meta: MetaBlock;
@@ -237,6 +254,10 @@ export interface JsonDoctorReport {
   suggestion: Suggestion | null;
   checks: CheckResult[];
   summary: SummaryBlock;
+  // PR 2 additive: chain-id provenance + RPC actual.
+  config: {
+    chainId: ConfigChainIdField;
+  };
 }
 
 export interface DoctorReportInputs {
@@ -256,6 +277,11 @@ export interface DoctorReportInputs {
   signerAddressError?: string;
   /** Defaults to `buildMeta()` if not supplied. Tests pass a stub. */
   meta?: MetaBlock;
+  // PR 2 additive — all optional so PR 1 callers (and tests) keep working.
+  expectedChainId?: { value: 137 | 80002; source: ExpectedChainIdSource } | null;
+  rpcProbe?: RpcProbeResult | null;
+  contractCheck?: ContractCheckResult | null;
+  rpcUrlMissing?: boolean;
 }
 
 export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport {
@@ -267,11 +293,22 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
       ? inputs.signerAddress
       : (inputs.balances?.owner ?? null);
 
+  // PR 2 inputs default to "no probe ran" when not supplied — keeps
+  // PR 1 callers and unit tests of the report builder working.
+  const expectedChainId = inputs.expectedChainId ?? null;
+  const rpcProbe = inputs.rpcProbe ?? null;
+  const contractCheck = inputs.contractCheck ?? null;
+  const rpcUrlMissing = inputs.rpcUrlMissing ?? false;
+
   const checksInputs = {
     apiOk: inputs.apiOk,
     balances: inputs.balances,
     approvals: inputs.approvals,
     signerAddress,
+    expectedChainId,
+    rpcProbe,
+    contractCheck,
+    rpcUrlMissing,
     ...(inputs.apiError !== undefined ? { apiError: inputs.apiError } : {}),
     ...(inputs.balancesError !== undefined ? { balancesError: inputs.balancesError } : {}),
     ...(inputs.approvalsError !== undefined ? { approvalsError: inputs.approvalsError } : {}),
@@ -282,6 +319,7 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
 
   const checks = runDoctorChecks(checksInputs);
   const summary = buildSummary(checks);
+  const configChainId = buildConfigChainIdField(expectedChainId, rpcProbe);
 
   const network = inputs.balances === null
     ? null
@@ -296,24 +334,35 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
   const allowancesBlock =
     inputs.approvals === null ? null : buildAllowancesBlock(inputs.approvals);
 
-  let readiness: Readiness;
+  // `ready` is always derived from `summary.byCapability` so it
+  // reflects every check — PR 1 (api/balances/allowances) AND PR 2+
+  // (rpc/chain/contracts/signer). The exit code reads from
+  // `ready.matchCommitments.ok`, so this guarantees the legacy guard
+  // agrees with the structured per-capability view. Hermes PR 53
+  // blocker #1: pre-fix `computeReadiness` only saw PR 1 conditions,
+  // so a `network.contracts_deployed: fail` could leave the doctor
+  // exiting 0 even though every other PR 2 surface said no.
+  const readiness = readinessFromSummary(summary);
+
   let suggestion: Suggestion | null;
   if (inputs.approvals !== null && inputs.balances !== null) {
-    readiness = computeReadiness({
-      approvals: inputs.approvals,
-      balances: inputs.balances,
-      apiOk: inputs.apiOk,
-    });
+    // PR 1 picker has fine-grained domain knowledge ("fund POL" before
+    // "approve USDC", etc.) that the structured-check enumeration
+    // can't match. Keep it for the happy snapshot path. We pass the
+    // SUMMARY-derived readiness through so the picker sees the same
+    // truth as `report.ready`.
     suggestion = pickNextSuggestion(
       { approvals: inputs.approvals, balances: inputs.balances, apiOk: inputs.apiOk },
       readiness,
     );
+    // Fallback: if PR 1 didn't fire a suggestion but matchCommitments
+    // is still blocked (necessarily by a PR 2+ structured check),
+    // surface the first blocking check's remediation so the user has
+    // a concrete next step instead of a silent envelope.
+    if (suggestion === null && !readiness.matchCommitments.ok) {
+      suggestion = structuredBlockSuggestion(checks);
+    }
   } else {
-    // Degraded path: the v2 `summary.byCapability` is authoritative;
-    // `ready` mirrors it for back-compat. No actionable next-step
-    // suggestion when chain reads failed — the user can't fix RPC by
-    // running a CLI command.
-    readiness = readinessFromSummary(summary);
     suggestion = degradedSuggestion(inputs);
   }
 
@@ -329,7 +378,21 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
     suggestion,
     checks,
     summary,
+    config: { chainId: configChainId },
   };
+}
+
+function buildConfigChainIdField(
+  expected: { value: 137 | 80002; source: ExpectedChainIdSource } | null,
+  rpc: RpcProbeResult | null,
+): ConfigChainIdField {
+  const expectedValue = expected === null ? null : expected.value;
+  const expectedSource = expected === null ? 'unset' : expected.source;
+  const actual = rpc !== null && rpc.ok ? rpc.chainId : null;
+  // `ok` is null if either side is missing — agents must not infer
+  // success from a half-resolved record. True iff both known and equal.
+  const ok = expectedValue === null || actual === null ? null : expectedValue === actual;
+  return { expected: expectedValue, actual, ok, expectedSource };
 }
 
 function buildBalancesBlock(balances: BalancesSnapshot): BalancesBlock {
@@ -397,6 +460,14 @@ function checkIdToReason(id: CheckId): string {
   switch (id) {
     case 'connectivity.api':
       return 'Core API unreachable';
+    case 'connectivity.rpc':
+      return 'RPC unreachable';
+    case 'config.chain_id_expected':
+      return 'expected chain ID not configured';
+    case 'network.chain_id_match':
+      return 'RPC chain id does not match expected';
+    case 'network.contracts_deployed':
+      return 'expected Ospex contracts not deployed at this RPC';
     case 'signer.address_known':
       return 'wallet address could not be resolved';
     case 'balances.native':
@@ -412,6 +483,34 @@ function checkIdToReason(id: CheckId): string {
     case 'allowances.link_oracle':
       return 'OracleModule LINK not approved';
   }
+}
+
+/**
+ * Surface the first failing structured check as a suggestion. Used as
+ * a fallback when the PR 1 picker has nothing to say (API/balances/
+ * allowances are all fine) but `matchCommitments` is still blocked —
+ * which means a PR 2+ check (RPC, chain id, contracts, etc.) is at
+ * fault. Without this, an agent gets a silent `Next step:` section
+ * even though the structured envelope says something is wrong.
+ */
+function structuredBlockSuggestion(checks: CheckResult[]): Suggestion | null {
+  // First non-ok check that blocks matchCommitments. Iteration order
+  // matches the `runDoctorChecks` declared order (config → connectivity
+  // → network → signer → balances → allowances), so the most fundamental
+  // issue is reported first by construction.
+  const blocking = checks.find(
+    (c) =>
+      c.blockingFor.includes('matchCommitments') &&
+      (c.status === 'fail' || c.status === 'warn' || c.status === 'skip'),
+  );
+  if (blocking === undefined) return null;
+  const text =
+    blocking.remediation !== undefined
+      ? blocking.remediation
+      : `Resolve check \`${blocking.id}\`${
+          blocking.details !== undefined ? ` — ${blocking.details}` : ''
+        }.`;
+  return { text, audience: 'bettor' };
 }
 
 function degradedSuggestion(inputs: DoctorReportInputs): Suggestion | null {

@@ -15,6 +15,7 @@ import {
   pickNextSuggestion,
   renderDoctorReport,
 } from '../src/lib/doctorRender.js';
+import type { ContractCheckResult, RpcProbeResult } from '../src/lib/doctorProbe.js';
 
 class StringSink extends Writable {
   buf = '';
@@ -30,6 +31,38 @@ const TREASURY_MODULE = '0xCB56CD2c509301e888965DD3A2E5C486Fe03a56e';
 const ORACLE_MODULE = '0x7e1397eD5b4c9f606DCF2EB0281485B2296E29Bb';
 const USDC = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
 const LINK = '0xb0897686c545045aFc77CF20eC7A532E3120E0F1';
+
+// PR 2: tests that assert happy-path `ready` or "no Next step" must
+// supply probe data — otherwise the new structured checks
+// (`connectivity.rpc` / `network.chain_id_match` / `network.contracts_deployed`)
+// skip and roll up to block matchCommitments, since `ready` is now
+// derived from `summary.byCapability` (Hermes PR 53 blocker #1).
+const HAPPY_RPC_PROBE: RpcProbeResult = {
+  ok: true,
+  urlHost: 'rpc.example.com',
+  durationMs: 12,
+  chainId: 137,
+  blockNumber: 50_000_000n,
+  blockTimestamp: BigInt(Math.floor(Date.now() / 1000)),
+  blockAgeSec: 1,
+};
+const HAPPY_CONTRACT_CHECK: ContractCheckResult = {
+  ok: true,
+  checked: [
+    { name: 'USDC', address: USDC as `0x${string}`, hasCode: true },
+    { name: 'LINK', address: LINK as `0x${string}`, hasCode: true },
+    { name: 'PositionModule', address: POSITION_MODULE as `0x${string}`, hasCode: true },
+    { name: 'TreasuryModule', address: TREASURY_MODULE as `0x${string}`, hasCode: true },
+    { name: 'OracleModule', address: ORACLE_MODULE as `0x${string}`, hasCode: true },
+  ],
+  missing: [],
+  unknown: [],
+};
+const HAPPY_PROBES = {
+  expectedChainId: { value: 137 as const, source: 'env-OSPEX_CHAIN_ID' as const },
+  rpcProbe: HAPPY_RPC_PROBE,
+  contractCheck: HAPPY_CONTRACT_CHECK,
+};
 
 function makeApprovals(overrides: {
   positionModule?: bigint;
@@ -363,6 +396,7 @@ describe('buildDoctorReport (JSON envelope)', () => {
       approvals: makeApprovals({ positionModule: 50_000_000n, treasuryModule: 5_000_000n }),
       balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
       apiOk: true,
+      ...HAPPY_PROBES,
     });
     expect(report.ready.matchCommitments.ok).toBe(true);
     expect(report.ready.createContests.ok).toBe(false);
@@ -483,6 +517,7 @@ describe('renderDoctorReport (human)', () => {
         link: 2n * 10n ** 18n,
       }),
       apiOk: true,
+      ...HAPPY_PROBES,
     });
     renderDoctorReport(report, sink);
     expect(sink.buf).not.toContain('Next step:');
