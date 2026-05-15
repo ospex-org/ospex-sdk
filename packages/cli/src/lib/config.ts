@@ -22,6 +22,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DEFAULT_API_URL } from '@ospex/sdk';
 import { secureMkdirP, secureWriteFile } from './secure-fs.js';
 
 export interface CliConfigFile {
@@ -223,6 +224,67 @@ export async function resolveExpectedChainId(): Promise<ResolvedExpectedChainId>
   const file = await loadConfigFile();
   if (file.chainId !== undefined) return { value: file.chainId, source: 'config' };
   return { value: 137, source: 'default' };
+}
+
+// ── Per-field provenance resolvers ────────────────────────────────────
+//
+// The doctor's `config` envelope block needs to surface WHICH source
+// supplied each value (env vs config file vs hard-coded default) so
+// agents can diagnose "wait, why is my chain id 137?" without guessing.
+// `resolveCliConfig` above returns values only — kept for `getClient`
+// and other callers that don't care about provenance.
+//
+// `resolveCliConfigDetailed` is the doctor-flavored sibling. One config
+// file read services every field for the request.
+
+export type ApiUrlSource = 'env-OSPEX_API_URL' | 'config' | 'default';
+export type RpcUrlSource = 'env-OSPEX_RPC_URL' | 'config' | 'unset';
+
+export interface ResolvedApiUrl {
+  value: string;
+  source: ApiUrlSource;
+}
+
+export interface ResolvedRpcUrl {
+  /** `null` when no rpcUrl is configured anywhere. */
+  value: string | null;
+  source: RpcUrlSource;
+}
+
+export interface ResolvedCliConfigDetailed {
+  apiUrl: ResolvedApiUrl;
+  rpcUrl: ResolvedRpcUrl;
+  chainId: ResolvedExpectedChainId;
+}
+
+export async function resolveCliConfigDetailed(): Promise<ResolvedCliConfigDetailed> {
+  const file = await loadConfigFile();
+
+  const envApi = process.env.OSPEX_API_URL;
+  const apiUrl: ResolvedApiUrl =
+    envApi !== undefined && envApi !== ''
+      ? { value: envApi, source: 'env-OSPEX_API_URL' }
+      : file.apiUrl !== undefined && file.apiUrl !== ''
+        ? { value: file.apiUrl, source: 'config' }
+        : { value: DEFAULT_API_URL, source: 'default' };
+
+  const envRpc = process.env.OSPEX_RPC_URL;
+  const rpcUrl: ResolvedRpcUrl =
+    envRpc !== undefined && envRpc !== ''
+      ? { value: envRpc, source: 'env-OSPEX_RPC_URL' }
+      : file.rpcUrl !== undefined && file.rpcUrl !== ''
+        ? { value: file.rpcUrl, source: 'config' }
+        : { value: null, source: 'unset' };
+
+  const envChain = parseEnvChainId(process.env.OSPEX_CHAIN_ID);
+  const chainId: ResolvedExpectedChainId =
+    envChain !== undefined
+      ? { value: envChain, source: 'env-OSPEX_CHAIN_ID' }
+      : file.chainId !== undefined
+        ? { value: file.chainId, source: 'config' }
+        : { value: 137, source: 'default' };
+
+  return { apiUrl, rpcUrl, chainId };
 }
 
 export function isFileNotFound(err: unknown): boolean {

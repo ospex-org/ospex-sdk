@@ -62,6 +62,12 @@ const HAPPY_PROBES = {
   expectedChainId: { value: 137 as const, source: 'env-OSPEX_CHAIN_ID' as const },
   rpcProbe: HAPPY_RPC_PROBE,
   contractCheck: HAPPY_CONTRACT_CHECK,
+  apiUrl: { value: 'https://api.ospex.org', source: 'default' as const },
+  rpcUrl: {
+    value: 'https://polygon-mainnet.g.alchemy.com/v2/aaaaaaaaaaaaaaaaaaaa',
+    source: 'env-OSPEX_RPC_URL' as const,
+  },
+  apiPublicConfigOk: true,
 };
 
 function makeApprovals(overrides: {
@@ -532,6 +538,29 @@ describe('renderDoctorReport (human)', () => {
     });
     renderDoctorReport(report, sink);
     expect(sink.buf).toContain('unreachable');
+  });
+
+  // PR 3 — credential leak guard. Human stdout is just as much an
+  // observable surface as JSON (terminal scrollback, screenshares).
+  // The renderer never receives raw URLs directly — it goes through
+  // `report.config.{apiUrl,rpcUrl}.redactedValue` — so this test is
+  // really a contract assertion that no future renderer change
+  // accidentally adds a raw URL print path.
+  it('renderer never emits raw RPC URL secrets', () => {
+    const rawSecret = 'topsecretalchemykey0123456789abcdef';
+    const sink = new StringSink();
+    const report = buildDoctorReport({
+      approvals: makeApprovals({ positionModule: 50_000_000n }),
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
+      apiOk: true,
+      ...HAPPY_PROBES,
+      rpcUrl: {
+        value: `https://polygon-mainnet.g.alchemy.com/v2/${rawSecret}`,
+        source: 'env-OSPEX_RPC_URL',
+      },
+    });
+    renderDoctorReport(report, sink);
+    expect(sink.buf).not.toContain(rawSecret);
   });
 
   it('labels Polygon Amoy correctly', () => {

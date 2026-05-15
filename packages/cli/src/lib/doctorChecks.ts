@@ -21,7 +21,13 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { formatUnits } from 'viem';
 import type { ApprovalsSnapshot, BalancesSnapshot } from '@ospex/sdk';
-import type { ExpectedChainIdSource } from './config.js';
+import type {
+  ApiUrlSource,
+  ExpectedChainIdSource,
+  ResolvedApiUrl,
+  ResolvedRpcUrl,
+  RpcUrlSource,
+} from './config.js';
 import type { ContractCheckResult, RpcProbeResult } from './doctorProbe.js';
 
 // ── thresholds (mirrored from doctorRender.ts) ────────────────────────
@@ -40,9 +46,12 @@ export type CapabilityId =
   | 'createContests';
 
 export type CheckId =
-  | 'connectivity.api'
-  | 'connectivity.rpc'
+  | 'config.api_url'
+  | 'config.rpc_url'
   | 'config.chain_id_expected'
+  | 'connectivity.api'
+  | 'connectivity.api_public_config'
+  | 'connectivity.rpc'
   | 'network.chain_id_match'
   | 'network.contracts_deployed'
   | 'signer.address_known'
@@ -63,7 +72,8 @@ export type ErrorCode =
   | 'balance_below_floor'
   | 'balance_zero'
   | 'allowance_zero'
-  | 'password_source_missing';
+  | 'password_source_missing'
+  | 'config_not_set';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'skip';
 
@@ -143,11 +153,17 @@ export interface ChecksInputs {
   expectedChainId?: { value: 137 | 80002; source: ExpectedChainIdSource } | null;
   rpcProbe?: RpcProbeResult | null;
   contractCheck?: ContractCheckResult | null;
-  /** True when no rpcUrl was configured — drives the skip cascade for
-   *  every chain-touching check. PR 2 doesn't yet ship the structured
-   *  `config.rpc_url` check (that's PR 3); for now this flag flows
-   *  into the connectivity.rpc message. */
+  /** Kept for back-compat with PR 2 callers; superseded by
+   *  `rpcUrl.value === null` in PR 3. When unset, the runner derives
+   *  it from `rpcUrl ?? null`. */
   rpcUrlMissing?: boolean;
+  // PR 3 additions: URL provenance + Realtime-bootstrap probe.
+  apiUrl?: ResolvedApiUrl | null;
+  rpcUrl?: ResolvedRpcUrl | null;
+  /** True/false based on `GET <apiUrl>/v1/config/public`; `null` when
+   *  the probe wasn't attempted (typical unit-test path). */
+  apiPublicConfigOk?: boolean | null;
+  apiPublicConfigError?: string;
 }
 
 interface NormalizedChecksInputs extends ChecksInputs {
@@ -155,15 +171,27 @@ interface NormalizedChecksInputs extends ChecksInputs {
   rpcProbe: RpcProbeResult | null;
   contractCheck: ContractCheckResult | null;
   rpcUrlMissing: boolean;
+  apiUrl: ResolvedApiUrl | null;
+  rpcUrl: ResolvedRpcUrl | null;
+  apiPublicConfigOk: boolean | null;
 }
 
 function normalize(inputs: ChecksInputs): NormalizedChecksInputs {
+  const apiUrl = inputs.apiUrl ?? null;
+  const rpcUrl = inputs.rpcUrl ?? null;
+  // `rpcUrlMissing` is back-compat with PR 2 callers. PR 3 callers
+  // supply `rpcUrl` directly and we derive missing-ness from it.
+  const rpcUrlMissing =
+    inputs.rpcUrlMissing ?? (rpcUrl !== null ? rpcUrl.value === null : false);
   return {
     ...inputs,
     expectedChainId: inputs.expectedChainId ?? null,
     rpcProbe: inputs.rpcProbe ?? null,
     contractCheck: inputs.contractCheck ?? null,
-    rpcUrlMissing: inputs.rpcUrlMissing ?? false,
+    rpcUrlMissing,
+    apiUrl,
+    rpcUrl,
+    apiPublicConfigOk: inputs.apiPublicConfigOk ?? null,
   };
 }
 
@@ -174,15 +202,18 @@ const ALL_CAPABILITIES: CapabilityId[] = [
 ];
 
 export function runDoctorChecks(rawInputs: ChecksInputs): CheckResult[] {
-  // Normalize PR 2 fields so check functions can rely on the guaranteed
-  // shape — saves a `?? null` at every call site.
+  // Normalize PR 2/3 fields so check functions can rely on the
+  // guaranteed shape — saves a `?? null` at every call site.
   const inputs = normalize(rawInputs);
   // Order matters for human-renderer scanability: config → connectivity
   // → network → identity → balances → allowances. Agents iterate by id
   // so the order is purely display.
   return [
+    checkConfigApiUrl(inputs),
+    checkConfigRpcUrl(inputs),
     checkConfigChainIdExpected(inputs),
     checkConnectivityApi(inputs),
+    checkConnectivityApiPublicConfig(inputs),
     checkConnectivityRpc(inputs),
     checkNetworkChainIdMatch(inputs),
     checkNetworkContractsDeployed(inputs),
@@ -194,6 +225,103 @@ export function runDoctorChecks(rawInputs: ChecksInputs): CheckResult[] {
     checkAllowancesUsdcTreasury(inputs),
     checkAllowancesLinkOracle(inputs),
   ];
+}
+
+// ── PR 3: config URL provenance + Realtime bootstrap probe ────────────
+
+// API URL always has a documented default (`https://api.ospex.org`),
+// so this check never fails. It exists to surface the provenance
+// (env / config / default) so agents can diagnose "why does this
+// envelope point at a staging API?".
+function checkConfigApiUrl(inputs: NormalizedChecksInputs): CheckResult {
+  if (inputs.apiUrl === null) {
+    // Caller didn't supply detailed config — skip rather than guess.
+    return {
+      id: 'config.api_url',
+      label: 'API URL configured',
+      status: 'skip',
+      blockingFor: [],
+      details: 'api url provenance not resolved',
+    };
+  }
+  return {
+    id: 'config.api_url',
+    label: 'API URL configured',
+    status: 'ok',
+    blockingFor: [],
+    data: { source: inputs.apiUrl.source },
+  };
+}
+
+// RPC URL has no default — bring-your-own. Failing this check
+// cascades into `connectivity.rpc` and every chain-touching check.
+function checkConfigRpcUrl(inputs: NormalizedChecksInputs): CheckResult {
+  if (inputs.rpcUrl === null) {
+    // Caller didn't supply detailed config — skip rather than fail.
+    return {
+      id: 'config.rpc_url',
+      label: 'RPC URL configured',
+      status: 'skip',
+      blockingFor: [...ALL_CAPABILITIES],
+      details: 'rpc url provenance not resolved',
+    };
+  }
+  if (inputs.rpcUrl.value === null) {
+    return {
+      id: 'config.rpc_url',
+      label: 'RPC URL configured',
+      status: 'fail',
+      blockingFor: [...ALL_CAPABILITIES],
+      details: 'no rpcUrl configured — every chain read will skip',
+      remediation:
+        'Run `ospex init` and supply an RPC URL (Alchemy / Infura / QuickNode strongly recommended over public RPCs), or export OSPEX_RPC_URL.',
+      error: { code: 'config_not_set', retryable: false },
+    };
+  }
+  return {
+    id: 'config.rpc_url',
+    label: 'RPC URL configured',
+    status: 'ok',
+    blockingFor: [...ALL_CAPABILITIES],
+    data: { source: inputs.rpcUrl.source },
+  };
+}
+
+// `/v1/config/public` is the Supabase Realtime bootstrap. It's
+// informational for non-Realtime consumers (bettors / matchers don't
+// need it), so a fail here doesn't block any readiness capability —
+// the structured signal is just exposed for Realtime-aware agents.
+function checkConnectivityApiPublicConfig(inputs: NormalizedChecksInputs): CheckResult {
+  if (inputs.apiPublicConfigOk === null) {
+    return {
+      id: 'connectivity.api_public_config',
+      label: 'API /v1/config/public reachable (Realtime bootstrap)',
+      status: 'skip',
+      blockingFor: [],
+      details: 'probe not attempted',
+    };
+  }
+  if (inputs.apiPublicConfigOk) {
+    return {
+      id: 'connectivity.api_public_config',
+      label: 'API /v1/config/public reachable (Realtime bootstrap)',
+      status: 'ok',
+      blockingFor: [],
+    };
+  }
+  const result: CheckResult = {
+    id: 'connectivity.api_public_config',
+    label: 'API /v1/config/public reachable (Realtime bootstrap)',
+    status: 'fail',
+    blockingFor: [],
+    remediation:
+      'Realtime odds subscriptions need this endpoint; bettors / matchers can ignore it.',
+    error: { code: 'api_error', retryable: true },
+  };
+  if (inputs.apiPublicConfigError !== undefined) {
+    result.details = inputs.apiPublicConfigError;
+  }
+  return result;
 }
 
 // ── PR 2: chain provenance + probes ───────────────────────────────────
@@ -239,19 +367,19 @@ function checkConfigChainIdExpected(inputs: NormalizedChecksInputs): CheckResult
 // fails (declared via `dependsOn`).
 function checkConnectivityRpc(inputs: NormalizedChecksInputs): CheckResult {
   if (inputs.rpcProbe === null) {
-    // Distinguish "doctor tried but rpcUrl wasn't configured" (fail)
-    // from "probe wasn't attempted by this caller" (skip — typical
-    // unit-test path that didn't construct probe inputs).
+    // `config.rpc_url: fail` (rpcUrl unset) is the authoritative
+    // signal — skip here with `dependsOn` so agents traverse to the
+    // upstream cause rather than seeing two duplicate fails. PR 2
+    // surfaced this as a direct fail; PR 3 makes config.rpc_url the
+    // canonical source of truth.
     if (inputs.rpcUrlMissing) {
       return {
         id: 'connectivity.rpc',
         label: 'RPC reachable',
-        status: 'fail',
+        status: 'skip',
         blockingFor: [...ALL_CAPABILITIES],
-        details: 'rpcUrl not configured — run `ospex init` to set one',
-        remediation:
-          'Run `ospex init` and supply an RPC URL (Alchemy / Infura / QuickNode strongly recommended over public RPCs).',
-        error: { code: 'rpc_error', retryable: false },
+        details: 'rpcUrl not configured (see config.rpc_url)',
+        dependsOn: ['config.rpc_url'],
       };
     }
     return {

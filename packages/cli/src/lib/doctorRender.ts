@@ -15,8 +15,13 @@
 
 import { formatUnits } from 'viem';
 import type { ApprovalsSnapshot, BalancesSnapshot } from '@ospex/sdk';
-import type { ExpectedChainIdSource } from './config.js';
+import type {
+  ExpectedChainIdSource,
+  ResolvedApiUrl,
+  ResolvedRpcUrl,
+} from './config.js';
 import type { ContractCheckResult, RpcProbeResult } from './doctorProbe.js';
+import { redactUrl, type UrlField } from './redact.js';
 import {
   buildMeta,
   buildSummary,
@@ -255,8 +260,11 @@ export interface JsonDoctorReport {
   checks: CheckResult[];
   summary: SummaryBlock;
   // PR 2 additive: chain-id provenance + RPC actual.
+  // PR 3 additive: URL provenance for apiUrl + rpcUrl (redacted).
   config: {
     chainId: ConfigChainIdField;
+    apiUrl: UrlField | null;
+    rpcUrl: UrlField | null;
   };
 }
 
@@ -282,6 +290,11 @@ export interface DoctorReportInputs {
   rpcProbe?: RpcProbeResult | null;
   contractCheck?: ContractCheckResult | null;
   rpcUrlMissing?: boolean;
+  // PR 3 additive — URL provenance + Realtime-bootstrap probe.
+  apiUrl?: ResolvedApiUrl | null;
+  rpcUrl?: ResolvedRpcUrl | null;
+  apiPublicConfigOk?: boolean | null;
+  apiPublicConfigError?: string;
 }
 
 export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport {
@@ -293,12 +306,18 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
       ? inputs.signerAddress
       : (inputs.balances?.owner ?? null);
 
-  // PR 2 inputs default to "no probe ran" when not supplied — keeps
+  // PR 2/3 inputs default to "no probe ran" when not supplied — keeps
   // PR 1 callers and unit tests of the report builder working.
   const expectedChainId = inputs.expectedChainId ?? null;
   const rpcProbe = inputs.rpcProbe ?? null;
   const contractCheck = inputs.contractCheck ?? null;
-  const rpcUrlMissing = inputs.rpcUrlMissing ?? false;
+  const apiUrl = inputs.apiUrl ?? null;
+  const rpcUrl = inputs.rpcUrl ?? null;
+  const apiPublicConfigOk = inputs.apiPublicConfigOk ?? null;
+  // Back-compat: PR 2 callers passed `rpcUrlMissing` explicitly; PR 3
+  // callers pass `rpcUrl` and we derive it.
+  const rpcUrlMissing =
+    inputs.rpcUrlMissing ?? (rpcUrl !== null ? rpcUrl.value === null : false);
 
   const checksInputs = {
     apiOk: inputs.apiOk,
@@ -309,17 +328,29 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
     rpcProbe,
     contractCheck,
     rpcUrlMissing,
+    apiUrl,
+    rpcUrl,
+    apiPublicConfigOk,
     ...(inputs.apiError !== undefined ? { apiError: inputs.apiError } : {}),
     ...(inputs.balancesError !== undefined ? { balancesError: inputs.balancesError } : {}),
     ...(inputs.approvalsError !== undefined ? { approvalsError: inputs.approvalsError } : {}),
     ...(inputs.signerAddressError !== undefined
       ? { signerAddressError: inputs.signerAddressError }
       : {}),
+    ...(inputs.apiPublicConfigError !== undefined
+      ? { apiPublicConfigError: inputs.apiPublicConfigError }
+      : {}),
   };
 
   const checks = runDoctorChecks(checksInputs);
   const summary = buildSummary(checks);
   const configChainId = buildConfigChainIdField(expectedChainId, rpcProbe);
+  const configApiUrl =
+    apiUrl !== null ? redactUrl(apiUrl.value, apiUrl.source) : null;
+  const configRpcUrl =
+    rpcUrl !== null && rpcUrl.value !== null
+      ? redactUrl(rpcUrl.value, rpcUrl.source)
+      : null;
 
   const network = inputs.balances === null
     ? null
@@ -378,7 +409,11 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
     suggestion,
     checks,
     summary,
-    config: { chainId: configChainId },
+    config: {
+      chainId: configChainId,
+      apiUrl: configApiUrl,
+      rpcUrl: configRpcUrl,
+    },
   };
 }
 
@@ -458,12 +493,18 @@ function capabilityFromRollup(rollup: SummaryBlock['byCapability']['matchCommitm
 
 function checkIdToReason(id: CheckId): string {
   switch (id) {
-    case 'connectivity.api':
-      return 'Core API unreachable';
-    case 'connectivity.rpc':
-      return 'RPC unreachable';
+    case 'config.api_url':
+      return 'API URL not configured';
+    case 'config.rpc_url':
+      return 'RPC URL not configured';
     case 'config.chain_id_expected':
       return 'expected chain ID not configured';
+    case 'connectivity.api':
+      return 'Core API unreachable';
+    case 'connectivity.api_public_config':
+      return 'Realtime-bootstrap endpoint unreachable';
+    case 'connectivity.rpc':
+      return 'RPC unreachable';
     case 'network.chain_id_match':
       return 'RPC chain id does not match expected';
     case 'network.contracts_deployed':
