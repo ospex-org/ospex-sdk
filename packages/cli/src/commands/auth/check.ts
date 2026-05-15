@@ -33,6 +33,32 @@
  * provenance ("which source set this field"), which the runtime path
  * doesn't track. Keeping the walk here means the runtime path stays
  * lean and the diagnostic stays a single self-contained file.
+ *
+ * **The walk MUST stay in lockstep with `loadSigner`'s
+ * `materializeIntent` + `mergeIntentFromConfig` +
+ * `resolveSignerByPrecedence`.** Any change to either path must be
+ * mirrored on the other. Hermes's PR 50 round-1 review caught three
+ * divergences that the regression tests in
+ * `tests/auth-check.test.ts` now lock in:
+ *
+ *   1. Session-cache password provenance applies ONLY when the
+ *      keystore came from a legacy source (config-keystorePath-legacy /
+ *      default-legacy). Explicit sources (flag, env, config-foundry*)
+ *      bypass the session cache — same as `loadSigner`'s "path 1
+ *      explicit skips path 2 session" precedence.
+ *
+ *   2. When session-cache is the unlock path, `keystore_not_found`
+ *      is suppressed — the session.privateKey path never consults
+ *      the keystore file, same as `loadSigner` (path 2 wins before
+ *      path 3 reads the file).
+ *
+ *   3. Config-pinned `expectedAddress` lifts apply only when the
+ *      resolved keystore source corresponds to the configured one.
+ *      Env `OSPEX_KEYSTORE_PATH` is an explicit source, so the
+ *      config pin does NOT apply unless the env path equals
+ *      `config.foundryKeystorePath` — mirrors
+ *      `mergeIntentFromConfig`'s `explicitMatchesConfigKeystorePath`
+ *      branch.
  */
 
 import path from 'node:path';
@@ -256,10 +282,15 @@ export async function buildEnvelope(args: BuildEnvelopeArgs): Promise<AuthCheckJ
 
   const keystore = await resolveKeystoreField(intent, env, config);
   const foundryKeystoresDir = resolveFoundryDirField(intent, env, config);
-  const password = await resolvePasswordField(intent, env, config);
+  const password = await resolvePasswordField(intent, env, config, keystore);
   const expectedAddress = resolveExpectedAddressField(intent, config, keystore);
 
-  if (!keystore.exists) {
+  // Hermes PR 50 blocker #2: a missing keystore file is not a fatal
+  // error when the session cache is the unlock path. Real `loadSigner`
+  // reaches the session-cache branch (path 2) before any attempt to
+  // read the legacy default keystore (path 3), so `keystore.exists`
+  // becomes purely informational in that case.
+  if (!keystore.exists && password.provenance !== 'session-cache') {
     errors.push({
       code: 'keystore_not_found',
       message: `Keystore not found at ${keystore.path}.`,
@@ -289,19 +320,19 @@ export async function buildEnvelope(args: BuildEnvelopeArgs): Promise<AuthCheckJ
     }
   }
 
-  // Unlock attempt — only fires when non-interactive credentials are
-  // available AND there are no upstream fatal errors yet (no point
-  // attempting decrypt against a missing keystore). The SDK helper
-  // re-validates expectedAddress + strict permissions; we let any
-  // signer-resolution error fall through into the envelope.
+  // Unlock attempt — fires when non-interactive credentials are
+  // available AND there are no upstream fatal errors yet. The session-
+  // cache branch is the one case where `keystore.exists` is irrelevant
+  // (path 2 of `loadSigner` uses session.privateKey without ever
+  // reading the keystore file — Hermes PR 50 blocker #2).
   const canAttemptUnlock =
     errors.length === 0 &&
-    keystore.exists &&
-    (password.provenance === 'flag-password-file' ||
-      password.provenance === 'flag-password-stdin' ||
-      password.provenance === 'env-OSPEX_PASSWORD_FILE' ||
-      password.provenance === 'config-passwordFile' ||
-      password.provenance === 'session-cache');
+    (password.provenance === 'session-cache' ||
+      (keystore.exists &&
+        (password.provenance === 'flag-password-file' ||
+          password.provenance === 'flag-password-stdin' ||
+          password.provenance === 'env-OSPEX_PASSWORD_FILE' ||
+          password.provenance === 'config-passwordFile')));
 
   const unlock: AuthCheckJsonEnvelope['unlock'] = {
     attempted: false,
@@ -461,6 +492,7 @@ async function resolvePasswordField(
   intent: SignerIntent,
   env: NodeJS.ProcessEnv,
   config: CliConfigFile,
+  keystore: AuthCheckJsonEnvelope['resolution']['keystore'],
 ): Promise<AuthCheckJsonEnvelope['resolution']['password']> {
   if (intent.passwordFile !== undefined) {
     const p = expandTilde(intent.passwordFile);
@@ -492,19 +524,39 @@ async function resolvePasswordField(
       exists: await fileExists(p),
     };
   }
-  const session = await readSession();
-  if (session) {
-    return { provenance: 'session-cache', path: null, exists: null };
+  // Session cache applies ONLY when the keystore came from a legacy
+  // source. Hermes PR 50 blocker #1: real `loadSigner` skips the
+  // session cache once an explicit signer source (flag / env /
+  // config-foundry*) is resolved — otherwise a `--sign-challenge`
+  // could happily sign with the cached session wallet even though
+  // the agent asked for a specific Foundry account.
+  const sessionApplies =
+    keystore.provenance === 'config-keystorePath-legacy' ||
+    keystore.provenance === 'default-legacy';
+  if (sessionApplies) {
+    const session = await readSession();
+    if (session) {
+      return { provenance: 'session-cache', path: null, exists: null };
+    }
   }
   return { provenance: 'none', path: null, exists: null };
 }
 
 /**
  * Mirror the conditional `expectedAddress` lift from
- * `client.ts:mergeIntentFromConfig`: a config pin applies only when
- * the resolved keystore actually corresponds to the pinned source.
- * Without this, an agent re-running `auth check --account other` would
- * see the previous wallet's pin attached to the wrong keystore.
+ * `client.ts:mergeIntentFromConfig`. The config-pinned address is a
+ * guardrail for "the configured signer always resolves to this
+ * address"; it applies only when the resolved keystore source
+ * corresponds to the configured one.
+ *
+ * Hermes PR 50 blocker #3: the previous implementation used an
+ * intent-only check (`intent.account === undefined && intent.keystorePath === undefined`)
+ * which was true when env `OSPEX_KEYSTORE_PATH` was set without a
+ * flag — making the config pin falsely apply to an env-selected
+ * keystore. Real `loadSigner`'s `materializeIntent` lifts env into
+ * the intent first, so `noExplicitSource` is false in that case.
+ * We mirror that by deriving "explicitness" from `keystore.provenance`
+ * (which already factors in env), not from raw intent fields.
  */
 function resolveExpectedAddressField(
   intent: SignerIntent,
@@ -514,37 +566,53 @@ function resolveExpectedAddressField(
   if (intent.expectedAddress !== undefined) {
     return { provenance: 'flag', value: intent.expectedAddress };
   }
-  if (config.expectedAddress !== undefined && config.expectedAddress.length > 0) {
-    const noExplicitFlag =
-      intent.account === undefined && intent.keystorePath === undefined;
-    const flagMatchesConfigAccount =
-      config.foundryAccount !== undefined &&
-      config.foundryAccount.length > 0 &&
-      intent.account === config.foundryAccount;
-    const flagMatchesConfigPath =
-      config.foundryKeystorePath !== undefined &&
-      config.foundryKeystorePath.length > 0 &&
-      intent.keystorePath !== undefined &&
-      expandTilde(intent.keystorePath) === expandTilde(config.foundryKeystorePath);
+  if (config.expectedAddress === undefined || config.expectedAddress.length === 0) {
+    return { provenance: 'none', value: null };
+  }
 
-    // Provenance flag also matches when the walker picked the config-
-    // pinned source itself (`keystore.provenance` starts with
-    // `config-foundry`). Covers the no-flag agent case.
-    const keystoreCameFromConfig =
-      keystore.provenance === 'config-foundryAccount' ||
-      keystore.provenance === 'config-foundryKeystorePath';
+  // "Explicit" mirrors what `materializeIntent` + the path-1 check
+  // in `resolveSignerByPrecedence` consider an explicit signer source:
+  // flag account, flag keystore-path, OR env `OSPEX_KEYSTORE_PATH`
+  // (lifted into intent.keystorePath at runtime).
+  const cameFromExplicitSource =
+    keystore.provenance === 'flag-account' ||
+    keystore.provenance === 'flag-keystore-path' ||
+    keystore.provenance === 'env-OSPEX_KEYSTORE_PATH';
 
-    if (
-      noExplicitFlag ||
-      flagMatchesConfigAccount ||
-      flagMatchesConfigPath ||
-      keystoreCameFromConfig
-    ) {
-      return {
-        provenance: 'config',
-        value: config.expectedAddress.toLowerCase() as `0x${string}`,
-      };
-    }
+  if (!cameFromExplicitSource) {
+    // Keystore came from config-foundryAccount / config-foundryKeystorePath
+    // (caller inherited the configured source) OR a legacy fallback
+    // (config-keystorePath-legacy / default-legacy — `mergeIntentFromConfig`
+    // also lifts the pin when `noExplicitSource` is true). Pin applies.
+    return {
+      provenance: 'config',
+      value: config.expectedAddress.toLowerCase() as `0x${string}`,
+    };
+  }
+
+  // Explicit source — pin applies only on an exact match with the
+  // configured account or keystore-path.
+  const flagAccountMatchesConfig =
+    keystore.provenance === 'flag-account' &&
+    config.foundryAccount !== undefined &&
+    config.foundryAccount.length > 0 &&
+    intent.account === config.foundryAccount;
+
+  // `keystore.path` is already expanded for both flag-keystore-path
+  // and env-OSPEX_KEYSTORE_PATH; expand config.foundryKeystorePath
+  // for the comparison.
+  const explicitPathMatchesConfigPath =
+    (keystore.provenance === 'flag-keystore-path' ||
+      keystore.provenance === 'env-OSPEX_KEYSTORE_PATH') &&
+    config.foundryKeystorePath !== undefined &&
+    config.foundryKeystorePath.length > 0 &&
+    keystore.path === expandTilde(config.foundryKeystorePath);
+
+  if (flagAccountMatchesConfig || explicitPathMatchesConfigPath) {
+    return {
+      provenance: 'config',
+      value: config.expectedAddress.toLowerCase() as `0x${string}`,
+    };
   }
   return { provenance: 'none', value: null };
 }
@@ -829,4 +897,3 @@ async function fileExists(filePath: string): Promise<boolean> {
     return false;
   }
 }
-

@@ -782,3 +782,312 @@ describe('auth check — command help', () => {
     expect(help).toMatch(/--json/);
   });
 });
+
+// ── Hermes PR 50 regression — session-cache must mirror loadSigner ──
+
+// Anvil PK #1 — used as the session-cache wallet in regression tests
+// so we can tell the difference between an explicit-source unlock
+// (uses #0 / TEST_ADDRESS) and a session-fallback unlock (uses #1).
+const SESSION_PK =
+  '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as const;
+const SESSION_ADDRESS = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const;
+
+async function writeFakeSession(privateKey: string, address: string): Promise<void> {
+  // `getSessionPath()` returns `<OSPEX_HOME>/session` — beforeEach sets
+  // OSPEX_HOME to tmpDir, so writing here lands where `readSession()`
+  // will look. 1-minute TTL so the entry is fresh during the test.
+  await fs.writeFile(
+    path.join(tmpDir, 'session'),
+    JSON.stringify({
+      address,
+      privateKey,
+      expiresAt: Date.now() + 60_000,
+    }) + '\n',
+  );
+}
+
+describe('auth check — Hermes PR 50 blocker #1 (session-cache must not leak past explicit sources)', () => {
+  it('explicit --account + active session + no password → password.provenance is "none", NOT "session-cache"', async () => {
+    // Repro from Hermes's review: `auth check --account maker-a` was
+    // returning 'session-cache' when a stale session existed, which
+    // would let `--sign-challenge` sign with the WRONG wallet.
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+    const accountDir = path.join(tmpDir, 'fdir');
+    await writeKeystoreAt(accountDir, 'maker-a');
+
+    const env = await buildEnvelope({
+      intent: { account: 'maker-a', foundryKeystoresDir: accountDir },
+      env: process.env,
+      config: {},
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.password.provenance).toBe('none');
+    expect(env.unlock.attempted).toBe(false);
+    expect(env.unlock.skippedReason).toBe('no_non_interactive_password');
+  });
+
+  it('explicit --account + --password-file + active session for a different wallet → unlock uses maker-a, NOT session', async () => {
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+    const accountDir = path.join(tmpDir, 'fdir');
+    await writeKeystoreAt(accountDir, 'maker-a');
+    const pwFile = await writePass(PASSPHRASE);
+
+    const env = await buildEnvelope({
+      intent: {
+        account: 'maker-a',
+        passwordFile: pwFile,
+        foundryKeystoresDir: accountDir,
+      },
+      env: process.env,
+      config: {},
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.password.provenance).toBe('flag-password-file');
+    expect(env.unlock.attempted).toBe(true);
+    expect(env.unlock.succeeded).toBe(true);
+    // The explicit account's address — NOT the session's.
+    expect(env.unlock.address?.toLowerCase()).toBe(TEST_ADDRESS.toLowerCase());
+    expect(env.unlock.address?.toLowerCase()).not.toBe(SESSION_ADDRESS.toLowerCase());
+  });
+
+  it('env OSPEX_KEYSTORE_PATH + active session → password.provenance is "none"', async () => {
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+    const ks = await writeKeystoreAt(tmpDir, 'envks.json');
+    process.env.OSPEX_KEYSTORE_PATH = ks;
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config: {},
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('env-OSPEX_KEYSTORE_PATH');
+    expect(env.resolution.password.provenance).toBe('none');
+  });
+
+  it('config.foundryAccount + active session (no config.passwordFile) → password.provenance is "none"', async () => {
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+    const accountDir = path.join(tmpDir, 'fdir');
+    await writeKeystoreAt(accountDir, 'configmaker');
+    const config: CliConfigFile = {
+      foundryAccount: 'configmaker',
+      foundryKeystoresDir: accountDir,
+    };
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config,
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('config-foundryAccount');
+    expect(env.resolution.password.provenance).toBe('none');
+  });
+
+  it('legacy config.keystorePath + active session → password.provenance IS "session-cache"', async () => {
+    // Affirmative case: legacy keystore path is the one where session
+    // cache is meant to apply (mirrors loadSigner's path 2 before
+    // path 3 readKeystore).
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+    const legacy = await writeKeystoreAt(tmpDir, 'legacy.json');
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config: { keystorePath: legacy },
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('config-keystorePath-legacy');
+    expect(env.resolution.password.provenance).toBe('session-cache');
+  });
+
+  it('default-legacy + active session → password.provenance IS "session-cache"', async () => {
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+    // Don't write a keystore file — exercising the default-legacy path.
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config: {},
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('default-legacy');
+    expect(env.resolution.password.provenance).toBe('session-cache');
+  });
+});
+
+describe('auth check — Hermes PR 50 blocker #2 (session unlocks even when legacy keystore file missing)', () => {
+  it('legacy default keystore missing + session active → unlock via session, no keystore_not_found error', async () => {
+    // Real loadSigner reaches path 2 (session) before path 3 reads
+    // the keystore file. Previously we hard-failed with
+    // keystore_not_found before ever consulting the session.
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+    // Intentionally NO keystore at <tmpDir>/keystore.json.
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config: {},
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('default-legacy');
+    expect(env.resolution.keystore.exists).toBe(false);
+    expect(env.resolution.password.provenance).toBe('session-cache');
+    expect(env.errors.map((e) => e.code)).not.toContain('keystore_not_found');
+    expect(env.unlock.attempted).toBe(true);
+    expect(env.unlock.succeeded).toBe(true);
+    expect(env.unlock.address?.toLowerCase()).toBe(SESSION_ADDRESS.toLowerCase());
+    expect(env.ok).toBe(true);
+  });
+
+  it('legacy config.keystorePath set to a missing file + session active → unlock via session, no keystore_not_found', async () => {
+    // Same as above but with config-pinned legacy path (vs the
+    // hard-coded default).
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config: { keystorePath: path.join(tmpDir, 'absent.json') },
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('config-keystorePath-legacy');
+    expect(env.resolution.keystore.exists).toBe(false);
+    expect(env.resolution.password.provenance).toBe('session-cache');
+    expect(env.errors.map((e) => e.code)).not.toContain('keystore_not_found');
+    expect(env.unlock.succeeded).toBe(true);
+    expect(env.ok).toBe(true);
+  });
+
+  it('explicit --account that doesn\'t exist + session active → keystore_not_found still errors (session does NOT rescue an explicit path)', async () => {
+    // Negative case: the rescue applies only to legacy keystores.
+    // Explicit sources must fail loudly when the configured keystore
+    // is missing — agents shouldn't silently fall back.
+    await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
+
+    const env = await buildEnvelope({
+      intent: { account: 'never-existed', foundryKeystoresDir: tmpDir },
+      env: process.env,
+      config: {},
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('flag-account');
+    expect(env.resolution.keystore.exists).toBe(false);
+    expect(env.errors.map((e) => e.code)).toContain('keystore_not_found');
+    expect(env.unlock.attempted).toBe(false);
+    expect(env.ok).toBe(false);
+  });
+});
+
+describe('auth check — Hermes PR 50 blocker #3 (config expectedAddress vs env OSPEX_KEYSTORE_PATH)', () => {
+  it('env OSPEX_KEYSTORE_PATH set + config.expectedAddress pinned to a different wallet → no false address_mismatch', async () => {
+    // Repro from Hermes's review: env points at wallet A, config has a
+    // stale pin for wallet B. Previously the pin would falsely apply
+    // and unlock would emit address_mismatch.
+    const ks = await writeKeystoreAt(tmpDir, 'envks.json');
+    const pwFile = await writePass(PASSPHRASE);
+    process.env.OSPEX_KEYSTORE_PATH = ks;
+    const config: CliConfigFile = {
+      // A pin from a previous `auth use-foundry` of a different account.
+      foundryAccount: 'some-other-account',
+      expectedAddress: '0xababababababababababababababababababababab',
+    };
+
+    const env = await buildEnvelope({
+      intent: { passwordFile: pwFile },
+      env: process.env,
+      config,
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('env-OSPEX_KEYSTORE_PATH');
+    expect(env.resolution.expectedAddress.provenance).toBe('none');
+    expect(env.resolution.expectedAddress.value).toBeNull();
+    expect(env.unlock.succeeded).toBe(true);
+    expect(env.unlock.address?.toLowerCase()).toBe(TEST_ADDRESS.toLowerCase());
+    expect(env.errors.map((e) => e.code)).not.toContain('address_mismatch');
+    expect(env.ok).toBe(true);
+  });
+
+  it('env OSPEX_KEYSTORE_PATH matching config.foundryKeystorePath + pin → pin DOES apply', async () => {
+    // Affirmative case: when the env path equals the config-pinned
+    // path, the pin is for THIS wallet (it was set by `auth
+    // use-foundry --keystore-path <same>`). Mirrors
+    // `mergeIntentFromConfig`'s `explicitMatchesConfigKeystorePath`.
+    const ks = await writeKeystoreAt(tmpDir, 'pinned.json');
+    process.env.OSPEX_KEYSTORE_PATH = ks;
+    const config: CliConfigFile = {
+      foundryKeystorePath: ks,
+      expectedAddress: TEST_ADDRESS.toLowerCase(),
+    };
+
+    const env = await buildEnvelope({
+      intent: {},
+      env: process.env,
+      config,
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('env-OSPEX_KEYSTORE_PATH');
+    expect(env.resolution.expectedAddress.provenance).toBe('config');
+    expect(env.resolution.expectedAddress.value?.toLowerCase()).toBe(
+      TEST_ADDRESS.toLowerCase(),
+    );
+  });
+
+  it('flag --keystore-path matching config.foundryKeystorePath + pin → pin DOES apply', async () => {
+    const ks = await writeKeystoreAt(tmpDir, 'pinned.json');
+    const config: CliConfigFile = {
+      foundryKeystorePath: ks,
+      expectedAddress: TEST_ADDRESS.toLowerCase(),
+    };
+
+    const env = await buildEnvelope({
+      intent: { keystorePath: ks },
+      env: process.env,
+      config,
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.keystore.provenance).toBe('flag-keystore-path');
+    expect(env.resolution.expectedAddress.provenance).toBe('config');
+  });
+
+  it('flag --keystore-path NOT matching config.foundryKeystorePath + pin → pin does NOT apply', async () => {
+    const otherKs = await writeKeystoreAt(tmpDir, 'other.json');
+    const config: CliConfigFile = {
+      foundryKeystorePath: '/some/configured/path.json',
+      expectedAddress: '0xababababababababababababababababababababab',
+    };
+
+    const env = await buildEnvelope({
+      intent: { keystorePath: otherKs },
+      env: process.env,
+      config,
+      strict: false,
+      signChallengeRequested: false,
+    });
+
+    expect(env.resolution.expectedAddress.provenance).toBe('none');
+  });
+});
