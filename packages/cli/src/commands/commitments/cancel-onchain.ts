@@ -23,23 +23,27 @@ import type { Hex } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { polygonscanTxUrl } from '../../lib/explorer.js';
 import { getClient } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 
 const optionsSchema = z.object({
   json: z.boolean().optional(),
 });
 
-export const commitmentsCancelOnchainCommand = new Command('cancel-onchain')
-  .description(
-    'On-chain cancel: call MatchingModule.cancelCommitment(commitment). ' +
-      'Accepts a full hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars). ' +
-      'Always requires API access to reconstruct the commitment struct.',
-  )
-  .argument('<hash-or-prefix>', 'full commitment hash, or unique 0x-prefixed hex prefix')
-  .option('--json', 'output as JSON')
+export const commitmentsCancelOnchainCommand = addSignerOptions(
+  new Command('cancel-onchain')
+    .description(
+      'On-chain cancel: call MatchingModule.cancelCommitment(commitment). ' +
+        'Accepts a full hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars). ' +
+        'Always requires API access to reconstruct the commitment struct.',
+    )
+    .argument('<hash-or-prefix>', 'full commitment hash, or unique 0x-prefixed hex prefix')
+    .option('--json', 'output as JSON'),
+)
   .action(async (hashArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
 
-    const client = await getClient({ requiresSigner: true, requiresChain: true });
+    const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
     const commitment = await client.commitments.resolveByPrefix(hashArg, {
       status: ['open', 'partially_filled'],

@@ -216,12 +216,26 @@ export async function prepareSubmit(
   }
 
   // ── 7. Maker + chain reads ─────────────────────────────────────────
-  // Unlocking the signer to read maker is allowed before preview
-  // confirmation (signing is what's gated on confirmation). Foundry
-  // keystores omit the top-level address field so we may need to
-  // decrypt to derive maker.
-  const signer = ctx.requireSigner();
-  const maker = (await signer.getAddress()).toLowerCase() as Hex;
+  // Two paths for resolving the maker address:
+  //   - args.maker set → caller already knows it (CLI `--expected-address`
+  //     for preview-only `--json` flows). Skip the signer call so we
+  //     don't decrypt or prompt for a passphrase just to render a
+  //     preview the agent will inspect before deciding to sign.
+  //   - args.maker unset → fall back to the configured signer.
+  //
+  // The signing step (`submitPrepared`) always uses the real signer,
+  // so `args.maker` here is purely for preview-time identity. If the
+  // override mismatches the eventual signer at submit time, the
+  // server-side EIP-712 hash will simply differ and the API will
+  // reject — there's no scenario where this can let someone sign as
+  // a different address.
+  let maker: Hex;
+  if (args.maker !== undefined) {
+    maker = args.maker.toLowerCase() as Hex;
+  } else {
+    const signer = ctx.requireSigner();
+    maker = (await signer.getAddress()).toLowerCase() as Hex;
+  }
 
   const publicClient = ctx.requireChainClient();
   // Two USDC allowance reads when this is a lazy commit:

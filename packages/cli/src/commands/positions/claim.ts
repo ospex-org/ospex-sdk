@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { OspexChainError } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 
 const positionSchema = z.enum(['upper', 'lower', '0', '1']);
 const optionsSchema = z.object({
@@ -26,17 +27,20 @@ function parsePosition(raw: string): 0 | 1 {
   return 1;
 }
 
-export const positionsClaimCommand = new Command('claim')
-  .description('Claim a single settled position. Reverts if the parent speculation is not yet settled.')
-  .argument('<speculationId>', 'speculation id (uint256)')
-  .requiredOption('--type <upper|lower>', 'position side (upper = away/over, lower = home/under)')
-  .option('--json', 'output as JSON')
+export const positionsClaimCommand = addSignerOptions(
+  new Command('claim')
+    .description('Claim a single settled position. Reverts if the parent speculation is not yet settled.')
+    .argument('<speculationId>', 'speculation id (uint256)')
+    .requiredOption('--type <upper|lower>', 'position side (upper = away/over, lower = home/under)')
+    .option('--json', 'output as JSON'),
+)
   .action(async (speculationIdArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
     const speculationId = BigInt(speculationIdArg);
     const positionType = parsePosition(opts.type);
 
-    const client = await getClient({ requiresSigner: true, requiresChain: true });
+    const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
     let result;
     try {

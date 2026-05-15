@@ -24,6 +24,7 @@ import { parseUnits } from 'viem';
 import { OspexValidationError, wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptYesNo } from '../../lib/prompt.js';
 
 const optionsSchema = z.object({
@@ -33,17 +34,20 @@ const optionsSchema = z.object({
 
 const USDC_DECIMAL_RE = /^\d+(?:\.\d{1,6})?$/;
 
-export const commitmentsApproveCommand = new Command('approve')
-  .description(
-    'Approve PositionModule for USDC. Argument is decimal USDC (e.g. "5", "0.25") or "max" for unlimited. ' +
-      'For raw 6-decimal units, use `ospex commitments approve-raw`. The blessed multi-spender setup path is ' +
-      '`ospex approvals setup --risk-usdc <n>`.',
-  )
-  .argument('<amount>', 'decimal USDC ("5", "0.25") or "max"')
-  .option('--yes', 'skip the confirmation prompt')
-  .option('--json', 'machine-readable output')
+export const commitmentsApproveCommand = addSignerOptions(
+  new Command('approve')
+    .description(
+      'Approve PositionModule for USDC. Argument is decimal USDC (e.g. "5", "0.25") or "max" for unlimited. ' +
+        'For raw 6-decimal units, use `ospex commitments approve-raw`. The blessed multi-spender setup path is ' +
+        '`ospex approvals setup --risk-usdc <n>`.',
+    )
+    .argument('<amount>', 'decimal USDC ("5", "0.25") or "max"')
+    .option('--yes', 'skip the confirmation prompt')
+    .option('--json', 'machine-readable output'),
+)
   .action(async (amountArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
     const skipPrompt = opts.yes === true;
     const wantJson = opts.json === true;
     const isInteractiveTTY = process.stdin.isTTY === true;
@@ -56,7 +60,7 @@ export const commitmentsApproveCommand = new Command('approve')
 
     const parsed = parseHumanUsdc(amountArg);
 
-    const client = await getClient({ requiresSigner: true, requiresChain: true });
+    const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
     if (!skipPrompt) {
       const summary = parsed === 'max' ? 'unlimited (uint256 max)' : `${wei6ToDecimalUSDC(parsed)} USDC`;

@@ -31,6 +31,7 @@ import { z } from 'zod';
 import { OspexValidationError, type ApprovalsSnapshot } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
 import {
   buildSetupPlan,
@@ -55,30 +56,33 @@ const optionsSchema = z.object({
   json: z.boolean().optional(),
 });
 
-export const approvalsSetupCommand = new Command('setup')
-  .description(
-    'Set up USDC + LINK approvals for Ospex modules in one command. ' +
-      'Without flags, runs interactively. With at least one flag, only acts on the dimensions specified.',
-  )
-  .option(
-    '--risk-usdc <amount>',
-    'USDC approval for PositionModule (your bet risk pool). Decimal USDC like "50" or "0.25", or "max".',
-  )
-  .option(
-    '--fee-usdc <amount>',
-    'USDC approval for TreasuryModule (protocol fees: contest creation + lazy spec creation). ' +
-      'If --risk-usdc is set and --fee-usdc is omitted, a small default is auto-included to ' +
-      'prevent a mid-bet approval prompt; pass --fee-usdc 0 to opt out.',
-  )
-  .option(
-    '--link <amount>',
-    'LINK approval for OracleModule (Chainlink Functions, only for contest creation/scoring). ' +
-      'Most users skip this. Decimal LINK like "2", or "max".',
-  )
-  .option('--yes', 'skip the confirmation prompt')
-  .option('--json', 'machine-readable output')
+export const approvalsSetupCommand = addSignerOptions(
+  new Command('setup')
+    .description(
+      'Set up USDC + LINK approvals for Ospex modules in one command. ' +
+        'Without flags, runs interactively. With at least one flag, only acts on the dimensions specified.',
+    )
+    .option(
+      '--risk-usdc <amount>',
+      'USDC approval for PositionModule (your bet risk pool). Decimal USDC like "50" or "0.25", or "max".',
+    )
+    .option(
+      '--fee-usdc <amount>',
+      'USDC approval for TreasuryModule (protocol fees: contest creation + lazy spec creation). ' +
+        'If --risk-usdc is set and --fee-usdc is omitted, a small default is auto-included to ' +
+        'prevent a mid-bet approval prompt; pass --fee-usdc 0 to opt out.',
+    )
+    .option(
+      '--link <amount>',
+      'LINK approval for OracleModule (Chainlink Functions, only for contest creation/scoring). ' +
+        'Most users skip this. Decimal LINK like "2", or "max".',
+    )
+    .option('--yes', 'skip the confirmation prompt')
+    .option('--json', 'machine-readable output'),
+)
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
     const wantJson = opts.json === true;
     const skipPrompt = opts.yes === true;
     const isInteractiveTTY = process.stdin.isTTY === true;
@@ -113,7 +117,7 @@ export const approvalsSetupCommand = new Command('setup')
     if (opts.feeUsdc !== undefined) parseUsdcInput(opts.feeUsdc);
     if (opts.link !== undefined) parseLinkInput(opts.link);
 
-    const client = await getClient({ requiresSigner: true, requiresChain: true });
+    const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
     // Ensure the signer is unlocked once up-front so the subsequent
     // approve txs don't each prompt for the passphrase. The first call

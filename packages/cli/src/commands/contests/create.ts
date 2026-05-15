@@ -23,6 +23,7 @@ import { formatUnits, parseUnits } from 'viem';
 import { getAddresses, OspexAllowanceError, OspexValidationError, type OspexClient } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptYesNo, promptValue } from '../../lib/prompt.js';
 
 const optionsSchema = z.object({
@@ -41,23 +42,26 @@ const optionsSchema = z.object({
   yes: z.boolean().optional(),
 });
 
-export const contestCreateCommand = new Command('create')
-  .description('Create a contest by submitting OracleModule.createContestFromOracle.')
-  .option('--game-id <id>', 'gameId from `ospex games list` (canonical UUID)')
-  .option(
-    '--game <slug-or-id>',
-    'resolver-friendly alias: pass either the slug from `ospex games list` or a UUID',
-  )
-  .option(
-    '--subscription-id <n>',
-    'Chainlink Functions subscription id (defaults to OSPEX_SHARED_SUBSCRIPTION_ID per chain)',
-  )
-  .option('--gas-limit <n>', 'Chainlink Functions callback gas limit (default 300000, Polygon router max)')
-  .option('--no-wait', 'skip polling for verification; print txHash and return')
-  .option('--yes', 'skip the slug-resolved confirmation prompt (no effect for --game-id / UUID input)')
-  .addOption(new Option('--json').hideHelp(false))
+export const contestCreateCommand = addSignerOptions(
+  new Command('create')
+    .description('Create a contest by submitting OracleModule.createContestFromOracle.')
+    .option('--game-id <id>', 'gameId from `ospex games list` (canonical UUID)')
+    .option(
+      '--game <slug-or-id>',
+      'resolver-friendly alias: pass either the slug from `ospex games list` or a UUID',
+    )
+    .option(
+      '--subscription-id <n>',
+      'Chainlink Functions subscription id (defaults to OSPEX_SHARED_SUBSCRIPTION_ID per chain)',
+    )
+    .option('--gas-limit <n>', 'Chainlink Functions callback gas limit (default 300000, Polygon router max)')
+    .option('--no-wait', 'skip polling for verification; print txHash and return')
+    .option('--yes', 'skip the slug-resolved confirmation prompt (no effect for --game-id / UUID input)')
+    .addOption(new Option('--json').hideHelp(false)),
+)
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
 
     // Resolve --game / --game-id: exactly one must be set. --game
     // accepts either a UUID (passed through) or a slug (resolved
@@ -74,7 +78,7 @@ export const contestCreateCommand = new Command('create')
       throw new OspexValidationError('Either --game-id <id> or --game <slug-or-id> is required.');
     }
 
-    const client = await getClient({ requiresSigner: true, requiresChain: true });
+    const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
     let gameId: string;
     if (hasGameId) {

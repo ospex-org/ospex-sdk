@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { OspexAllowanceError } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptYesNo, promptValue } from '../../lib/prompt.js';
 import type { Hex } from '@ospex/sdk';
 
@@ -43,23 +44,26 @@ function parseExpiry(raw: string): bigint {
   return BigInt(Math.floor(ms / 1000));
 }
 
-export const commitmentsSubmitRawCommand = new Command('submit-raw')
-  .description(
-    'Protocol-level escape hatch — sign + post an EIP-712 OspexCommitment using ' +
-      'the literal canonical tuple. Prefer `ospex commitments submit` for the ' +
-      'domain-language flow with preview block.',
-  )
-  .argument('<contestId>', 'contest id (uint256)')
-  .argument('<scorer>', 'scorer module address')
-  .argument('<lineTicks>', 'line ticks (int32, 10× scale)')
-  .argument('<position>', 'upper | lower (or 0 | 1)')
-  .argument('<oddsTick>', 'odds tick (uint16, 100× scale; 191 = 1.91)')
-  .argument('<riskAmount>', 'risk amount (USDC, 6 decimals; multiple of 100)')
-  .option('--expiry <iso-or-unix>', 'expiry (default: 24h from now)')
-  .option('--nonce <bigint>', 'override nonce strategy with an explicit value')
-  .addOption(new Option('--json').hideHelp(false))
+export const commitmentsSubmitRawCommand = addSignerOptions(
+  new Command('submit-raw')
+    .description(
+      'Protocol-level escape hatch — sign + post an EIP-712 OspexCommitment using ' +
+        'the literal canonical tuple. Prefer `ospex commitments submit` for the ' +
+        'domain-language flow with preview block.',
+    )
+    .argument('<contestId>', 'contest id (uint256)')
+    .argument('<scorer>', 'scorer module address')
+    .argument('<lineTicks>', 'line ticks (int32, 10× scale)')
+    .argument('<position>', 'upper | lower (or 0 | 1)')
+    .argument('<oddsTick>', 'odds tick (uint16, 100× scale; 191 = 1.91)')
+    .argument('<riskAmount>', 'risk amount (USDC, 6 decimals; multiple of 100)')
+    .option('--expiry <iso-or-unix>', 'expiry (default: 24h from now)')
+    .option('--nonce <bigint>', 'override nonce strategy with an explicit value')
+    .addOption(new Option('--json').hideHelp(false)),
+)
   .action(async (contestIdArg, scorerArg, lineTicksArg, positionArg, oddsTickArg, riskAmountArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
     const args = {
       contestId: BigInt(contestIdArg),
       scorer: scorerArg as Hex,
@@ -71,7 +75,7 @@ export const commitmentsSubmitRawCommand = new Command('submit-raw')
       ...(opts.nonce !== undefined ? { nonce: BigInt(opts.nonce) } : {}),
     };
 
-    const client = await getClient({ requiresSigner: true, requiresChain: true });
+    const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
     const trySubmit = async () => client.commitments.submitRaw(args);
 

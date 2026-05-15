@@ -433,3 +433,106 @@ describe('prepareMatch — chain id pass-through', () => {
     expect(p.verifyingContract.toLowerCase()).toBe(ADDRESSES.matchingModule.toLowerCase());
   });
 });
+
+describe('prepareMatch — taker override (preview-only without signer unlock)', () => {
+  // Critical agent-trust contract from spec §17.2: `--json` preview-only
+  // paths in the CLI must not trigger a passphrase prompt or a keystore
+  // decrypt. The SDK side of that contract is the `args.taker` override
+  // — when set, `prepareMatch` MUST NOT call the configured signer.
+
+  const EXPLICIT_TAKER: Hex = '0x'.padEnd(42, 'e') as Hex;
+
+  it('uses args.taker as the taker address when provided', async () => {
+    const { ctx } = buildContext();
+    const p = await prepareMatch(ctx, {
+      commitment: makeCommitment(),
+      taker: EXPLICIT_TAKER,
+    });
+    // The taker fields in the preview should reflect the explicit
+    // address, not the buildSigner default (TAKER).
+    expect(p.taker.toLowerCase()).toBe(EXPLICIT_TAKER.toLowerCase());
+  });
+
+  it('does NOT call signer.getAddress when args.taker is provided', async () => {
+    const signer = buildSigner();
+    const ctx: CommitmentsContext = {
+      api: { request: vi.fn() } as unknown as CommitmentsContext['api'],
+      requireSigner: () => signer,
+      getChainId: () => 137,
+      getAddresses: () => ADDRESSES,
+      requireChainClient: () =>
+        buildPublicClient({}) as ReturnType<CommitmentsContext['requireChainClient']>,
+      nonceCounter: new NonceCounter(),
+      getContestsApi: () => ({
+        get: vi.fn(async () => buildContest()),
+        list: vi.fn(),
+        scripts: vi.fn(),
+      }) as unknown as ReturnType<CommitmentsContext['getContestsApi']>,
+      getSpeculationsApi: () => ({}) as ReturnType<CommitmentsContext['getSpeculationsApi']>,
+      getTeams: () => ({}) as ReturnType<CommitmentsContext['getTeams']>,
+    };
+    await prepareMatch(ctx, {
+      commitment: makeCommitment(),
+      taker: EXPLICIT_TAKER,
+    });
+    expect(signer.getAddress).not.toHaveBeenCalled();
+  });
+
+  it('works when no signer is configured at all (requireSigner would throw)', async () => {
+    // Simulates the CLI's "construct OspexClient without signer for the
+    // --json preview branch" pattern.
+    const ctx: CommitmentsContext = {
+      api: { request: vi.fn() } as unknown as CommitmentsContext['api'],
+      requireSigner: () => {
+        throw new Error('no signer configured — should never be called');
+      },
+      getChainId: () => 137,
+      getAddresses: () => ADDRESSES,
+      requireChainClient: () =>
+        buildPublicClient({}) as ReturnType<CommitmentsContext['requireChainClient']>,
+      nonceCounter: new NonceCounter(),
+      getContestsApi: () => ({
+        get: vi.fn(async () => buildContest()),
+        list: vi.fn(),
+        scripts: vi.fn(),
+      }) as unknown as ReturnType<CommitmentsContext['getContestsApi']>,
+      getSpeculationsApi: () => ({}) as ReturnType<CommitmentsContext['getSpeculationsApi']>,
+      getTeams: () => ({}) as ReturnType<CommitmentsContext['getTeams']>,
+    };
+    const p = await prepareMatch(ctx, {
+      commitment: makeCommitment(),
+      taker: EXPLICIT_TAKER,
+    });
+    expect(p.taker.toLowerCase()).toBe(EXPLICIT_TAKER.toLowerCase());
+  });
+
+  it('selfMatch flag still computes correctly under explicit taker', async () => {
+    const commitment = makeCommitment();
+    const { ctx } = buildContext({ commitment });
+    const selfTaker = commitment.maker as Hex;
+    const p = await prepareMatch(ctx, { commitment, taker: selfTaker });
+    expect(p.selfMatch).toBe(true);
+  });
+
+  it('falls back to signer.getAddress when args.taker is unset (current behavior preserved)', async () => {
+    const signer = buildSigner();
+    const ctx: CommitmentsContext = {
+      api: { request: vi.fn() } as unknown as CommitmentsContext['api'],
+      requireSigner: () => signer,
+      getChainId: () => 137,
+      getAddresses: () => ADDRESSES,
+      requireChainClient: () =>
+        buildPublicClient({}) as ReturnType<CommitmentsContext['requireChainClient']>,
+      nonceCounter: new NonceCounter(),
+      getContestsApi: () => ({
+        get: vi.fn(async () => buildContest()),
+        list: vi.fn(),
+        scripts: vi.fn(),
+      }) as unknown as ReturnType<CommitmentsContext['getContestsApi']>,
+      getSpeculationsApi: () => ({}) as ReturnType<CommitmentsContext['getSpeculationsApi']>,
+      getTeams: () => ({}) as ReturnType<CommitmentsContext['getTeams']>,
+    };
+    await prepareMatch(ctx, { commitment: makeCommitment() });
+    expect(signer.getAddress).toHaveBeenCalled();
+  });
+});

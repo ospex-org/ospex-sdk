@@ -18,6 +18,7 @@ import { OspexChainError } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { polygonscanTxUrl } from '../../lib/explorer.js';
 import { getClient } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import type { Hex } from '@ospex/sdk';
 
 const optionsSchema = z.object({
@@ -25,19 +26,22 @@ const optionsSchema = z.object({
   json: z.boolean().optional(),
 });
 
-export const commitmentsCancelCommand = new Command('cancel')
-  .description(
-    'Off-chain cancel via signed DELETE. Add --also-onchain for an authoritative cancel. ' +
-      'Accepts a full hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars).',
-  )
-  .argument('<hash-or-prefix>', 'full commitment hash, or unique 0x-prefixed hex prefix')
-  .option(
-    '--also-onchain',
-    'after the DELETE, also call MatchingModule.cancelCommitment on chain (recommended)',
-  )
-  .option('--json', 'output as JSON')
+export const commitmentsCancelCommand = addSignerOptions(
+  new Command('cancel')
+    .description(
+      'Off-chain cancel via signed DELETE. Add --also-onchain for an authoritative cancel. ' +
+        'Accepts a full hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars).',
+    )
+    .argument('<hash-or-prefix>', 'full commitment hash, or unique 0x-prefixed hex prefix')
+    .option(
+      '--also-onchain',
+      'after the DELETE, also call MatchingModule.cancelCommitment on chain (recommended)',
+    )
+    .option('--json', 'output as JSON'),
+)
   .action(async (hashArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
     const wantsOnchain = opts.alsoOnchain === true;
 
     // The off-chain DELETE only needs a signer (for the EIP-712 cancel
@@ -45,6 +49,7 @@ export const commitmentsCancelCommand = new Command('cancel')
     const client = await getClient({
       requiresSigner: true,
       requiresChain: wantsOnchain,
+      signerIntent,
     });
 
     // Cancel scope: only live commitments (open + partially_filled).

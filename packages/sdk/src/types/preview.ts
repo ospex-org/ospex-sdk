@@ -306,6 +306,20 @@ export type SubmitParent =
 /** Public input shape for `client.commitments.prepareSubmit` / `.submit`. */
 export interface HighLevelSubmitArgs {
   parent: SubmitParent;
+  /**
+   * Override the maker address for preview computation. When set,
+   * `prepareSubmit` skips the `signer.getAddress()` call entirely —
+   * useful for `--json` preview-only flows that mustn't trigger a
+   * passphrase prompt. When unset (the default), the SDK falls back
+   * to the configured signer as before.
+   *
+   * The signing step (`submitPrepared`) always requires a real signer
+   * regardless of this override; it never reads from `maker`. So a
+   * caller that uses `maker` in preview-only mode is opting out of
+   * preview-time unlock but still has to attach a signer if they go
+   * on to sign.
+   */
+  maker?: `0x${string}`;
   /** Free-form team name, alias, or `over`/`under`. */
   side: string;
   /**

@@ -62,7 +62,8 @@ import {
   type SubmitParent,
 } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
-import { getClient } from '../../lib/client.js';
+import { getClient, resolvePreviewAddress } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
 import { renderPreview } from '../../lib/previewRender.js';
 
@@ -83,40 +84,43 @@ const optionsSchema = z.object({
   approveMax: z.boolean().optional(),
 });
 
-export const commitmentsSubmitCommand = new Command('submit')
-  .description(
-    'Sign + post an EIP-712 commitment using domain-language inputs. Renders a ' +
-      'win/lose/push preview before signing; pass --yes to skip the prompt.',
-  )
-  .option('--speculation <id>', 'speculation id (uint256)')
-  .option('--contest <id>', 'contest id (uint256) — pair with --market')
-  .option('--market <type>', 'market type: moneyline | spread | total')
-  .option('--line <decimal>', 'selected-side displayed line (e.g. -3.5)')
-  .option('--side <input>', 'team name / alias, or "over"/"under" for totals')
-  .option(
-    '--odds <value>',
-    'decimal (e.g. "2.50", "1.91") or American with explicit sign (e.g. "+150", "-110"). Plain integers without a sign or decimal point are ambiguous and rejected.',
-  )
-  .option('--risk-usdc <decimal>', 'decimal USDC risk (e.g. 1 or 0.001)')
-  .option(
-    '--expiry <value>',
-    'duration ("30m", "4h", "1d", "1w"), ISO-8601 ("2026-05-09T20:00:00Z"), or unix-seconds. Default: contest match time.',
-  )
-  .option('--nonce <bigint>', 'override the SDK nonce strategy')
-  .option('--yes', 'skip the confirmation prompt')
-  .option(
-    '--approve-max',
-    'with --yes (non-interactive), approve unlimited USDC instead of the exact required amount. Ignored in interactive mode — to grant unlimited interactively, type "max" at the amount prompt.',
-  )
-  .addOption(
-    new Option(
-      '--json',
-      'machine-readable output. ALONE = preview only, no signing (SubmitPreviewEnvelope). ' +
-        'WITH --yes = signs/posts and emits SubmitJsonResult.',
-    ).hideHelp(false),
-  )
+export const commitmentsSubmitCommand = addSignerOptions(
+  new Command('submit')
+    .description(
+      'Sign + post an EIP-712 commitment using domain-language inputs. Renders a ' +
+        'win/lose/push preview before signing; pass --yes to skip the prompt.',
+    )
+    .option('--speculation <id>', 'speculation id (uint256)')
+    .option('--contest <id>', 'contest id (uint256) — pair with --market')
+    .option('--market <type>', 'market type: moneyline | spread | total')
+    .option('--line <decimal>', 'selected-side displayed line (e.g. -3.5)')
+    .option('--side <input>', 'team name / alias, or "over"/"under" for totals')
+    .option(
+      '--odds <value>',
+      'decimal (e.g. "2.50", "1.91") or American with explicit sign (e.g. "+150", "-110"). Plain integers without a sign or decimal point are ambiguous and rejected.',
+    )
+    .option('--risk-usdc <decimal>', 'decimal USDC risk (e.g. 1 or 0.001)')
+    .option(
+      '--expiry <value>',
+      'duration ("30m", "4h", "1d", "1w"), ISO-8601 ("2026-05-09T20:00:00Z"), or unix-seconds. Default: contest match time.',
+    )
+    .option('--nonce <bigint>', 'override the SDK nonce strategy')
+    .option('--yes', 'skip the confirmation prompt')
+    .option(
+      '--approve-max',
+      'with --yes (non-interactive), approve unlimited USDC instead of the exact required amount. Ignored in interactive mode — to grant unlimited interactively, type "max" at the amount prompt.',
+    )
+    .addOption(
+      new Option(
+        '--json',
+        'machine-readable output. ALONE = preview only, no signing (SubmitPreviewEnvelope). ' +
+          'WITH --yes = signs/posts and emits SubmitJsonResult.',
+      ).hideHelp(false),
+    ),
+)
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
     const parent = parseParent(opts);
     const args: HighLevelSubmitArgs = {
       parent,
@@ -131,19 +135,31 @@ export const commitmentsSubmitCommand = new Command('submit')
     const skipPrompt = opts.yes === true;
     const approveMax = opts.approveMax === true;
     const isInteractive = process.stdin.isTTY === true;
+    const previewOnly = wantJson && !skipPrompt;
 
-    const client = await getClient({ requiresSigner: true, requiresChain: true });
+    // Lazy signer split (spec §17.2): preview-only mode (`--json`
+    // without `--yes`) MUST NOT trigger an interactive passphrase
+    // prompt or a keystore decrypt unless a non-interactive source
+    // is configured. `resolvePreviewAddress` returns an address
+    // from --expected-address, non-interactive credentials, or
+    // cached session (never from a prompt). prepareSubmit gets the
+    // `maker` override so it skips its own signer.getAddress() call.
+    const client = previewOnly
+      ? await getClient({ requiresChain: true })
+      : await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
     // 1. Prepare. Decimal parsing, side resolution, contest/spec
     //    fetches, allowance + nonce reads. No signing yet.
-    const preview = await client.commitments.prepareSubmit(args);
+    const prepArgs: HighLevelSubmitArgs = { ...args };
+    if (previewOnly) {
+      prepArgs.maker = await resolvePreviewAddress(signerIntent);
+    }
+    const preview = await client.commitments.prepareSubmit(prepArgs);
 
     // 2. `--json` alone (no --yes) is the preview-only mode — emit
     //    the SubmitPreviewEnvelope and exit without prompting or
-    //    signing. Use case: an agent inspects the resolved tuple
-    //    before deciding whether to run the actual submit
-    //    (`--yes --json`).
-    if (wantJson && !skipPrompt) {
+    //    signing.
+    if (previewOnly) {
       formatOutput({ schemaVersion: 1, preview }, { json: true });
       return;
     }
