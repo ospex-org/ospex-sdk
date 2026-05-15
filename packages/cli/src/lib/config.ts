@@ -34,8 +34,57 @@ export interface CliConfigFile {
   /**
    * Foundry-managed keystore path (or any v3 JSON keystore). Leading
    * `~/` is expanded against the user's home directory at read time.
+   *
+   * Long-standing legacy field. Pinned-via-`auth use-foundry` clients
+   * should prefer `foundryAccount`; `keystorePath` is still supported
+   * for users with an arbitrary v3 keystore that isn't under
+   * `~/.foundry/keystores`.
    */
   keystorePath?: string;
+  // ── Foundry signer defaults (PR 3 of the agent-signer series) ─────
+  /**
+   * Foundry account name pinned by `ospex auth use-foundry`. Resolved
+   * against `foundryKeystoresDir` (or `~/.foundry/keystores`) at
+   * unlock time. Mutually exclusive with `foundryKeystorePath` —
+   * `use-foundry` clears whichever is not being set.
+   */
+  foundryAccount?: string;
+  /**
+   * Explicit v3 keystore path pinned by `ospex auth use-foundry
+   * --keystore-path`. Distinct from the legacy `keystorePath` field
+   * (which is set by `ospex init` and consulted only by the legacy
+   * default-keystore path 3 of `loadSigner`). The split is critical:
+   * `mergeIntentFromConfig` lifts `foundryKeystorePath` into explicit
+   * signer intent (skipping the legacy session cache, pairing with
+   * the pinned `passwordFile` for non-interactive unlock), but
+   * intentionally leaves the legacy `keystorePath` alone so users
+   * who only ran `ospex init` keep today's behavior.
+   *
+   * Mutually exclusive with `foundryAccount` — `use-foundry` clears
+   * whichever isn't being set.
+   */
+  foundryKeystorePath?: string;
+  /**
+   * Path to a passphrase file. Set by `ospex auth use-foundry` so
+   * subsequent write commands can unlock non-interactively. The file
+   * itself is the secret; only the path is persisted here.
+   */
+  passwordFile?: string;
+  /**
+   * Override the Foundry keystores directory. Only set when the user
+   * passed `--foundry-keystores-dir` to `auth use-foundry` (or
+   * configured a non-default home).
+   */
+  foundryKeystoresDir?: string;
+  /**
+   * Pinned address from the last successful `auth use-foundry`
+   * validation. When set, every unlock compares the resolved signer's
+   * address against this value; mismatches throw
+   * `OspexSignerResolutionError({ reason: 'address_mismatch' })`. The
+   * guardrail catches surprise key rotations (re-importing a
+   * different PK under the same account name).
+   */
+  expectedAddress?: string;
 }
 
 export interface ResolvedCliConfig {
@@ -110,6 +159,15 @@ export async function loadConfigFile(): Promise<CliConfigFile> {
     if (typeof obj.rpcUrl === 'string') out.rpcUrl = obj.rpcUrl;
     if (obj.chainId === 137 || obj.chainId === 80002) out.chainId = obj.chainId;
     if (typeof obj.keystorePath === 'string') out.keystorePath = obj.keystorePath;
+    if (typeof obj.foundryAccount === 'string') out.foundryAccount = obj.foundryAccount;
+    if (typeof obj.foundryKeystorePath === 'string') {
+      out.foundryKeystorePath = obj.foundryKeystorePath;
+    }
+    if (typeof obj.passwordFile === 'string') out.passwordFile = obj.passwordFile;
+    if (typeof obj.foundryKeystoresDir === 'string') {
+      out.foundryKeystoresDir = obj.foundryKeystoresDir;
+    }
+    if (typeof obj.expectedAddress === 'string') out.expectedAddress = obj.expectedAddress;
     return out;
   } catch (err) {
     if (isFileNotFound(err)) return {};

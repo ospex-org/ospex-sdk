@@ -40,6 +40,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { OspexClient, OspexSignerResolutionError, type Signer } from '@ospex/sdk';
 import { KeystoreSigner } from '@ospex/sdk/signers/keystore';
 import type { FromFoundryAccountArgs, FromKeystoreFileArgs } from '@ospex/sdk/signers/keystore';
@@ -49,6 +50,7 @@ import {
   getOspexHome,
   getSessionPath,
   isFileNotFound,
+  loadConfigFile,
   resolveCliConfig,
 } from './config.js';
 import { promptHidden } from './prompt.js';
@@ -147,7 +149,8 @@ interface SessionFile {
  * `intent` is optional. When omitted, only paths 2-3 apply.
  */
 export async function loadSigner(intent?: SignerIntent): Promise<Signer> {
-  const resolvedIntent = materializeIntent(intent ?? {});
+  const envMaterialized = materializeIntent(intent ?? {});
+  const resolvedIntent = await mergeIntentFromConfig(envMaterialized);
   const signer = await resolveSignerByPrecedence(resolvedIntent);
 
   // Final address guard (covers paths 2 and 3). The SDK-helper paths
@@ -198,17 +201,22 @@ async function resolveSignerByPrecedence(intent: SignerIntent): Promise<Signer> 
 }
 
 /**
- * Materialize env-only keystore source into `intent.keystorePath` so
- * downstream code can treat env-set keystores the same as flag-set
- * ones. Without this, `OSPEX_KEYSTORE_PATH` was a "ghost source" —
+ * Materialize env-only signer sources into the intent so downstream
+ * code can treat env-set values the same as flag-set ones. Without
+ * this, `OSPEX_KEYSTORE_PATH` was a "ghost source" —
  * `hasExplicitKeystoreSource` saw it but `loadSignerNonInteractive`
  * passed `undefined` to the SDK helper, which then threw
- * `keystore_not_found`. Hermes's PR 48 blocker #3.
+ * `keystore_not_found` (Hermes's PR 48 blocker #3).
  *
- * Config `keystorePath` is NOT materialized here. It's a long-standing
- * implicit default; promoting it to "explicit intent" would change
- * the legacy session-cache UX for every user with a configured path.
- * Read by `readKeystore` only on path 3 (the legacy default branch).
+ * Also materializes `OSPEX_PASSWORD_FILE` so the precedence ladder
+ * (flag > env > config) is enforceable in one place. The SDK helper
+ * still has its own env fallback for direct programmatic consumers,
+ * but the CLI layer short-circuits before that fires.
+ *
+ * Config keystorePath / passwordFile are NOT materialized here.
+ * Config-pinned values flow through `mergeIntentFromConfig` below;
+ * the split keeps env-precedence-over-config explicit (this function
+ * runs first, the config merge fills only what's still empty).
  */
 function materializeIntent(intent: SignerIntent): SignerIntent {
   const result: SignerIntent = { ...intent };
@@ -218,6 +226,129 @@ function materializeIntent(intent: SignerIntent): SignerIntent {
       result.keystorePath = expandTilde(envPath);
     }
   }
+  if (result.passwordFile === undefined && result.fromStdin !== true) {
+    const envPwFile = process.env.OSPEX_PASSWORD_FILE;
+    if (envPwFile !== undefined && envPwFile !== '') {
+      result.passwordFile = expandTilde(envPwFile);
+    }
+  }
+  // Foundry keystores dir env precedence: OSPEX_FOUNDRY_KEYSTORES_DIR
+  // > FOUNDRY_DIR/keystores. Lifting here means env beats
+  // `mergeIntentFromConfig`'s lift of `config.foundryKeystoresDir` —
+  // matching the documented flag > env > config ordering.
+  // Hermes PR 49 blocker #3.
+  if (result.foundryKeystoresDir === undefined) {
+    const envOspex = process.env.OSPEX_FOUNDRY_KEYSTORES_DIR;
+    if (envOspex !== undefined && envOspex !== '') {
+      result.foundryKeystoresDir = expandTilde(envOspex);
+    } else {
+      const foundryDir = process.env.FOUNDRY_DIR;
+      if (foundryDir !== undefined && foundryDir !== '') {
+        result.foundryKeystoresDir = path.join(expandTilde(foundryDir), 'keystores');
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Merge `auth use-foundry`-pinned config defaults into the intent.
+ * Runs after `materializeIntent` so env beats config (env-materialized
+ * intent fields already populated; this function only fills what's
+ * still empty).
+ *
+ * Precedence end-to-end:
+ *
+ *   flag       → highest, set in `parseSignerIntent`
+ *   env var    → next, populated by `materializeIntent`
+ *   config     → next, populated by this function
+ *   default    → lowest, hard-coded in the helpers
+ *
+ * `expectedAddress` from config is always lowercased (the config
+ * writer also normalizes) so the final `loadSigner` guard compares
+ * cleanly.
+ */
+async function mergeIntentFromConfig(intent: SignerIntent): Promise<SignerIntent> {
+  const result: SignerIntent = { ...intent };
+  const config = await loadConfigFile();
+
+  // Keystore source: lift `config.foundryAccount` OR
+  // `config.foundryKeystorePath` (both set only by `ospex auth
+  // use-foundry`). NOT the legacy `config.keystorePath` from
+  // `ospex init` — that field stays the path-3 fallback consumed
+  // by `readKeystore`, preserving today's `wallet unlock` UX for
+  // users with only `init`-pinned values.
+  //
+  // Track whether we lifted from config — this determines whether
+  // the config-pinned `expectedAddress` applies further down.
+  let accountLiftedFromConfig = false;
+  if (result.account === undefined && result.keystorePath === undefined) {
+    if (config.foundryAccount !== undefined && config.foundryAccount !== '') {
+      result.account = config.foundryAccount;
+      accountLiftedFromConfig = true;
+    } else if (
+      config.foundryKeystorePath !== undefined &&
+      config.foundryKeystorePath !== ''
+    ) {
+      result.keystorePath = expandTilde(config.foundryKeystorePath);
+      accountLiftedFromConfig = true;
+    }
+  }
+
+  // Passphrase source: only if intent has no file/stdin.
+  if (result.passwordFile === undefined && result.fromStdin !== true) {
+    if (config.passwordFile !== undefined && config.passwordFile !== '') {
+      result.passwordFile = expandTilde(config.passwordFile);
+    }
+  }
+
+  // Foundry keystores dir.
+  if (result.foundryKeystoresDir === undefined) {
+    if (
+      config.foundryKeystoresDir !== undefined &&
+      config.foundryKeystoresDir !== ''
+    ) {
+      result.foundryKeystoresDir = expandTilde(config.foundryKeystoresDir);
+    }
+  }
+
+  // Expected-address pin (Hermes PR 49 blocker #4):
+  //
+  // The config-pinned address is a guardrail for "the configured
+  // account always resolves here." It applies only when the result's
+  // signer source actually corresponds to the configured one:
+  //
+  //   - We lifted the source from config (caller inherited it), OR
+  //   - The caller's flag/env source equals the configured value
+  //     (caller re-stated the same account — pin still relevant), OR
+  //   - No explicit source was supplied at all (legacy default path
+  //     uses the configured / default keystore).
+  //
+  // If a flag/env supplied a DIFFERENT account or keystore path, the
+  // pinned address is for a different wallet and must NOT apply.
+  if (result.expectedAddress === undefined) {
+    if (config.expectedAddress !== undefined && config.expectedAddress !== '') {
+      const noExplicitSource =
+        result.account === undefined && result.keystorePath === undefined;
+      const explicitMatchesConfigAccount =
+        config.foundryAccount !== undefined &&
+        config.foundryAccount !== '' &&
+        result.account === config.foundryAccount;
+      const explicitMatchesConfigKeystorePath =
+        config.foundryKeystorePath !== undefined &&
+        config.foundryKeystorePath !== '' &&
+        result.keystorePath === expandTilde(config.foundryKeystorePath);
+      if (
+        accountLiftedFromConfig ||
+        noExplicitSource ||
+        explicitMatchesConfigAccount ||
+        explicitMatchesConfigKeystorePath
+      ) {
+        result.expectedAddress = config.expectedAddress.toLowerCase() as `0x${string}`;
+      }
+    }
+  }
+
   return result;
 }
 
@@ -365,12 +496,23 @@ async function readKeystore(): Promise<string> {
  */
 export async function resolvePreviewAddress(intent: SignerIntent): Promise<`0x${string}`> {
   // 1. Explicit expected-address wins. Zero I/O — preserves agent's
-  //    "I told you who I am" assertion without unlocking.
+  //    "I told you who I am" assertion without unlocking. Note: this
+  //    fires for the per-invocation flag only. Config-pinned
+  //    `expectedAddress` is merged below; if no flag was passed, it
+  //    becomes the override after `mergeIntentFromConfig` runs.
   if (intent.expectedAddress !== undefined) {
     return intent.expectedAddress;
   }
 
-  const resolvedIntent = materializeIntent(intent);
+  const envMaterialized = materializeIntent(intent);
+  const resolvedIntent = await mergeIntentFromConfig(envMaterialized);
+
+  // After config merge: re-check expectedAddress. If `auth
+  // use-foundry` pinned an address, it's now in resolvedIntent and
+  // we can use it without unlocking.
+  if (resolvedIntent.expectedAddress !== undefined) {
+    return resolvedIntent.expectedAddress;
+  }
 
   // 2. Explicit keystore source — must NOT fall through to the
   //    session cache (Hermes PR 48 #1). If we can't unlock non-
