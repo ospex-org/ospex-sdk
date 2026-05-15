@@ -49,7 +49,8 @@ import {
   type ApprovalPurpose,
 } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
-import { getClient } from '../../lib/client.js';
+import { getClient, resolvePreviewAddress } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
 import { renderMatchPreview } from '../../lib/matchPreviewRender.js';
 
@@ -60,60 +61,78 @@ const optionsSchema = z.object({
   approveMax: z.boolean().optional(),
 });
 
-export const commitmentsMatchCommand = new Command('match')
-  .description(
-    'Match an existing commitment as the taker. Renders a preview block before signing; ' +
-      'pass --yes to skip the prompt. Accepts a full 0x-prefixed 32-byte hash OR a unique ' +
-      '0x-prefixed hex prefix (≥ 8 hex chars after 0x).',
-  )
-  .argument('<hash-or-prefix>', 'full commitment hash, or unique 0x-prefixed hex prefix')
-  .option(
-    '--risk-usdc <decimal>',
-    'taker desired risk / taker max outlay in decimal USDC (e.g. "1" or "0.5"). ' +
-      "The matching engine computes the maker fill from this and the maker's odds — " +
-      "at +260, a taker risking 1.6 USDC fully fills a maker risking 1 USDC. The preview " +
-      'shows both takerRisk AND fillMakerRisk so the relationship is visible. Default: ' +
-      'fully fill the maker remaining capacity.',
-  )
-  .option('--yes', 'skip the confirmation prompt')
-  .option(
-    '--approve-max',
-    'with --yes (non-interactive), approve unlimited USDC instead of the exact required amount. ' +
-      'Ignored in interactive mode — to grant unlimited interactively, type "max" at the amount prompt.',
-  )
-  .addOption(
-    new Option(
-      '--json',
-      'machine-readable output. ALONE = preview only, no signing (MatchPreviewEnvelope). ' +
-        'WITH --yes = signs/sends and emits MatchJsonResult.',
-    ).hideHelp(false),
-  )
+export const commitmentsMatchCommand = addSignerOptions(
+  new Command('match')
+    .description(
+      'Match an existing commitment as the taker. Renders a preview block before signing; ' +
+        'pass --yes to skip the prompt. Accepts a full 0x-prefixed 32-byte hash OR a unique ' +
+        '0x-prefixed hex prefix (≥ 8 hex chars after 0x).',
+    )
+    .argument('<hash-or-prefix>', 'full commitment hash, or unique 0x-prefixed hex prefix')
+    .option(
+      '--risk-usdc <decimal>',
+      'taker desired risk / taker max outlay in decimal USDC (e.g. "1" or "0.5"). ' +
+        "The matching engine computes the maker fill from this and the maker's odds — " +
+        "at +260, a taker risking 1.6 USDC fully fills a maker risking 1 USDC. The preview " +
+        'shows both takerRisk AND fillMakerRisk so the relationship is visible. Default: ' +
+        'fully fill the maker remaining capacity.',
+    )
+    .option('--yes', 'skip the confirmation prompt')
+    .option(
+      '--approve-max',
+      'with --yes (non-interactive), approve unlimited USDC instead of the exact required amount. ' +
+        'Ignored in interactive mode — to grant unlimited interactively, type "max" at the amount prompt.',
+    )
+    .addOption(
+      new Option(
+        '--json',
+        'machine-readable output. ALONE = preview only, no signing (MatchPreviewEnvelope). ' +
+          'WITH --yes = signs/sends and emits MatchJsonResult.',
+      ).hideHelp(false),
+    ),
+)
   .action(async (hashArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
     const wantJson = opts.json === true;
     const skipPrompt = opts.yes === true;
     const approveMax = opts.approveMax === true;
     const isInteractive = process.stdin.isTTY === true;
+    const previewOnly = wantJson && !skipPrompt;
 
     // ── 0. Early non-TTY guard. ────────────────────────────────────
     // Refuses runs that would hang on a confirmation prompt (no
-    // `--yes`) before we trigger any signer unlock. The keystore
-    // passphrase prompt that loadSigner runs is hidden-stdin and
-    // fails outright on non-TTY runs with a less-actionable error
-    // than the message below; better to fail here with an actionable
-    // hint. `--json` alone (preview-only for agents) is allowed past
-    // this guard — it may still hit the hidden-input error if no
-    // session is cached, but that is a separate, documented condition
-    // unrelated to the missing-confirmation case this guard exists for.
+    // `--yes`) before we trigger any signer unlock. `--json` alone
+    // (preview-only for agents) is handled separately below — it
+    // resolves the taker address from --expected-address or non-
+    // interactive credentials rather than calling loadSigner.
     if (!skipPrompt && !wantJson && !isInteractive) {
       throw new OspexValidationError(
         '--yes is required for non-interactive runs of `commitments match`. Re-run with --yes.',
       );
     }
 
-    const client = await getClient({ requiresSigner: true, requiresChain: true });
+    // ── 1. Lazy signer split (spec §17.2). ─────────────────────────
+    // Preview-only mode (`--json` without `--yes`): compute the
+    // preview WITHOUT calling `loadSigner`. Hermes's hard
+    // requirement — agents should never get an interactive
+    // passphrase prompt from a preview-only invocation. We resolve
+    // the taker address via `resolvePreviewAddress`:
+    //   1. `--expected-address` → use it directly, no I/O at all.
+    //   2. Non-interactive credentials (--account + --password-file,
+    //      OSPEX_PASSWORD_FILE env, etc.) → unlock silently and
+    //      derive.
+    //   3. Cached legacy session → use cached address.
+    //   4. Else throw `non_interactive_password_required`.
+    //
+    // Sign mode (interactive or `--yes`): loadSigner runs as before,
+    // unlocking the keystore for the sign step. The preview is
+    // computed using the unlocked address.
+    const client = previewOnly
+      ? await getClient({ requiresChain: true })
+      : await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
-    // ── 1. Resolve input via the SDK's prefix resolver. ─────────────
+    // ── 2. Resolve input via the SDK's prefix resolver. ─────────────
     // Match scope is open + partially_filled (live commitments).
     const commitment = await client.commitments.resolveByPrefix(hashArg, {
       status: ['open', 'partially_filled'],
@@ -125,22 +144,27 @@ export const commitmentsMatchCommand = new Command('match')
       );
     }
 
-    // ── 2. Prepare match preview. No signing. ──────────────────────
+    // ── 3. Prepare match preview. ─────────────────────────────────
+    // In preview-only mode, pass `taker` as an explicit override so
+    // prepareMatch skips its signer.getAddress() call entirely.
     const prepArgs: Parameters<typeof client.commitments.prepareMatch>[0] = {
       commitment,
     };
     if (opts.riskUsdc !== undefined) {
       prepArgs.takerDesiredRiskWei6 = usdcDecimalToWei6(opts.riskUsdc);
     }
+    if (previewOnly) {
+      prepArgs.taker = await resolvePreviewAddress(signerIntent);
+    }
     const preview = await client.commitments.prepareMatch(prepArgs);
 
-    // ── 3. --json alone (no --yes) is preview-only. ────────────────
-    if (wantJson && !skipPrompt) {
+    // ── 4. --json alone (no --yes) is preview-only — emit + exit. ──
+    if (previewOnly) {
       formatOutput({ schemaVersion: 1, preview }, { json: true });
       return;
     }
 
-    // ── 4. Render preview + confirm (unless --yes). ────────────────
+    // ── 5. Render preview + confirm (unless --yes). ────────────────
     renderMatchPreview(preview);
     if (!skipPrompt) {
       const ok = await promptYesNo('Match?', true);
@@ -150,7 +174,7 @@ export const commitmentsMatchCommand = new Command('match')
       }
     }
 
-    // ── 5. Run approvals if needed. ────────────────────────────────
+    // ── 6. Run approvals if needed. ────────────────────────────────
     // commitment-risk → PositionModule (always present); lazy-creation-fee
     // → TreasuryModule (present iff speculation.mode === 'lazy').
     for (const row of preview.approvals) {
@@ -218,7 +242,7 @@ export const commitmentsMatchCommand = new Command('match')
       );
     }
 
-    // ── 6. Sign + send. matchFromPreview always re-fetches first. ──
+    // ── 7. Sign + send. matchFromPreview always re-fetches first. ──
     let result;
     try {
       result = await client.commitments.matchFromPreview(preview);

@@ -982,3 +982,91 @@ describe('prepareSubmit — TreasuryModule allowance preflight', () => {
     expect(preview.approvals[0]?.purpose).toBe('commitment-risk');
   });
 });
+
+describe('prepareSubmit — maker override (preview-only without signer unlock)', () => {
+  // Mirrors prepareMatch's `taker` override. Spec §17.2: `--json`
+  // preview-only paths must not trigger a passphrase prompt or
+  // keystore decrypt. The SDK side of that contract is `args.maker`
+  // — when set, prepareSubmit MUST NOT call signer.getAddress.
+
+  const EXPLICIT_MAKER: Hex = '0x'.padEnd(42, 'e') as Hex;
+
+  it('uses args.maker when provided', async () => {
+    const ctx = buildContext({ allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, {
+      ...speculationArgs(),
+      maker: EXPLICIT_MAKER,
+    });
+    expect(preview.raw.maker.toLowerCase()).toBe(EXPLICIT_MAKER.toLowerCase());
+  });
+
+  it('does NOT call signer.getAddress when args.maker is provided', async () => {
+    const signer = buildSigner();
+    const contestsApi = {
+      get: vi.fn(async () => buildContest()),
+      list: vi.fn(),
+    } as unknown as ReturnType<CommitmentsContext['getContestsApi']>;
+    const speculationsApi = {
+      get: vi.fn(async () => buildSpec()),
+      list: vi.fn(),
+    } as unknown as ReturnType<CommitmentsContext['getSpeculationsApi']>;
+    const teams = {
+      aliases: vi.fn(async () => ALIASES),
+      invalidateCache: vi.fn(),
+    } as unknown as ReturnType<CommitmentsContext['getTeams']>;
+    const ctx: CommitmentsContext = {
+      api: {} as CommitmentsContext['api'],
+      requireSigner: () => signer,
+      getChainId: () => 137,
+      getAddresses: () => ADDRESSES,
+      requireChainClient: () =>
+        buildPublicClient({ allowance: 1_000_000n }) as ReturnType<CommitmentsContext['requireChainClient']>,
+      nonceCounter: new NonceCounter(),
+      getContestsApi: () => contestsApi,
+      getSpeculationsApi: () => speculationsApi,
+      getTeams: () => teams,
+    };
+    await prepareSubmit(ctx, { ...speculationArgs(), maker: EXPLICIT_MAKER });
+    expect(signer.getAddress).not.toHaveBeenCalled();
+  });
+
+  it('works when no signer is configured at all (requireSigner would throw)', async () => {
+    const contestsApi = {
+      get: vi.fn(async () => buildContest()),
+      list: vi.fn(),
+    } as unknown as ReturnType<CommitmentsContext['getContestsApi']>;
+    const speculationsApi = {
+      get: vi.fn(async () => buildSpec()),
+      list: vi.fn(),
+    } as unknown as ReturnType<CommitmentsContext['getSpeculationsApi']>;
+    const teams = {
+      aliases: vi.fn(async () => ALIASES),
+      invalidateCache: vi.fn(),
+    } as unknown as ReturnType<CommitmentsContext['getTeams']>;
+    const ctx: CommitmentsContext = {
+      api: {} as CommitmentsContext['api'],
+      requireSigner: () => {
+        throw new Error('no signer configured — should never be called');
+      },
+      getChainId: () => 137,
+      getAddresses: () => ADDRESSES,
+      requireChainClient: () =>
+        buildPublicClient({ allowance: 1_000_000n }) as ReturnType<CommitmentsContext['requireChainClient']>,
+      nonceCounter: new NonceCounter(),
+      getContestsApi: () => contestsApi,
+      getSpeculationsApi: () => speculationsApi,
+      getTeams: () => teams,
+    };
+    const preview = await prepareSubmit(ctx, {
+      ...speculationArgs(),
+      maker: EXPLICIT_MAKER,
+    });
+    expect(preview.raw.maker.toLowerCase()).toBe(EXPLICIT_MAKER.toLowerCase());
+  });
+
+  it('falls back to signer.getAddress when args.maker is unset (current behavior preserved)', async () => {
+    const ctx = buildContext({ allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs());
+    expect(preview.raw.maker.toLowerCase()).toBe(MAKER.toLowerCase());
+  });
+});

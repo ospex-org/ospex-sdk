@@ -18,6 +18,7 @@ import type { Commitment, Hex } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { polygonscanTxUrl } from '../../lib/explorer.js';
 import { getClient } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 
 const DRY_RUN_PAGE_LIMIT = 1000;
 const DRY_RUN_MAX_PAGES = 50;
@@ -31,23 +32,26 @@ const optionsSchema = z.object({
   json: z.boolean().optional(),
 });
 
-export const commitmentsCancelAllCommand = new Command('cancel-all')
-  .description(
-    'Bulk-cancel every open commitment from this maker on one speculation by raising the nonce floor.',
-  )
-  .requiredOption('--contest-id <id>', 'contest id (uint256)')
-  .requiredOption('--scorer <addr>', 'scorer module address')
-  .requiredOption('--line <ticks>', 'line ticks (int32, 10× scale)')
-  .option('--new-min-nonce <n>', 'override the computed default (must exceed current floor)')
-  .option('--dry-run', 'count what would be invalidated; do not send a tx')
-  .option('--json', 'output as JSON')
+export const commitmentsCancelAllCommand = addSignerOptions(
+  new Command('cancel-all')
+    .description(
+      'Bulk-cancel every open commitment from this maker on one speculation by raising the nonce floor.',
+    )
+    .requiredOption('--contest-id <id>', 'contest id (uint256)')
+    .requiredOption('--scorer <addr>', 'scorer module address')
+    .requiredOption('--line <ticks>', 'line ticks (int32, 10× scale)')
+    .option('--new-min-nonce <n>', 'override the computed default (must exceed current floor)')
+    .option('--dry-run', 'count what would be invalidated; do not send a tx')
+    .option('--json', 'output as JSON'),
+)
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
     const contestId = BigInt(opts.contestId);
     const scorer = opts.scorer.toLowerCase() as Hex;
     const lineTicks = Number(opts.line);
 
-    const client = await getClient({ requiresSigner: true, requiresChain: true });
+    const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
     const maker = (await client.signer().getAddress()).toLowerCase() as Hex;
 
     if (opts.dryRun === true) {

@@ -131,6 +131,18 @@ describe('commitments match — command structure', () => {
     expect(help).toMatch(/--json/);
     expect(help).toMatch(/preview only|preview-only|MatchPreviewEnvelope/i);
   });
+
+  it('exposes the shared signer option group (PR 2)', () => {
+    // The non-interactive Foundry signer flags should be available on
+    // every write command, including match. See lib/signer-options.ts
+    // and the spec §17.
+    const help = commitmentsMatchCommand.helpInformation();
+    expect(help).toMatch(/--account/);
+    expect(help).toMatch(/--keystore-path/);
+    expect(help).toMatch(/--password-file/);
+    expect(help).toMatch(/--password-stdin/);
+    expect(help).toMatch(/--expected-address/);
+  });
 });
 
 describe('commitments match — preview renderer (existing speculation)', () => {

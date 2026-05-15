@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { OspexAllowanceError, type OspexClient } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptYesNo, promptValue } from '../../lib/prompt.js';
 
 const optionsSchema = z.object({
@@ -19,15 +20,18 @@ const optionsSchema = z.object({
   json: z.boolean().optional(),
 });
 
-export const contestScoreCommand = new Command('score')
-  .description('Submit OracleModule.scoreContestFromOracle for an existing contest.')
-  .argument('<contestId>', 'contest id (uint256)')
-  .option('--subscription-id <n>', 'Chainlink Functions subscription id')
-  .option('--gas-limit <n>', 'Chainlink Functions callback gas limit (default 300000, Polygon router max)')
-  .addOption(new Option('--json').hideHelp(false))
+export const contestScoreCommand = addSignerOptions(
+  new Command('score')
+    .description('Submit OracleModule.scoreContestFromOracle for an existing contest.')
+    .argument('<contestId>', 'contest id (uint256)')
+    .option('--subscription-id <n>', 'Chainlink Functions subscription id')
+    .option('--gas-limit <n>', 'Chainlink Functions callback gas limit (default 300000, Polygon router max)')
+    .addOption(new Option('--json').hideHelp(false)),
+)
   .action(async (contestIdArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
-    const client = await getClient({ requiresSigner: true, requiresChain: true });
+    const signerIntent = parseSignerIntent(rawOpts);
+    const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
     const args: Parameters<typeof client.contests.score>[0] = {
       contestId: BigInt(contestIdArg),

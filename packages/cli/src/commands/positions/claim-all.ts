@@ -15,6 +15,7 @@ import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 
 const optionsSchema = z.object({
   address: z.string().regex(/^0x[0-9a-fA-F]{40}$/, 'address must be a 0x-prefixed 20-byte hex string').optional(),
@@ -22,19 +23,22 @@ const optionsSchema = z.object({
   json: z.boolean().optional(),
 });
 
-export const positionsClaimAllCommand = new Command('claim-all')
-  .description('Sweep all settle + claim actions for a wallet.')
-  .option('--address <addr>', 'wallet to sweep (defaults to the configured signer\'s address)')
-  .option('--dry-run', 'print the action plan without sending txs')
-  .option('--json', 'output as JSON (default: human-readable summary)')
+export const positionsClaimAllCommand = addSignerOptions(
+  new Command('claim-all')
+    .description('Sweep all settle + claim actions for a wallet.')
+    .option('--address <addr>', 'wallet to sweep (defaults to the configured signer\'s address)')
+    .option('--dry-run', 'print the action plan without sending txs')
+    .option('--json', 'output as JSON (default: human-readable summary)'),
+)
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
     const dryRun = opts.dryRun === true;
 
     // Dry-run only needs read paths — no signer required if --address is set.
     const requiresSigner = !dryRun || opts.address === undefined;
     const requiresChain = !dryRun;
-    const client = await getClient({ requiresSigner, requiresChain });
+    const client = await getClient({ requiresSigner, requiresChain, signerIntent });
 
     const result = await client.positions.claimAll({
       ...(opts.address !== undefined ? { address: opts.address } : {}),

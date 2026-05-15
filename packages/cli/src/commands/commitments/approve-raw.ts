@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { OspexValidationError, wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
+import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptYesNo } from '../../lib/prompt.js';
 
 const optionsSchema = z.object({
@@ -25,16 +26,19 @@ const optionsSchema = z.object({
 
 const WEI6_INTEGER_RE = /^\d+$/;
 
-export const commitmentsApproveRawCommand = new Command('approve-raw')
-  .description(
-    'Approve PositionModule for USDC using a raw 6-decimal-units integer (e.g. "5000000" = 5 USDC). ' +
-      'For decimal USDC use `ospex commitments approve <n>` instead.',
-  )
-  .argument('<wei6>', 'USDC units (6 decimals; integer) or "max"')
-  .option('--yes', 'skip the confirmation prompt')
-  .option('--json', 'machine-readable output')
+export const commitmentsApproveRawCommand = addSignerOptions(
+  new Command('approve-raw')
+    .description(
+      'Approve PositionModule for USDC using a raw 6-decimal-units integer (e.g. "5000000" = 5 USDC). ' +
+        'For decimal USDC use `ospex commitments approve <n>` instead.',
+    )
+    .argument('<wei6>', 'USDC units (6 decimals; integer) or "max"')
+    .option('--yes', 'skip the confirmation prompt')
+    .option('--json', 'machine-readable output'),
+)
   .action(async (wei6Arg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const signerIntent = parseSignerIntent(rawOpts);
     const skipPrompt = opts.yes === true;
     const wantJson = opts.json === true;
     const isInteractiveTTY = process.stdin.isTTY === true;
@@ -47,7 +51,7 @@ export const commitmentsApproveRawCommand = new Command('approve-raw')
 
     const parsed = parseRawWei6(wei6Arg);
 
-    const client = await getClient({ requiresSigner: true, requiresChain: true });
+    const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
     if (!skipPrompt) {
       const summary =

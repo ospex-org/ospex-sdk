@@ -6,6 +6,7 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ### SDK (`@ospex/sdk`)
 
+- **`commitments.prepareSubmit({ maker })` and `commitments.prepareMatch({ taker })`** — new optional address overrides. When set, the preview computation uses the supplied address instead of calling `signer.getAddress()`. Enables `--json` preview-only flows in the CLI to compute a full preview without ever unlocking the keystore. The actual sign step (`submitPrepared` / `matchFromPreview`) always uses the configured signer, so the override can never cause a sign with the wrong wallet.
 - **`KeystoreSigner.fromFoundryAccount({ account, passwordFile?, passphrase?, fromStdin?, foundryKeystoresDir?, expectedAddress?, strict? })`** and **`KeystoreSigner.fromKeystoreFile({ keystorePath, passwordFile?, passphrase?, fromStdin?, expectedAddress?, strict? })`** — new non-interactive constructors. Read a v3 keystore file plus a passphrase (from a file, stdin, literal arg, or `OSPEX_PASSWORD_FILE` env), decrypt in memory, and optionally verify an expected address. The decrypted private key never crosses a function boundary outside the signer. Available via the `@ospex/sdk/signers/keystore` subpath alongside the existing `unlock` constructor.
 - **`resolveKeystoreSource`, `readPassphrase`, `checkPasswordFilePermissions`** — composable building blocks behind the new constructors, exported from `@ospex/sdk/signers/keystore` for callers that want fine-grained control. The resolver honors `OSPEX_FOUNDRY_KEYSTORES_DIR` and `FOUNDRY_DIR` env vars; the passphrase reader honors `OSPEX_PASSWORD_FILE`.
 - **`OspexSignerResolutionError`** — new typed error class with a stable `reason` code, attached `path` / `expectedAddress` / `actualAddress` / `mode` fields. Reasons: `keystore_not_found`, `password_file_not_found`, `decryption_failed`, `address_mismatch`, `non_interactive_password_required`, `password_file_permissions_loose`, `account_and_path_conflict`, `password_source_conflict`. Exported from the main SDK barrel.
@@ -13,6 +14,16 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ### CLI (`@ospex/cli`)
 
+- **Shared non-interactive signer option group on every write command.** Each of `approvals setup`, `commitments {submit, submit-raw, match, approve, approve-raw, cancel, cancel-onchain, cancel-all}`, `contests {create, score}`, `positions {claim, claim-all, settle}`, and `wallet address` now accepts:
+  - `--account <name>` — Foundry account (resolved against `~/.foundry/keystores`, `OSPEX_FOUNDRY_KEYSTORES_DIR`, or `FOUNDRY_DIR/keystores`).
+  - `--keystore-path <path>` — explicit v3 keystore JSON.
+  - `--password-file <path>` — read the passphrase from a `0600` file (skips the interactive prompt).
+  - `--password-stdin` — read the passphrase from a pipe (`pass show … | ospex …`).
+  - `--expected-address <0x…>` — refuse to sign if the unlocked address differs; also used as the preview-only address override.
+  - `--foundry-keystores-dir <path>` — override the Foundry keystores directory.
+
+  When non-interactive credentials are supplied (or `OSPEX_PASSWORD_FILE` is set in the env), the SDK's new `KeystoreSigner.fromFoundryAccount` / `fromKeystoreFile` helpers run; no session-cache write. The legacy `ospex wallet unlock` flow keeps working when none of the new flags are passed.
+- **Lazy signer unlock for `--json` preview-only flows.** `ospex commitments submit --json` and `ospex commitments match --json` (both without `--yes`) no longer trigger a keystore decrypt or interactive prompt. The taker/maker address is resolved from `--expected-address`, configured non-interactive credentials, or a cached legacy session — in that order. If none is available, the commands fail fast with `OspexSignerResolutionError({ reason: 'non_interactive_password_required' })` and an actionable message pointing at the three remediation paths. Agents can now run preview-only flows in CI without keystore access at all.
 - **`ospex commitments list` — default human output is now taker-centric.** Columns: matchup, market, you back, your odds, max bet, to win. The previous protocol view (positionType=upper/lower, maker risk, maker odds) is preserved behind `--raw`. `--json` output is intentionally unchanged — the on-chain commitment shape stays the agent-stable contract.
 - **`ospex commitments list --side <team>`** — taker-view filter. Case-insensitive substring match against `youBack`. Handles full team names, last-token nicknames, and `over`/`under` for totals.
 - **`ospex commitments list --sort size|odds|newest`** — taker-view sort order. Default `size` puts the largest available `maxBet` first.

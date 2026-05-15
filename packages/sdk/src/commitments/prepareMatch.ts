@@ -54,6 +54,18 @@ export interface PrepareMatchArgs {
    * `commitment.remainingRiskAmount`.
    */
   takerDesiredRiskWei6?: bigint;
+  /**
+   * Override the taker address for preview computation. When set,
+   * `prepareMatch` skips the `signer.getAddress()` call — useful for
+   * `--json` preview-only flows that mustn't trigger a passphrase
+   * prompt. When unset, the SDK falls back to the configured signer
+   * as before.
+   *
+   * `matchFromPreview` (the actual sign + send step) ignores this
+   * field and always uses the configured signer, so an override
+   * during preview can never cause a sign with a different wallet.
+   */
+  taker?: Hex;
 }
 
 export async function prepareMatch(
@@ -125,11 +137,26 @@ export async function prepareMatch(
   }
 
   // ── 4. Taker address + allowance reads ────────────────────────────
-  const signer = ctx.requireSigner();
+  // Two paths for resolving the taker address:
+  //   - args.taker set → CLI passed `--expected-address` for a
+  //     preview-only flow. Skip the signer call (no decrypt, no
+  //     passphrase prompt).
+  //   - args.taker unset → fall back to the configured signer.
+  //
+  // `matchFromPreview` ignores this override and always uses the
+  // configured signer to actually sign, so the override only affects
+  // preview-time identity for selfMatch detection and allowance
+  // preflight.
   const publicClient = ctx.requireChainClient();
   const chainId = ctx.getChainId();
   const addresses = ctx.getAddresses();
-  const taker = (await signer.getAddress()).toLowerCase() as Hex;
+  let taker: Hex;
+  if (args.taker !== undefined) {
+    taker = args.taker.toLowerCase() as Hex;
+  } else {
+    const signer = ctx.requireSigner();
+    taker = (await signer.getAddress()).toLowerCase() as Hex;
+  }
 
   // Cross-chain protection: the configured client is bound to one
   // chain. We don't surface `chainId` on the commitment row directly
