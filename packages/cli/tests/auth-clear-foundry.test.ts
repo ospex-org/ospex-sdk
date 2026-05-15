@@ -40,13 +40,17 @@ async function seedConfig(config: Record<string, unknown>): Promise<void> {
 }
 
 describe('auth clear-foundry — no flags / --all', () => {
-  it('clears every foundry-signer field and preserves non-signer fields', async () => {
+  it('clears every foundry-signer field, preserves non-signer fields AND legacy keystorePath', async () => {
+    // Hermes PR 49 blocker #2: the legacy `keystorePath` field (set
+    // by `ospex init` before any auth use-foundry work) is non-signer
+    // config from this command's POV and must NOT be cleared.
     await seedConfig({
       apiUrl: 'https://api.ospex.org',
       rpcUrl: 'https://rpc.example',
       chainId: 137,
       foundryAccount: 'maker-a',
-      keystorePath: '/some/keystore.json',
+      foundryKeystorePath: '/some/foundry-pinned.json',
+      keystorePath: '/legacy/init-set.json', // legacy — must survive
       passwordFile: '/etc/pw',
       foundryKeystoresDir: '/home/agent/.foundry/keystores',
       expectedAddress: '0xab12cd34ab12cd34ab12cd34ab12cd34ab12cd34',
@@ -55,11 +59,14 @@ describe('auth clear-foundry — no flags / --all', () => {
     await authClearFoundryCommand.parseAsync(['--json'], { from: 'user' });
 
     const config = await loadConfigFile();
+    // Foundry-signer fields cleared.
     expect(config.foundryAccount).toBeUndefined();
-    expect(config.keystorePath).toBeUndefined();
+    expect(config.foundryKeystorePath).toBeUndefined();
     expect(config.passwordFile).toBeUndefined();
     expect(config.foundryKeystoresDir).toBeUndefined();
     expect(config.expectedAddress).toBeUndefined();
+    // Legacy `keystorePath` preserved.
+    expect(config.keystorePath).toBe('/legacy/init-set.json');
     // Non-signer fields preserved.
     expect(config.apiUrl).toBe('https://api.ospex.org');
     expect(config.rpcUrl).toBe('https://rpc.example');
@@ -129,5 +136,23 @@ describe('auth clear-foundry — targeted flags', () => {
     expect(config.foundryAccount).toBeUndefined();
     expect(config.passwordFile).toBe('/etc/pw');
     expect(config.expectedAddress).toBeDefined();
+  });
+
+  it('--keystore-path clears only foundryKeystorePath, leaves legacy keystorePath alone', async () => {
+    await seedConfig({
+      foundryKeystorePath: '/foundry-pinned.json',
+      keystorePath: '/legacy/init-set.json',
+      passwordFile: '/etc/pw',
+    });
+
+    await authClearFoundryCommand.parseAsync(
+      ['--keystore-path', '--json'],
+      { from: 'user' },
+    );
+
+    const config = await loadConfigFile();
+    expect(config.foundryKeystorePath).toBeUndefined();
+    expect(config.keystorePath).toBe('/legacy/init-set.json');
+    expect(config.passwordFile).toBe('/etc/pw');
   });
 });

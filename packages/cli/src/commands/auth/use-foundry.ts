@@ -112,16 +112,24 @@ export const authUseFoundryCommand = new Command('use-foundry')
     }
     const address = (await signer.getAddress()).toLowerCase() as `0x${string}`;
 
-    // Merge into config. The two keystore-source fields are
+    // Merge into config. The two foundry-signer source fields are
     // mutually exclusive — clear whichever the user did NOT pick so
     // a re-run with a different mode doesn't leave a stale field.
+    //
+    // Note: we write to `foundryKeystorePath`, NOT the legacy
+    // `keystorePath`. The latter is set by `ospex init` for the
+    // legacy default-keystore + interactive-prompt path 3 of
+    // `loadSigner`; promoting it to explicit intent would change
+    // behavior for every user with only an `init` setup. The
+    // distinct `foundryKeystorePath` field is unambiguously the
+    // sticky signer source, lifted by `mergeIntentFromConfig`.
     const config = await loadConfigFile();
     const next: CliConfigFile = { ...config };
     if (opts.account !== undefined) {
       next.foundryAccount = opts.account;
-      delete next.keystorePath;
+      delete next.foundryKeystorePath;
     } else {
-      next.keystorePath = opts.keystorePath as string;
+      next.foundryKeystorePath = opts.keystorePath as string;
       delete next.foundryAccount;
     }
     next.passwordFile = opts.passwordFile;
@@ -145,7 +153,7 @@ export const authUseFoundryCommand = new Command('use-foundry')
         {
           schemaVersion: 1,
           foundryAccount: next.foundryAccount ?? null,
-          keystorePath: next.keystorePath ?? null,
+          foundryKeystorePath: next.foundryKeystorePath ?? null,
           passwordFile: next.passwordFile,
           foundryKeystoresDir: next.foundryKeystoresDir ?? null,
           expectedAddress: next.expectedAddress ?? null,
@@ -160,7 +168,7 @@ export const authUseFoundryCommand = new Command('use-foundry')
     const sourceLabel =
       opts.account !== undefined
         ? `  account:               ${opts.account}\n`
-        : `  keystorePath:          ${opts.keystorePath as string}\n`;
+        : `  foundryKeystorePath:   ${opts.keystorePath as string}\n`;
     const dirLabel =
       opts.foundryKeystoresDir !== undefined
         ? `  foundryKeystoresDir:   ${opts.foundryKeystoresDir}\n`

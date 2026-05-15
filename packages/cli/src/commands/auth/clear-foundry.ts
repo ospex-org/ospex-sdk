@@ -1,12 +1,13 @@
 /**
- * `ospex auth clear-foundry [--account] [--password-file]
- *                            [--expected-address] [--all] [--json]`
+ * `ospex auth clear-foundry [--account] [--keystore-path]
+ *                            [--password-file] [--expected-address]
+ *                            [--foundry-keystores-dir] [--all] [--json]`
  *
  * Remove `auth use-foundry`-pinned signer defaults from
  * `~/.ospex/config.json`. With no flags (or `--all`), clears every
- * foundry-signer field (account / keystorePath / passwordFile /
- * foundryKeystoresDir / expectedAddress). Targeted flags clear only
- * the named fields.
+ * foundry-signer field (foundryAccount / foundryKeystorePath /
+ * passwordFile / foundryKeystoresDir / expectedAddress). Targeted
+ * flags clear only the named fields.
  *
  * Use cases:
  *   - Switching to a different wallet: clear all, then re-run
@@ -15,14 +16,16 @@
  *     `auth clear-foundry --expected-address`. Subsequent commands
  *     unlock under the configured account again with no mismatch
  *     guardrail.
- *   - Removing the password file pointer (e.g., rotating the .pass
- *     file location): `auth clear-foundry --password-file`. The
- *     account stays configured; future commands will prompt or
- *     require an inline `--password-file`.
+ *   - Removing the password file pointer: `auth clear-foundry
+ *     --password-file`. The account stays configured; future commands
+ *     will prompt or require an inline `--password-file`.
  *
- * Unaffected fields: `apiUrl`, `supabaseUrl`, `supabaseAnonKey`,
- * `rpcUrl`, `chainId`, and the legacy `keystorePath`. They're written
- * via `ospex init` and have their own lifecycle.
+ * **Unaffected fields**: `apiUrl`, `supabaseUrl`, `supabaseAnonKey`,
+ * `rpcUrl`, `chainId`, and the **legacy `keystorePath`** (set by
+ * `ospex init`). They're written by other commands and have their
+ * own lifecycle. Removing only `foundryKeystorePath` (the sticky
+ * signer slot) is what this command does — the legacy `init`-set
+ * path is never touched.
  */
 
 import { Command } from '@commander-js/extra-typings';
@@ -36,6 +39,7 @@ import {
 
 const optionsSchema = z.object({
   account: z.boolean().optional(),
+  keystorePath: z.boolean().optional(),
   passwordFile: z.boolean().optional(),
   expectedAddress: z.boolean().optional(),
   foundryKeystoresDir: z.boolean().optional(),
@@ -45,6 +49,7 @@ const optionsSchema = z.object({
 
 const FOUNDRY_FIELDS = [
   'foundryAccount',
+  'foundryKeystorePath',
   'passwordFile',
   'foundryKeystoresDir',
   'expectedAddress',
@@ -54,9 +59,11 @@ export const authClearFoundryCommand = new Command('clear-foundry')
   .description(
     'Remove `auth use-foundry`-pinned signer defaults from ~/.ospex/config.json. ' +
       'Without flags (or with --all), clears every foundry-signer field. ' +
-      'Targeted flags clear only the named fields.',
+      'Targeted flags clear only the named fields. The legacy `keystorePath` ' +
+      'field set by `ospex init` is NEVER touched by this command.',
   )
-  .option('--account', 'clear only `foundryAccount` (and `keystorePath` if it was set via this command)')
+  .option('--account', 'clear only `foundryAccount`')
+  .option('--keystore-path', 'clear only `foundryKeystorePath` (does NOT clear the legacy `init`-set `keystorePath`)')
   .option('--password-file', 'clear only `passwordFile`')
   .option('--expected-address', 'clear only `expectedAddress` (keeps account + password)')
   .option('--foundry-keystores-dir', 'clear only `foundryKeystoresDir`')
@@ -67,6 +74,7 @@ export const authClearFoundryCommand = new Command('clear-foundry')
 
     const targeted =
       opts.account === true ||
+      opts.keystorePath === true ||
       opts.passwordFile === true ||
       opts.expectedAddress === true ||
       opts.foundryKeystoresDir === true;
@@ -82,19 +90,14 @@ export const authClearFoundryCommand = new Command('clear-foundry')
         delete next.foundryAccount;
         cleared.push('foundryAccount');
       }
-      // `keystorePath` from `auth use-foundry`'s `--keystore-path` mode
-      // is the same conceptual slot as `foundryAccount`. Clear it
-      // alongside on the catch-all `--account` flag — but only if
-      // there's no separate signal that it came from `ospex init`.
-      // (We can't perfectly distinguish; clearing on --all is safe;
-      // clearing on --account alone leaves it for now since the user
-      // didn't explicitly ask. `--all` will clear it via the next
-      // block.)
     }
-    if (clearAll) {
-      if (next.keystorePath !== undefined) {
-        delete next.keystorePath;
-        cleared.push('keystorePath');
+    if (clearAll || opts.keystorePath === true) {
+      // ONLY the new `foundryKeystorePath` field — the legacy
+      // `keystorePath` set by `ospex init` is intentionally
+      // preserved. See file header.
+      if (next.foundryKeystorePath !== undefined) {
+        delete next.foundryKeystorePath;
+        cleared.push('foundryKeystorePath');
       }
     }
     if (clearAll || opts.passwordFile === true) {
@@ -125,7 +128,7 @@ export const authClearFoundryCommand = new Command('clear-foundry')
           cleared,
           remaining: {
             foundryAccount: next.foundryAccount ?? null,
-            keystorePath: next.keystorePath ?? null,
+            foundryKeystorePath: next.foundryKeystorePath ?? null,
             passwordFile: next.passwordFile ?? null,
             foundryKeystoresDir: next.foundryKeystoresDir ?? null,
             expectedAddress: next.expectedAddress ?? null,

@@ -40,6 +40,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { OspexClient, OspexSignerResolutionError, type Signer } from '@ospex/sdk';
 import { KeystoreSigner } from '@ospex/sdk/signers/keystore';
 import type { FromFoundryAccountArgs, FromKeystoreFileArgs } from '@ospex/sdk/signers/keystore';
@@ -231,6 +232,22 @@ function materializeIntent(intent: SignerIntent): SignerIntent {
       result.passwordFile = expandTilde(envPwFile);
     }
   }
+  // Foundry keystores dir env precedence: OSPEX_FOUNDRY_KEYSTORES_DIR
+  // > FOUNDRY_DIR/keystores. Lifting here means env beats
+  // `mergeIntentFromConfig`'s lift of `config.foundryKeystoresDir` —
+  // matching the documented flag > env > config ordering.
+  // Hermes PR 49 blocker #3.
+  if (result.foundryKeystoresDir === undefined) {
+    const envOspex = process.env.OSPEX_FOUNDRY_KEYSTORES_DIR;
+    if (envOspex !== undefined && envOspex !== '') {
+      result.foundryKeystoresDir = expandTilde(envOspex);
+    } else {
+      const foundryDir = process.env.FOUNDRY_DIR;
+      if (foundryDir !== undefined && foundryDir !== '') {
+        result.foundryKeystoresDir = path.join(expandTilde(foundryDir), 'keystores');
+      }
+    }
+  }
   return result;
 }
 
@@ -255,26 +272,30 @@ async function mergeIntentFromConfig(intent: SignerIntent): Promise<SignerIntent
   const result: SignerIntent = { ...intent };
   const config = await loadConfigFile();
 
-  // Keystore source: only if intent has neither account nor keystorePath
-  // (env didn't fill in, flag wasn't passed).
+  // Keystore source: lift `config.foundryAccount` OR
+  // `config.foundryKeystorePath` (both set only by `ospex auth
+  // use-foundry`). NOT the legacy `config.keystorePath` from
+  // `ospex init` — that field stays the path-3 fallback consumed
+  // by `readKeystore`, preserving today's `wallet unlock` UX for
+  // users with only `init`-pinned values.
   //
-  // We lift `config.foundryAccount` (set by `ospex auth use-foundry`)
-  // but NOT the legacy `config.keystorePath` (set by `ospex init`).
-  // Reason: `auth use-foundry` is the explicit "make this my default
-  // signer" command, so its values get promoted to explicit intent
-  // and bypass the legacy session cache. `init`-set `keystorePath`
-  // pre-dates the explicit-intent semantics and is still consumed by
-  // `readKeystore` in path 3 of the precedence ladder, preserving
-  // today's `wallet unlock` UX for users with only `init`-pinned
-  // values.
+  // Track whether we lifted from config — this determines whether
+  // the config-pinned `expectedAddress` applies further down.
+  let accountLiftedFromConfig = false;
   if (result.account === undefined && result.keystorePath === undefined) {
     if (config.foundryAccount !== undefined && config.foundryAccount !== '') {
       result.account = config.foundryAccount;
+      accountLiftedFromConfig = true;
+    } else if (
+      config.foundryKeystorePath !== undefined &&
+      config.foundryKeystorePath !== ''
+    ) {
+      result.keystorePath = expandTilde(config.foundryKeystorePath);
+      accountLiftedFromConfig = true;
     }
   }
 
-  // Passphrase source: only if intent has no file/stdin (env didn't
-  // fill in, flag wasn't passed).
+  // Passphrase source: only if intent has no file/stdin.
   if (result.passwordFile === undefined && result.fromStdin !== true) {
     if (config.passwordFile !== undefined && config.passwordFile !== '') {
       result.passwordFile = expandTilde(config.passwordFile);
@@ -291,10 +312,40 @@ async function mergeIntentFromConfig(intent: SignerIntent): Promise<SignerIntent
     }
   }
 
-  // Expected-address pin.
+  // Expected-address pin (Hermes PR 49 blocker #4):
+  //
+  // The config-pinned address is a guardrail for "the configured
+  // account always resolves here." It applies only when the result's
+  // signer source actually corresponds to the configured one:
+  //
+  //   - We lifted the source from config (caller inherited it), OR
+  //   - The caller's flag/env source equals the configured value
+  //     (caller re-stated the same account — pin still relevant), OR
+  //   - No explicit source was supplied at all (legacy default path
+  //     uses the configured / default keystore).
+  //
+  // If a flag/env supplied a DIFFERENT account or keystore path, the
+  // pinned address is for a different wallet and must NOT apply.
   if (result.expectedAddress === undefined) {
     if (config.expectedAddress !== undefined && config.expectedAddress !== '') {
-      result.expectedAddress = config.expectedAddress.toLowerCase() as `0x${string}`;
+      const noExplicitSource =
+        result.account === undefined && result.keystorePath === undefined;
+      const explicitMatchesConfigAccount =
+        config.foundryAccount !== undefined &&
+        config.foundryAccount !== '' &&
+        result.account === config.foundryAccount;
+      const explicitMatchesConfigKeystorePath =
+        config.foundryKeystorePath !== undefined &&
+        config.foundryKeystorePath !== '' &&
+        result.keystorePath === expandTilde(config.foundryKeystorePath);
+      if (
+        accountLiftedFromConfig ||
+        noExplicitSource ||
+        explicitMatchesConfigAccount ||
+        explicitMatchesConfigKeystorePath
+      ) {
+        result.expectedAddress = config.expectedAddress.toLowerCase() as `0x${string}`;
+      }
     }
   }
 

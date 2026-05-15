@@ -142,14 +142,22 @@ describe('auth use-foundry — happy path with --account', () => {
 });
 
 describe('auth use-foundry — happy path with --keystore-path', () => {
-  it('writes keystorePath, clears any stale foundryAccount', async () => {
-    // Pre-seed config with a stale foundryAccount to verify the
-    // command clears it when switching modes.
+  it('writes foundryKeystorePath (NOT legacy keystorePath), clears any stale foundryAccount', async () => {
+    // Pre-seed config with a stale foundryAccount and a legacy
+    // `keystorePath` from `ospex init` to verify:
+    //   - foundryAccount is cleared (mode switch).
+    //   - The new sticky-signer path goes into `foundryKeystorePath`,
+    //     NOT the legacy `keystorePath` slot.
+    //   - Legacy `keystorePath` is preserved (set by `ospex init`).
     const home = tmpDir;
     await fs.mkdir(home, { recursive: true });
     await fs.writeFile(
       path.join(home, 'config.json'),
-      JSON.stringify({ foundryAccount: 'stale', passwordFile: '/old/pw' }) + '\n',
+      JSON.stringify({
+        foundryAccount: 'stale',
+        passwordFile: '/old/pw',
+        keystorePath: '/legacy/init-set.json',
+      }) + '\n',
     );
 
     const ksPath = await writeKeystoreFile('explicit.json');
@@ -167,8 +175,12 @@ describe('auth use-foundry — happy path with --keystore-path', () => {
     );
 
     const config = await loadConfigFile();
-    expect(config.keystorePath).toBe(ksPath);
+    // New sticky-signer slot got the new value.
+    expect(config.foundryKeystorePath).toBe(ksPath);
+    // Stale foundryAccount cleared (mutually exclusive with foundryKeystorePath).
     expect(config.foundryAccount).toBeUndefined();
+    // Legacy `keystorePath` from a prior `ospex init` is preserved.
+    expect(config.keystorePath).toBe('/legacy/init-set.json');
     expect(config.passwordFile).toBe(pwPath);
     expect(config.expectedAddress?.toLowerCase()).toBe(
       TEST_ADDRESS.toLowerCase(),

@@ -45,11 +45,25 @@ export interface CliConfigFile {
   /**
    * Foundry account name pinned by `ospex auth use-foundry`. Resolved
    * against `foundryKeystoresDir` (or `~/.foundry/keystores`) at
-   * unlock time. Mutually exclusive with `keystorePath` at the
-   * signer-resolution layer — `use-foundry` clears whichever is not
-   * being set.
+   * unlock time. Mutually exclusive with `foundryKeystorePath` —
+   * `use-foundry` clears whichever is not being set.
    */
   foundryAccount?: string;
+  /**
+   * Explicit v3 keystore path pinned by `ospex auth use-foundry
+   * --keystore-path`. Distinct from the legacy `keystorePath` field
+   * (which is set by `ospex init` and consulted only by the legacy
+   * default-keystore path 3 of `loadSigner`). The split is critical:
+   * `mergeIntentFromConfig` lifts `foundryKeystorePath` into explicit
+   * signer intent (skipping the legacy session cache, pairing with
+   * the pinned `passwordFile` for non-interactive unlock), but
+   * intentionally leaves the legacy `keystorePath` alone so users
+   * who only ran `ospex init` keep today's behavior.
+   *
+   * Mutually exclusive with `foundryAccount` — `use-foundry` clears
+   * whichever isn't being set.
+   */
+  foundryKeystorePath?: string;
   /**
    * Path to a passphrase file. Set by `ospex auth use-foundry` so
    * subsequent write commands can unlock non-interactively. The file
@@ -146,6 +160,9 @@ export async function loadConfigFile(): Promise<CliConfigFile> {
     if (obj.chainId === 137 || obj.chainId === 80002) out.chainId = obj.chainId;
     if (typeof obj.keystorePath === 'string') out.keystorePath = obj.keystorePath;
     if (typeof obj.foundryAccount === 'string') out.foundryAccount = obj.foundryAccount;
+    if (typeof obj.foundryKeystorePath === 'string') {
+      out.foundryKeystorePath = obj.foundryKeystorePath;
+    }
     if (typeof obj.passwordFile === 'string') out.passwordFile = obj.passwordFile;
     if (typeof obj.foundryKeystoresDir === 'string') {
       out.foundryKeystoresDir = obj.foundryKeystoresDir;

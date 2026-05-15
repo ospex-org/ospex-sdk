@@ -239,3 +239,193 @@ describe('resolvePreviewAddress — config-pinned expectedAddress', () => {
     expect(addr.toLowerCase()).toBe(OTHER_ADDRESS.toLowerCase());
   });
 });
+
+// ── Hermes PR 49 regression coverage ──────────────────────────────
+
+describe('Hermes PR 49 blocker #1 — config-pinned foundryKeystorePath is sticky', () => {
+  it('loadSigner: config foundryKeystorePath + passwordFile unlocks non-interactively', async () => {
+    // The bug: writing keystorePath to config via auth use-foundry
+    // landed in the legacy field, which `mergeIntentFromConfig`
+    // intentionally doesn't lift. loadSigner then fell through to
+    // path 3 (legacy default) and prompted for a passphrase,
+    // ignoring the pinned password file.
+    //
+    // Fix: a new `foundryKeystorePath` config slot, lifted by
+    // mergeIntentFromConfig. This test exercises the corrected path.
+    const ksPath = await writeKeystoreFile('foundry-pinned.json');
+    const pwPath = await writePassFile(PASSPHRASE);
+    await saveConfigFile({
+      foundryKeystorePath: ksPath,
+      passwordFile: pwPath,
+      expectedAddress: TEST_ADDRESS.toLowerCase(),
+    });
+
+    const signer = await loadSigner();
+    expect((await signer.getAddress()).toLowerCase()).toBe(
+      TEST_ADDRESS.toLowerCase(),
+    );
+  });
+
+  it('resolvePreviewAddress: same config produces a preview address without unlocking', async () => {
+    // The config has expectedAddress pinned, so preview should
+    // return it via the shortcut (no decrypt).
+    const ksPath = await writeKeystoreFile('foundry-pinned.json');
+    const pwPath = await writePassFile(PASSPHRASE);
+    await saveConfigFile({
+      foundryKeystorePath: ksPath,
+      passwordFile: pwPath,
+      expectedAddress: TEST_ADDRESS.toLowerCase(),
+    });
+
+    const addr = await resolvePreviewAddress({});
+    expect(addr.toLowerCase()).toBe(TEST_ADDRESS.toLowerCase());
+  });
+});
+
+describe('Hermes PR 49 blocker #3 — env foundry-keystores-dir beats config', () => {
+  it('OSPEX_FOUNDRY_KEYSTORES_DIR env overrides config-pinned foundryKeystoresDir', async () => {
+    // Config points at an empty dir; env points at the dir containing
+    // maker-a. Before the fix, materializeIntent didn't lift the env
+    // var, mergeIntentFromConfig lifted the config value, and the SDK
+    // helper used the explicit-arg config value (which won over env at
+    // the helper level). Now materializeIntent lifts the env var
+    // first; merge sees the field already set and skips.
+    const emptyDir = path.join(tmpDir, 'empty');
+    await fs.mkdir(emptyDir, { recursive: true });
+    const realDir = path.join(tmpDir, 'real');
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.writeFile(path.join(realDir, 'maker-a'), keystoreJson, 'utf8');
+    const pwPath = await writePassFile(PASSPHRASE);
+
+    await saveConfigFile({
+      foundryAccount: 'maker-a',
+      passwordFile: pwPath,
+      foundryKeystoresDir: emptyDir,
+    });
+    process.env.OSPEX_FOUNDRY_KEYSTORES_DIR = realDir;
+
+    const signer = await loadSigner();
+    expect((await signer.getAddress()).toLowerCase()).toBe(
+      TEST_ADDRESS.toLowerCase(),
+    );
+  });
+
+  it('FOUNDRY_DIR env (with /keystores suffix) overrides config-pinned foundryKeystoresDir', async () => {
+    const emptyDir = path.join(tmpDir, 'empty');
+    await fs.mkdir(emptyDir, { recursive: true });
+    const realKeystoresDir = path.join(tmpDir, 'real-foundry', 'keystores');
+    await fs.mkdir(realKeystoresDir, { recursive: true });
+    await fs.writeFile(
+      path.join(realKeystoresDir, 'maker-a'),
+      keystoreJson,
+      'utf8',
+    );
+    const pwPath = await writePassFile(PASSPHRASE);
+
+    await saveConfigFile({
+      foundryAccount: 'maker-a',
+      passwordFile: pwPath,
+      foundryKeystoresDir: emptyDir,
+    });
+    // FOUNDRY_DIR is the parent — the lifter appends /keystores.
+    process.env.FOUNDRY_DIR = path.join(tmpDir, 'real-foundry');
+
+    const signer = await loadSigner();
+    expect((await signer.getAddress()).toLowerCase()).toBe(
+      TEST_ADDRESS.toLowerCase(),
+    );
+  });
+});
+
+describe('Hermes PR 49 blocker #4 — explicit per-invocation source beats config expectedAddress in preview', () => {
+  it('resolvePreviewAddress: flag --account + --password-file returns unlocked address, NOT config-pinned address', async () => {
+    // Bug: config has expectedAddress for account-A. User runs a
+    // preview with explicit --account B + password file. Before the
+    // fix, resolvePreviewAddress returned the A-pin instead of B's
+    // actual address. After: the explicit per-invocation source
+    // suppresses the config pin lift, and B's actual address is
+    // returned.
+    //
+    // Both the configured "A" and the flag "B" point at the same
+    // keystore for test simplicity (so the keystore actually exists
+    // under both names). The lifted-vs-not-lifted check is what
+    // matters: if config.expectedAddress (set to OTHER_ADDRESS) were
+    // lifted, the preview would return OTHER_ADDRESS. With the fix,
+    // it returns TEST_ADDRESS (the actual unlocked address).
+    await fs.writeFile(path.join(tmpDir, 'account-a'), keystoreJson, 'utf8');
+    await fs.writeFile(path.join(tmpDir, 'account-b'), keystoreJson, 'utf8');
+    const pwPath = await writePassFile(PASSPHRASE);
+
+    await saveConfigFile({
+      foundryAccount: 'account-a',
+      passwordFile: pwPath,
+      foundryKeystoresDir: tmpDir,
+      expectedAddress: OTHER_ADDRESS.toLowerCase(), // pin for A
+    });
+
+    const addr = await resolvePreviewAddress({
+      account: 'account-b', // different from configured account
+      passwordFile: pwPath,
+      foundryKeystoresDir: tmpDir,
+    });
+    // We get B's actual unlocked address, NOT the config-pinned A pin.
+    expect(addr.toLowerCase()).toBe(TEST_ADDRESS.toLowerCase());
+  });
+
+  it('loadSigner: flag --account different from config does not apply config-pinned expectedAddress guard', async () => {
+    // Same scenario — flag account differs from config. The final
+    // guard in loadSigner must NOT apply the config-pinned
+    // expectedAddress (which is for the configured account, not the
+    // flag-named one). Before fix: merge lifted config.expectedAddress
+    // unconditionally → guard threw address_mismatch.
+    await fs.writeFile(path.join(tmpDir, 'account-a'), keystoreJson, 'utf8');
+    await fs.writeFile(path.join(tmpDir, 'account-b'), keystoreJson, 'utf8');
+    const pwPath = await writePassFile(PASSPHRASE);
+
+    await saveConfigFile({
+      foundryAccount: 'account-a',
+      passwordFile: pwPath,
+      foundryKeystoresDir: tmpDir,
+      expectedAddress: OTHER_ADDRESS.toLowerCase(),
+    });
+
+    // Flag picks a different account. The config-pinned pin must
+    // NOT apply here. Both keystores happen to encrypt the same PK
+    // so the unlock succeeds and returns TEST_ADDRESS.
+    const signer = await loadSigner({
+      account: 'account-b',
+      passwordFile: pwPath,
+      foundryKeystoresDir: tmpDir,
+    });
+    expect((await signer.getAddress()).toLowerCase()).toBe(
+      TEST_ADDRESS.toLowerCase(),
+    );
+  });
+
+  it('loadSigner: when flag account matches config foundryAccount, the pin DOES apply', async () => {
+    // The other direction — the pin SHOULD apply when the flag-named
+    // account matches the configured one (the agent re-stated the
+    // same account; the pin is still relevant). Mismatching the
+    // actual unlocked address vs the pin throws.
+    await fs.writeFile(path.join(tmpDir, 'account-a'), keystoreJson, 'utf8');
+    const pwPath = await writePassFile(PASSPHRASE);
+
+    await saveConfigFile({
+      foundryAccount: 'account-a',
+      passwordFile: pwPath,
+      foundryKeystoresDir: tmpDir,
+      expectedAddress: OTHER_ADDRESS.toLowerCase(), // wrong pin
+    });
+
+    await expect(
+      loadSigner({
+        account: 'account-a', // same as config
+        passwordFile: pwPath,
+        foundryKeystoresDir: tmpDir,
+      }),
+    ).rejects.toMatchObject({
+      name: 'OspexSignerResolutionError',
+      reason: 'address_mismatch',
+    });
+  });
+});
