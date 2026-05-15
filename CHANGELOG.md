@@ -4,7 +4,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### CLI (`@ospex/cli`)
+
+- `ospex odds show <contestId> --market <type>` — narrow the human render to a single market (`moneyline`, `spread`, or `total`). The `--json` envelope shape is intentionally unchanged so agents still see the same `{ moneyline, spread, total }` triple regardless of the flag.
 
 ## [0.1.0] — 2026-05-10
 
