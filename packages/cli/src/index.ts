@@ -44,6 +44,7 @@ import { walletLockCommand } from './commands/wallet/lock.js';
 import { walletAddressCommand } from './commands/wallet/address.js';
 import { authUseFoundryCommand } from './commands/auth/use-foundry.js';
 import { authClearFoundryCommand } from './commands/auth/clear-foundry.js';
+import { authCheckCommand } from './commands/auth/check.js';
 
 function makeProgram(): Command {
   const program = new Command()
@@ -111,10 +112,12 @@ function makeProgram(): Command {
   const auth = new Command('auth').description(
     'Manage non-interactive Foundry signer defaults in ~/.ospex/config.json. ' +
       'Use `auth use-foundry` to pin an account + password file (and, by default, ' +
-      'the resolved address); use `auth clear-foundry` to remove the pinned defaults.',
+      'the resolved address); use `auth clear-foundry` to remove the pinned defaults; ' +
+      'use `auth check` to diagnose the resolved signer source without signing a tx.',
   );
   auth.addCommand(authUseFoundryCommand);
   auth.addCommand(authClearFoundryCommand);
+  auth.addCommand(authCheckCommand);
   program.addCommand(auth);
 
   return program;
