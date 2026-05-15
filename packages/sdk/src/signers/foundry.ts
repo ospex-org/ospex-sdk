@@ -41,6 +41,18 @@ const DEFAULT_FOUNDRY_KEYSTORES_DIR = path.join(
   'keystores',
 );
 
+/**
+ * Structural env-vars shape used by the public helper APIs. We do NOT
+ * expose `NodeJS.ProcessEnv` directly — that would force every
+ * TypeScript consumer of `@ospex/sdk` to also install `@types/node`,
+ * because we list it as a `devDependency` only (the SDK's published
+ * surface is supposed to be runtime-environment-agnostic). The
+ * structural type is assignable to/from `NodeJS.ProcessEnv` (both
+ * have the same index signature), so internal call sites pass
+ * `process.env` without ceremony.
+ */
+export type OspexEnv = Record<string, string | undefined>;
+
 /** Resolved keystore source — used by `fromFoundryAccount` / `fromKeystoreFile`. */
 export interface KeystoreSource {
   /** Absolute (or resolved-from-cwd) path to the v3 keystore JSON. */
@@ -63,7 +75,7 @@ export interface ResolveKeystoreSourceArgs {
    */
   foundryKeystoresDir?: string;
   /** Test-injectable env. Defaults to `process.env`. */
-  env?: NodeJS.ProcessEnv;
+  env?: OspexEnv;
 }
 
 /**
@@ -155,7 +167,7 @@ export interface ReadPassphraseArgs {
    */
   readEnv?: boolean;
   /** Test-injectable env. Defaults to `process.env`. */
-  env?: NodeJS.ProcessEnv;
+  env?: OspexEnv;
   /** Test-injectable stdin reader. Defaults to a single-line stdin read. */
   stdinReader?: () => Promise<string>;
 }
@@ -260,7 +272,7 @@ export async function checkPasswordFilePermissions(
 // ── internals ─────────────────────────────────────────────────────
 
 function resolveFoundryKeystoresDir(
-  args: { foundryKeystoresDir?: string; env?: NodeJS.ProcessEnv },
+  args: { foundryKeystoresDir?: string; env?: OspexEnv },
 ): string {
   if (args.foundryKeystoresDir !== undefined && args.foundryKeystoresDir.length > 0) {
     return args.foundryKeystoresDir;

@@ -67,6 +67,7 @@ export type {
   PassphraseSource,
   ReadPassphraseArgs,
   PermissionCheckResult,
+  OspexEnv,
 } from './foundry.js';
 
 export class KeystoreSigner implements Signer {
