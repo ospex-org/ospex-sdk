@@ -142,6 +142,11 @@ export {
   buildMatchPreview,
 } from './commitments/buildMatchPreview.js';
 export {
+  computeTakerView,
+  type TakerView,
+  type TakerViewContext,
+} from './commitments/takerView.js';
+export {
   MIN_PREFIX_HEX_LEN,
   PAGE_LIMIT,
 } from './commitments/resolveByPrefix.js';

@@ -1,13 +1,57 @@
+/**
+ * `ospex commitments list [filters]` — orderbook view of open
+ * commitments.
+ *
+ * Two display modes:
+ *
+ *   default → taker-centric. Each row shows the team / side the *user*
+ *             would be backing if they matched the commitment, the
+ *             user's (inverted) odds, the max USDC they can risk to
+ *             fully fill, and the profit on full fill. Designed for
+ *             quick visual scan ("what bets are available right now,
+ *             what do they pay?"). Requires a contest fetch per
+ *             distinct `contestId` in the result — joined client-side.
+ *   --raw   → protocol view. The row is exactly the on-chain commitment
+ *             tuple (positionType=upper/lower, maker's risk, maker's
+ *             odds). Kept for orderbook-level inspection (e.g. who's
+ *             posting at what price, regardless of the perspective).
+ *             Power-user / debugging path.
+ *
+ * `--json` output is intentionally unaffected by `--raw` / `--side` /
+ * `--sort` and renders the protocol commitment list as-is — agent
+ * contract stays stable. The taker-view formatting is a CLI-side
+ * concern only; agents that want it call `computeTakerView` from the
+ * SDK directly.
+ *
+ * Sorting & filtering (default-mode only — `--raw` and `--json` keep
+ * the server-returned order):
+ *
+ *   --side <team>        filter to rows where the taker would back
+ *                        this side. Case-insensitive substring match
+ *                        against `youBack`. Handles team names, last-
+ *                        token nicknames, and 'over'/'under'.
+ *   --sort size|odds|newest
+ *                        default: size (largest available maxBet
+ *                        first — i.e. biggest bet you can take).
+ *                        odds: best taker decimal first.
+ *                        newest: newest commitment first.
+ */
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import {
   MIN_PREFIX_HEX_LEN,
+  computeTakerView,
   tickToAmericanOdds,
   tickToDecimalOdds,
   wei6ToDecimalUSDC,
+  type Commitment,
+  type Contest,
+  type TakerView,
 } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
 import { formatOutput } from '../../lib/format.js';
+
+const SORT_VALUES = ['size', 'odds', 'newest'] as const;
 
 const optionsSchema = z.object({
   json: z.boolean().optional(),
@@ -21,11 +65,16 @@ const optionsSchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).optional(),
   offset: z.coerce.number().int().nonnegative().optional(),
   fullHash: z.boolean().optional(),
+  raw: z.boolean().optional(),
+  side: z.string().min(1).optional(),
+  sort: z.enum(SORT_VALUES).optional(),
 });
 
 export const commitmentsListCommand = new Command('list')
-  .description('List open commitments (optionally filtered).')
-  .option('--json', 'output as JSON')
+  .description(
+    'List open commitments (default: taker-centric — who would you back, your odds, max bet, to win).',
+  )
+  .option('--json', 'output as JSON (unchanged by --raw / --side / --sort — agent contract is stable)')
   .option('--maker <address>', 'filter by maker address')
   .option('--scorer <address>', 'filter by scorer contract address')
   .option('--contest-id <id>', 'filter by contest id')
@@ -38,6 +87,18 @@ export const commitmentsListCommand = new Command('list')
   .option(
     '--full-hash',
     'human output: show the full 32-byte hash instead of the 0x+8hex truncated form. JSON output always includes the full hash.',
+  )
+  .option(
+    '--raw',
+    'render protocol-native columns (positionType=upper/lower, maker risk, maker odds) instead of the default taker-centric view',
+  )
+  .option(
+    '--side <team>',
+    'taker-view only: filter to rows where you would be backing this side (substring match against team name, nickname, or "over"/"under")',
+  )
+  .option(
+    '--sort <key>',
+    'taker-view only: sort by size (default — largest maxBet first), odds (best taker odds first), or newest (most recent first)',
   )
   .action(async (opts) => {
     const parsed = optionsSchema.parse(opts);
@@ -57,31 +118,174 @@ export const commitmentsListCommand = new Command('list')
     if (parsed.limit !== undefined) listOpts.limit = parsed.limit;
     if (parsed.offset !== undefined) listOpts.offset = parsed.offset;
     const commitments = await client.commitments.list(listOpts);
+
+    // --json: keep the on-chain commitment shape stable for agents.
+    // Filters / sort are taker-view concerns and don't apply here.
     if (parsed.json === true) {
       formatOutput(commitments, { json: true });
       return;
     }
+
+    // --raw: protocol view, no contest join. Same as the pre-redesign
+    // human output.
+    if (parsed.raw === true) {
+      renderRaw(commitments, parsed.fullHash === true);
+      return;
+    }
+
+    // Default: taker-centric. Join each commitment to its contest so
+    // we have team names for the side resolver.
+    const contestsById = await fetchContestsForCommitments(client, commitments);
+    const rows = enrich(commitments, contestsById);
+
+    const filtered =
+      parsed.side !== undefined ? filterBySide(rows, parsed.side) : rows;
+    const sorted = sortRows(filtered, parsed.sort ?? 'size');
+
+    if (sorted.length === 0) {
+      process.stdout.write('(no commitments match)\n');
+      return;
+    }
     formatOutput(
-      commitments.map((c) => ({
+      sorted.map((r) => ({
         hash: parsed.fullHash === true
-          ? c.commitmentHash
-          : c.commitmentHash.slice(0, 2 + MIN_PREFIX_HEX_LEN) + '…',
-        maker: c.maker,
-        contest: c.contestId ?? '-',
-        market: c.marketType ?? '-',
-        line: c.lineTicks ?? '-',
-        side: c.positionType === 0 ? 'upper' : c.positionType === 1 ? 'lower' : '-',
-        odds:
-          c.oddsTick !== null
-            ? `${tickToDecimalOdds(c.oddsTick)} / ${tickToAmericanOdds(c.oddsTick)}`
-            : '-',
-        risk: formatUSDC(c.riskAmount),
-        remaining: formatUSDC(c.remainingRiskAmount),
-        status: c.status,
+          ? r.commitment.commitmentHash
+          : r.commitment.commitmentHash.slice(0, 2 + MIN_PREFIX_HEX_LEN) + '…',
+        matchup: r.contest !== null
+          ? `${r.contest.awayTeam} @ ${r.contest.homeTeam}`
+          : '-',
+        market: r.commitment.marketType ?? '-',
+        'you back': r.taker?.youBack ?? '-',
+        'your odds': r.taker !== null
+          ? `${r.taker.takerDecimal} / ${r.taker.takerAmerican}`
+          : '-',
+        'max bet': r.taker !== null ? `$${r.taker.maxBetUSDC}` : '-',
+        'to win': r.taker !== null ? `$${r.taker.toWinUSDC}` : '-',
       })),
       { json: false },
     );
   });
+
+interface EnrichedRow {
+  commitment: Commitment;
+  contest: Contest | null;
+  taker: TakerView | null;
+}
+
+async function fetchContestsForCommitments(
+  client: Awaited<ReturnType<typeof getClient>>,
+  commitments: Commitment[],
+): Promise<Map<string, Contest>> {
+  const ids = new Set<string>();
+  for (const c of commitments) {
+    if (c.contestId !== null) ids.add(c.contestId);
+  }
+  if (ids.size === 0) return new Map();
+
+  // Fan out the per-contest fetches in parallel. Bounded by the
+  // commitments-list page limit (1000), but in practice the distinct
+  // contestId count is tiny (handful of active games at a time).
+  // `allSettled` so a single missing contest doesn't blow up the
+  // whole render — the missing row falls back to '-' columns.
+  const results = await Promise.allSettled(
+    Array.from(ids).map((id) => client.contests.get(id)),
+  );
+  const map = new Map<string, Contest>();
+  for (const r of results) {
+    if (r.status === 'fulfilled') {
+      map.set(r.value.contestId, r.value);
+    }
+  }
+  return map;
+}
+
+function enrich(
+  commitments: Commitment[],
+  contestsById: Map<string, Contest>,
+): EnrichedRow[] {
+  return commitments.map((c) => {
+    const contest =
+      c.contestId !== null ? contestsById.get(c.contestId) ?? null : null;
+    if (contest === null) {
+      return { commitment: c, contest: null, taker: null };
+    }
+    try {
+      const taker = computeTakerView(c, {
+        awayTeam: contest.awayTeam,
+        homeTeam: contest.homeTeam,
+      });
+      return { commitment: c, contest, taker };
+    } catch {
+      // Corrupt row (missing oddsTick / lineTicks / etc). Render with
+      // placeholders rather than crash the whole table.
+      return { commitment: c, contest, taker: null };
+    }
+  });
+}
+
+function filterBySide(rows: EnrichedRow[], side: string): EnrichedRow[] {
+  const needle = side.toLowerCase().trim();
+  return rows.filter((r) => {
+    if (r.taker === null) return false;
+    return r.taker.youBack.toLowerCase().includes(needle);
+  });
+}
+
+function sortRows(
+  rows: EnrichedRow[],
+  key: 'size' | 'odds' | 'newest',
+): EnrichedRow[] {
+  // Stable sort via Array.prototype.sort on a copy. Rows where the
+  // taker view couldn't be computed get pushed to the bottom — they
+  // can't be sorted by economics, and a missing-data row at the top
+  // of the list is just noise.
+  const copy = [...rows];
+  copy.sort((a, b) => {
+    if (a.taker === null && b.taker === null) return 0;
+    if (a.taker === null) return 1;
+    if (b.taker === null) return -1;
+    if (key === 'size') {
+      const av = BigInt(a.taker.maxBetWei6);
+      const bv = BigInt(b.taker.maxBetWei6);
+      if (av === bv) return 0;
+      return av < bv ? 1 : -1; // desc
+    }
+    if (key === 'odds') {
+      // Higher taker decimal = better price for the taker.
+      return b.taker.takerOddsTick - a.taker.takerOddsTick;
+    }
+    // newest
+    return b.commitment.createdAt.localeCompare(a.commitment.createdAt);
+  });
+  return copy;
+}
+
+function renderRaw(commitments: Commitment[], fullHash: boolean): void {
+  if (commitments.length === 0) {
+    process.stdout.write('(no commitments)\n');
+    return;
+  }
+  formatOutput(
+    commitments.map((c) => ({
+      hash: fullHash
+        ? c.commitmentHash
+        : c.commitmentHash.slice(0, 2 + MIN_PREFIX_HEX_LEN) + '…',
+      maker: c.maker,
+      contest: c.contestId ?? '-',
+      market: c.marketType ?? '-',
+      line: c.lineTicks ?? '-',
+      side: c.positionType === 0 ? 'upper' : c.positionType === 1 ? 'lower' : '-',
+      odds:
+        c.oddsTick !== null
+          ? `${tickToDecimalOdds(c.oddsTick)} / ${tickToAmericanOdds(c.oddsTick)}`
+          : '-',
+      risk: formatUSDC(c.riskAmount),
+      remaining: formatUSDC(c.remainingRiskAmount),
+      status: c.status,
+    })),
+    { json: false },
+  );
+}
 
 function formatUSDC(wei6Str: string): string {
   try {
