@@ -40,7 +40,7 @@ All read endpoints. Run against the prod core-api by default; override with `OSP
 | 1.3 | `ospex contests show <contestId>` (pick one from 1.2) | Detail with `speculations[].orderbook` populated when commitments exist | `client.contests.get` + `fetchOpenCommitmentsByContestId` join. |
 | 1.4 | `ospex speculations list --contest <contestId>` (use 1.2's id) | Bare speculation rows for that contest, each carrying `contestId` | `client.speculations.list`. |
 | 1.5 | `ospex speculations show <speculationId>` (pick one from 1.4) | Single speculation with `orderbook[]` + 5-field parent `contest` block | `client.speculations.get`. |
-| 1.6 | `ospex commitments list --limit 10` | Open + partially_filled rows; `riskAmount` printed as a string | List pagination + bigint serialization. |
+| 1.6 | `ospex commitments list --limit 10 --json` | JSON array of up to 10 open + partially_filled rows; `riskAmount` / `nonce` are strings (not Numbers) | List pagination + bigint serialization. The default human columns are now taker-centric and don't expose raw bigints — checking serialization needs `--json`. |
 | 1.7 | `ospex commitments list --speculation <speculationId>` (use 1.4's id) | Subset filtered to that speculation only | `--speculation` filter end-to-end (resolves speculation_key server-side). |
 | 1.8 | `ospex commitments list --maker 0x… --status filled` | Subset for that maker | Multi-filter query path. |
 | 1.9 | `ospex commitments show <hash>` (pick one from 1.6) | Single commitment row with all canonical fields | `client.commitments.get`. |
@@ -90,10 +90,10 @@ Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end bef
 |---|---|---|---|
 | 4.1 | `ospex commitments approve max --yes` | tx submitted, receipt confirmed; verify on Amoy Polygonscan that `allowance(walletA, PositionModule)` is `2^256-1` | Signer + chain client + ERC20 ABI + USDC + PositionModule address resolution. (`--yes` skips the confirmation prompt; interactive runs render a preview block before sending.) |
 | 4.2 | `ospex commitments submit-raw <contestId> <scorerAddr> <lineTicks> upper 250 1000` | Prints commitment hash + `status: open` | Nonce-floor read + EIP-712 typed-data + sign + hash + POST + idempotency. (Raw form is used here because the test exercises the canonical-tuple surface directly; production users should prefer the high-level `submit`.) |
-| 4.3 | `ospex commitments list --maker <walletA>` | Row appears with `status='open'` and the right risk/odds | Indexer-free read path. |
+| 4.3 | `ospex commitments list --maker <walletA> --raw` | Row appears with `status='open'`, matching `risk`/`odds` columns, and `remaining = risk` (nothing filled yet) | Indexer-free read path. `--raw` keeps the protocol-native columns — the default taker view inverts odds for the matcher's perspective and is the wrong frame for inspecting your own maker rows. |
 | 4.4 | Re-run 4.2 with **identical** inputs | Same commitment hash returned, no duplicate row | Server-side dedup on hash. |
 | 4.5 | `ospex commitments cancel <hash>` | `{ ok: true }` | EIP-712 cancel typed-data + DELETE flow. |
-| 4.6 | `ospex commitments list --maker <walletA>` | Row now `status='cancelled'` | Cancel propagation. |
+| 4.6 | `ospex commitments list --maker <walletA> --status cancelled --raw` | Row now appears with `status='cancelled'`. (The default status filter is `open,partially_filled`; cancelled rows require an explicit `--status cancelled`. `--raw` keeps the status column visible — the default taker view drops it.) | Cancel propagation. |
 | 4.7 | `ospex commitments cancel <hash>` again | `{ ok: true }` (idempotent) | API CAS guard. |
 
 **Picking inputs for 4.2**: contest id from `ospex contests list --chain-id 80002` (assuming Amoy contests are seeded; otherwise ask ops to seed one). Scorer = one of the three Amoy scorer addresses (moneyline `0x2e6f…`, spread `0x0de8…`, total `0xac2e…`). `oddsTick=250` ⇒ 2.50 odds; `riskAmount=1000` ⇒ 0.001 USDC (lot-size aligned).
@@ -114,7 +114,7 @@ The flow that proves funds actually move. Irreplaceable; this section is **non-n
 | 5.4 | `cast call <MatchingModuleAmoy> "s_filledRisk(bytes32)(uint256)" <hashFromA> --rpc-url <rpcUrl>` | Non-zero, equal to `fillMakerRisk` from the match tx | Contract observed the fill. |
 | 5.5 | `cast call <PositionModuleAmoy> "getPosition(uint256,address,uint8)(uint256,uint256,address,uint32,bool,uint8)" <speculationId> <walletA> <makerPositionType> --rpc-url <rpcUrl>` (verify exact signature against `IPositionModule.sol`) | Position with `riskAmount = fillMakerRisk` | Maker side recorded. |
 | 5.6 | Same as 5.5 for wallet B with the **opposite** `positionType` | Position with `riskAmount = takerRisk` | Taker side recorded. |
-| 5.7 | `ospex commitments list --maker <walletA>` | Row now `status='partially_filled'` (or `'filled'` if 5.3 took it all) and `filled_risk_amount` updated | Indexer projected the event (allow ~30s). |
+| 5.7 | `ospex commitments list --maker <walletA> --status open,partially_filled,filled --raw` | Row now `status='partially_filled'` (or `'filled'` if 5.3 took it all); `remaining` column reflects the unfilled wei6 amount (or zero on full fill). `--raw` is required for the status / risk / remaining columns; the explicit `--status` list adds `filled` so a fully-filled row still appears. | Indexer projected the event (allow ~30s). |
 | 5.8 | `ospex positions status <walletB>` | Reflects the new position. | `positions.status` post-match. |
 
 **JSON-RPC success alone does NOT count.** All four of 5.4–5.7 must hold. Addresses to use:
@@ -130,7 +130,7 @@ Verifies the SDK's takerRisk math against the contract's revert-or-exact-fill ru
 | # | Step | Expected | Validates |
 |---|---|---|---|
 | 6.1 | Wallet A submits a 1000-unit commitment at oddsTick=200 (2.00). | `ospex commitments submit-raw ... 200 1000` succeeds. | — |
-| 6.2 | Wallet B: `ospex commitments match <hash> --risk-usdc 0.000400 --yes` | Match succeeds; `commitments list` shows `filled_risk_amount` of 400 wei6 = 0.000400 USDC (taker side risks 400 = (400×100)/(200-100) → makerFill 400, takerRisk 400). | Partial-fill math + indexer projection + `--risk-usdc` decimal parsing. |
+| 6.2 | Wallet B: `ospex commitments match <hash> --risk-usdc 0.000400 --yes` | Match succeeds. Verify the fill landed: `ospex commitments list --speculation <id> --raw` shows the maker row's `remaining` dropped to `0.000600` USDC (from `0.001000`) — a 400-wei6 fill (taker risks 400 = (400×100)/(200-100) → makerFill 400, takerRisk 400). For an exact `filledRiskAmount` integer, use `... --json | jq '.[].filledRiskAmount'`. | Partial-fill math + indexer projection + `--risk-usdc` decimal parsing. |
 | 6.3 | Wallet B again: `ospex commitments match <hash> --risk-usdc 0.000600 --yes` | Commitment now `filled`. | Remaining-capacity match. |
 | 6.4 | `ospex commitments match <hash> --risk-usdc 0.000100 --yes` (any wallet) | SDK throws `OspexValidationError` ("commitment has no remaining capacity") OR contract reverts `CommitmentFullyFilled` and SDK surfaces `OspexChainError`. | Fully-filled guard. |
 
