@@ -44,6 +44,7 @@ import { OspexClient, OspexSignerResolutionError, type Signer } from '@ospex/sdk
 import { KeystoreSigner } from '@ospex/sdk/signers/keystore';
 import type { FromFoundryAccountArgs, FromKeystoreFileArgs } from '@ospex/sdk/signers/keystore';
 import {
+  expandTilde,
   getKeystorePath,
   getOspexHome,
   getSessionPath,
@@ -111,62 +112,113 @@ interface SessionFile {
 }
 
 /**
- * Load a signer following the precedence:
- *   1. Non-interactive Foundry path — when `intent` carries an
- *      explicit `--account` / `--keystore-path` AND a passphrase
- *      source (`--password-file` / `--password-stdin` / `OSPEX_PASSWORD_FILE`).
- *      Uses the SDK helpers; never writes to the session cache.
- *   2. Legacy session cache — `~/.ospex/session` if a fresh entry
- *      exists.
- *   3. Legacy interactive — read keystore from `OSPEX_KEYSTORE_PATH`
- *      / config `keystorePath` / `~/.ospex/keystore.json`, prompt
- *      for the passphrase.
+ * Load a signer following the safety-ordered precedence:
  *
- * `intent` is optional. When omitted, paths 2-3 apply.
+ *   0. Materialize env-only sources into intent. `OSPEX_KEYSTORE_PATH`
+ *      becomes `intent.keystorePath` so downstream resolution works.
+ *      Config `keystorePath` is intentionally NOT materialized — it's
+ *      an implicit default that shouldn't override the legacy session
+ *      cache.
+ *
+ *   1. **Explicit keystore source** (intent.account or
+ *      intent.keystorePath, including env-materialized OSPEX_KEYSTORE_PATH).
+ *      Never consults the legacy session cache — the user / agent
+ *      asked for THIS specific keystore. Resolution within this path:
+ *        a. Non-interactive passphrase source available → silent SDK
+ *           helper unlock.
+ *        b. No non-interactive source → SDK helper unlock with an
+ *           interactive passphrase prompt.
+ *
+ *   2. **Legacy session cache** (no explicit intent). `~/.ospex/session`
+ *      if a fresh entry exists.
+ *
+ *   3. **Legacy default** (no intent, no session). Read keystore from
+ *      `~/.ospex/keystore.json` or `config.keystorePath`, prompt
+ *      interactively for the passphrase.
+ *
+ *   4. Final `expectedAddress` guard. If the intent carries an
+ *      expected address, compare it against the unlocked signer's
+ *      address. The SDK-helper path also validates internally; this
+ *      guard catches paths 2 and 3 where the SDK helper isn't on the
+ *      critical line. Throws `OspexSignerResolutionError({ reason:
+ *      'address_mismatch' })` on mismatch — agent guardrail against
+ *      signing with the wrong wallet.
+ *
+ * `intent` is optional. When omitted, only paths 2-3 apply.
  */
 export async function loadSigner(intent?: SignerIntent): Promise<Signer> {
-  // 1. Non-interactive Foundry path.
-  if (intent !== undefined && canResolveNonInteractive(intent)) {
-    return loadSignerNonInteractive(intent);
+  const resolvedIntent = materializeIntent(intent ?? {});
+  const signer = await resolveSignerByPrecedence(resolvedIntent);
+
+  // Final address guard (covers paths 2 and 3). The SDK-helper paths
+  // (path 1) already enforce expectedAddress internally and throw
+  // before reaching this check, but the legacy session-cache and
+  // default-keystore paths don't — without this guard, expectedAddress
+  // is silently ignored on those paths.
+  if (resolvedIntent.expectedAddress !== undefined) {
+    const actual = (await signer.getAddress()).toLowerCase() as `0x${string}`;
+    const expected = resolvedIntent.expectedAddress.toLowerCase() as `0x${string}`;
+    if (actual !== expected) {
+      throw new OspexSignerResolutionError(
+        `Resolved wallet ${actual} does not match --expected-address ${resolvedIntent.expectedAddress}. ` +
+          'For agent safety, the unlock was rejected — re-run with the correct keystore source or remove --expected-address.',
+        {
+          reason: 'address_mismatch',
+          expectedAddress: resolvedIntent.expectedAddress,
+          actualAddress: actual,
+        },
+      );
+    }
   }
 
-  // 2. Legacy session cache.
+  return signer;
+}
+
+/**
+ * Walk the precedence ladder (paths 1-3 of `loadSigner`). Pulled out
+ * from `loadSigner` so the final `expectedAddress` guard runs against
+ * every branch uniformly.
+ */
+async function resolveSignerByPrecedence(intent: SignerIntent): Promise<Signer> {
+  // Path 1: Explicit keystore source. Skips session cache.
+  if (intent.account !== undefined || intent.keystorePath !== undefined) {
+    return loadSignerNonInteractive(intent, !hasNonInteractivePassphrase(intent));
+  }
+
+  // Path 2: Legacy session cache.
   const session = await readSession();
   if (session) {
     return KeystoreSigner.fromPrivateKey(session.privateKey as `0x${string}`);
   }
 
-  // 3. Legacy interactive — keystore path may come from intent's
-  //    explicit override (account / keystorePath) or from the
-  //    config/env fallback.
-  if (intent !== undefined && (intent.account !== undefined || intent.keystorePath !== undefined)) {
-    // No non-interactive passphrase source was supplied, but the
-    // caller pointed at a specific keystore — use the SDK helpers
-    // with an interactive prompt. This keeps `--account foo` working
-    // even when the user didn't pass `--password-file`.
-    const intentNoPwSource: SignerIntent = {};
-    if (intent.account !== undefined) intentNoPwSource.account = intent.account;
-    if (intent.keystorePath !== undefined) intentNoPwSource.keystorePath = intent.keystorePath;
-    if (intent.expectedAddress !== undefined) intentNoPwSource.expectedAddress = intent.expectedAddress;
-    if (intent.foundryKeystoresDir !== undefined) {
-      intentNoPwSource.foundryKeystoresDir = intent.foundryKeystoresDir;
-    }
-    return loadSignerNonInteractive(intentNoPwSource, true);
-  }
-
+  // Path 3: Legacy default keystore + interactive prompt.
   const json = await readKeystore();
   const passphrase = await promptHidden('Keystore passphrase: ');
   return KeystoreSigner.unlock(json, passphrase);
 }
 
 /**
- * Returns true when `intent` carries enough information for a fully
- * non-interactive unlock — both a keystore source and a passphrase
- * source. The passphrase source can be the env var
- * `OSPEX_PASSWORD_FILE`; that's why this isn't a simple field check.
+ * Materialize env-only keystore source into `intent.keystorePath` so
+ * downstream code can treat env-set keystores the same as flag-set
+ * ones. Without this, `OSPEX_KEYSTORE_PATH` was a "ghost source" —
+ * `hasExplicitKeystoreSource` saw it but `loadSignerNonInteractive`
+ * passed `undefined` to the SDK helper, which then threw
+ * `keystore_not_found`. Hermes's PR 48 blocker #3.
+ *
+ * Config `keystorePath` is NOT materialized here. It's a long-standing
+ * implicit default; promoting it to "explicit intent" would change
+ * the legacy session-cache UX for every user with a configured path.
+ * Read by `readKeystore` only on path 3 (the legacy default branch).
  */
-function canResolveNonInteractive(intent: SignerIntent): boolean {
-  return hasExplicitKeystoreSource(intent) && hasNonInteractivePassphrase(intent);
+function materializeIntent(intent: SignerIntent): SignerIntent {
+  const result: SignerIntent = { ...intent };
+  if (result.account === undefined && result.keystorePath === undefined) {
+    const envPath = process.env.OSPEX_KEYSTORE_PATH;
+    if (envPath !== undefined && envPath !== '') {
+      result.keystorePath = expandTilde(envPath);
+    }
+  }
+  return result;
 }
 
 /**
@@ -291,34 +343,58 @@ async function readKeystore(): Promise<string> {
  * for a passphrase. Precedence:
  *
  *   1. `intent.expectedAddress` — explicit override, zero I/O.
- *   2. Non-interactive credentials (`--account` + `--password-file`,
- *      or `OSPEX_PASSWORD_FILE` env, etc.) — silent unlock, derive
- *      the address from the resulting signer.
+ *
+ *   2. **Explicit keystore source** (intent.account or
+ *      intent.keystorePath, including env-materialized OSPEX_KEYSTORE_PATH).
+ *      - Has non-interactive passphrase source → silent unlock,
+ *        derive address.
+ *      - No non-interactive passphrase → throw. Preview-only mode
+ *        can't prompt; the caller picked an explicit account so we
+ *        must not fall back to a different one (the cached session
+ *        signer).
+ *
  *   3. Legacy session cache (`ospex wallet unlock` was already run).
+ *
  *   4. Else throw `OspexSignerResolutionError({ reason:
  *      'non_interactive_password_required' })`. The CLI command
- *      surfaces this with an actionable message — "pass
- *      --expected-address, or configure --account + --password-file".
+ *      surfaces this with an actionable message.
  *
  * Used by `commitments submit` / `commitments match` in their
  * `--json` (preview-only) branches. Sign-mode flows take the regular
  * `loadSigner` path instead.
  */
 export async function resolvePreviewAddress(intent: SignerIntent): Promise<`0x${string}`> {
+  // 1. Explicit expected-address wins. Zero I/O — preserves agent's
+  //    "I told you who I am" assertion without unlocking.
   if (intent.expectedAddress !== undefined) {
     return intent.expectedAddress;
   }
 
-  if (canResolveNonInteractive(intent)) {
-    const signer = await loadSignerNonInteractive(intent);
+  const resolvedIntent = materializeIntent(intent);
+
+  // 2. Explicit keystore source — must NOT fall through to the
+  //    session cache (Hermes PR 48 #1). If we can't unlock non-
+  //    interactively, throw — preview-only can't prompt.
+  if (resolvedIntent.account !== undefined || resolvedIntent.keystorePath !== undefined) {
+    if (!hasNonInteractivePassphrase(resolvedIntent)) {
+      throw new OspexSignerResolutionError(
+        'Explicit --account / --keystore-path requires --password-file, --password-stdin, ' +
+          'or OSPEX_PASSWORD_FILE for preview-only mode. Either supply a passphrase source, ' +
+          'or pass --expected-address to skip the unlock entirely.',
+        { reason: 'non_interactive_password_required' },
+      );
+    }
+    const signer = await loadSignerNonInteractive(resolvedIntent);
     return (await signer.getAddress()).toLowerCase() as `0x${string}`;
   }
 
+  // 3. Cached session — only when no explicit intent.
   const session = await readSession();
   if (session) {
     return session.address.toLowerCase() as `0x${string}`;
   }
 
+  // 4. Nothing — error with a three-path remediation message.
   throw new OspexSignerResolutionError(
     'Preview-only `--json` mode needs a non-interactive signer source. ' +
       'Pass --expected-address <0x...>, or --account <name> --password-file <path>, ' +

@@ -76,6 +76,12 @@ const HEX_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
  * options object. Tolerant of extra keys — commander-js passes the
  * whole rawOpts to the action; the standard pattern is to parse with
  * a schema that only describes the keys this layer cares about.
+ *
+ * The two refinements enforce mutual-exclusion pairs that the help
+ * text claims (--account ↔ --keystore-path, --password-file ↔
+ * --password-stdin). Without these, the loader would silently pick
+ * one — a foot-gun on a financial command. Fail-closed at parse
+ * time so the user gets a clear error before any signer work runs.
  */
 export const signerOptionsSchema = z
   .object({
@@ -89,7 +95,23 @@ export const signerOptionsSchema = z
       .optional(),
     foundryKeystoresDir: z.string().min(1).optional(),
   })
-  .passthrough();
+  .passthrough()
+  .refine(
+    (data) => !(data.account !== undefined && data.keystorePath !== undefined),
+    {
+      message:
+        '--account and --keystore-path are mutually exclusive — pass exactly one.',
+      path: ['account'],
+    },
+  )
+  .refine(
+    (data) => !(data.passwordFile !== undefined && data.passwordStdin === true),
+    {
+      message:
+        '--password-file and --password-stdin are mutually exclusive — pass exactly one.',
+      path: ['passwordFile'],
+    },
+  );
 
 export type SignerOptionsInput = z.infer<typeof signerOptionsSchema>;
 

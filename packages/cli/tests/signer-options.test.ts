@@ -82,6 +82,45 @@ describe('signerOptionsSchema — validation', () => {
     });
     expect(parsed.account).toBe('maker-a');
   });
+
+  // Hermes PR 48 warning #4: mutual-exclusion documented in help but
+  // not enforced. Failing closed at parse time prevents the loader
+  // from silently picking one of the two conflicting sources.
+
+  it('rejects --account AND --keystore-path together', () => {
+    expect(() =>
+      signerOptionsSchema.parse({
+        account: 'maker-a',
+        keystorePath: '/path/to/keystore.json',
+      }),
+    ).toThrow(/mutually exclusive/);
+  });
+
+  it('rejects --password-file AND --password-stdin together', () => {
+    expect(() =>
+      signerOptionsSchema.parse({
+        passwordFile: '/etc/pw',
+        passwordStdin: true,
+      }),
+    ).toThrow(/mutually exclusive/);
+  });
+
+  it('accepts --account alone or --keystore-path alone', () => {
+    expect(signerOptionsSchema.parse({ account: 'maker-a' }).account).toBe('maker-a');
+    expect(
+      signerOptionsSchema.parse({ keystorePath: '/path/to/keystore.json' })
+        .keystorePath,
+    ).toBe('/path/to/keystore.json');
+  });
+
+  it('accepts --password-file alone or --password-stdin alone', () => {
+    expect(signerOptionsSchema.parse({ passwordFile: '/etc/pw' }).passwordFile).toBe(
+      '/etc/pw',
+    );
+    expect(signerOptionsSchema.parse({ passwordStdin: true }).passwordStdin).toBe(
+      true,
+    );
+  });
 });
 
 describe('parseSignerIntent', () => {
