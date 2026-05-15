@@ -208,5 +208,42 @@ describe('CLI config', () => {
       expect(r.apiUrl.source).toBe('config'); // falls through env=''
       expect(r.rpcUrl.source).toBe('unset');  // no config either
     });
+
+    // Hermes PR 54 blocker #3: both resolvers must agree on what
+    // counts as "set". An empty-string `OSPEX_RPC_URL` was treated
+    // as set by `resolveCliConfig` (via `??`) but as unset by
+    // `resolveCliConfigDetailed`. Result was a split-brain doctor
+    // report where `config.rpc_url: ok` and `connectivity.rpc: ok`
+    // but the eventual `getClient()` failed with "No rpcUrl
+    // configured". Aligning to "empty = unset" everywhere.
+    it('resolveCliConfig + resolveCliConfigDetailed agree: empty env falls through to config', async () => {
+      process.env.OSPEX_RPC_URL = '';
+      process.env.OSPEX_API_URL = '';
+      await saveConfigFile({
+        rpcUrl: 'https://from-file/rpc',
+        apiUrl: 'https://from-file/api',
+      });
+
+      const valuesOnly = await resolveCliConfig();
+      const detailed = await resolveCliConfigDetailed();
+
+      expect(valuesOnly.rpcUrl).toBe('https://from-file/rpc');
+      expect(detailed.rpcUrl.value).toBe('https://from-file/rpc');
+      expect(detailed.rpcUrl.source).toBe('config');
+
+      expect(valuesOnly.apiUrl).toBe('https://from-file/api');
+      expect(detailed.apiUrl.value).toBe('https://from-file/api');
+      expect(detailed.apiUrl.source).toBe('config');
+    });
+
+    it('resolveCliConfig + resolveCliConfigDetailed agree: no env + no config → rpc unset', async () => {
+      // Empty string for env, no file entry, no default for rpc.
+      process.env.OSPEX_RPC_URL = '';
+      const valuesOnly = await resolveCliConfig();
+      const detailed = await resolveCliConfigDetailed();
+      expect(valuesOnly.rpcUrl).toBeUndefined();
+      expect(detailed.rpcUrl.value).toBeNull();
+      expect(detailed.rpcUrl.source).toBe('unset');
+    });
   });
 });

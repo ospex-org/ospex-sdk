@@ -184,11 +184,18 @@ export async function saveConfigFile(config: CliConfigFile): Promise<void> {
 export async function resolveCliConfig(): Promise<ResolvedCliConfig> {
   const file = await loadConfigFile();
   const envChainId = parseEnvChainId(process.env.OSPEX_CHAIN_ID);
+  // Treat empty-string env vars as unset. `??` alone preserves `''`,
+  // which produces a split-brain with `resolveCliConfigDetailed`
+  // (which treats `''` as unset) AND breaks `getClient()` downstream:
+  // it short-circuits on falsy `rpcUrl` but the bare string `''` is
+  // falsy already, so the bug only surfaced for fields the SDK
+  // happened to forward verbatim. Hermes PR 54 blocker #3 — every
+  // env var is normalised the same way both resolvers do.
   return {
-    apiUrl: process.env.OSPEX_API_URL ?? file.apiUrl,
-    supabaseUrl: process.env.OSPEX_SUPABASE_URL ?? file.supabaseUrl,
-    supabaseAnonKey: process.env.OSPEX_SUPABASE_ANON_KEY ?? file.supabaseAnonKey,
-    rpcUrl: process.env.OSPEX_RPC_URL ?? file.rpcUrl,
+    apiUrl: nonEmpty(process.env.OSPEX_API_URL) ?? file.apiUrl,
+    supabaseUrl: nonEmpty(process.env.OSPEX_SUPABASE_URL) ?? file.supabaseUrl,
+    supabaseAnonKey: nonEmpty(process.env.OSPEX_SUPABASE_ANON_KEY) ?? file.supabaseAnonKey,
+    rpcUrl: nonEmpty(process.env.OSPEX_RPC_URL) ?? file.rpcUrl,
     chainId: envChainId ?? file.chainId,
   };
 }
@@ -197,6 +204,11 @@ function parseEnvChainId(raw: string | undefined): 137 | 80002 | undefined {
   if (raw === '137') return 137;
   if (raw === '80002') return 80002;
   return undefined;
+}
+
+/** Treat empty strings as unset. Exported so tests can grok the rule. */
+export function nonEmpty(value: string | undefined): string | undefined {
+  return value !== undefined && value !== '' ? value : undefined;
 }
 
 /**
@@ -260,20 +272,25 @@ export interface ResolvedCliConfigDetailed {
 export async function resolveCliConfigDetailed(): Promise<ResolvedCliConfigDetailed> {
   const file = await loadConfigFile();
 
-  const envApi = process.env.OSPEX_API_URL;
+  // `nonEmpty` matches `resolveCliConfig`'s empty-string normalisation
+  // exactly. Both must agree or the doctor's `config.*` provenance
+  // diverges from what `getClient()` actually uses downstream.
+  const envApi = nonEmpty(process.env.OSPEX_API_URL);
+  const fileApi = nonEmpty(file.apiUrl);
   const apiUrl: ResolvedApiUrl =
-    envApi !== undefined && envApi !== ''
+    envApi !== undefined
       ? { value: envApi, source: 'env-OSPEX_API_URL' }
-      : file.apiUrl !== undefined && file.apiUrl !== ''
-        ? { value: file.apiUrl, source: 'config' }
+      : fileApi !== undefined
+        ? { value: fileApi, source: 'config' }
         : { value: DEFAULT_API_URL, source: 'default' };
 
-  const envRpc = process.env.OSPEX_RPC_URL;
+  const envRpc = nonEmpty(process.env.OSPEX_RPC_URL);
+  const fileRpc = nonEmpty(file.rpcUrl);
   const rpcUrl: ResolvedRpcUrl =
-    envRpc !== undefined && envRpc !== ''
+    envRpc !== undefined
       ? { value: envRpc, source: 'env-OSPEX_RPC_URL' }
-      : file.rpcUrl !== undefined && file.rpcUrl !== ''
-        ? { value: file.rpcUrl, source: 'config' }
+      : fileRpc !== undefined
+        ? { value: fileRpc, source: 'config' }
         : { value: null, source: 'unset' };
 
   const envChain = parseEnvChainId(process.env.OSPEX_CHAIN_ID);

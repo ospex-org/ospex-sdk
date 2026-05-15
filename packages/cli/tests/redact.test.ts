@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { redactUrl } from '../src/lib/redact.js';
+import { redactUrl, sanitizeMessageForUrl } from '../src/lib/redact.js';
 
 describe('redactUrl — Alchemy-style URLs', () => {
   it('strips a hex API key from the trailing path segment', () => {
@@ -114,18 +114,34 @@ describe('redactUrl — fingerprint', () => {
   });
 });
 
-describe('redactUrl — malformed input never throws', () => {
-  it('returns a UrlField with host="" for an unparseable URL', () => {
+describe('redactUrl — malformed input fails closed', () => {
+  // Hermes PR 54 blocker #2: a malformed URL with secret-bearing
+  // substrings (`not-a-url?apikey=secret`) used to pass through as
+  // `redactedValue` and leak the secret into shared envelopes. The
+  // redactor now substitutes a sentinel instead — the raw value
+  // never reaches output.
+  it('returns sentinel `[invalid url]` for an unparseable URL', () => {
     const r = redactUrl('not-a-url', 'flag');
     expect(r.host).toBe('');
-    expect(r.redactedValue).toBe('not-a-url');
+    expect(r.redactedValue).toBe('[invalid url]');
     expect(r.fingerprint).toMatch(/^sha256:/);
   });
 
-  it('handles empty string without throwing', () => {
+  it('does not leak secret-bearing substrings of a malformed URL', () => {
+    const raw = 'not-a-url?apikey=secretvalue1234567890';
+    const r = redactUrl(raw, 'env-OSPEX_RPC_URL');
+    expect(r.redactedValue).toBe('[invalid url]');
+    expect(r.redactedValue).not.toContain('secretvalue1234567890');
+    expect(r.host).toBe('');
+    // Fingerprint is still computable from the raw bytes — agents can
+    // detect "the configured URL changed" without ever seeing it.
+    expect(r.fingerprint).toMatch(/^sha256:[0-9a-f]{16}$/);
+  });
+
+  it('handles empty string without throwing — sentinel still applies', () => {
     const r = redactUrl('', 'unset');
     expect(r.host).toBe('');
-    expect(r.redactedValue).toBe('');
+    expect(r.redactedValue).toBe('[invalid url]');
   });
 });
 
@@ -150,5 +166,75 @@ describe('redactUrl — does not over-redact safe URLs', () => {
     // /v2 is only 2 chars — below threshold; earlier segment preserved.
     expect(r.redactedValue).toContain('/abcdefghijklmnopqrstu/');
     expect(r.redactedValue).toContain('/v2');
+  });
+});
+
+// Hermes PR 54 blocker #1. Probe error messages (especially viem's
+// HttpRequestError) include the raw URL verbatim. Without
+// sanitisation the URL — and any embedded credential — propagates
+// into checks[].details and the human Checks section. The sanitiser
+// scrubs the URL out before the error message lands in the envelope.
+describe('sanitizeMessageForUrl', () => {
+  it('replaces an exact URL match with its redacted form', () => {
+    const raw = 'https://polygon-mainnet.g.alchemy.com/v2/abcdef0123456789abcdef0123456789';
+    const message = `HTTP request failed.\n\nURL: ${raw}\n\nDetails: connect ECONNREFUSED`;
+    const sanitized = sanitizeMessageForUrl(message, raw);
+    expect(sanitized).not.toContain('abcdef0123456789abcdef0123456789');
+    expect(sanitized).toContain('/v2/[redacted]');
+    expect(sanitized).toContain('connect ECONNREFUSED'); // useful context preserved
+  });
+
+  it('scrubs the credential-shaped path segment even when the URL appears mangled', () => {
+    // Simulates a downstream library appending extra params or
+    // re-encoding the URL such that exact-substring match misses.
+    const raw = 'https://rpc.example.com/v2/secrethexkey0123456789abcdef';
+    const message = 'Request to /v2/secrethexkey0123456789abcdef returned 401 (no exact URL)';
+    const sanitized = sanitizeMessageForUrl(message, raw);
+    expect(sanitized).not.toContain('secrethexkey0123456789abcdef');
+    expect(sanitized).toContain('[redacted]');
+  });
+
+  it('scrubs secret query values referenced by name', () => {
+    const raw = 'https://rpc.example.com/?apikey=secretvalue1234567890';
+    const message = 'request failed: apikey=secretvalue1234567890 was rejected';
+    const sanitized = sanitizeMessageForUrl(message, raw);
+    expect(sanitized).not.toContain('secretvalue1234567890');
+  });
+
+  it('scrubs HTTP-basic password when it appears in the message', () => {
+    const raw = 'https://user:supersecretpw@rpc.example.com';
+    const message = 'auth header had user:supersecretpw — rejected';
+    const sanitized = sanitizeMessageForUrl(message, raw);
+    expect(sanitized).not.toContain('supersecretpw');
+  });
+
+  it('returns the message verbatim when rawUrl is null/undefined/empty', () => {
+    const message = 'an error without an associated URL';
+    expect(sanitizeMessageForUrl(message, null)).toBe(message);
+    expect(sanitizeMessageForUrl(message, undefined)).toBe(message);
+    expect(sanitizeMessageForUrl(message, '')).toBe(message);
+  });
+
+  it('handles a malformed rawUrl without throwing (substring path only)', () => {
+    const raw = 'not-a-url?apikey=secretvalue1234567890';
+    const message = `failed to dial ${raw}`;
+    const sanitized = sanitizeMessageForUrl(message, raw);
+    // Exact-substring step still fires — `[invalid url]` is the
+    // safer substitute for the raw input.
+    expect(sanitized).not.toContain('secretvalue1234567890');
+    expect(sanitized).toContain('[invalid url]');
+  });
+
+  it('Hermes PR 54 blocker #1 repro — viem-style HttpRequestError', () => {
+    // Mirrors the smoke output Hermes posted: an Alchemy key
+    // appearing verbatim in the error message because viem's
+    // HttpRequestError adds `URL: <raw>` to its message body.
+    const raw = 'http://127.0.0.1:9/v2/supersecretkey0123456789abcdef';
+    const message =
+      'HTTP request failed.\n\nURL: ' +
+      raw +
+      '\nRequest body: {"method":"eth_chainId","params":[]}\n\nDetails: connect ECONNREFUSED 127.0.0.1:9\nVersion: viem@2.x';
+    const sanitized = sanitizeMessageForUrl(message, raw);
+    expect(sanitized).not.toContain('supersecretkey0123456789abcdef');
   });
 });

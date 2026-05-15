@@ -82,12 +82,16 @@ export function redactUrl(raw: string, source: string): UrlField {
   try {
     parsed = new URL(raw);
   } catch {
-    // Malformed URL — there's nothing to parse, but there's also
-    // nothing safe to assume about it. Pass through verbatim;
-    // the fingerprint still works.
+    // Malformed URL — we can't structurally parse out credentials,
+    // and a passthrough would leak any secret-bearing substring
+    // (e.g. `not-a-url?apikey=secret`). Fail closed: emit a sentinel
+    // so the envelope and rendered output never contain the raw
+    // value. Agents can detect the case via `host === ''` and use
+    // `fingerprint` (computed from the raw input) to spot config
+    // changes between runs. Hermes PR 54 blocker #2.
     return {
       source,
-      redactedValue: raw,
+      redactedValue: '[invalid url]',
       host: '',
       fingerprint,
     };
@@ -151,4 +155,69 @@ function redactCredentialPathSegment(pathname: string): string {
 function computeFingerprint(raw: string): string {
   const hex = createHash('sha256').update(raw, 'utf8').digest('hex');
   return `sha256:${hex.slice(0, 16)}`;
+}
+
+/**
+ * Strip credential-bearing portions of `rawUrl` out of a free-form
+ * error message before it lands in `checks[].details`. The probes
+ * cannot control what viem / node:fetch put in `err.message` —
+ * viem's `HttpRequestError`, for instance, includes the full request
+ * URL in its message body. Without this sanitiser those URLs ride
+ * through the doctor envelope and the human Checks section verbatim.
+ *
+ * Defense in depth:
+ *   1. Exact substring replace of `rawUrl` with its redacted form —
+ *      handles the common viem case `URL: <rawUrl>`.
+ *   2. If the URL parses, also zap any credential-shaped path
+ *      segment, named secret query value, and userinfo password —
+ *      catches the cases where viem mangles the URL slightly
+ *      (appended params, percent-encoding, etc.).
+ *   3. If the URL doesn't parse, the substring replace is still
+ *      applied. We rely on the malformed-URL caller having a
+ *      sentinel-only `redactedValue` so the substitute is safe.
+ *
+ * Never throws — sanitisation is best-effort and failure here would
+ * be worse than the leak this defends against (the caller still
+ * returns a structured error result either way).
+ */
+export function sanitizeMessageForUrl(
+  message: string,
+  rawUrl: string | null | undefined,
+): string {
+  if (rawUrl === null || rawUrl === undefined || rawUrl === '') return message;
+  let result = message;
+
+  // (1) Exact substring match.
+  const field = redactUrl(rawUrl, 'unset');
+  if (result.includes(rawUrl)) {
+    result = result.split(rawUrl).join(field.redactedValue);
+  }
+
+  // (2) Per-component scrub for partial URL fragments that viem may emit.
+  try {
+    const parsed = new URL(rawUrl);
+    const segments = parsed.pathname.split('/');
+    for (const seg of segments) {
+      if (seg.length === 0) continue;
+      if (CREDENTIAL_PATH_SEGMENT.test(seg) && result.includes(seg)) {
+        result = result.split(seg).join(REDACTED);
+      }
+    }
+    for (const [name, value] of parsed.searchParams) {
+      if (
+        SECRET_QUERY_NAMES.has(name.toLowerCase()) &&
+        value !== '' &&
+        result.includes(value)
+      ) {
+        result = result.split(value).join(REDACTED);
+      }
+    }
+    if (parsed.password !== '' && result.includes(parsed.password)) {
+      result = result.split(parsed.password).join(REDACTED);
+    }
+  } catch {
+    // Malformed URL — step (1) is all we can do safely.
+  }
+
+  return result;
 }

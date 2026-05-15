@@ -43,6 +43,7 @@ import {
   type ContractCheckResult,
   type RpcProbeResult,
 } from '../lib/doctorProbe.js';
+import { sanitizeMessageForUrl } from '../lib/redact.js';
 import {
   resolveWalletAddress,
   WalletAddressUnresolvedError,
@@ -308,7 +309,10 @@ async function probeApiPublicConfig(
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: errorMessage(err) };
+    // Defense-in-depth: a custom apiUrl with auth could appear in
+    // node:fetch error text. Apply the same sanitiser the chain
+    // probes use. Hermes PR 54 blocker #1 extends to this path.
+    return { ok: false, error: sanitizeMessageForUrl(errorMessage(err), endpoint) };
   } finally {
     clearTimeout(timer);
   }
