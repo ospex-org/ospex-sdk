@@ -114,7 +114,7 @@ export const doctorCommand = new Command('doctor')
     }
     const apiPublicConfigResult = await probeApiPublicConfig(apiUrl.value);
 
-    const inputs = await fetchDoctorInputs(owner, rpcUrlMissing, rpcProbe);
+    const inputs = await fetchDoctorInputs(owner, rpcUrlMissing, rpcProbe, rpcUrlValue);
     const reportInputs: DoctorReportInputs = {
       apiOk: inputs.apiOk,
       approvals: inputs.approvals,
@@ -154,7 +154,7 @@ interface FetchedInputs {
   approvalsError?: string;
 }
 
-interface SafeReadResult<T> {
+export interface SafeReadResult<T> {
   value: T | null;
   error?: string;
 }
@@ -180,6 +180,7 @@ async function fetchDoctorInputs(
   owner: `0x${string}` | null,
   rpcUrlMissing: boolean,
   rpcProbe: RpcProbeResult | null,
+  rpcUrl: string | null,
 ): Promise<FetchedInputs> {
   const canChainRead =
     owner !== null &&
@@ -206,7 +207,9 @@ async function fetchDoctorInputs(
     client = await getClient({ requiresChain: true });
   } catch (err) {
     const apiResult = await probeApiHealth(null);
-    const msg = errorMessage(err);
+    // Sanitise the getClient error message too — it can mention the
+    // rpcUrl when complaining about a malformed transport config.
+    const msg = sanitizeMessageForUrl(errorMessage(err), rpcUrl);
     return {
       apiOk: apiResult.ok,
       balances: null,
@@ -218,8 +221,8 @@ async function fetchDoctorInputs(
 
   const [healthResult, approvalsResult, balancesResult] = await Promise.all([
     probeApiHealth(client),
-    readApprovalsSafe(client, resolvedOwner),
-    readBalancesSafe(client, resolvedOwner),
+    readApprovalsSafe(client, resolvedOwner, rpcUrl),
+    readBalancesSafe(client, resolvedOwner, rpcUrl),
   ]);
 
   const result: FetchedInputs = {
@@ -257,27 +260,44 @@ async function probeApiHealth(client: OspexClient | null): Promise<{ ok: boolean
   );
 }
 
-async function readBalancesSafe(
+// Exported for regression tests — Hermes PR 54 review #2 specifically
+// targeted this leak surface, so the test asserts the sanitisation
+// happens here rather than higher up the stack.
+export async function readBalancesSafe(
   client: OspexClient,
   owner: `0x${string}`,
+  rpcUrl: string | null,
 ): Promise<SafeReadResult<BalancesSnapshot>> {
   try {
     const value = await client.balances.read({ owner });
     return { value };
   } catch (err) {
-    return { value: null, error: errorMessage(err) };
+    // Hermes PR 54 review #2: the probe path already sanitises its
+    // own errors, but viem's HttpRequestError thrown from the chain
+    // read inside the OspexClient also includes the raw URL in
+    // err.message. That message then lands in `checks[].details` via
+    // `balancesError`. Sanitise here so balance/allowance read
+    // errors don't leak credentials.
+    return {
+      value: null,
+      error: sanitizeMessageForUrl(errorMessage(err), rpcUrl),
+    };
   }
 }
 
-async function readApprovalsSafe(
+export async function readApprovalsSafe(
   client: OspexClient,
   owner: `0x${string}`,
+  rpcUrl: string | null,
 ): Promise<SafeReadResult<ApprovalsSnapshot>> {
   try {
     const value = await client.approvals.read({ owner });
     return { value };
   } catch (err) {
-    return { value: null, error: errorMessage(err) };
+    return {
+      value: null,
+      error: sanitizeMessageForUrl(errorMessage(err), rpcUrl),
+    };
   }
 }
 

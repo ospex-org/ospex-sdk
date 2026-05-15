@@ -72,9 +72,12 @@ const REDACTION_PATTERN = new RegExp(REDACTION_SENTINEL_ENCODED, 'g');
 
 /**
  * Redact one URL. Never throws — a malformed input still produces a
- * `UrlField` (with `host: ''` and the raw string passed through
- * untouched as `redactedValue`). The doctor's threat surface is
- * "leak via JSON output," not "crash on bad URL."
+ * `UrlField` (with `host: ''` and the sentinel `'[invalid url]'` as
+ * `redactedValue`; the fingerprint is still computed from the raw
+ * bytes so agents can detect URL changes between runs). The doctor's
+ * threat surface is "leak via JSON output," not "crash on bad URL,"
+ * and a malformed URL is more likely than not to contain something
+ * sensitive — fail closed.
  */
 export function redactUrl(raw: string, source: string): UrlField {
   const fingerprint = computeFingerprint(raw);
