@@ -6,7 +6,11 @@ import { writeSession } from '../../lib/client.js';
 import { promptHidden } from '../../lib/prompt.js';
 
 export const walletUnlockCommand = new Command('unlock')
-  .description('Decrypt the keystore and cache for 15 minutes.')
+  .description(
+    'Legacy session-cache unlock flow. Kept for compatibility. ' +
+      'Foundry-first agents should prefer `--account` + `--password-file` ' +
+      'or `auth use-foundry`.',
+  )
   .action(async () => {
     const file = await getKeystorePath();
     let json: string;

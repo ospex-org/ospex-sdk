@@ -116,6 +116,45 @@ The values land in `~/.ospex/config.json`. From this point on, every Ospex comma
 
 If you'd rather not persist the keystore path (e.g. you're scripting against multiple wallets), leave it blank at the prompt and instead `export OSPEX_KEYSTORE_PATH=…` in the shell where you run Ospex. Env var beats config file when both are set.
 
+## Optional: pin a non-interactive signer (recommended for agents)
+
+The default `ospex init` flow prompts for the Foundry passphrase every time you sign. For agent flows — or just to skip the prompt yourself — save the passphrase to a `0600` file and pin it once via `ospex auth use-foundry`:
+
+```bash
+# 1. Save the passphrase to a file readable only by you.
+mkdir -p ~/.ospex/secrets
+printf '%s' 'your-passphrase' > ~/.ospex/secrets/ospex-test.pass
+chmod 600 ~/.ospex/secrets/ospex-test.pass
+
+# 2. Validate + pin (decrypts once, captures the address, writes config).
+ospex auth use-foundry \
+  --account ospex-test \
+  --password-file ~/.ospex/secrets/ospex-test.pass
+# Validated: 0xab12…34cd
+# Wrote ~/.ospex/config.json with the Foundry signer defaults: ...
+
+# 3. (Recommended) verify the resolution end-to-end.
+ospex auth check --sign-challenge
+```
+
+From this point on every write command (`submit`, `match`, `claim`, ...) unlocks non-interactively without prompting. The decrypted key lives in process memory for the duration of one command — it's never written to disk. (Compare with `ospex wallet unlock`, the legacy flow, which writes the decrypted private key to `~/.ospex/session` for 15 minutes.)
+
+The address pin in step 2 also catches surprise key rotations: if the keystore later decrypts to a different address than the one validated here, the next sign refuses with `address_mismatch`. Use `--no-pin-address` to opt out, or `ospex auth clear-foundry --expected-address` to remove the pin later. `ospex auth clear-foundry --all` removes every Foundry-signer field and reverts to the prompt-on-every-sign behavior (the legacy `keystorePath` from `ospex init` is preserved).
+
+PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.ospex\secrets" | Out-Null
+$Pass = Read-Host -AsSecureString
+[System.IO.File]::WriteAllText(
+  "$env:USERPROFILE\.ospex\secrets\ospex-test.pass",
+  [System.Net.NetworkCredential]::new('', $Pass).Password,
+)
+# (Windows has no POSIX 0600 — rely on user-folder ACLs.)
+ospex auth use-foundry --account ospex-test --password-file "$env:USERPROFILE\.ospex\secrets\ospex-test.pass"
+ospex auth check --sign-challenge
+```
+
 ## Verify readiness
 
 ```bash
@@ -417,7 +456,15 @@ ospex commitments match "$HASH" --json
 ospex commitments match "$HASH" --yes --json
 ```
 
-For `commitments match --json` specifically: no transaction is signed or sent. The signer may briefly unlock to derive the taker address (for the `selfMatch` flag and the allowance preflight), which mirrors how `commitments submit --json` works; on a non-TTY run with no cached session, the underlying passphrase prompt fails. Pre-cache a session via `ospex wallet unlock` (15-min TTL) if you need preview-only output from a script. `--yes --json` runs the full flow and emits `{ schemaVersion, preview, result }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
+For `commitments match --json` specifically: no transaction is signed or sent. The preview needs a taker address (for the `selfMatch` flag and the allowance preflight); the lazy-unlock contract resolves it in this order, falling back only when the preceding option is absent:
+
+1. `--expected-address <0x…>` — no unlock at all; the agent asserts the address.
+2. Any non-interactive password source — flag (`--account` + `--password-file` / `--password-stdin`), env (`OSPEX_PASSWORD_FILE`), or config (set via `ospex auth use-foundry`). The keystore unlocks silently to derive the address.
+3. The legacy cached session (`ospex wallet unlock`) — kept for compatibility but not the recommended posture.
+
+If none of those resolve, the command errors out with `non_interactive_password_required` rather than hanging on a prompt. For new scripts the preferred preamble is one of `--expected-address` or `auth use-foundry`; `wallet unlock` should be treated as a legacy fallback only.
+
+`--yes --json` runs the full flow and emits `{ schemaVersion, preview, result }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
 
 `--approve-max` is the non-interactive shortcut for unlimited USDC approval; without it, `--yes` approves the exact amount needed. (Mostly redundant if the agent runs `ospex approvals setup --risk-usdc <n> --yes` once during init.)
 
@@ -428,6 +475,49 @@ ospex wallet address --json | jq -r .address      # passphrase prompt goes to st
 ospex doctor --address $WALLET --json             # full readiness envelope
 ospex approvals show --address $WALLET --json
 ```
+
+---
+
+## Advanced / automation
+
+Not part of the happy path — these are for CI runners, multi-wallet agents, and similar non-interactive setups. Most users should pin a default signer via `ospex auth use-foundry` (covered above) instead of reaching for env vars and flags every time.
+
+### Per-invocation signer overrides
+
+Every write command accepts the same six flags. They beat env vars; env vars beat `~/.ospex/config.json`:
+
+- `--account <name>` — Foundry account name. Resolves to `<foundryKeystoresDir>/<name>`. Mutually exclusive with `--keystore-path`.
+- `--keystore-path <path>` — Explicit path to a v3 keystore JSON.
+- `--password-file <path>` — Read passphrase from a file (trailing newline trimmed, matching `cast`).
+- `--password-stdin` — Read passphrase from stdin (first line). Useful for password-manager pipes: `pass show foo | ospex commitments submit ... --password-stdin --yes`.
+- `--expected-address <0x…>` — Refuse to sign if the unlocked address differs (agent guardrail).
+- `--foundry-keystores-dir <path>` — Override Foundry keystores root.
+
+There is intentionally no `--password <value>` flag — passphrases on the CLI would leak into shell history and process listings.
+
+### Env vars
+
+| Var | Effect |
+|---|---|
+| `OSPEX_KEYSTORE_PATH` | Direct path to a v3 keystore JSON. |
+| `OSPEX_PASSWORD_FILE` | Path to a passphrase file. The file contents are the secret; the path may be in env. Never put a passphrase itself in an env var — env is leaky (`/proc/<pid>/environ`, child processes, debuggers). |
+| `OSPEX_FOUNDRY_KEYSTORES_DIR` | Override the Foundry keystores root. |
+| `FOUNDRY_DIR` | Foundry's standard env var. The CLI appends `/keystores`. |
+| `OSPEX_HOME` | Override `~/.ospex` (useful for tests / parallel agent instances). |
+
+The full precedence ladder for every field is **flag > env > config > default**. `ospex auth check` walks the ladder and reports the resolved source for each field — pair with `--json` for machine-readable output.
+
+### Verifying a setup in CI
+
+```bash
+ospex auth check --strict --sign-challenge --json
+```
+
+Exits 0 only if the keystore actually unlocks AND signs a deterministic EIP-712 challenge — the strongest one-shot proof that the agent can sign. `--strict` additionally rejects a group/other-readable password file (mode `& 0o077 != 0`). The lighter-weight `ospex auth check --strict --json` (no `--sign-challenge`) validates the resolution + permission gate but **passes** with `unlock.attempted: false` when no password source is configured — useful for config sanity but not a proof of signing capability. If you want that lighter form, also assert `unlock.succeeded === true` in the JSON envelope.
+
+`ospex doctor --strict` applies the same loose-perm gate before the chain-side readiness checks — useful as a one-shot guard ahead of a batch of writes.
+
+For the full machine-readable contract — envelope shapes, error reason codes, the lazy-unlock contract for `--json` previews — see [`AGENT_CONTRACT.md` §4](./AGENT_CONTRACT.md).
 
 ---
 

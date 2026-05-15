@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semver](https://semver.org/) with the pre-1.0 caret-pinning rules described in [`docs/AGENT_CONTRACT.md` §12](./docs/AGENT_CONTRACT.md).
+All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semver](https://semver.org/) with the pre-1.0 caret-pinning rules described in [`docs/AGENT_CONTRACT.md` §13](./docs/AGENT_CONTRACT.md).
 
 ## [Unreleased]
 
@@ -17,7 +17,7 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 - **`ospex auth use-foundry --account <name> --password-file <path> [--no-pin-address]`** — pin a Foundry account + password file as the default signer for every future `ospex` command. Validates by decrypting once and (by default) pins the resulting address in config as a safety check. Every subsequent unlock compares the resolved signer's address against the pinned value and throws `OspexSignerResolutionError({ reason: 'address_mismatch' })` on mismatch — agent guardrail against accidental key rotation under the same account name. `--no-pin-address` opts out of the pin. `--keystore-path <path>` accepted as a mutually-exclusive alternative to `--account` for non-Foundry v3 keystores.
 - **`ospex auth clear-foundry [--account] [--password-file] [--expected-address] [--foundry-keystores-dir] [--all]`** — remove `auth use-foundry`-pinned defaults from `~/.ospex/config.json`. Without flags, clears every foundry-signer field. Targeted flags clear only the named fields. Non-signer config (`apiUrl`, `rpcUrl`, `chainId`, legacy `keystorePath`) is untouched.
 - **Config-pinned defaults flow through every write command.** After `auth use-foundry`, subsequent calls to `commitments submit`, `commitments match`, `approvals setup`, `contests create`, etc. pick up the configured `foundryAccount` / `passwordFile` / `foundryKeystoresDir` / `expectedAddress` automatically. Precedence: flag > env > config > default. The merge runs inside `loadSigner` so the existing legacy-session-cache UX is preserved for users who haven't run `auth use-foundry`.
-- **Shared non-interactive signer option group on every write command.** Each of `approvals setup`, `commitments {submit, submit-raw, match, approve, approve-raw, cancel, cancel-onchain, cancel-all}`, `contests {create, score}`, `positions {claim, claim-all, settle}`, and `wallet address` now accepts:
+- **Shared non-interactive signer option group on every write command.** Each of `approvals setup`, `commitments {submit, submit-raw, match, approve, approve-raw, cancel, cancel-onchain, cancel-all}`, `contests {create, score}`, top-level `{claim, claim-all, settle}` (registered at the program root, not under `positions`), and `wallet address` now accepts:
   - `--account <name>` — Foundry account (resolved against `~/.foundry/keystores`, `OSPEX_FOUNDRY_KEYSTORES_DIR`, or `FOUNDRY_DIR/keystores`).
   - `--keystore-path <path>` — explicit v3 keystore JSON.
   - `--password-file <path>` — read the passphrase from a `0600` file (skips the interactive prompt).
@@ -57,7 +57,7 @@ Initial public release.
 - `ospex speculations {list, show}`.
 - `ospex commitments {list, show, submit, submit-raw, match, approve, approve-raw, cancel, cancel-onchain, cancel-all, nonce-floor}` with preview blocks, prefix-resolution for hashes, and allowance prompts.
 - `ospex approvals {setup, show}` — multi-spender approval orchestration.
-- `ospex positions {list, status, history, claim, claim-all, settle}` with `--dry-run` on `claim-all` and `cancel-all`.
+- `ospex positions {list, status, history}` plus top-level `claim`, `claim-all`, `settle` (registered at the program root for day-to-day ergonomics, not under `positions`) with `--dry-run` on `claim-all` and `cancel-all`.
 - `ospex odds {show, watch}` — one-shot snapshot + Realtime stream (line-delimited JSON in `--json` mode).
 - `ospex leaderboard show`.
 - `ospex wallet {import, address, unlock, lock}` — legacy session-cache path.

@@ -69,6 +69,29 @@ Do NOT run `ospex wallet unlock` on a shared / multi-user host — mode 0600 onl
 
 ---
 
+## Section 2.5 — Non-interactive Foundry signer
+
+Verifies the Foundry-native, agent-friendly signing surface (`auth use-foundry`, `auth check`, the `--strict` permission gate, the `--sign-challenge` self-test). Use a **fresh, throwaway test keystore** — never a mainnet key. Section 2.5 runs independently of Section 2's legacy flow; you can clear the Section 2 session between them.
+
+| # | Command | Expected | Validates |
+|---|---|---|---|
+| 2.5.1 | `mkdir -p ~/.foundry/keystores && cast wallet import ospex-mit-test --interactive` (paste fresh test key, choose a passphrase). Save the same passphrase to `~/.ospex/secrets/ospex-mit-test.pass` and `chmod 600` it. | Keystore at `~/.foundry/keystores/ospex-mit-test`; `.pass` file mode 0600 on POSIX (Windows: user-only ACL). | Foundry keystore + `.pass` file setup outside Ospex's home. |
+| 2.5.2 | `ospex auth use-foundry --account ospex-mit-test --password-file ~/.ospex/secrets/ospex-mit-test.pass --json` | Exit 0; JSON envelope with `validatedAddress` matching the imported key's address and `addressPinned: true`. `~/.ospex/config.json` now has `foundryAccount`, `passwordFile`, `foundryKeystoresDir`, `expectedAddress`. | `auth use-foundry` validate-then-pin path; address pin by default. |
+| 2.5.3 | `ospex auth check --json` | `ok: true`. `resolution.keystore.provenance === "config-foundryAccount"`. `resolution.password.provenance === "config-passwordFile"`. `resolution.expectedAddress.provenance === "config"`. `unlock.attempted: true`, `unlock.succeeded: true`, `unlock.address` equals 2.5.2's `validatedAddress`. | `auth check` resolution walker mirroring `loadSigner` after a pin. |
+| 2.5.4 | `ospex auth check --sign-challenge --json` | `challenge.signed: true`; `challenge.signature` matches `/^0x[0-9a-fA-F]{130}$/`. | End-to-end sign capability proved without a transaction. The deterministic EIP-712 payload + signature are stable; re-running yields the same signature. |
+| 2.5.5 | (POSIX only) `chmod 644 ~/.ospex/secrets/ospex-mit-test.pass`, then `ospex auth check --json` | `passwordFilePermissions.loose: true`. `warnings[]` contains a `chmod 600` hint. `errors: []`. `ok: true` (default mode is warn-and-proceed). | Default-mode permission warning. |
+| 2.5.6 | (POSIX only) `ospex auth check --strict --json` against the same 0644 pass file | Exit 1. `errors[]` contains `{ code: "password_file_permissions_loose", ... }`. `unlock.attempted: false`. **Restore `chmod 600` after this step.** | `--strict` CI gate. |
+| 2.5.7 | (POSIX only) `ospex doctor --strict` against a 0644 pass file (re-loosen briefly) | Stderr: `error (password_file_permissions_loose): ...`; exit 1 **before** any chain call. Restore `chmod 600` afterwards. | `doctor --strict` parity with `auth check --strict`. |
+| 2.5.8 | With the pin in place + a funded Amoy wallet + USDC allowance already approved (Section 4.1): `ospex commitments submit-raw <contestId> <scorer> <line> upper 250 1000` (use Section 4 inputs — `submit-raw` is the raw-tuple escape hatch and has no preview / no `--yes`, so it goes straight through). | Commitment hash printed; `status: open`. **No passphrase prompt.** | End-to-end non-interactive write path consuming the config-pinned signer. |
+| 2.5.9 | Pollute the env with a stale value to confirm precedence: `OSPEX_FOUNDRY_KEYSTORES_DIR=/never/used ospex auth check --json` | `resolution.foundryKeystoresDir.provenance === "env-OSPEX_FOUNDRY_KEYSTORES_DIR"`, `value === "/never/used"`. `resolution.keystore.exists: false`. `errors[]` contains `{ code: "keystore_not_found" }`. | Env-beats-config precedence + early-fail diagnostic. |
+| 2.5.10 | `ospex auth check --account different-account --password-file ~/.ospex/secrets/ospex-mit-test.pass --json` (account name that doesn't exist in `~/.foundry/keystores`) | `resolution.keystore.provenance === "flag-account"`, `exists: false`. `errors[]` contains `keystore_not_found`. The config pin is NOT applied to the wrong account (`resolution.expectedAddress.provenance === "none"`). | Per-invocation flag overrides + conditional `expectedAddress` lift. |
+| 2.5.11 | `ospex auth clear-foundry --all --json` | Exit 0. `~/.ospex/config.json` no longer carries `foundryAccount` / `passwordFile` / `foundryKeystoresDir` / `expectedAddress`. The legacy `keystorePath` (if set by `ospex init`) is preserved. | Tear-down + legacy preservation. |
+| 2.5.12 | `ospex auth check --json` after the clear | `resolution.keystore.provenance` is `"config-keystorePath-legacy"` (if `ospex init` ran) or `"default-legacy"` (if not). `resolution.password.provenance` is `"session-cache"` (if a session is active) or `"none"` otherwise. | Post-tear-down resolution; legacy path's password gate (only session-cache OR `'none'` — flag/env/config sources do NOT apply to the legacy keystore path-3). |
+
+**Pass criterion**: 2.5.1–2.5.4 and 2.5.8–2.5.12 succeed on every host. 2.5.5–2.5.7 are POSIX-only and may be skipped on Windows. Section 2 (legacy `wallet unlock`) and Section 2.5 (Foundry-native non-interactive) are both expected to remain functional — soft-deprecation of `wallet unlock` is docs-only; no runtime warning fires.
+
+---
+
 ## Section 3 — M1 Realtime odds
 
 | # | Step | Expected | Validates |
@@ -109,7 +132,7 @@ The flow that proves funds actually move. Irreplaceable; this section is **non-n
 | 5.1 | Both wallets A and B have allowance set (4.1 covered A; repeat for B). | Both `allowance` calls return `2^256-1` on Polygonscan. | Approve flow on a second wallet. |
 | 5.2 | Wallet A: `ospex commitments submit-raw ...` (fresh inputs). Capture hash. | Hash printed. | Same as 4.2. |
 | 5.3 | Wallet B: `ospex commitments match <hashFromA>` (or its 0x+8hex prefix) | Preview block prints to stderr with both `taker risks` and `maker fill` lines; prompt to confirm. After Y, if allowance was missing prompts to approve, prints both tx hashes; otherwise prints just the match tx hash. | Prefix resolution + `prepareMatch` preview + match math + tx broadcast. |
-| 5.3a | Wallet B: `ospex commitments match <prefixFromA> --json` (no `--yes`) | Preview JSON envelope on stdout (`{ schemaVersion: 1, preview: {...} }`); no transaction sent. (The signer may unlock once to derive the taker address — same as `commitments submit --json`. To skip the passphrase prompt, pre-cache a session via `ospex wallet unlock`.) The "Resolved <prefix> → <fullHash>" echo (if prefix used) appears on stderr only — `... --json | jq .` parses cleanly. | `--json`-alone = preview-only (no tx); cached-session non-interactive mode. |
+| 5.3a | Wallet B: `ospex commitments match <prefixFromA> --json` (no `--yes`) | Preview JSON envelope on stdout (`{ schemaVersion: 1, preview: {...} }`); no transaction sent. The signer may unlock once to derive the taker address — same as `commitments submit --json` — but only when a non-interactive credential is available. To run cleanly without a passphrase prompt, use one of (preferred → legacy): `--expected-address <0x…>` (no unlock at all); a Foundry account pinned via `ospex auth use-foundry`; per-invocation `--account <name> --password-file <path>`; or, as a legacy fallback, a pre-cached session from `ospex wallet unlock` (15-min TTL). The "Resolved <prefix> → <fullHash>" echo (if prefix used) appears on stderr only — `... --json | jq .` parses cleanly. | `--json`-alone = preview-only (no tx); lazy-unlock contract for non-TTY runs. |
 | 5.3b | Wallet B: `ospex commitments match <prefixFromA> --yes --json` | Result envelope on stdout (`{ schemaVersion: 1, preview: {...}, result: { txHash, status, blockNumber, takerRiskWei6, fillMakerRiskWei6 } }`). | `--yes --json` = execute + emit. |
 | 5.4 | `cast call <MatchingModuleAmoy> "s_filledRisk(bytes32)(uint256)" <hashFromA> --rpc-url <rpcUrl>` | Non-zero, equal to `fillMakerRisk` from the match tx | Contract observed the fill. |
 | 5.5 | `cast call <PositionModuleAmoy> "getPosition(uint256,address,uint8)(uint256,uint256,address,uint32,bool,uint8)" <speculationId> <walletA> <makerPositionType> --rpc-url <rpcUrl>` (verify exact signature against `IPositionModule.sol`) | Position with `riskAmount = fillMakerRisk` | Maker side recorded. |
@@ -265,7 +288,8 @@ Copy this into the release ticket:
 
 ```
 [ ] Section 1 — Reads
-[ ] Section 2 — Wallet lifecycle
+[ ] Section 2 — Wallet lifecycle (legacy)
+[ ] Section 2.5 — Non-interactive Foundry signer
 [ ] Section 3 — Realtime odds
 [ ] Section 4 — Single-wallet chain ops (Amoy)
 [ ] Section 5 — Two-wallet match (Amoy) — NON-NEGOTIABLE

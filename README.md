@@ -167,28 +167,35 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex positions list <address>` | Position history for an address. |
 | `ospex positions status <address>` | Three-bucket categorization: active / pendingSettle / claimable. |
 | `ospex positions history <address>` | Full claim/settlement history. |
-| `ospex positions claim <speculationId> --type upper\|lower` | Claim one specific winning position. |
-| `ospex positions claim-all [--address <addr>] [--dry-run]` | Sweep every claimable position for a wallet (settles where needed). |
-| `ospex positions settle <speculationId>` | Permissionlessly settle a scored speculation. |
+| `ospex claim <speculationId> --type upper\|lower` | Claim one specific winning position. Top-level for ergonomics — not under `positions`. |
+| `ospex claim-all [--address <addr>] [--dry-run]` | Sweep every claimable position for a wallet (settles where needed). Top-level. |
+| `ospex settle <speculationId>` | Permissionlessly settle a scored speculation. Top-level. |
 | `ospex leaderboard show` | Top entries on the active leaderboard. |
 | `ospex odds show <contestId> [--json] [--market moneyline\|spread\|total]` | One-shot snapshot of upstream reference odds (moneyline / spread / total) for a contest's underlying game. Both American and decimal odds; `--json` emits a single envelope. `--market` narrows the human render to one market (no effect on `--json` — the envelope stays stable for agents). Use this to decide a commitment price. |
 | `ospex odds watch <contestId> [--json --include-refreshes]` | Streams Realtime upstream odds change events. Line-delimited JSON in `--json` mode — agent-facing. Use `odds show` for a one-shot snapshot; `watch` is for reacting to changes over time. |
+| `ospex auth use-foundry --account <name> --password-file <path> [--keystore-path <path>] [--foundry-keystores-dir <path>] [--no-pin-address]` | Pin a Foundry account + password file as the default signer for every subsequent `ospex` command. Decrypts once to validate, captures the resulting address, and writes `~/.ospex/config.json`. By default also pins the resolved address — a surprise key rotation throws `address_mismatch` before signing. Recommended for non-interactive / agent setups; see [QUICKSTART](./docs/QUICKSTART.md) for the three-step flow. |
+| `ospex auth clear-foundry [--all] [--account] [--keystore-path] [--password-file] [--expected-address] [--foundry-keystores-dir]` | Remove Foundry signer fields from `~/.ospex/config.json`. `--all` clears every Foundry-signer field but preserves the legacy `keystorePath` from `ospex init`. |
+| `ospex auth check [signer-flags...] [--strict] [--sign-challenge] [--json]` | Diagnose the resolved signer source without sending a transaction. Walks the same precedence ladder a real write would (flag > env > config > default), optionally unlocks + verifies, optionally signs a deterministic EIP-712 challenge. `--strict` promotes a group/other-readable password file (mode `& 0o077 != 0`) from a stderr warning to a hard exit — same gate added to `ospex doctor --strict`. |
 | `ospex wallet import [--force]` | Encrypts a private key into `~/.ospex/keystore.json` (legacy path). |
-| `ospex wallet unlock` | Caches the decrypted key for 15 minutes in `~/.ospex/session` (legacy path). |
+| `ospex wallet unlock` | Legacy session-cache unlock — decrypts the keystore and caches the private key at `~/.ospex/session` for 15 minutes. Kept for compatibility; Foundry-first agents should prefer `ospex auth use-foundry` (above) or the per-invocation `--account` + `--password-file` flags on write commands. |
 | `ospex wallet lock` | Deletes the cached unlocked key. |
 | `ospex wallet address` | Prints the keystore's address. Foundry-produced keystores omit the top-level `address` field, so the passphrase is requested in that case. |
 
 Most commands support `--json` for machine-readable output. The interactive setup / wallet-management commands — `init`, `wallet import`, `wallet unlock`, `wallet lock` — do not, because they're stateful prompt flows. See [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) for the stable JSON envelope shapes and which commands are preview-bearing vs. output-format-only.
 
+Every command that signs (`commitments {submit, match, approve, approve-raw, cancel, cancel-onchain, cancel-all}`, `contests {create, score}`, top-level `{claim, claim-all, settle}`, `approvals setup`, `wallet address`) accepts the same six signer-resolution flags: `--account`, `--keystore-path`, `--password-file`, `--password-stdin`, `--expected-address`, `--foundry-keystores-dir`. They beat env vars, which beat `~/.ospex/config.json`. The flag group is the per-invocation override seam; `ospex auth use-foundry` is the once-per-host pin. See [`docs/AGENT_CONTRACT.md` §4](./docs/AGENT_CONTRACT.md) for the full non-interactive signing contract.
+
 ## Wallet security
 
 **Recommended path: Foundry-managed keystore.** Run `mkdir -p ~/.foundry/keystores && cast wallet new ~/.foundry/keystores <name>` (or `cast wallet import <name>` for an existing PK) once, then run `ospex init` and supply the path (`~/.foundry/keystores/<name>`) when it prompts for **Keystore path** — it persists in `~/.ospex/config.json` so future shells just work. For per-shell overrides (scripts / CI) the `OSPEX_KEYSTORE_PATH` env var still wins when set. Ospex never sees your private key — it reads the v3 JSON keystore Foundry produces and prompts you for the passphrase only when a signature is needed. This is the path documented in the [QUICKSTART](./docs/QUICKSTART.md).
 
+**Non-interactive signing for agents:** Pin a default signer once via `ospex auth use-foundry --account <name> --password-file <path>` — every subsequent write command unlocks the Foundry keystore in process memory using the passphrase from the file, with no decrypted key written to disk (unlike `wallet unlock`). The address is also pinned by default, so a surprise key rotation throws `address_mismatch` before signing. See [QUICKSTART → "Optional: pin a non-interactive signer"](./docs/QUICKSTART.md) for the three-step setup and [`docs/AGENT_CONTRACT.md` §4](./docs/AGENT_CONTRACT.md) for the full surface (flag group, env vars, `auth check` JSON envelope, reason codes).
+
 **Legacy path (still functional but not recommended):** `ospex wallet import` writes an Ospex-managed keystore at `~/.ospex/keystore.json`. `ospex wallet unlock` caches the decrypted private key at `~/.ospex/session` (plain JSON, mode 0600, 15-minute TTL) inside `~/.ospex` (mode 0700). Both are written atomically and the modes are reasserted on overwrite — they do not silently inherit weaker permissions from a pre-existing file.
 
-What 0600 actually buys you: the session file is unreadable by *other* users on the host. **Any process running as the same user can still read it while the session is unlocked.** OS-keychain integration (DPAPI / Keychain / libsecret) is out of scope. The Foundry path avoids the session-cache trade-off entirely — each write prompts for the passphrase and the key is never persisted in cleartext.
+What 0600 actually buys you: the session file is unreadable by *other* users on the host. **Any process running as the same user can still read it while the session is unlocked.** OS-keychain integration (DPAPI / Keychain / libsecret) is out of scope. The Foundry path avoids the session-cache trade-off entirely — each write prompts for the passphrase, or unlocks non-interactively from a `.pass` file under `auth use-foundry`, and the decrypted key is never persisted in cleartext.
 
-For the full SDK-level trust-boundary description (how `KeystoreSigner` holds decrypted material in memory, what the SDK never does), see [`docs/AGENT_CONTRACT.md` §7](./docs/AGENT_CONTRACT.md).
+For the full SDK-level trust-boundary description (how `KeystoreSigner` holds decrypted material in memory, what the SDK never does), see [`docs/AGENT_CONTRACT.md` §8](./docs/AGENT_CONTRACT.md). For the non-interactive signing surface (the `--account` / `--password-file` flag group, `auth use-foundry` pinning, and the `auth check` JSON envelope), see [`docs/AGENT_CONTRACT.md` §4](./docs/AGENT_CONTRACT.md).
 
 ## Architecture notes
 

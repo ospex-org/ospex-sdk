@@ -26,7 +26,7 @@ Smart-contract issues (the on-chain protocol itself) are out of scope here — p
 
 ## Wallet model
 
-Ospex never asks for a raw private key in its public `Signer` interface. The recommended posture is a Foundry-managed keystore that the SDK reads via a passphrase prompt at signing time. The legacy `ospex wallet unlock` flow caches a decrypted private key in `~/.ospex/session` (mode `0600`, 15-minute TTL) — see [`docs/AGENT_CONTRACT.md` §7](./docs/AGENT_CONTRACT.md) for the full trust-boundary description.
+Ospex never asks for a raw private key in its public `Signer` interface. The recommended posture is a Foundry-managed keystore that the SDK reads via a passphrase prompt at signing time, or via a non-interactive `--password-file` for agent flows. The legacy `ospex wallet unlock` flow caches a decrypted private key in `~/.ospex/session` (mode `0600`, 15-minute TTL) — see [`docs/AGENT_CONTRACT.md` §8](./docs/AGENT_CONTRACT.md) for the full trust-boundary description and §4 for the non-interactive signing surface.
 
 ## Disclosure
 
