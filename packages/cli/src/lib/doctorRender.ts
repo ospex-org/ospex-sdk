@@ -20,6 +20,12 @@ import type {
   ResolvedApiUrl,
   ResolvedRpcUrl,
 } from './config.js';
+import type {
+  AuthSourceResolution,
+  KeystoreProvenance,
+  PasswordFilePermissions,
+  PasswordProvenance,
+} from './authResolution.js';
 import type { ContractCheckResult, RpcProbeResult } from './doctorProbe.js';
 import { redactUrl, type UrlField } from './redact.js';
 import {
@@ -261,11 +267,31 @@ export interface JsonDoctorReport {
   summary: SummaryBlock;
   // PR 2 additive: chain-id provenance + RPC actual.
   // PR 3 additive: URL provenance for apiUrl + rpcUrl (redacted).
+  // PR 4 additive: signer source provenance + password-file perms.
   config: {
     chainId: ConfigChainIdField;
     apiUrl: UrlField | null;
     rpcUrl: UrlField | null;
+    signer: ConfigSignerField | null;
   };
+}
+
+/**
+ * Signer-source provenance snapshot. PR 4 — feeds `signer.*` checks
+ * and the wallet-address provenance hint. Path fields stay as raw
+ * strings (filesystem paths aren't credentials on their own —
+ * keystore content is encrypted, password file is read for content).
+ */
+export interface ConfigSignerField {
+  keystoreProvenance: KeystoreProvenance;
+  keystorePath: string;
+  account: string | null;
+  /** Resolved address, or `null` when unlock would be required. */
+  address: string | null;
+  /** True when the address came from `--address` or in-keystore field; false when an unlock would have been needed. */
+  addressKnownWithoutUnlock: boolean;
+  passwordProvenance: PasswordProvenance;
+  passwordFilePermissions: PasswordFilePermissions;
 }
 
 export interface DoctorReportInputs {
@@ -295,6 +321,12 @@ export interface DoctorReportInputs {
   rpcUrl?: ResolvedRpcUrl | null;
   apiPublicConfigOk?: boolean | null;
   apiPublicConfigError?: string;
+  // PR 4 additive — signer provenance via shared auth-check walker.
+  authResolution?: AuthSourceResolution | null;
+  passwordFilePermissions?: PasswordFilePermissions | null;
+  /** When true, loose password-file perms become a hard fail and
+   *  drive the readiness rollup to exit 1. */
+  strict?: boolean;
 }
 
 export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport {
@@ -306,7 +338,7 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
       ? inputs.signerAddress
       : (inputs.balances?.owner ?? null);
 
-  // PR 2/3 inputs default to "no probe ran" when not supplied — keeps
+  // PR 2/3/4 inputs default to "no probe ran" when not supplied — keeps
   // PR 1 callers and unit tests of the report builder working.
   const expectedChainId = inputs.expectedChainId ?? null;
   const rpcProbe = inputs.rpcProbe ?? null;
@@ -314,6 +346,9 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
   const apiUrl = inputs.apiUrl ?? null;
   const rpcUrl = inputs.rpcUrl ?? null;
   const apiPublicConfigOk = inputs.apiPublicConfigOk ?? null;
+  const authResolution = inputs.authResolution ?? null;
+  const passwordFilePermissions = inputs.passwordFilePermissions ?? null;
+  const strict = inputs.strict ?? false;
   // Back-compat: PR 2 callers passed `rpcUrlMissing` explicitly; PR 3
   // callers pass `rpcUrl` and we derive it.
   const rpcUrlMissing =
@@ -331,6 +366,9 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
     apiUrl,
     rpcUrl,
     apiPublicConfigOk,
+    authResolution,
+    passwordFilePermissions,
+    strict,
     ...(inputs.apiError !== undefined ? { apiError: inputs.apiError } : {}),
     ...(inputs.balancesError !== undefined ? { balancesError: inputs.balancesError } : {}),
     ...(inputs.approvalsError !== undefined ? { approvalsError: inputs.approvalsError } : {}),
@@ -351,6 +389,11 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
     rpcUrl !== null && rpcUrl.value !== null
       ? redactUrl(rpcUrl.value, rpcUrl.source)
       : null;
+  const configSigner = buildConfigSignerField(
+    authResolution,
+    passwordFilePermissions,
+    signerAddress,
+  );
 
   const network = inputs.balances === null
     ? null
@@ -413,6 +456,34 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
       chainId: configChainId,
       apiUrl: configApiUrl,
       rpcUrl: configRpcUrl,
+      signer: configSigner,
+    },
+  };
+}
+
+function buildConfigSignerField(
+  resolution: AuthSourceResolution | null,
+  perms: PasswordFilePermissions | null,
+  signerAddress: string | null,
+): ConfigSignerField | null {
+  if (resolution === null) return null;
+  // "Known without unlock" means the address resolved cheaply (flag
+  // override / in-keystore field / session cache) rather than via a
+  // would-be passphrase prompt. Doctor always runs in no-prompt mode,
+  // so `signerAddress !== null` is the operational signal.
+  return {
+    keystoreProvenance: resolution.keystore.provenance,
+    keystorePath: resolution.keystore.path,
+    account: resolution.keystore.account,
+    address: signerAddress,
+    addressKnownWithoutUnlock: signerAddress !== null,
+    passwordProvenance: resolution.password.provenance,
+    passwordFilePermissions: perms ?? {
+      checked: false,
+      platformSkipped: false,
+      mode: null,
+      octal: null,
+      loose: null,
     },
   };
 }
@@ -509,8 +580,14 @@ function checkIdToReason(id: CheckId): string {
       return 'RPC chain id does not match expected';
     case 'network.contracts_deployed':
       return 'expected Ospex contracts not deployed at this RPC';
+    case 'signer.resolved':
+      return 'no keystore configured';
     case 'signer.address_known':
       return 'wallet address could not be resolved';
+    case 'signer.password_source':
+      return 'no non-interactive password source';
+    case 'signer.password_file_perms':
+      return 'password file readable by group/other';
     case 'balances.native':
       return 'no POL balance for gas';
     case 'balances.usdc':

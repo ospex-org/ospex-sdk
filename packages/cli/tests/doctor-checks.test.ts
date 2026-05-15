@@ -16,6 +16,10 @@ import {
   type MetaBlock,
 } from '../src/lib/doctorChecks.js';
 import type { ContractCheckResult, RpcProbeResult } from '../src/lib/doctorProbe.js';
+import type {
+  AuthSourceResolution,
+  PasswordFilePermissions,
+} from '../src/lib/authResolution.js';
 
 const OWNER = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as `0x${string}`;
 const POSITION_MODULE = '0x0DCd42f8609cd7884ddBa3481b03a78dfc88366c' as `0x${string}`;
@@ -127,6 +131,38 @@ const HAPPY_RPC_URL = {
   source: 'env-OSPEX_RPC_URL' as const,
 };
 
+// PR 4: a fully resolved walker output where the signer is configured
+// non-interactively. The doctor's happy path with these fields produces
+// `signer.{resolved, password_source, password_file_perms}: ok`.
+const HAPPY_AUTH_RESOLUTION: AuthSourceResolution = {
+  keystore: {
+    provenance: 'config-foundryAccount',
+    path: '/home/agent/.foundry/keystores/maker-a',
+    account: 'maker-a',
+    exists: true,
+  },
+  password: {
+    provenance: 'config-passwordFile',
+    path: '/home/agent/.ospex/secrets/maker-a.pass',
+    exists: true,
+  },
+  expectedAddress: {
+    provenance: 'config',
+    value: '0xab12cd34ab12cd34ab12cd34ab12cd34ab12cd34',
+  },
+  foundryKeystoresDir: {
+    provenance: 'default',
+    value: '/home/agent/.foundry/keystores',
+  },
+};
+const HAPPY_PASSWORD_FILE_PERMS: PasswordFilePermissions = {
+  checked: true,
+  platformSkipped: false,
+  mode: 0o600,
+  octal: '600',
+  loose: false,
+};
+
 const HAPPY_CHAIN_PROBES = {
   expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
   rpcProbe: HAPPY_RPC_PROBE,
@@ -134,6 +170,9 @@ const HAPPY_CHAIN_PROBES = {
   apiUrl: HAPPY_API_URL,
   rpcUrl: HAPPY_RPC_URL,
   apiPublicConfigOk: true,
+  authResolution: HAPPY_AUTH_RESOLUTION,
+  passwordFilePermissions: HAPPY_PASSWORD_FILE_PERMS,
+  strict: false,
 };
 
 describe('runDoctorChecks — happy path', () => {
@@ -363,7 +402,8 @@ describe('buildSummary — rollup math', () => {
     // PR 1: address + balances.native + balances.usdc + allowances.usdc_position = 4 ok
     // PR 2: config.chain_id_expected + connectivity.rpc + network.chain_id_match + network.contracts_deployed = 4 ok
     // PR 3: config.api_url + config.rpc_url + connectivity.api_public_config = 3 ok
-    expect(s.counts.ok).toBe(11);
+    // PR 4: signer.resolved + signer.password_source + signer.password_file_perms = 3 ok
+    expect(s.counts.ok).toBe(14);
     expect(s.counts.fail).toBe(4); // connectivity.api, balances.link, allowances.usdc_treasury, allowances.link_oracle
     expect(s.counts.skip).toBe(0);
     expect(s.counts.warn).toBe(0);
@@ -757,6 +797,270 @@ describe('PR 2: ready/exit agree with summary even on happy snapshot path', () =
   });
 });
 
+// ── PR 4: signer provenance via shared auth-check walker ─────────────
+
+describe('PR 4: signer.resolved check', () => {
+  it('ok with keystore provenance/path/account when a keystore is configured', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      authResolution: HAPPY_AUTH_RESOLUTION,
+    });
+    const c = findCheck(checks, 'signer.resolved');
+    expect(c.status).toBe('ok');
+    expect(c.data?.['keystoreProvenance']).toBe('config-foundryAccount');
+    expect(c.data?.['account']).toBe('maker-a');
+  });
+
+  it('fail with signer_unresolvable when no keystore exists anywhere', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: null,
+      authResolution: {
+        keystore: {
+          provenance: 'default-legacy',
+          path: '/home/agent/.ospex/keystore.json',
+          account: null,
+          exists: false,
+        },
+        password: { provenance: 'none', path: null, exists: null },
+        expectedAddress: { provenance: 'none', value: null },
+        foundryKeystoresDir: { provenance: 'default', value: '/home/agent/.foundry/keystores' },
+      },
+    });
+    const c = findCheck(checks, 'signer.resolved');
+    expect(c.status).toBe('fail');
+    expect(c.error?.code).toBe('signer_unresolvable');
+    expect(c.blockingFor).toEqual(['matchCommitments', 'submitCommitments', 'createContests']);
+  });
+
+  it('ok when keystore is missing BUT a fresh session cache will unlock', () => {
+    // `loadSigner`'s path-2 uses session.privateKey without touching the
+    // keystore file — so `keystore.exists: false` is fine here.
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      authResolution: {
+        keystore: {
+          provenance: 'default-legacy',
+          path: '/home/agent/.ospex/keystore.json',
+          account: null,
+          exists: false,
+        },
+        password: { provenance: 'session-cache', path: null, exists: null },
+        expectedAddress: { provenance: 'none', value: null },
+        foundryKeystoresDir: { provenance: 'default', value: '/home/agent/.foundry/keystores' },
+      },
+    });
+    const c = findCheck(checks, 'signer.resolved');
+    expect(c.status).toBe('ok');
+  });
+});
+
+describe('PR 4: signer.address_known check is enriched with provenance', () => {
+  it('exposes keystoreProvenance + passwordProvenance in data when the walker ran', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      authResolution: HAPPY_AUTH_RESOLUTION,
+    });
+    const c = findCheck(checks, 'signer.address_known');
+    expect(c.status).toBe('ok');
+    expect(c.data?.['keystoreProvenance']).toBe('config-foundryAccount');
+    expect(c.data?.['passwordProvenance']).toBe('config-passwordFile');
+  });
+
+  it('reports fail with password_source_missing when signerAddress is null in --json mode', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: null,
+      signerAddressError: 'cannot derive without unlock',
+      authResolution: HAPPY_AUTH_RESOLUTION,
+    });
+    const c = findCheck(checks, 'signer.address_known');
+    expect(c.status).toBe('fail');
+    expect(c.error?.code).toBe('password_source_missing');
+  });
+});
+
+describe('PR 4: signer.password_source check', () => {
+  it('ok when a non-interactive password source is configured', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      authResolution: HAPPY_AUTH_RESOLUTION,
+    });
+    const c = findCheck(checks, 'signer.password_source');
+    expect(c.status).toBe('ok');
+    expect(c.data?.['passwordProvenance']).toBe('config-passwordFile');
+    expect(c.blockingFor).toEqual([]); // informational
+  });
+
+  it('warn with none provenance — informational, never blocks', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      authResolution: {
+        ...HAPPY_AUTH_RESOLUTION,
+        password: { provenance: 'none', path: null, exists: null },
+      },
+    });
+    const c = findCheck(checks, 'signer.password_source');
+    expect(c.status).toBe('warn');
+    expect(c.blockingFor).toEqual([]);
+    expect(c.remediation).toMatch(/use-foundry/);
+  });
+
+  it('ok with session-cache — annotates legacy posture in details', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      authResolution: {
+        ...HAPPY_AUTH_RESOLUTION,
+        password: { provenance: 'session-cache', path: null, exists: null },
+      },
+    });
+    const c = findCheck(checks, 'signer.password_source');
+    expect(c.status).toBe('ok');
+    expect(c.details).toMatch(/session/);
+  });
+});
+
+describe('PR 4: signer.password_file_perms check', () => {
+  it('ok when mode is 0600', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      passwordFilePermissions: HAPPY_PASSWORD_FILE_PERMS,
+    });
+    const c = findCheck(checks, 'signer.password_file_perms');
+    expect(c.status).toBe('ok');
+  });
+
+  it('warn when loose by default (not --strict)', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      passwordFilePermissions: {
+        checked: true,
+        platformSkipped: false,
+        mode: 0o644,
+        octal: '644',
+        loose: true,
+      },
+    });
+    const c = findCheck(checks, 'signer.password_file_perms');
+    expect(c.status).toBe('warn');
+    expect(c.blockingFor).toEqual([]);
+    expect(c.details).toMatch(/644/);
+  });
+
+  // Hermes PR 52 / spec §15 PR 4: the legacy `--strict` early-exit
+  // is gone; the structured check is the new source of truth. Under
+  // --strict, loose perms become a hard fail that blocks every
+  // capability, so the rollup drives the exit-1 outcome.
+  it('fail with password_file_perms_loose when loose + --strict — blocks every capability', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      strict: true,
+      passwordFilePermissions: {
+        checked: true,
+        platformSkipped: false,
+        mode: 0o644,
+        octal: '644',
+        loose: true,
+      },
+    });
+    const c = findCheck(checks, 'signer.password_file_perms');
+    expect(c.status).toBe('fail');
+    expect(c.error?.code).toBe('password_file_perms_loose');
+    expect(c.blockingFor).toEqual([
+      'matchCommitments',
+      'submitCommitments',
+      'createContests',
+    ]);
+  });
+
+  it('skip on non-POSIX host (platformSkipped)', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: null,
+      approvals: null,
+      signerAddress: OWNER,
+      passwordFilePermissions: {
+        checked: false,
+        platformSkipped: true,
+        mode: null,
+        octal: null,
+        loose: null,
+      },
+    });
+    const c = findCheck(checks, 'signer.password_file_perms');
+    expect(c.status).toBe('skip');
+  });
+});
+
+// Locked-in rollup behaviour for --strict: the readiness derivation
+// must flip `matchCommitments.ok` to false when password_file_perms
+// is fail, since `signer.password_file_perms` then declares
+// `blockingFor: [all-three]`. This is what makes the exit code reach 1
+// without the legacy early-exit gate.
+describe('PR 4: --strict + loose pw-file drives exit-1 via rollup', () => {
+  it('summary.byCapability.matchCommitments.ok flips false under --strict + loose', () => {
+    const checks = runDoctorChecks({
+      apiOk: true,
+      balances: makeBalances({
+        native: 10n ** 18n,
+        usdc: 10_000_000n,
+        link: 2n * 10n ** 18n,
+      }),
+      approvals: makeApprovals({
+        positionModule: 50_000_000n,
+        treasuryModule: 5_000_000n,
+        oracleModule: 2n * 10n ** 18n,
+      }),
+      signerAddress: OWNER,
+      ...HAPPY_CHAIN_PROBES,
+      strict: true,
+      passwordFilePermissions: {
+        checked: true,
+        platformSkipped: false,
+        mode: 0o644,
+        octal: '644',
+        loose: true,
+      },
+    });
+    const s = buildSummary(checks);
+    expect(s.byCapability.matchCommitments.ok).toBe(false);
+    expect(s.byCapability.matchCommitments.blockingChecks).toContain(
+      'signer.password_file_perms',
+    );
+  });
+});
+
 // ── PR 3: URL provenance + Realtime-bootstrap probe ───────────────────
 
 describe('PR 3: config.api_url check', () => {
@@ -976,6 +1280,51 @@ describe('PR 3: config.{apiUrl,rpcUrl} envelope field — UrlField with redactio
     for (const secret of rawSecrets) {
       expect(serialized, `raw secret "${secret}" must not appear in envelope`).not.toContain(secret);
     }
+  });
+});
+
+describe('PR 4: config.signer envelope field', () => {
+  it('emits keystore/password provenance + perms in the envelope when walker ran', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: null,
+      balances: null,
+      signerAddress: OWNER,
+      meta: STUB_META,
+      ...HAPPY_CHAIN_PROBES,
+    });
+    expect(report.config.signer).not.toBeNull();
+    expect(report.config.signer?.keystoreProvenance).toBe('config-foundryAccount');
+    expect(report.config.signer?.account).toBe('maker-a');
+    expect(report.config.signer?.address).toBe(OWNER);
+    expect(report.config.signer?.addressKnownWithoutUnlock).toBe(true);
+    expect(report.config.signer?.passwordProvenance).toBe('config-passwordFile');
+    expect(report.config.signer?.passwordFilePermissions.octal).toBe('600');
+  });
+
+  it('signer envelope is null when the walker was not run', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: null,
+      balances: null,
+      signerAddress: OWNER,
+      meta: STUB_META,
+    });
+    expect(report.config.signer).toBeNull();
+  });
+
+  it('addressKnownWithoutUnlock is false when signerAddress is null', () => {
+    const report = buildDoctorReport({
+      apiOk: true,
+      approvals: null,
+      balances: null,
+      signerAddress: null,
+      signerAddressError: 'no source',
+      meta: STUB_META,
+      authResolution: HAPPY_AUTH_RESOLUTION,
+    });
+    expect(report.config.signer?.address).toBeNull();
+    expect(report.config.signer?.addressKnownWithoutUnlock).toBe(false);
   });
 });
 

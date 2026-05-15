@@ -1,4 +1,4 @@
-/**
+﻿/**
  * `ospex doctor` — comprehensive readiness check for the configured
  * wallet. Composes Core API health + USDC/LINK approvals + POL/USDC/
  * LINK balances into a single report and tells the user (or agent)
@@ -29,7 +29,6 @@ import type {
   BalancesSnapshot,
   OspexClient,
 } from '@ospex/sdk';
-import { checkPasswordFilePermissions } from '@ospex/sdk/signers/keystore';
 import { formatOutput } from '../lib/format.js';
 import { getClient } from '../lib/client.js';
 import {
@@ -49,10 +48,14 @@ import {
   WalletAddressUnresolvedError,
 } from '../lib/walletAddress.js';
 import {
-  expandTilde,
   loadConfigFile,
   resolveCliConfigDetailed,
 } from '../lib/config.js';
+import {
+  checkPasswordFilePerms,
+  resolveAuthSources,
+} from '../lib/authResolution.js';
+import { parseSignerIntent } from '../lib/signer-options.js';
 
 const optionsSchema = z.object({
   address: z.string().optional(),
@@ -72,7 +75,7 @@ export const doctorCommand = new Command('doctor')
   .option('--json', 'machine-readable output')
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
-    await runPasswordFilePermissionGate(opts.strict === true);
+    const strict = opts.strict === true;
 
     // No-prompt guarantee: in --json mode or when stdin isn't a TTY,
     // the doctor must never block on hidden-input read. Address
@@ -101,6 +104,21 @@ export const doctorCommand = new Command('doctor')
     const rpcUrlValue = rpcUrl.value;
     const rpcUrlMissing = rpcUrlValue === null;
 
+    // PR 4: run the same signer-resolution walker `ospex auth check`
+    // uses, in non-unlocking mode. The walker is pure resolution —
+    // no decrypt, no prompt — so the doctor's no-prompt guarantee
+    // is preserved. Permission check fans out separately.
+    const rawFile = await loadConfigFile();
+    const signerIntent = parseSignerIntent(rawOpts);
+    const authResolution = await resolveAuthSources(
+      signerIntent,
+      process.env,
+      rawFile,
+    );
+    const passwordFilePermissions = await checkPasswordFilePerms(
+      authResolution.password,
+    );
+
     // PR 2: probe RPC + contracts in parallel before chain reads.
     // PR 3: also probe /v1/config/public (Realtime bootstrap) so the
     // structured `connectivity.api_public_config` line is populated.
@@ -127,6 +145,9 @@ export const doctorCommand = new Command('doctor')
       apiUrl,
       rpcUrl,
       apiPublicConfigOk: apiPublicConfigResult.ok,
+      authResolution,
+      passwordFilePermissions,
+      strict,
       ...(inputs.balancesError !== undefined ? { balancesError: inputs.balancesError } : {}),
       ...(inputs.approvalsError !== undefined ? { approvalsError: inputs.approvalsError } : {}),
       ...(signerAddressError !== undefined ? { signerAddressError } : {}),
@@ -336,51 +357,4 @@ async function probeApiPublicConfig(
   } finally {
     clearTimeout(timer);
   }
-}
-
-/**
- * Check the permissions of the configured password file (env >
- * config). Loose perms → warning by default; with `--strict` they
- * become a hard exit before any chain work runs.
- *
- * Resolves in the same order `loadSigner` would consult: flag is not
- * a doctor surface, so env wins, then config. A missing file or
- * Windows / non-POSIX host short-circuits silently (no perm semantics
- * to enforce).
- *
- * Exported for tests via the dedicated `runPasswordFilePermissionGate`
- * import — keeps the test fixture from needing to round-trip through
- * the full doctor pipeline just to assert the strict-mode gate.
- */
-export async function runPasswordFilePermissionGate(strict: boolean): Promise<void> {
-  const envFile = process.env.OSPEX_PASSWORD_FILE;
-  let passwordFile: string | undefined;
-  if (envFile !== undefined && envFile.length > 0) {
-    passwordFile = expandTilde(envFile);
-  } else {
-    const config = await loadConfigFile();
-    if (config.passwordFile !== undefined && config.passwordFile.length > 0) {
-      passwordFile = expandTilde(config.passwordFile);
-    }
-  }
-  if (passwordFile === undefined) return;
-  let perms;
-  try {
-    perms = await checkPasswordFilePermissions(passwordFile);
-  } catch {
-    // File doesn't exist or stat failed — not this gate's problem.
-    return;
-  }
-  if (perms.platformSkipped) return;
-  if (!perms.loose) return;
-
-  const octal = perms.mode.toString(8).padStart(3, '0');
-  const msg =
-    `password file ${passwordFile} is readable by group/other (mode 0${octal}). ` +
-    'Tighten with `chmod 600 <file>`.';
-  if (strict) {
-    process.stderr.write(`error (password_file_permissions_loose): ${msg}\n`);
-    process.exit(1);
-  }
-  process.stderr.write(`warning: ${msg}\n`);
 }
