@@ -27,8 +27,11 @@ import type { MoneylineOdds, SpreadOdds, TotalOdds } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
 import { formatOutput } from '../../lib/format.js';
 
+const MARKET_VALUES = ['moneyline', 'spread', 'total'] as const;
+
 const optionsSchema = z.object({
   json: z.boolean().optional(),
+  market: z.enum(MARKET_VALUES).optional(),
 });
 
 export const oddsShowCommand = new Command('show')
@@ -37,6 +40,10 @@ export const oddsShowCommand = new Command('show')
   )
   .argument('<contestId>', 'contest ID')
   .option('--json', 'emit a single JSON envelope')
+  .option(
+    '--market <type>',
+    'filter human output to one market (moneyline | spread | total). Has no effect on --json — the JSON envelope shape stays stable for agents.',
+  )
   .action(async (contestId, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
     const client = await getClient({ requiresSigner: false });
@@ -96,9 +103,20 @@ export const oddsShowCommand = new Command('show')
       return;
     }
 
-    renderMoneyline(snapshot.odds.moneyline, contest);
-    renderSpread(snapshot.odds.spread, contest);
-    renderTotal(snapshot.odds.total);
+    // --market filters the human render to a single market. The JSON
+    // envelope shape (above) is intentionally NOT filtered so an agent
+    // sees the same `{ moneyline, spread, total }` triple regardless of
+    // whether the flag was passed — let the agent's own pipeline pick
+    // the field it cares about.
+    if (opts.market === undefined || opts.market === 'moneyline') {
+      renderMoneyline(snapshot.odds.moneyline, contest);
+    }
+    if (opts.market === undefined || opts.market === 'spread') {
+      renderSpread(snapshot.odds.spread, contest);
+    }
+    if (opts.market === undefined || opts.market === 'total') {
+      renderTotal(snapshot.odds.total);
+    }
   });
 
 function renderMoneyline(

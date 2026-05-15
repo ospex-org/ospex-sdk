@@ -13,6 +13,7 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 - **`ospex commitments list` — default human output is now taker-centric.** Columns: matchup, market, you back, your odds, max bet, to win. The previous protocol view (positionType=upper/lower, maker risk, maker odds) is preserved behind `--raw`. `--json` output is intentionally unchanged — the on-chain commitment shape stays the agent-stable contract.
 - **`ospex commitments list --side <team>`** — taker-view filter. Case-insensitive substring match against `youBack`. Handles full team names, last-token nicknames, and `over`/`under` for totals.
 - **`ospex commitments list --sort size|odds|newest`** — taker-view sort order. Default `size` puts the largest available `maxBet` first.
+- `ospex odds show <contestId> --market <type>` — narrow the human render to a single market (`moneyline`, `spread`, or `total`). The `--json` envelope shape is intentionally unchanged so agents still see the same `{ moneyline, spread, total }` triple regardless of the flag.
 
 ## [0.1.0] — 2026-05-10
 

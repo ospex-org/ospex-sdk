@@ -171,7 +171,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex positions claim-all [--address <addr>] [--dry-run]` | Sweep every claimable position for a wallet (settles where needed). |
 | `ospex positions settle <speculationId>` | Permissionlessly settle a scored speculation. |
 | `ospex leaderboard show` | Top entries on the active leaderboard. |
-| `ospex odds show <contestId> [--json]` | One-shot snapshot of upstream reference odds (moneyline / spread / total) for a contest's underlying game. Both American and decimal odds; `--json` emits a single envelope. Use this to decide a commitment price. |
+| `ospex odds show <contestId> [--json] [--market moneyline\|spread\|total]` | One-shot snapshot of upstream reference odds (moneyline / spread / total) for a contest's underlying game. Both American and decimal odds; `--json` emits a single envelope. `--market` narrows the human render to one market (no effect on `--json` — the envelope stays stable for agents). Use this to decide a commitment price. |
 | `ospex odds watch <contestId> [--json --include-refreshes]` | Streams Realtime upstream odds change events. Line-delimited JSON in `--json` mode — agent-facing. Use `odds show` for a one-shot snapshot; `watch` is for reacting to changes over time. |
 | `ospex wallet import [--force]` | Encrypts a private key into `~/.ospex/keystore.json` (legacy path). |
 | `ospex wallet unlock` | Caches the decrypted key for 15 minutes in `~/.ospex/session` (legacy path). |
