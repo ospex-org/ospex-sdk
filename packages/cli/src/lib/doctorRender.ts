@@ -15,6 +15,15 @@
 
 import { formatUnits } from 'viem';
 import type { ApprovalsSnapshot, BalancesSnapshot } from '@ospex/sdk';
+import {
+  buildMeta,
+  buildSummary,
+  runDoctorChecks,
+  type CheckId,
+  type CheckResult,
+  type MetaBlock,
+  type SummaryBlock,
+} from './doctorChecks.js';
 
 const INDENT = '  ';
 
@@ -190,84 +199,240 @@ export function pickNextSuggestion(
 }
 
 // ── JSON envelope ──────────────────────────────────────────────────
+//
+// `schemaVersion: 1` is additive on the happy path. On external-
+// dependency failure (RPC down, API down, missing config), the legacy
+// snapshot fields (`network`, `wallet.address`, `balances`, `allowances`)
+// may be `null` rather than fake-zeroed. Agents should treat `null` as
+// "could not read" and switch to `checks[]` for authoritative per-
+// field status. Pre-v2 the failure mode threw an unhandled exception
+// and produced no usable JSON envelope at all, so the new shape is
+// strictly an improvement, not a breaking change.
+
+export interface BalancesBlock {
+  native: { raw: string; formatted: string; decimals: 18; symbol: string };
+  usdc: { raw: string; formatted: string; decimals: 6; address: string };
+  link: { raw: string; formatted: string; decimals: 18; address: string };
+}
+
+export interface AllowancesBlock {
+  usdcPositionModule: { raw: string; formatted: string; spender: string };
+  usdcTreasuryModule: { raw: string; formatted: string; spender: string };
+  linkOracleModule: { raw: string; formatted: string; spender: string };
+}
 
 export interface JsonDoctorReport {
   schemaVersion: 1;
-  network: { chainId: number; label: string };
+  meta: MetaBlock;
+  network: { chainId: number; label: string } | null;
   api: { ok: boolean };
-  wallet: { address: string };
-  balances: {
-    native: { raw: string; formatted: string; decimals: 18; symbol: string };
-    usdc: { raw: string; formatted: string; decimals: 6; address: string };
-    link: { raw: string; formatted: string; decimals: 18; address: string };
-  };
-  allowances: {
-    usdcPositionModule: { raw: string; formatted: string; spender: string };
-    usdcTreasuryModule: { raw: string; formatted: string; spender: string };
-    linkOracleModule: { raw: string; formatted: string; spender: string };
-  };
+  wallet: { address: string | null };
+  balances: BalancesBlock | null;
+  allowances: AllowancesBlock | null;
   ready: {
     matchCommitments: Capability;
     submitCommitments: Capability;
     createContests: Capability;
   };
   suggestion: Suggestion | null;
+  checks: CheckResult[];
+  summary: SummaryBlock;
 }
 
-export interface DoctorReportInputs extends ReadinessInputs {
+export interface DoctorReportInputs {
   apiOk: boolean;
+  apiError?: string;
+  approvals: ApprovalsSnapshot | null;
+  approvalsError?: string;
+  balances: BalancesSnapshot | null;
+  balancesError?: string;
+  /**
+   * Resolved wallet address. Defaults to `balances?.owner ?? null`.
+   * Set explicitly to `null` to signal a no-prompt resolution failure
+   * (the doctor command does this when `--json` / non-TTY mode would
+   * otherwise need an interactive unlock).
+   */
+  signerAddress?: string | null;
+  signerAddressError?: string;
+  /** Defaults to `buildMeta()` if not supplied. Tests pass a stub. */
+  meta?: MetaBlock;
 }
 
 export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport {
-  const { approvals, balances, apiOk } = inputs;
-  const readiness = computeReadiness({ approvals, balances, apiOk });
-  const suggestion = pickNextSuggestion({ approvals, balances, apiOk }, readiness);
-  const symbol = nativeSymbol(balances.chainId);
+  const meta = inputs.meta ?? buildMeta();
+  // `signerAddress` defaults to the snapshot owner when not explicitly
+  // supplied — keeps test ergonomics that pre-date the v2 split.
+  const signerAddress =
+    inputs.signerAddress !== undefined
+      ? inputs.signerAddress
+      : (inputs.balances?.owner ?? null);
+
+  const checksInputs = {
+    apiOk: inputs.apiOk,
+    balances: inputs.balances,
+    approvals: inputs.approvals,
+    signerAddress,
+    ...(inputs.apiError !== undefined ? { apiError: inputs.apiError } : {}),
+    ...(inputs.balancesError !== undefined ? { balancesError: inputs.balancesError } : {}),
+    ...(inputs.approvalsError !== undefined ? { approvalsError: inputs.approvalsError } : {}),
+    ...(inputs.signerAddressError !== undefined
+      ? { signerAddressError: inputs.signerAddressError }
+      : {}),
+  };
+
+  const checks = runDoctorChecks(checksInputs);
+  const summary = buildSummary(checks);
+
+  const network = inputs.balances === null
+    ? null
+    : { chainId: inputs.balances.chainId, label: networkLabel(inputs.balances.chainId) };
+
+  // Wallet address falls back to the snapshot owner only when an
+  // explicit `signerAddress` wasn't provided — otherwise we respect
+  // null (the no-prompt failure mode wants `wallet.address: null`).
+  const walletAddress = signerAddress;
+
+  const balancesBlock = inputs.balances === null ? null : buildBalancesBlock(inputs.balances);
+  const allowancesBlock =
+    inputs.approvals === null ? null : buildAllowancesBlock(inputs.approvals);
+
+  let readiness: Readiness;
+  let suggestion: Suggestion | null;
+  if (inputs.approvals !== null && inputs.balances !== null) {
+    readiness = computeReadiness({
+      approvals: inputs.approvals,
+      balances: inputs.balances,
+      apiOk: inputs.apiOk,
+    });
+    suggestion = pickNextSuggestion(
+      { approvals: inputs.approvals, balances: inputs.balances, apiOk: inputs.apiOk },
+      readiness,
+    );
+  } else {
+    // Degraded path: the v2 `summary.byCapability` is authoritative;
+    // `ready` mirrors it for back-compat. No actionable next-step
+    // suggestion when chain reads failed — the user can't fix RPC by
+    // running a CLI command.
+    readiness = readinessFromSummary(summary);
+    suggestion = degradedSuggestion(inputs);
+  }
+
   return {
     schemaVersion: 1,
-    network: { chainId: balances.chainId, label: networkLabel(balances.chainId) },
-    api: { ok: apiOk },
-    wallet: { address: balances.owner },
-    balances: {
-      native: {
-        raw: balances.native.toString(),
-        formatted: trimDecimal(formatUnits(balances.native, 18), 6),
-        decimals: 18,
-        symbol,
-      },
-      usdc: {
-        raw: balances.usdc.toString(),
-        formatted: formatUnits(balances.usdc, 6),
-        decimals: 6,
-        address: balances.usdcAddress,
-      },
-      link: {
-        raw: balances.link.toString(),
-        formatted: trimDecimal(formatUnits(balances.link, 18), 6),
-        decimals: 18,
-        address: balances.linkAddress,
-      },
-    },
-    allowances: {
-      usdcPositionModule: serializeAllowance(
-        approvals.usdc.allowances.positionModule.raw,
-        approvals.usdc.allowances.positionModule.spender,
-        6,
-      ),
-      usdcTreasuryModule: serializeAllowance(
-        approvals.usdc.allowances.treasuryModule.raw,
-        approvals.usdc.allowances.treasuryModule.spender,
-        6,
-      ),
-      linkOracleModule: serializeAllowance(
-        approvals.link.allowances.oracleModule.raw,
-        approvals.link.allowances.oracleModule.spender,
-        18,
-      ),
-    },
+    meta,
+    network,
+    api: { ok: inputs.apiOk },
+    wallet: { address: walletAddress },
+    balances: balancesBlock,
+    allowances: allowancesBlock,
     ready: readiness,
     suggestion,
+    checks,
+    summary,
   };
+}
+
+function buildBalancesBlock(balances: BalancesSnapshot): BalancesBlock {
+  const symbol = nativeSymbol(balances.chainId);
+  return {
+    native: {
+      raw: balances.native.toString(),
+      formatted: trimDecimal(formatUnits(balances.native, 18), 6),
+      decimals: 18,
+      symbol,
+    },
+    usdc: {
+      raw: balances.usdc.toString(),
+      formatted: formatUnits(balances.usdc, 6),
+      decimals: 6,
+      address: balances.usdcAddress,
+    },
+    link: {
+      raw: balances.link.toString(),
+      formatted: trimDecimal(formatUnits(balances.link, 18), 6),
+      decimals: 18,
+      address: balances.linkAddress,
+    },
+  };
+}
+
+function buildAllowancesBlock(approvals: ApprovalsSnapshot): AllowancesBlock {
+  return {
+    usdcPositionModule: serializeAllowance(
+      approvals.usdc.allowances.positionModule.raw,
+      approvals.usdc.allowances.positionModule.spender,
+      6,
+    ),
+    usdcTreasuryModule: serializeAllowance(
+      approvals.usdc.allowances.treasuryModule.raw,
+      approvals.usdc.allowances.treasuryModule.spender,
+      6,
+    ),
+    linkOracleModule: serializeAllowance(
+      approvals.link.allowances.oracleModule.raw,
+      approvals.link.allowances.oracleModule.spender,
+      18,
+    ),
+  };
+}
+
+// Translate the v2 summary into the legacy readiness matrix when
+// snapshots weren't available. The check IDs map to the same reason
+// strings `computeReadiness` produces on the happy path so consumers
+// see consistent vocabulary regardless of which path ran.
+function readinessFromSummary(summary: SummaryBlock): Readiness {
+  return {
+    matchCommitments: capabilityFromRollup(summary.byCapability.matchCommitments),
+    submitCommitments: capabilityFromRollup(summary.byCapability.submitCommitments),
+    createContests: capabilityFromRollup(summary.byCapability.createContests),
+  };
+}
+
+function capabilityFromRollup(rollup: SummaryBlock['byCapability']['matchCommitments']): Capability {
+  if (rollup.ok) return { ok: true, reasons: [] };
+  return { ok: false, reasons: rollup.blockingChecks.map(checkIdToReason) };
+}
+
+function checkIdToReason(id: CheckId): string {
+  switch (id) {
+    case 'connectivity.api':
+      return 'Core API unreachable';
+    case 'signer.address_known':
+      return 'wallet address could not be resolved';
+    case 'balances.native':
+      return 'no POL balance for gas';
+    case 'balances.usdc':
+      return 'no USDC balance';
+    case 'balances.link':
+      return 'no LINK balance';
+    case 'allowances.usdc_position':
+      return 'PositionModule USDC not approved';
+    case 'allowances.usdc_treasury':
+      return 'TreasuryModule USDC not approved';
+    case 'allowances.link_oracle':
+      return 'OracleModule LINK not approved';
+  }
+}
+
+function degradedSuggestion(inputs: DoctorReportInputs): Suggestion | null {
+  if (inputs.signerAddress === null && inputs.signerAddressError !== undefined) {
+    return {
+      text:
+        'Wallet address could not be resolved without unlocking the keystore. ' +
+        'Pass --address <0x...> for a read-only check, or configure a non-interactive ' +
+        'signer via `ospex auth use-foundry --account <name> --password-file <path>`.',
+      audience: 'bettor',
+    };
+  }
+  if (inputs.balances === null || inputs.approvals === null) {
+    return {
+      text:
+        'Chain reads failed — the doctor could not determine on-chain balances or allowances. ' +
+        'Check that `rpcUrl` is configured and reachable. See `checks[]` for details.',
+      audience: 'bettor',
+    };
+  }
+  return null;
 }
 
 function serializeAllowance(
@@ -288,46 +453,62 @@ export function renderDoctorReport(
   report: JsonDoctorReport,
   out: NodeJS.WritableStream,
 ): void {
-  out.write(`\nNetwork:    ${report.network.label} (${report.network.chainId})\n`);
+  if (report.network !== null) {
+    out.write(`\nNetwork:    ${report.network.label} (${report.network.chainId})\n`);
+  } else {
+    out.write('\nNetwork:    (chain read failed)\n');
+  }
   out.write(`Core API:   ${report.api.ok ? 'ok' : 'unreachable'}\n`);
-  out.write(`Wallet:     ${report.wallet.address}\n`);
+  out.write(`Wallet:     ${report.wallet.address ?? '(not resolved)'}\n`);
 
-  out.write('\nBalances\n');
-  out.write(
-    `${INDENT}${(report.balances.native.symbol).padEnd(8)} ${formatNative(report.balances.native)}\n`,
-  );
-  out.write(
-    `${INDENT}${'USDC'.padEnd(8)} ${formatUsdcRow(report.balances.usdc)}\n`,
-  );
-  // The "only needed for contests" annotation fires when the user's
-  // LINK balance is below display precision — not strictly raw === 0.
-  // Address 0x..01 on mainnet has 6.45e-7 LINK from misdirected dust;
-  // raw is non-zero but visually it's "0 LINK", so the check has to
-  // mirror what the user actually sees. The same threshold gates
-  // `computeReadiness` so the doctor never says "ready to create
-  // contests" with a balance the renderer flagged as dust.
-  const linkEffectivelyZero = BigInt(report.balances.link.raw) < LINK_DUST_FLOOR_WEI;
-  out.write(
-    `${INDENT}${'LINK'.padEnd(8)} ${formatLinkRow(report.balances.link)}` +
-      (linkEffectivelyZero ? '    (only needed for contest creation/scoring)' : '') +
-      '\n',
-  );
+  if (report.balances !== null) {
+    out.write('\nBalances\n');
+    out.write(
+      `${INDENT}${report.balances.native.symbol.padEnd(8)} ${formatNative(report.balances.native)}\n`,
+    );
+    out.write(`${INDENT}${'USDC'.padEnd(8)} ${formatUsdcRow(report.balances.usdc)}\n`);
+    // The "only needed for contests" annotation fires when the user's
+    // LINK balance is below display precision — not strictly raw === 0.
+    // Address 0x..01 on mainnet has 6.45e-7 LINK from misdirected dust;
+    // raw is non-zero but visually it's "0 LINK", so the check has to
+    // mirror what the user actually sees. The same threshold gates
+    // `computeReadiness` so the doctor never says "ready to create
+    // contests" with a balance the renderer flagged as dust.
+    const linkEffectivelyZero = BigInt(report.balances.link.raw) < LINK_DUST_FLOOR_WEI;
+    out.write(
+      `${INDENT}${'LINK'.padEnd(8)} ${formatLinkRow(report.balances.link)}` +
+        (linkEffectivelyZero ? '    (only needed for contest creation/scoring)' : '') +
+        '\n',
+    );
+  } else {
+    out.write('\nBalances    (chain read failed — see Checks below)\n');
+  }
 
-  out.write('\nAllowances\n');
-  out.write(
-    `${INDENT}${'PositionModule'.padEnd(16)} (bet risk):       ${formatUsdcAllowance(report.allowances.usdcPositionModule)}\n`,
-  );
-  out.write(
-    `${INDENT}${'TreasuryModule'.padEnd(16)} (protocol fees):  ${formatUsdcAllowance(report.allowances.usdcTreasuryModule)}\n`,
-  );
-  out.write(
-    `${INDENT}${'OracleModule'.padEnd(16)} (Chainlink):       ${formatLinkAllowance(report.allowances.linkOracleModule)}\n`,
-  );
+  if (report.allowances !== null) {
+    out.write('\nAllowances\n');
+    out.write(
+      `${INDENT}${'PositionModule'.padEnd(16)} (bet risk):       ${formatUsdcAllowance(report.allowances.usdcPositionModule)}\n`,
+    );
+    out.write(
+      `${INDENT}${'TreasuryModule'.padEnd(16)} (protocol fees):  ${formatUsdcAllowance(report.allowances.usdcTreasuryModule)}\n`,
+    );
+    out.write(
+      `${INDENT}${'OracleModule'.padEnd(16)} (Chainlink):       ${formatLinkAllowance(report.allowances.linkOracleModule)}\n`,
+    );
+  } else {
+    out.write('\nAllowances  (chain read failed — see Checks below)\n');
+  }
 
   out.write('\nReady to:\n');
-  out.write(`${INDENT}${'match existing commitments'.padEnd(28)} ${formatCapability(report.ready.matchCommitments)}\n`);
-  out.write(`${INDENT}${'submit new commitments'.padEnd(28)} ${formatCapability(report.ready.submitCommitments)}\n`);
-  out.write(`${INDENT}${'create contests'.padEnd(28)} ${formatCapability(report.ready.createContests)}\n`);
+  out.write(
+    `${INDENT}${'match existing commitments'.padEnd(28)} ${formatCapability(report.ready.matchCommitments)}\n`,
+  );
+  out.write(
+    `${INDENT}${'submit new commitments'.padEnd(28)} ${formatCapability(report.ready.submitCommitments)}\n`,
+  );
+  out.write(
+    `${INDENT}${'create contests'.padEnd(28)} ${formatCapability(report.ready.createContests)}\n`,
+  );
 
   if (report.suggestion !== null) {
     out.write('\nNext step:\n');
@@ -336,7 +517,19 @@ export function renderDoctorReport(
       out.write(`${INDENT}  $ ${report.suggestion.command}\n`);
     }
   }
+
+  renderChecksSection(report.checks, out);
   out.write('\n');
+}
+
+function renderChecksSection(checks: CheckResult[], out: NodeJS.WritableStream): void {
+  out.write('\nChecks\n');
+  for (const c of checks) {
+    const status = c.status.padEnd(4);
+    const id = c.id.padEnd(28);
+    const details = c.details !== undefined ? `  — ${c.details}` : '';
+    out.write(`${INDENT}[${status}] ${id} ${c.label}${details}\n`);
+  }
 }
 
 function formatCapability(c: Capability): string {
@@ -344,7 +537,7 @@ function formatCapability(c: Capability): string {
   return `no — ${c.reasons.join(', ')}`;
 }
 
-function formatNative(b: JsonDoctorReport['balances']['native']): string {
+function formatNative(b: BalancesBlock['native']): string {
   // Same "below display precision = effectively zero" pattern as the
   // LINK annotation, sharing POL_GAS_FLOOR_WEI with computeReadiness
   // so the doctor never says "ready to match" while annotating the
@@ -353,11 +546,11 @@ function formatNative(b: JsonDoctorReport['balances']['native']): string {
   return `${b.formatted} ${b.symbol}` + (effectivelyZero ? '    (no gas — no tx will land)' : '');
 }
 
-function formatUsdcRow(b: JsonDoctorReport['balances']['usdc']): string {
+function formatUsdcRow(b: BalancesBlock['usdc']): string {
   return `${b.formatted} USDC`;
 }
 
-function formatLinkRow(b: JsonDoctorReport['balances']['link']): string {
+function formatLinkRow(b: BalancesBlock['link']): string {
   return `${b.formatted} LINK`;
 }
 
