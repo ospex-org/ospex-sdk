@@ -21,11 +21,13 @@ export {
   OspexAllowanceError,
   OspexChainError,
   OspexScriptApprovalError,
+  OspexSignerResolutionError,
   OspexSubscriptionError,
 } from './errors.js';
 export type {
   OspexErrorCode,
   OspexScriptApprovalReason,
+  OspexSignerResolutionReason,
   OspexSubscriptionReason,
 } from './errors.js';
 
