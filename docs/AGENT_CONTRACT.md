@@ -36,7 +36,7 @@ Three CLI commands ship a **dual-mode** `--json`: preview-only without `--yes`, 
 | Command | `--json` alone | `--yes --json` |
 |---|---|---|
 | `ospex commitments submit` | Emits `SubmitPreviewEnvelope`. **No signing, no POST.** | Emits `SubmitJsonResult`. Signs and posts. |
-| `ospex commitments match` | Emits `MatchPreviewEnvelope`. **No tx.** Signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight). | Emits `MatchJsonResult`. Sends a tx. |
+| `ospex commitments match` | Emits `MatchPreviewEnvelope`. **No tx.** Signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight) — only when a non-interactive credential is configured. See §4 (lazy-unlock contract) for the full rules. | Emits `MatchJsonResult`. Sends a tx. |
 | `ospex approvals setup` | Plan-only envelope (no tx). | Executes the plan, emits the result envelope. |
 
 Other write commands (`contests score`, `settle`, `claim`, `claim-all`, `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`) treat `--json` as **output format only** — they may still send a transaction. For these, use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
@@ -123,7 +123,258 @@ OspexValidationError: --yes is required for non-interactive runs of `<command>`.
 
 ---
 
-## 4. CLI: the streaming contract (`ospex odds watch`)
+## 4. Non-interactive signing
+
+Agents can't answer interactive passphrase prompts. The CLI and SDK both expose a non-interactive signer surface that reads the passphrase from a file, stdin, or env var, decrypts the Foundry keystore in process memory for the duration of one command, and discards the decrypted material when the command returns. The legacy session-cache file (`~/.ospex/session`) is **not** written on this path.
+
+The contract has four parts: a per-invocation flag group on every write command, a one-time pinning step via `ospex auth use-foundry`, a lazy-unlock guarantee for `--json` preview-only paths, and a diagnostic (`ospex auth check`) that mirrors the same resolution ladder a real write would walk.
+
+### Flag group (every write command)
+
+Every command that signs a transaction or an EIP-712 payload accepts the same six flags:
+
+| Flag | Effect |
+|---|---|
+| `--account <name>` | Foundry keystore name. Resolves to `<foundryKeystoresDir>/<name>`. Mutually exclusive with `--keystore-path`. |
+| `--keystore-path <path>` | Absolute path to a v3 keystore JSON. Mutually exclusive with `--account`. |
+| `--password-file <path>` | Read the passphrase from a file (trailing newline trimmed, matching `cast`). Mutually exclusive with `--password-stdin`. |
+| `--password-stdin` | Read the passphrase from stdin (first line). |
+| `--expected-address <0x…>` | Refuse to sign if the unlocked keystore's address doesn't match. Comparison is case-insensitive. |
+| `--foundry-keystores-dir <path>` | Override the Foundry keystores root. Default precedence: this flag → `$OSPEX_FOUNDRY_KEYSTORES_DIR` → `$FOUNDRY_DIR/keystores` → `~/.foundry/keystores`. |
+
+The CLI **never** accepts a raw passphrase or a raw private key as a CLI argument or env var. There is intentionally no `--password <value>` flag and no `OSPEX_PASSWORD` env var — passphrases are file paths or piped stdin only.
+
+### Env vars
+
+| Var | Effect |
+|---|---|
+| `OSPEX_KEYSTORE_PATH` | Direct path to a v3 keystore JSON. Highest-precedence env keystore source. |
+| `OSPEX_PASSWORD_FILE` | Path to a passphrase file. The file is the secret; only the path is in the env. |
+| `OSPEX_FOUNDRY_KEYSTORES_DIR` | Override the Foundry keystores root. |
+| `FOUNDRY_DIR` | Foundry's standard env var. The CLI appends `/keystores`. |
+| `OSPEX_HOME` | Ospex home dir (default `~/.ospex`). Tests use this to point at a tmpdir. |
+
+There is no env var that holds the passphrase itself — passing one through `/proc/<pid>/environ` is exactly the leak this surface exists to avoid.
+
+### Precedence ladder
+
+For each field, the highest source wins; lower sources are silently dropped.
+
+| Field | Precedence (high → low) |
+|---|---|
+| Keystore | `--account` / `--keystore-path` flag → `OSPEX_KEYSTORE_PATH` env → `foundryAccount` / `foundryKeystorePath` in config (set by `auth use-foundry`) → legacy `keystorePath` in config (set by `ospex init`) → default `~/.ospex/keystore.json` |
+| Passphrase | `--password-file` / `--password-stdin` flag → `OSPEX_PASSWORD_FILE` env → `passwordFile` in config → cached session (`~/.ospex/session`) → interactive prompt |
+| Expected address | `--expected-address` flag → `expectedAddress` in config (only when the resolved keystore corresponds to the configured source) → no pin |
+| Foundry keystores dir | `--foundry-keystores-dir` flag → `OSPEX_FOUNDRY_KEYSTORES_DIR` env → `$FOUNDRY_DIR/keystores` env → `foundryKeystoresDir` in config → default `~/.foundry/keystores` |
+
+Two precedence subtleties carved out by the regression tests in `tests/auth-check.test.ts`:
+
+1. **Config-pinned `expectedAddress` does not apply to env `OSPEX_KEYSTORE_PATH` overrides** unless the env path equals `config.foundryKeystorePath` exactly. A pin set by `auth use-foundry --account X` is for X; pointing env at a different keystore does not inherit the pin.
+
+2. **Legacy keystore paths (`config.keystorePath` from `ospex init`, default `~/.ospex/keystore.json`) ignore flag / env / config password sources.** The legacy code path is interactive only — it either reads the cached session or prompts. To get non-interactive unlocking on the legacy keystore, migrate with `ospex auth use-foundry --keystore-path <legacy-path>`. This is why `auth check` reports `password.provenance: 'none'` (would prompt) when only `config.passwordFile` is set on a legacy keystore — the runtime cannot consume it.
+
+### Pinning a default signer
+
+```bash
+ospex auth use-foundry --account ospex-stage-maker-a --password-file ~/.ospex/secrets/maker-a.pass
+```
+
+Decrypts the keystore once to validate the passphrase, captures the unlocked address, and writes the following to `~/.ospex/config.json`:
+
+```jsonc
+{
+  "foundryAccount": "ospex-stage-maker-a",
+  "passwordFile": "/home/agent/.ospex/secrets/maker-a.pass",
+  "foundryKeystoresDir": "/home/agent/.foundry/keystores",
+  "expectedAddress": "0xab12…34cd"
+}
+```
+
+Subsequent write commands resolve these as the keystore source, password source, and address guardrail. Re-running `auth use-foundry` overwrites the pin; pass `--no-pin-address` to opt out of the address pin (useful when intentionally rotating keys under the same account name).
+
+For the explicit-path variant, pass `--keystore-path` instead of `--account` — it writes `foundryKeystorePath`, a distinct field from the legacy `keystorePath` set by `ospex init`. The split is intentional: `auth use-foundry` never overwrites the field `ospex init` populated, so users with only an `init` setup keep today's behavior.
+
+### Clearing a pinned signer
+
+```bash
+ospex auth clear-foundry --all
+```
+
+Removes every Foundry signer field (`foundryAccount`, `foundryKeystorePath`, `passwordFile`, `foundryKeystoresDir`, `expectedAddress`) but **preserves** the legacy `keystorePath` from `ospex init`. Targeted flags clear individual fields: `--account`, `--keystore-path`, `--password-file`, `--expected-address`, `--foundry-keystores-dir`. Non-destructive when nothing is set.
+
+### Lazy-unlock for `--json` previews
+
+The two preview-bearing commands — `commitments submit --json` and `commitments match --json` (each without `--yes`) — must derive a maker / taker address to render the preview but must NOT surprise-unlock when no agent-friendly credentials are configured. The contract:
+
+1. If `--expected-address <addr>` is set, use it directly. No I/O on the keystore.
+2. Else if a non-interactive password source is configured (flag, env, config, or a cached session), unlock silently and derive the address.
+3. Else throw `OspexSignerResolutionError({ reason: 'non_interactive_password_required' })` with a three-path remediation message:
+
+```
+Preview-only `--json` mode needs a non-interactive signer source.
+Pass --expected-address <0x...>, or --account <name> --password-file <path>,
+or run `ospex wallet unlock` first.
+```
+
+Agents that want the preview without unlocking should pass `--expected-address`. The actual unlock-and-sign branch fires only after the user / agent confirms with `--yes`.
+
+### `ospex auth check`
+
+A diagnostic command that walks the same resolution ladder a real write command would, reports the provenance of every field, optionally unlocks + verifies, and optionally signs a static EIP-712 challenge — without sending a transaction or mutating any API state.
+
+```bash
+ospex auth check                            # walk + report
+ospex auth check --strict                   # promote loose password-file perms to a hard error
+ospex auth check --sign-challenge           # also sign a deterministic challenge to prove end-to-end signing
+ospex auth check --json                     # machine-readable envelope (schemaVersion: 1)
+```
+
+It also accepts the full signer flag group (`--account`, `--keystore-path`, etc.) so agents can validate a candidate configuration before committing it via `auth use-foundry`.
+
+#### Envelope shape (`schemaVersion: 1`)
+
+```ts
+interface AuthCheckJsonEnvelope {
+  schemaVersion: 1;
+  ok: boolean;
+  strict: boolean;
+  resolution: {
+    keystore: {
+      provenance: KeystoreProvenance;
+      path: string;
+      account: string | null;
+      exists: boolean;
+    };
+    password: {
+      provenance: PasswordProvenance;
+      path: string | null;
+      exists: boolean | null;
+    };
+    expectedAddress: {
+      provenance: 'flag' | 'config' | 'none';
+      value: `0x${string}` | null;
+    };
+    foundryKeystoresDir: {
+      provenance:
+        | 'flag'
+        | 'env-OSPEX_FOUNDRY_KEYSTORES_DIR'
+        | 'env-FOUNDRY_DIR'
+        | 'config'
+        | 'default';
+      value: string;
+    };
+  };
+  unlock: {
+    attempted: boolean;
+    succeeded: boolean | null;
+    address: `0x${string}` | null;
+    skippedReason: 'no_non_interactive_password' | null;
+  };
+  passwordFilePermissions: {
+    checked: boolean;
+    platformSkipped: boolean;     // true on Windows — POSIX semantics don't apply
+    mode: number | null;          // POSIX mode bits (lower 9)
+    octal: string | null;         // '600', '644', ...
+    loose: boolean | null;        // (mode & 0o077) !== 0
+  };
+  challenge: {
+    requested: boolean;
+    signed: boolean;
+    signature: `0x${string}` | null;
+  };
+  warnings: string[];
+  errors: Array<{ code: string; message: string }>;
+}
+
+type KeystoreProvenance =
+  | 'flag-account'
+  | 'flag-keystore-path'
+  | 'env-OSPEX_KEYSTORE_PATH'
+  | 'config-foundryAccount'
+  | 'config-foundryKeystorePath'
+  | 'config-keystorePath-legacy'    // set by `ospex init`, NOT by `auth use-foundry`
+  | 'default-legacy';               // ~/.ospex/keystore.json
+
+type PasswordProvenance =
+  | 'flag-password-file'
+  | 'flag-password-stdin'
+  | 'env-OSPEX_PASSWORD_FILE'
+  | 'config-passwordFile'
+  | 'session-cache'
+  | 'none';
+```
+
+Provenance enum values are stable; new values may be added (forward-compatible — log + ignore unknown). Authoritative source: [`packages/cli/src/commands/auth/check.ts`](../packages/cli/src/commands/auth/check.ts).
+
+Exit code: `0` if `ok === true`, `1` otherwise. `--strict` promotes loose password-file permissions from a warning to an `errors[]` entry with code `'password_file_permissions_loose'`.
+
+#### `--sign-challenge` payload
+
+Deterministic EIP-712 typed-data. Same key → same signature, forever. Agents can recreate this domain to verify a signature out-of-band:
+
+```ts
+const AUTH_CHALLENGE = {
+  domain: { name: 'Ospex Auth Check', version: '1' },
+  types: {
+    AuthChallenge: [
+      { name: 'product', type: 'string' },
+      { name: 'purpose', type: 'string' },
+    ],
+  },
+  primaryType: 'AuthChallenge',
+  message: {
+    product: 'ospex',
+    purpose: 'auth-check signing self-test',
+  },
+} as const;
+```
+
+The domain intentionally omits `chainId` and `verifyingContract` — this is a self-test, not a protocol message; binding to a chain would make Amoy vs mainnet checks produce different signatures for the same key. `auth check --sign-challenge` requires a non-interactive password source; absent one it errors with `reason: 'non_interactive_password_required'`.
+
+### `ospex doctor --strict`
+
+`doctor` gained the same `--strict` flag as `auth check`. A group/other-readable password file (`mode & 0o077 !== 0`) becomes a hard `password_file_permissions_loose` error before any chain calls run — useful as a CI gate ahead of a batch of writes. Default `doctor` still emits a stderr warning and proceeds.
+
+### SDK equivalents
+
+The CLI flag surface delegates to two SDK constructors that any programmatic consumer can use directly:
+
+```ts
+import { KeystoreSigner } from '@ospex/sdk/signers/keystore';
+
+const signer = await KeystoreSigner.fromFoundryAccount({
+  account: 'ospex-stage-maker-a',
+  passwordFile: '/home/agent/.ospex/secrets/maker-a.pass',
+  foundryKeystoresDir: '/home/agent/.foundry/keystores',  // optional
+  expectedAddress: '0xab12…34cd',                          // optional guardrail
+  strict: true,                                            // optional: hard-fail on loose pw-file perms
+});
+
+// Or by direct path:
+const signer2 = await KeystoreSigner.fromKeystoreFile({
+  keystorePath: '/path/to/v3-keystore.json',
+  passwordFile: '/path/to/pw',
+});
+```
+
+Both helpers throw `OspexSignerResolutionError` with one of the documented `reason` codes on failure (see §7). They never re-encrypt or copy the key — the decrypted material lives in the returned `KeystoreSigner` instance and is discarded when it goes out of scope.
+
+For callers that need fine-grained control, the lower-level resolver and reader are also exported from the same subpath:
+
+```ts
+import {
+  resolveKeystoreSource,
+  readPassphrase,
+  checkPasswordFilePermissions,
+  type OspexEnv,
+} from '@ospex/sdk/signers/keystore';
+```
+
+These are pure compositional pieces with no implicit env/config layering — the CLI does its env/config layering before calling them. The structural `OspexEnv = Record<string, string | undefined>` is the env-vars type; it's compatible with `process.env` without dragging `@types/node` into consumers that haven't installed it.
+
+---
+
+## 5. CLI: the streaming contract (`ospex odds watch`)
 
 `ospex odds watch <contestId> --json` is the agent-facing streaming primitive. Each event is emitted via `JSON.stringify({ kind, ...odds })` where `odds` is an `OddsSnapshot` from [`packages/sdk/src/types/odds.ts`](../packages/sdk/src/types/odds.ts). One object per line, NDJSON.
 
@@ -195,7 +446,7 @@ Use `odds show` to decide a price *now*; use `odds watch` to react to changes ov
 
 ---
 
-## 5. CLI: exit codes
+## 6. CLI: exit codes
 
 | Code | Meaning |
 |---|---|
@@ -207,7 +458,7 @@ The SDK's typed errors that surface to the CLI all currently exit `1`. If you ne
 
 ---
 
-## 6. SDK: typed error contract
+## 7. SDK: typed error contract
 
 Every error thrown by the SDK extends `OspexError` and carries a discriminable `code` field. Switch on `code` for routing; switch on `reason` (sub-class) for finer dispatch.
 
@@ -222,6 +473,7 @@ import {
   OspexChainError,
   OspexScriptApprovalError,
   OspexSubscriptionError,
+  OspexSignerResolutionError,
 } from '@ospex/sdk';
 
 try {
@@ -248,6 +500,7 @@ try {
 | `CHAIN_ERROR` | `OspexChainError` | `reason?`, `revertReason?`, `txHash?` | RPC error, revert, receipt status reverted. |
 | `SCRIPT_APPROVAL_INVALID` | `OspexScriptApprovalError` | `reason: 'hash_mismatch' \| 'expired' \| 'not_configured'`, `expectedHash?`, `actualHash?` | Chainlink Functions ScriptApproval is unusable. |
 | `SUBSCRIPTION_ERROR` | `OspexSubscriptionError` | `reason: 'link_balance_insufficient' \| 'consumer_not_registered' \| 'subscription_id_missing'`, `subscriptionId?` | Chainlink Functions subscription unusable. |
+| `SIGNER_RESOLUTION_ERROR` | `OspexSignerResolutionError` | `reason`, `path?`, `expectedAddress?`, `actualAddress?`, `mode?` | Non-interactive Foundry-keystore signer resolution failed (missing path / file, wrong passphrase, address mismatch, conflicting flags, or — under `--strict` — loose password-file perms). See §4. |
 
 ### `OspexChainError.reason` enum
 
@@ -257,6 +510,21 @@ Stable strings:
 - `'NonceMustIncrease'` — `raiseMinNonce` / `cancelAllOnSpeculation` called with `newMinNonce` ≤ current floor.
 
 Other reverts surface with `reason` undefined and a free-form `revertReason` string when the SDK can decode it. New typed reasons are additive (forward-compatible).
+
+### `OspexSignerResolutionError.reason` enum
+
+Stable strings. Switch on this for fine dispatch in the non-interactive signing flow:
+
+- `'keystore_not_found'` — the resolved keystore file doesn't exist on disk. `error.path` is the resolved path (so error renderers can say "looked at /home/agent/.foundry/keystores/maker-a").
+- `'password_file_not_found'` — `--password-file` / `OSPEX_PASSWORD_FILE` / `config.passwordFile` points at a missing file. `error.path` is the resolved path.
+- `'decryption_failed'` — the passphrase didn't decrypt the keystore. Most common cause is a typo in the `.pass` file.
+- `'address_mismatch'` — the unlocked keystore's address differs from `--expected-address` or the config-pinned `expectedAddress`. `error.expectedAddress` and `error.actualAddress` carry the diff (both lowercased).
+- `'non_interactive_password_required'` — a preview-only `--json` path or `auth check --sign-challenge` needs a non-interactive password source and none is configured.
+- `'password_file_permissions_loose'` — emitted only under `--strict` (e.g. `auth check --strict` / `doctor --strict`). `error.mode` carries the POSIX mode bits; `error.path` is the file.
+- `'account_and_path_conflict'` — both `--account` and `--keystore-path` were supplied for one resolve call. Caller bug.
+- `'password_source_conflict'` — multiple passphrase sources were supplied to the SDK (e.g. `passwordFile` AND `fromStdin`). Caller bug.
+
+New reason codes are additive (forward-compatible).
 
 ### Retryability
 
@@ -273,12 +541,13 @@ Other reverts surface with `reason` undefined and a free-form `revertReason` str
 | `CHAIN_ERROR` without `txHash` | Sometimes — RPC transport errors are retry-safe; reverts before send are not. Use `reason` to distinguish. |
 | `SCRIPT_APPROVAL_INVALID` with `reason === 'expired'` | Wait for re-sign + redeploy of `ospex-core-api`. |
 | `SUBSCRIPTION_ERROR` with `reason === 'link_balance_insufficient'` | Yes after funding the wallet with LINK. |
+| `SIGNER_RESOLUTION_ERROR` (any `reason`) | No — fix the configuration. Surface to the operator rather than retrying. |
 
 The SDK does not retry for you. Build the retry loop in your agent.
 
 ---
 
-## 7. SDK: trust boundaries
+## 8. SDK: trust boundaries
 
 The SDK's threat model is "the host machine is honest, the user's wallet is sovereign." From that, the contract:
 
@@ -286,17 +555,18 @@ The SDK's threat model is "the host machine is honest, the user's wallet is sove
 |---|---|
 | Private keys (SDK) | The SDK never asks for a raw private key in its public `Signer` interface, never logs one, and never persists one. Signing is delegated to whichever `Signer` you supply (typed-data + raw-tx). |
 | `KeystoreSigner` | `KeystoreSigner.unlock(json, passphrase)` decrypts a v3 keystore (Foundry- or ethers-produced) **once** and stores a `viem.PrivateKeyAccount` on the signer instance. Subsequent `signTypedData` / `signTransaction` calls reuse that account — they do **not** re-decrypt. The decrypted material lives for the lifetime of the `KeystoreSigner` instance, not "the duration of the call". `KeystoreSigner.fromPrivateKey(pk)` constructs from a raw key directly (no decrypt). |
-| **CLI session cache (`ospex wallet unlock`)** | Writes the **decrypted private key** to `~/.ospex/session` as plain JSON, mode `0600`, 15-minute TTL (parent dir mode `0700`). Mode `0600` makes the file unreadable by *other* users on the host but does NOT protect against any process running as the same user — those can read it for the duration of the unlock. The Foundry-keystore path with no `wallet unlock` (each signature re-prompts for the passphrase via a fresh `KeystoreSigner.unlock`) avoids this trade-off entirely; the legacy session-cache path is kept for backwards compatibility but is not the recommended posture. |
+| `KeystoreSigner.fromFoundryAccount` / `fromKeystoreFile` | Non-interactive helpers used by both the CLI and direct SDK consumers. They read the keystore file, read the passphrase from `passwordFile` / `fromStdin` / `passphrase` (literal) / `OSPEX_PASSWORD_FILE` env, decrypt in process memory, optionally verify `expectedAddress`, and return a `KeystoreSigner`. They never re-encrypt or copy the key; the decrypted material lives only inside the returned instance. The decryption never touches the session cache (`~/.ospex/session`). See §4 for the full surface. |
+| **CLI session cache (`ospex wallet unlock`)** | Writes the **decrypted private key** to `~/.ospex/session` as plain JSON, mode `0600`, 15-minute TTL (parent dir mode `0700`). Mode `0600` makes the file unreadable by *other* users on the host but does NOT protect against any process running as the same user — those can read it for the duration of the unlock. The Foundry-keystore path with non-interactive credentials (flag / env / `auth use-foundry`-pinned `passwordFile`) avoids this trade-off entirely; the legacy session-cache path is kept for backwards compatibility but is not the recommended posture. New `wallet unlock` users should consider `ospex auth use-foundry --account <name> --password-file <path>` instead — same passphrase storage on disk (the `.pass` file), no decrypted key on disk. |
 | RPC URL | **Caller-supplied.** No public-RPC default; `ospex init` prompts for one. The SDK uses the URL only as a viem `PublicClient` transport. |
 | Supabase URL + anon key | Lazy-fetched from `GET /v1/config/public` on the first Realtime call, OR caller-supplied via `OspexClient` constructor. The anon key is the **publishable** key — never the service-role key. |
 | Chainlink Functions encrypted secrets | Fetched from a public alias (`secrets.ospex.org`) and passed verbatim into `OracleModule.createContestFromOracle`. The SDK never sees the plaintext. |
 | API base URL | Defaults to `https://api.ospex.org`. Override at construction. |
 
-The SDK has no module-level state. Multiple `OspexClient` instances are fully isolated — including per-instance nonce counters (see §9).
+The SDK has no module-level state. Multiple `OspexClient` instances are fully isolated — including per-instance nonce counters (see §10).
 
 ---
 
-## 8. SDK: idempotency contracts
+## 9. SDK: idempotency contracts
 
 | Operation | Idempotent? | Notes |
 |---|---|---|
@@ -312,7 +582,7 @@ For long-running agents, the safe retry pattern after a transient failure is: re
 
 ---
 
-## 9. SDK: nonce semantics
+## 10. SDK: nonce semantics
 
 `commitments.submit` uses a **per-`OspexClient`-instance** nonce counter:
 
@@ -335,7 +605,7 @@ After the on-chain call returns, the SDK calls `nonceCounter.observe(maker, spec
 
 ---
 
-## 10. SDK: Realtime contract (`client.odds.subscribe`)
+## 11. SDK: Realtime contract (`client.odds.subscribe`)
 
 Lazy bootstrap. The first `client.odds.subscribe(...)` call:
 
@@ -352,14 +622,14 @@ Promises:
 Non-promises:
 
 - **No replay.** Events that arrived while the channel was disconnected are lost. If you need historical odds, query `client.odds.snapshot(contestId)` separately.
-- **No ordering across markets.** Per-channel ordering is reliable; cross-channel is not (see §4).
+- **No ordering across markets.** Per-channel ordering is reliable; cross-channel is not (see §5).
 - **No automatic re-bootstrap on `/v1/config/public` failure.** The SDK resets the supabase-client promise so the *next* subscribe call retries — but the failed call's caller still receives an `OspexConfigError`.
 
 The CLI's `ospex odds watch` opens three channels (one per market) and is the canonical agent shape. For SDK-level use, batch your own subscribes if you want all three.
 
 ---
 
-## 11. What is NOT promised
+## 12. What is NOT promised
 
 Explicit non-guarantees, listed so you don't accidentally depend on them:
 
@@ -374,7 +644,7 @@ Explicit non-guarantees, listed so you don't accidentally depend on them:
 
 ---
 
-## 12. Versioning + migration
+## 13. Versioning + migration
 
 The SDK follows **semver** with the following interpretation of each kind of bump:
 
@@ -416,7 +686,7 @@ Re-vendor when you choose to upgrade — there is no auto-update story for tarba
 
 ---
 
-## 13. Where to look when something doesn't match this doc
+## 14. Where to look when something doesn't match this doc
 
 If you observe a runtime difference between this contract and the SDK:
 
@@ -427,6 +697,8 @@ If you observe a runtime difference between this contract and the SDK:
    - Match envelope: [`packages/sdk/src/types/matchPreview.ts`](../packages/sdk/src/types/matchPreview.ts)
    - Odds wire shapes (watch + show): [`packages/sdk/src/types/odds.ts`](../packages/sdk/src/types/odds.ts)
    - Public types barrel: [`packages/sdk/src/types/index.ts`](../packages/sdk/src/types/index.ts)
+   - `auth check` envelope + resolution walker: [`packages/cli/src/commands/auth/check.ts`](../packages/cli/src/commands/auth/check.ts)
+   - Non-interactive signer helpers + reason codes: [`packages/sdk/src/signers/foundry.ts`](../packages/sdk/src/signers/foundry.ts) and [`packages/sdk/src/signers/keystore.ts`](../packages/sdk/src/signers/keystore.ts)
 3. The integration playbook (which exercises every promise here against the live testnet) is [`MANUAL_INTEGRATION_TESTING.md`](./MANUAL_INTEGRATION_TESTING.md).
 
 ---
@@ -442,7 +714,9 @@ schemaVersion === 1                    Locked envelope contract
 --json on stdout                       Always parseable; logs/prompts go to stderr
 NDJSON for `odds watch`                One JSON object per line, numbers (not strings) for line/odds, SIGINT clean exit
 single envelope for `odds show`        NOT NDJSON; { contest, odds: { moneyline, spread, total } }
+non-interactive signing                --account + --password-file (or auth use-foundry pin); see §4
+auth check                             Diagnostic that mirrors loadSigner's resolution ladder; --json envelope locked
 err.code                               Switch on this for routing
-err.reason                             Switch on this for fine dispatch (chain/script-approval/subscription)
+err.reason                             Switch on this for fine dispatch (chain/script-approval/subscription/signer-resolution)
 schemaVersion: 2                       Will signal a breaking envelope change (not before v1.0.0)
 ```
