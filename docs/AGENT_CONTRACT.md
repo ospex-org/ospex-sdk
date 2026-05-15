@@ -115,7 +115,7 @@ These commands check `process.stdin.isTTY` and refuse to proceed when it's false
 OspexValidationError: --yes is required for non-interactive runs of `<command>`. Re-run with --yes.
 ```
 
-**Other write commands sign and send WITHOUT requiring `--yes`** — including `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`, `positions claim`, `positions claim-all`, `positions settle`, `contests score`, and `contests create --game-id <uuid>`. For these, `--json` is an *output format only*, not a preview gate; the command may still send a transaction. Use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
+**Other write commands sign and send WITHOUT requiring `--yes`** — including `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`, top-level `claim`, `claim-all`, `settle` (registered at the program root for ergonomics, not under `positions`), `contests score`, and `contests create --game-id <uuid>`. For these, `--json` is an *output format only*, not a preview gate; the command may still send a transaction. Use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
 
 **`--yes` does not auto-approve approvals.** When `--yes` is set on a preview-bearing command and an allowance is short, the command defaults to the **exact required** USDC amount, not unlimited. Pass `--approve-max` alongside `--yes` if you want unlimited.
 
