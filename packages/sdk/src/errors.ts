@@ -12,7 +12,8 @@ export type OspexErrorCode =
   | 'ALLOWANCE_INSUFFICIENT'
   | 'CHAIN_ERROR'
   | 'SCRIPT_APPROVAL_INVALID'
-  | 'SUBSCRIPTION_ERROR';
+  | 'SUBSCRIPTION_ERROR'
+  | 'SIGNER_RESOLUTION_ERROR';
 
 export class OspexError extends Error {
   readonly code: OspexErrorCode;
@@ -237,5 +238,85 @@ export class OspexSubscriptionError extends OspexError {
     this.name = 'OspexSubscriptionError';
     this.reason = init.reason;
     this.subscriptionId = init.subscriptionId;
+  }
+}
+
+/**
+ * Discriminator for failures in the non-interactive Foundry-keystore
+ * signer-resolution pipeline (path resolution, file reads, decryption,
+ * address pinning checks). Stable string codes — agents can `switch`
+ * on `err.reason` without parsing messages.
+ *
+ *   keystore_not_found              — resolved path didn't exist
+ *   password_file_not_found         — --password-file path didn't exist
+ *   decryption_failed               — passphrase didn't decrypt the keystore
+ *   address_mismatch                — keystore unlocked to a different
+ *                                     address than --expected-address /
+ *                                     the config-pinned expectedAddress
+ *   non_interactive_password_required
+ *                                   — no passphrase source available and
+ *                                     the caller refused to fall back to
+ *                                     an interactive prompt
+ *   password_file_permissions_loose — password file is group/other-readable;
+ *                                     emitted only under strict-mode checks
+ *                                     (e.g. `ospex auth check --strict`)
+ *   account_and_path_conflict       — both --account and --keystore-path
+ *                                     supplied for one resolve call
+ *   password_source_conflict        — multiple passphrase sources supplied
+ *                                     (e.g. --password-file AND
+ *                                     --password-stdin AND literal)
+ */
+export type OspexSignerResolutionReason =
+  | 'keystore_not_found'
+  | 'password_file_not_found'
+  | 'decryption_failed'
+  | 'address_mismatch'
+  | 'non_interactive_password_required'
+  | 'password_file_permissions_loose'
+  | 'account_and_path_conflict'
+  | 'password_source_conflict';
+
+/**
+ * Failure in the non-interactive Foundry-keystore signer-resolution
+ * pipeline. Thrown by `KeystoreSigner.fromFoundryAccount` and
+ * `KeystoreSigner.fromKeystoreFile`, and by the resolver/reader helpers
+ * in `signers/foundry.ts`.
+ *
+ * Carries context fields so callers can render actionable errors
+ * without re-deriving state:
+ *   - `path`            — the file path involved (keystore or password)
+ *   - `expectedAddress` — the asserted address (for address_mismatch)
+ *   - `actualAddress`   — the actually-unlocked address (for address_mismatch)
+ *   - `mode`            — POSIX mode (for password_file_permissions_loose)
+ */
+export class OspexSignerResolutionError extends OspexError {
+  readonly reason: OspexSignerResolutionReason;
+  readonly path: string | undefined;
+  readonly expectedAddress: string | undefined;
+  readonly actualAddress: string | undefined;
+  readonly mode: number | undefined;
+
+  constructor(
+    message: string,
+    init: {
+      reason: OspexSignerResolutionReason;
+      path?: string;
+      expectedAddress?: string;
+      actualAddress?: string;
+      mode?: number;
+      cause?: unknown;
+    },
+  ) {
+    super(
+      'SIGNER_RESOLUTION_ERROR',
+      message,
+      init.cause !== undefined ? { cause: init.cause } : undefined,
+    );
+    this.name = 'OspexSignerResolutionError';
+    this.reason = init.reason;
+    this.path = init.path;
+    this.expectedAddress = init.expectedAddress;
+    this.actualAddress = init.actualAddress;
+    this.mode = init.mode;
   }
 }
