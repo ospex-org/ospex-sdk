@@ -456,7 +456,15 @@ ospex commitments match "$HASH" --json
 ospex commitments match "$HASH" --yes --json
 ```
 
-For `commitments match --json` specifically: no transaction is signed or sent. The signer may briefly unlock to derive the taker address (for the `selfMatch` flag and the allowance preflight), which mirrors how `commitments submit --json` works; on a non-TTY run with no cached session, the underlying passphrase prompt fails. Pre-cache a session via `ospex wallet unlock` (15-min TTL) if you need preview-only output from a script. `--yes --json` runs the full flow and emits `{ schemaVersion, preview, result }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
+For `commitments match --json` specifically: no transaction is signed or sent. The preview needs a taker address (for the `selfMatch` flag and the allowance preflight); the lazy-unlock contract resolves it in this order, falling back only when the preceding option is absent:
+
+1. `--expected-address <0x…>` — no unlock at all; the agent asserts the address.
+2. Any non-interactive password source — flag (`--account` + `--password-file` / `--password-stdin`), env (`OSPEX_PASSWORD_FILE`), or config (set via `ospex auth use-foundry`). The keystore unlocks silently to derive the address.
+3. The legacy cached session (`ospex wallet unlock`) — kept for compatibility but not the recommended posture.
+
+If none of those resolve, the command errors out with `non_interactive_password_required` rather than hanging on a prompt. For new scripts the preferred preamble is one of `--expected-address` or `auth use-foundry`; `wallet unlock` should be treated as a legacy fallback only.
+
+`--yes --json` runs the full flow and emits `{ schemaVersion, preview, result }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
 
 `--approve-max` is the non-interactive shortcut for unlimited USDC approval; without it, `--yes` approves the exact amount needed. (Mostly redundant if the agent runs `ospex approvals setup --risk-usdc <n> --yes` once during init.)
 
@@ -502,10 +510,12 @@ The full precedence ladder for every field is **flag > env > config > default**.
 ### Verifying a setup in CI
 
 ```bash
-ospex auth check --strict --json
+ospex auth check --strict --sign-challenge --json
 ```
 
-Exit 0 if everything resolves and a non-interactive unlock would succeed; exit 1 otherwise. `--strict` rejects a group/other-readable password file (mode `& 0o077 != 0`). `ospex doctor --strict` applies the same gate before the chain-side readiness checks — useful as a one-shot guard ahead of a batch of writes.
+Exits 0 only if the keystore actually unlocks AND signs a deterministic EIP-712 challenge — the strongest one-shot proof that the agent can sign. `--strict` additionally rejects a group/other-readable password file (mode `& 0o077 != 0`). The lighter-weight `ospex auth check --strict --json` (no `--sign-challenge`) validates the resolution + permission gate but **passes** with `unlock.attempted: false` when no password source is configured — useful for config sanity but not a proof of signing capability. If you want that lighter form, also assert `unlock.succeeded === true` in the JSON envelope.
+
+`ospex doctor --strict` applies the same loose-perm gate before the chain-side readiness checks — useful as a one-shot guard ahead of a batch of writes.
 
 For the full machine-readable contract — envelope shapes, error reason codes, the lazy-unlock contract for `--json` previews — see [`AGENT_CONTRACT.md` §4](./AGENT_CONTRACT.md).
 

@@ -94,7 +94,7 @@ USDC formatted strings are six fractional digits: `'1.000000'`, `'0.250000'`. Ro
 
 Stdout is reserved for the JSON payload. Anything else — passphrase prompts, "Resolved 0xabc → 0xabcdef…" prefix-resolution echoes, progress logs, allowance prompts — goes to **stderr**. `… --json | jq .` is therefore always parseable.
 
-A non-TTY run that requires a signer with no cached session AND wants `--json` output will fail at the passphrase prompt (it can't read hidden input from a piped stdin). Pre-cache a session with `ospex wallet unlock` (15-minute TTL) before piping.
+A non-TTY run that wants `--json` output and would otherwise prompt for a passphrase fails up-front with `OspexSignerResolutionError({ reason: 'non_interactive_password_required' })` rather than hanging on hidden-input read. The agent-friendly fixes (in order of preference): pass `--expected-address` to skip the unlock entirely; pin a Foundry account + password file via `ospex auth use-foundry`; or pass `--account` + `--password-file` per invocation. The legacy `ospex wallet unlock` cached session is kept for compatibility but is not the recommended posture — see §4 for the full surface.
 
 ---
 
@@ -163,15 +163,17 @@ For each field, the highest source wins; lower sources are silently dropped.
 | Field | Precedence (high → low) |
 |---|---|
 | Keystore | `--account` / `--keystore-path` flag → `OSPEX_KEYSTORE_PATH` env → `foundryAccount` / `foundryKeystorePath` in config (set by `auth use-foundry`) → legacy `keystorePath` in config (set by `ospex init`) → default `~/.ospex/keystore.json` |
-| Passphrase | `--password-file` / `--password-stdin` flag → `OSPEX_PASSWORD_FILE` env → `passwordFile` in config → cached session (`~/.ospex/session`) → interactive prompt |
+| Passphrase | `--password-file` / `--password-stdin` flag → `OSPEX_PASSWORD_FILE` env → `passwordFile` in config → cached session (`~/.ospex/session`, only when the keystore is a legacy source — see subtlety #3) → interactive prompt |
 | Expected address | `--expected-address` flag → `expectedAddress` in config (only when the resolved keystore corresponds to the configured source) → no pin |
 | Foundry keystores dir | `--foundry-keystores-dir` flag → `OSPEX_FOUNDRY_KEYSTORES_DIR` env → `$FOUNDRY_DIR/keystores` env → `foundryKeystoresDir` in config → default `~/.foundry/keystores` |
 
-Two precedence subtleties carved out by the regression tests in `tests/auth-check.test.ts`:
+Three precedence subtleties carved out by the regression tests in `tests/auth-check.test.ts`:
 
 1. **Config-pinned `expectedAddress` does not apply to env `OSPEX_KEYSTORE_PATH` overrides** unless the env path equals `config.foundryKeystorePath` exactly. A pin set by `auth use-foundry --account X` is for X; pointing env at a different keystore does not inherit the pin.
 
 2. **Legacy keystore paths (`config.keystorePath` from `ospex init`, default `~/.ospex/keystore.json`) ignore flag / env / config password sources.** The legacy code path is interactive only — it either reads the cached session or prompts. To get non-interactive unlocking on the legacy keystore, migrate with `ospex auth use-foundry --keystore-path <legacy-path>`. This is why `auth check` reports `password.provenance: 'none'` (would prompt) when only `config.passwordFile` is set on a legacy keystore — the runtime cannot consume it.
+
+3. **An explicit keystore source never falls back to the cached session.** When the keystore is selected via `--account` / `--keystore-path` flag, `OSPEX_KEYSTORE_PATH` env, or a config-pinned `foundryAccount` / `foundryKeystorePath`, the legacy session cache (`~/.ospex/session`) is **excluded** from the passphrase ladder entirely — `auth check` reports `password.provenance: 'none'` even when a fresh session exists. Without this guardrail, an agent's `--account maker-a --sign-challenge` could happily sign with a stale session for an entirely different wallet. Mirrors `loadSigner`'s "path-1 explicit skips path-2 session" rule; `auth check` is required to enforce the same.
 
 ### Pinning a default signer
 

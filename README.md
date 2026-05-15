@@ -167,9 +167,9 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex positions list <address>` | Position history for an address. |
 | `ospex positions status <address>` | Three-bucket categorization: active / pendingSettle / claimable. |
 | `ospex positions history <address>` | Full claim/settlement history. |
-| `ospex positions claim <speculationId> --type upper\|lower` | Claim one specific winning position. |
-| `ospex positions claim-all [--address <addr>] [--dry-run]` | Sweep every claimable position for a wallet (settles where needed). |
-| `ospex positions settle <speculationId>` | Permissionlessly settle a scored speculation. |
+| `ospex claim <speculationId> --type upper\|lower` | Claim one specific winning position. Top-level for ergonomics — not under `positions`. |
+| `ospex claim-all [--address <addr>] [--dry-run]` | Sweep every claimable position for a wallet (settles where needed). Top-level. |
+| `ospex settle <speculationId>` | Permissionlessly settle a scored speculation. Top-level. |
 | `ospex leaderboard show` | Top entries on the active leaderboard. |
 | `ospex odds show <contestId> [--json] [--market moneyline\|spread\|total]` | One-shot snapshot of upstream reference odds (moneyline / spread / total) for a contest's underlying game. Both American and decimal odds; `--json` emits a single envelope. `--market` narrows the human render to one market (no effect on `--json` — the envelope stays stable for agents). Use this to decide a commitment price. |
 | `ospex odds watch <contestId> [--json --include-refreshes]` | Streams Realtime upstream odds change events. Line-delimited JSON in `--json` mode — agent-facing. Use `odds show` for a one-shot snapshot; `watch` is for reacting to changes over time. |
@@ -183,7 +183,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 
 Most commands support `--json` for machine-readable output. The interactive setup / wallet-management commands — `init`, `wallet import`, `wallet unlock`, `wallet lock` — do not, because they're stateful prompt flows. See [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) for the stable JSON envelope shapes and which commands are preview-bearing vs. output-format-only.
 
-Every command that signs (`commitments {submit, match, approve, approve-raw, cancel, cancel-onchain, cancel-all}`, `contests {create, score}`, `positions {claim, claim-all, settle}`, `approvals setup`, `wallet address`) accepts the same six signer-resolution flags: `--account`, `--keystore-path`, `--password-file`, `--password-stdin`, `--expected-address`, `--foundry-keystores-dir`. They beat env vars, which beat `~/.ospex/config.json`. The flag group is the per-invocation override seam; `ospex auth use-foundry` is the once-per-host pin. See [`docs/AGENT_CONTRACT.md` §4](./docs/AGENT_CONTRACT.md) for the full non-interactive signing contract.
+Every command that signs (`commitments {submit, match, approve, approve-raw, cancel, cancel-onchain, cancel-all}`, `contests {create, score}`, top-level `{claim, claim-all, settle}`, `approvals setup`, `wallet address`) accepts the same six signer-resolution flags: `--account`, `--keystore-path`, `--password-file`, `--password-stdin`, `--expected-address`, `--foundry-keystores-dir`. They beat env vars, which beat `~/.ospex/config.json`. The flag group is the per-invocation override seam; `ospex auth use-foundry` is the once-per-host pin. See [`docs/AGENT_CONTRACT.md` §4](./docs/AGENT_CONTRACT.md) for the full non-interactive signing contract.
 
 ## Wallet security
 
