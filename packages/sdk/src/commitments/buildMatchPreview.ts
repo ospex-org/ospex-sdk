@@ -409,13 +409,27 @@ function buildLazyCreationFee(
   makerTreasuryAllowanceWei6: bigint,
   selfMatch: boolean,
 ): LazyCreationFee {
-  // Each side's required allowance — the wallet that's both maker and
-  // taker pays the full fee through TWO safeTransferFrom calls; the
-  // wallet's allowance must cover the total. For the non-self case
-  // both sides pay half each.
+  // On the wire, `takerShareWei6` + `makerShareWei6` always sum to
+  // `totalFeeWei6` so dashboards never double-count. Self-match: the
+  // same wallet pays both halves, so we attribute the FULL fee to the
+  // taker side (the "executing party" in the match flow) and zero
+  // the maker share. Non-self: each side pays half. The renderer
+  // never shows `makerShare` on self-match (it falls back to
+  // `totalFeeUSDC` for that case); this aligns the JSON wire shape
+  // with that rendering and with the docstring on `LazyCreationFee`.
+  //
+  // Allowance semantics: the wallet's PositionModule + TreasuryModule
+  // allowances must cover the FULL fee on self-match. That check is
+  // enforced through the `approvals[]` row (which uses `takerShareWei6`
+  // = totalFee on self-match) — NOT through this `makerShareWei6`
+  // field. Consequently `makerTreasuryAllowanceSufficient` is
+  // trivially true on self-match (maker share is 0; any allowance
+  // covers 0). The maker-allowance warning is also gated on
+  // `!selfMatch` (see warnings block above), so the trivially-true
+  // value here is consistent — it never gates a UX path.
   const halfFeeWei6 = totalFeeWei6 / 2n;
   const takerShareWei6 = selfMatch ? totalFeeWei6 : halfFeeWei6;
-  const makerShareWei6 = selfMatch ? totalFeeWei6 : halfFeeWei6;
+  const makerShareWei6 = selfMatch ? 0n : halfFeeWei6;
   return {
     totalFeeWei6: totalFeeWei6.toString(),
     totalFeeUSDC: wei6ToDecimalUSDC(totalFeeWei6),
