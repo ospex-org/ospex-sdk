@@ -91,6 +91,28 @@ export type {
   GameTeam,
   GameExternalIds,
   GamesListOptions,
+  // agent envelope (schemaVersion: 2)
+  AgentEnvelope,
+  AgentFailureEnvelope,
+  AgentStage,
+  WalletRole,
+  ApprovalRequirement,
+  AgentApprovalPurpose,
+  AgentApprovalSpenderLabel,
+  EstimatedCosts,
+  AgentUsdcFee,
+  AgentLinkFee,
+  AgentPayout,
+  AgentWarning,
+  AgentWarningCode,
+  AgentWarningSeverity,
+  AgentBlockingCapability,
+  AgentError,
+  AgentEffect,
+  AgentEffectType,
+  AgentEffectStatus,
+  AgentNextCommand,
+  AgentNextCommandIntent,
 } from './types/index.js';
 
 // Resolver-layer surface — preview model + high-level submit args + the
