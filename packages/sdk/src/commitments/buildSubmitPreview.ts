@@ -28,19 +28,26 @@ import {
   wei6ToDecimalUSDC,
   ticksToDecimalLine,
 } from './decimals.js';
-import { pushPossible } from './pushPossible.js';
+import { buildPreviewOutcomes } from './outcomeView.js';
+import {
+  buildPreviewCounterparty,
+  buildPreviewYou,
+  inverseOddsTick,
+} from './perspectiveView.js';
 import type { ResolveSideResult } from './resolveSide.js';
 import type { MarketType } from '../types/odds.js';
 import type {
   ExpirySource,
   PreviewApproval,
   PreviewContest,
+  PreviewCounterparty,
   PreviewEconomics,
   PreviewExpiry,
   PreviewMarket,
   PreviewOutcome,
   PreviewRaw,
   PreviewSide,
+  PreviewYou,
   SpeculationMode,
   SubmitPreview,
 } from '../types/preview.js';
@@ -231,9 +238,65 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
     resolutionSource: args.resolvedSide.resolutionSource,
   };
 
-  const outcomes = buildOutcomes(args, profitWei6);
+  const outcomes = buildPreviewOutcomes({
+    market: args.market,
+    lineTicks: args.lineTicks,
+    riskWei6: args.riskWei6,
+    profitWei6,
+    resolvedSide: {
+      role: args.resolvedSide.role,
+      resolvedLabel: args.resolvedSide.resolvedLabel,
+    },
+    awayTeam: args.awayTeam,
+    homeTeam: args.homeTeam,
+  });
 
-  return { contest, market, side, economics, expiry, raw, approvals, outcomes };
+  // ── Agent-facing "you / counterparty" view ────────────────────────
+  // Maker is the executing party on a submit preview; the counterparty
+  // is the hypothetical taker who would fully fill (address: null —
+  // no taker has signed yet). Mirrors `MatchPreview.you/counterparty`
+  // for one consistent agent surface across both flows.
+  const you: PreviewYou = buildPreviewYou({
+    role: 'maker',
+    address: args.maker,
+    market: args.market,
+    positionType: args.resolvedSide.positionType,
+    lineTicks: args.lineTicks,
+    oddsTick: args.oddsTick,
+    riskWei6: args.riskWei6,
+    profitWei6,
+    awayTeam: args.awayTeam,
+    homeTeam: args.homeTeam,
+  });
+  const counterpartyOddsTick = inverseOddsTick(args.oddsTick);
+  // Counterparty risks `profitWei6` to potentially win `args.riskWei6`
+  // (zero-vig protocol). For the hypothetical taker the address is
+  // null since no one has signed the other side yet.
+  const counterparty: PreviewCounterparty = buildPreviewCounterparty({
+    role: 'taker',
+    address: null,
+    market: args.market,
+    positionType: args.resolvedSide.positionType === 0 ? 1 : 0,
+    lineTicks: args.lineTicks,
+    oddsTick: counterpartyOddsTick,
+    riskWei6: profitWei6,
+    profitWei6: args.riskWei6,
+    awayTeam: args.awayTeam,
+    homeTeam: args.homeTeam,
+  });
+
+  return {
+    contest,
+    market,
+    side,
+    economics,
+    expiry,
+    raw,
+    approvals,
+    outcomes,
+    you,
+    counterparty,
+  };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -270,210 +333,7 @@ function computeDisplayLine(
   return `${teamLabel} ${signed}`;
 }
 
-function buildOutcomes(args: BuildSubmitPreviewArgs, profitWei6: bigint): PreviewOutcome[] {
-  const winPayout = wei6ToDecimalUSDC(profitWei6);
-  const losePayout = wei6ToDecimalUSDC(-args.riskWei6);
-  const pushPayout = wei6ToDecimalUSDC(args.riskWei6);
-
-  if (args.market === 'moneyline') {
-    return [
-      {
-        condition: `${args.resolvedSide.resolvedLabel} wins`,
-        result: 'win',
-        payoutUSDC: winPayout,
-      },
-      {
-        condition: `${otherTeam(args)} wins`,
-        result: 'lose',
-        payoutUSDC: losePayout,
-      },
-    ];
-  }
-
-  if (args.market === 'total') {
-    // line_ticks for total is unsigned; convert to a decimal threshold
-    // for human-readable conditions.
-    const totalDecimal = ticksToDecimalLine(Math.abs(args.lineTicks));
-    const integerLine = pushPossible('total', args.lineTicks);
-    const threshold = Math.abs(args.lineTicks) / 10;
-    if (args.resolvedSide.role === 'over') {
-      const winRow: PreviewOutcome = {
-        condition: `Combined score ${Math.floor(threshold) + 1} or more`,
-        result: 'win',
-        payoutUSDC: winPayout,
-      };
-      if (integerLine) {
-        return [
-          winRow,
-          {
-            condition: `Combined score exactly ${threshold}`,
-            result: 'push',
-            payoutUSDC: pushPayout,
-          },
-          {
-            condition: `Combined score ${Math.floor(threshold) - 1} or fewer`,
-            result: 'lose',
-            payoutUSDC: losePayout,
-          },
-        ];
-      }
-      return [
-        winRow,
-        {
-          condition: `Combined score ${Math.floor(threshold)} or fewer`,
-          result: 'lose',
-          payoutUSDC: losePayout,
-        },
-      ];
-    }
-    // under
-    const winRow: PreviewOutcome = {
-      condition: integerLine
-        ? `Combined score ${threshold - 1} or fewer`
-        : `Combined score ${Math.floor(threshold)} or fewer`,
-      result: 'win',
-      payoutUSDC: winPayout,
-    };
-    if (integerLine) {
-      return [
-        winRow,
-        {
-          condition: `Combined score exactly ${threshold}`,
-          result: 'push',
-          payoutUSDC: pushPayout,
-        },
-        {
-          condition: `Combined score ${threshold + 1} or more`,
-          result: 'lose',
-          payoutUSDC: losePayout,
-        },
-      ];
-    }
-    // half-point under: "≤ floor(threshold) → win", "> threshold → lose"
-    void totalDecimal;
-    return [
-      winRow,
-      {
-        condition: `Combined score ${Math.ceil(threshold)} or more`,
-        result: 'lose',
-        payoutUSDC: losePayout,
-      },
-    ];
-  }
-
-  // Spread.
-  return buildSpreadOutcomes(args, winPayout, losePayout, pushPayout);
-}
-
-function otherTeam(args: BuildSubmitPreviewArgs): string {
-  return args.resolvedSide.role === 'away' ? args.homeTeam : args.awayTeam;
-}
-
-function buildSpreadOutcomes(
-  args: BuildSubmitPreviewArgs,
-  winPayout: string,
-  losePayout: string,
-  pushPayout: string,
-): PreviewOutcome[] {
-  const integerLine = pushPossible('spread', args.lineTicks);
-  // Selected-side line ticks (positive = underdog; negative = favored)
-  const selectedTicks =
-    args.resolvedSide.role === 'away' ? args.lineTicks : -args.lineTicks;
-  // line magnitude in points (e.g. 35 → 3.5, 30 → 3)
-  const points = Math.abs(selectedTicks) / 10;
-  const team = args.resolvedSide.resolvedLabel;
-  const opp = otherTeam(args);
-
-  if (selectedTicks < 0) {
-    // Selected team is favored by `points`. Win = team wins by > points.
-    if (integerLine) {
-      // Exact `points` is a push.
-      return [
-        {
-          condition: `${team} wins by ${points + 1} or more`,
-          result: 'win',
-          payoutUSDC: winPayout,
-        },
-        {
-          condition: `${team} wins by exactly ${points}`,
-          result: 'push',
-          payoutUSDC: pushPayout,
-        },
-        {
-          condition: `${team} wins by ${points - 1} or fewer, OR ${team} loses`,
-          result: 'lose',
-          payoutUSDC: losePayout,
-        },
-      ];
-    }
-    // Half-point favored: e.g. -3.5 → win by 4+, otherwise lose.
-    return [
-      {
-        condition: `${team} wins by ${Math.ceil(points)} or more`,
-        result: 'win',
-        payoutUSDC: winPayout,
-      },
-      {
-        condition: `${team} wins by ${Math.floor(points)} or fewer, OR ${team} loses`,
-        result: 'lose',
-        payoutUSDC: losePayout,
-      },
-    ];
-  }
-  if (selectedTicks > 0) {
-    // Selected team is underdog by `points`. Win = team wins OR loses by < points.
-    if (integerLine) {
-      return [
-        {
-          condition: `${team} wins, OR ${team} loses by ${points - 1} or fewer`,
-          result: 'win',
-          payoutUSDC: winPayout,
-        },
-        {
-          condition: `${team} loses by exactly ${points}`,
-          result: 'push',
-          payoutUSDC: pushPayout,
-        },
-        {
-          condition: `${team} loses by ${points + 1} or more`,
-          result: 'lose',
-          payoutUSDC: losePayout,
-        },
-      ];
-    }
-    return [
-      {
-        condition: `${team} wins, OR ${team} loses by ${Math.floor(points)} or fewer`,
-        result: 'win',
-        payoutUSDC: winPayout,
-      },
-      {
-        condition: `${team} loses by ${Math.ceil(points)} or more`,
-        result: 'lose',
-        payoutUSDC: losePayout,
-      },
-    ];
-  }
-  // selectedTicks === 0 — pick'em spread. lineTicks=0 IS an integer line
-  // (0 % 10 === 0), so pushPossible('spread', 0) returns true. Emit the
-  // three-row outcome including the tie/push, never collapse to the
-  // moneyline two-row shape — the protocol settles a tie as a push on
-  // any spread market regardless of how rare the line is in practice.
-  return [
-    {
-      condition: `${team} wins`,
-      result: 'win',
-      payoutUSDC: winPayout,
-    },
-    {
-      condition: `${team} and ${opp} tie (final margin 0)`,
-      result: 'push',
-      payoutUSDC: pushPayout,
-    },
-    {
-      condition: `${opp} wins`,
-      result: 'lose',
-      payoutUSDC: losePayout,
-    },
-  ];
-}
+// Note: the per-market outcome generation that used to live here is
+// now in `outcomeView.ts:buildPreviewOutcomes`, called from this file's
+// main body. Match-side previews call the same helper for taker-
+// perspective outcomes.
