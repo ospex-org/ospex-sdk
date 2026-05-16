@@ -16,8 +16,13 @@
 
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
+import type { Hex } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
-import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import {
   renderApprovalsSnapshot,
   snapshotToJson,
@@ -38,13 +43,31 @@ export const approvalsShowCommand = new Command('show')
   .option('--json', 'output as JSON')
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
+    const wantJson = opts.json === true;
     const owner = await resolveWalletAddress(opts.address);
 
     const client = await getClient({ requiresChain: true });
     const snapshot = await client.approvals.read({ owner });
 
-    if (opts.json === true) {
-      formatOutput(snapshotToJson(snapshot), { json: true });
+    if (wantJson) {
+      const chainId = client.chainId();
+      const wallet = owner.toLowerCase() as Hex;
+      // Per spec §3.1, reads always emit `approvalRequirements: []` —
+      // the live allowance snapshot lives in `payload`. The shoulder
+      // field is "what would be needed to advance to the next stage";
+      // a read has no next stage.
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'approvals.show',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          wallet,
+          walletRole: 'subject',
+          payload: snapshotToJson(snapshot),
+        }),
+      );
       return;
     }
 

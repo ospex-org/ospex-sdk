@@ -134,6 +134,27 @@ export function buildAgentEnvelope<TPayload>(
         `Spec §2.6 mandates a hard cap; prefer one good suggestion over many.`,
     );
   }
+  // Wire-contract guard: payload MUST NOT carry an inner
+  // `schemaVersion`. The outer envelope is the only schemaVersion
+  // marker; nesting a v1 marker under v2 gives agents two version
+  // signals (Hermes PR-67 review). Callers wrapping a legacy v1
+  // envelope (e.g. `JsonDoctorReport`) MUST destructure it out:
+  //   const { schemaVersion: _legacy, ...payload } = report;
+  //   buildAgentEnvelope({ ..., payload });
+  // Throws so future PR-3/4/5 migrations can't silently ship the
+  // same bug.
+  if (
+    args.payload !== null &&
+    typeof args.payload === 'object' &&
+    'schemaVersion' in (args.payload as Record<string, unknown>)
+  ) {
+    throw new Error(
+      'buildAgentEnvelope: payload object carries an inner `schemaVersion` field. ' +
+        'The outer v2 envelope is the only schemaVersion marker — strip it from the ' +
+        'payload (e.g. via destructure) before wrapping. See spec §6 + ' +
+        'agent-envelope-spec.md.',
+    );
+  }
   return {
     schemaVersion: 2,
     ok: args.ok,
@@ -266,6 +287,18 @@ export function writeAgentEnvelope(
 /* ------------------------------------------------------------------------- */
 /* Helpers                                                                   */
 /* ------------------------------------------------------------------------- */
+
+/**
+ * Derive the `Network` enum value from a `ChainId`. Used by every
+ * Class A command to populate `envelope.network` alongside `chainId`.
+ *
+ * Polygon mainnet = 137 → 'polygon'; Polygon Amoy = 80002 → 'amoy'.
+ * The ChainId type already pins the input to one of these two
+ * literals, so the implementation is total at the type level.
+ */
+export function networkForChainId(chainId: ChainId): Network {
+  return chainId === 137 ? 'polygon' : 'amoy';
+}
 
 /**
  * BigInt-safe JSON replacer. Matches `lib/format.ts`'s replacer; kept

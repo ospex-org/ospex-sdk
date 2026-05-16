@@ -12,6 +12,7 @@ import {
   SDK_VERSION,
   buildAgentEnvelope,
   buildFailureEnvelope,
+  networkForChainId,
   writeAgentEnvelope,
 } from '../src/lib/agentEnvelope.js';
 
@@ -153,6 +154,39 @@ describe('buildAgentEnvelope', () => {
     const env = buildAgentEnvelope({ ...BASE_REQUIRED, nextCommands: allowed });
     expect(env.nextCommands).toHaveLength(MAX_NEXT_COMMANDS);
   });
+
+  // Hermes PR-67 review: `doctor` shipped with `payload.schemaVersion: 1`
+  // because `JsonDoctorReport` baked it in. The guard below catches this
+  // class of bug at build time so future migrations can't silently
+  // ship two version signals.
+  it('throws when payload object carries an inner schemaVersion', () => {
+    expect(() =>
+      buildAgentEnvelope({
+        ...BASE_REQUIRED,
+        payload: { schemaVersion: 1, foo: 'bar' },
+      }),
+    ).toThrow(/inner `schemaVersion` field/);
+  });
+
+  it('accepts payload objects without schemaVersion', () => {
+    expect(() =>
+      buildAgentEnvelope({ ...BASE_REQUIRED, payload: { foo: 'bar' } }),
+    ).not.toThrow();
+  });
+
+  it('accepts null payload (failure envelopes)', () => {
+    expect(() =>
+      buildAgentEnvelope({ ...BASE_REQUIRED, payload: null }),
+    ).not.toThrow();
+  });
+
+  it('accepts primitive payloads (number, string, boolean) without guard', () => {
+    for (const payload of [42, 'ok', true]) {
+      expect(() =>
+        buildAgentEnvelope({ ...BASE_REQUIRED, payload }),
+      ).not.toThrow();
+    }
+  });
 });
 
 describe('buildFailureEnvelope', () => {
@@ -252,5 +286,12 @@ describe('writeAgentEnvelope', () => {
     // Compact: exactly one line plus trailing newline.
     expect(sink.buf.trimEnd().split('\n')).toHaveLength(1);
     expect(JSON.parse(sink.buf.trim())).toBeTypeOf('object');
+  });
+});
+
+describe('networkForChainId', () => {
+  it('maps 137 to polygon and 80002 to amoy', () => {
+    expect(networkForChainId(137)).toBe('polygon');
+    expect(networkForChainId(80002)).toBe('amoy');
   });
 });

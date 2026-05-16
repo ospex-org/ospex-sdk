@@ -25,16 +25,25 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import type {
+  AgentEnvelope,
   ApprovalsSnapshot,
   BalancesSnapshot,
+  ChainId,
+  Hex,
   OspexClient,
 } from '@ospex/sdk';
 import { formatOutput } from '../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../lib/agentEnvelope.js';
 import { getClient } from '../lib/client.js';
 import {
   buildDoctorReport,
   renderDoctorReport,
   type DoctorReportInputs,
+  type JsonDoctorReport,
 } from '../lib/doctorRender.js';
 import {
   probeContractsDeployed,
@@ -168,13 +177,70 @@ export const doctorCommand = new Command('doctor')
     const report = buildDoctorReport(reportInputs);
 
     if (opts.json === true) {
-      formatOutput(report, { json: true });
+      const chainId = expectedChainId.value;
+      const wallet = owner !== null ? (owner.toLowerCase() as Hex) : null;
+      writeAgentEnvelope(toAgentEnvelope(report, { chainId, wallet }));
     } else {
       renderDoctorReport(report, process.stdout);
     }
 
     process.exit(report.ready.matchCommitments.ok ? 0 : 1);
   });
+
+// ── v1 → v2 envelope transform ──────────────────────────────────────
+
+/**
+ * Shape of `payload` for `ospex doctor --json` under v2. Mirrors
+ * `JsonDoctorReport` minus the inner `schemaVersion: 1` marker —
+ * the outer v2 envelope is the only schemaVersion source. See
+ * `agent-envelope-spec.md` §6.
+ */
+export type DoctorPayload = Omit<JsonDoctorReport, 'schemaVersion'>;
+
+export interface ToDoctorAgentEnvelopeArgs {
+  chainId: ChainId;
+  /** Resolved wallet address (lowercased); `null` when no-prompt resolution failed. */
+  wallet: Hex | null;
+}
+
+/**
+ * Wrap a `JsonDoctorReport` in the v2 agent envelope. Strips the
+ * legacy `schemaVersion: 1` marker out of the report so payload
+ * carries only `meta / network / api / wallet / balances /
+ * allowances / ready / suggestion / checks / summary / config`.
+ *
+ * Hoists `ok` from `report.ready.matchCommitments.ok` — same
+ * semantic the action's `process.exit` uses, so the envelope's
+ * top-level `ok` and the exit code agree.
+ *
+ * Exposed so tests can pin the wire shape (no `payload.schemaVersion`,
+ * field hoisting, walletRole derivation) without booting the full
+ * CLI action with its chain / API probes — mirrors the auth-check
+ * `toAgentEnvelope` test surface.
+ *
+ * PR-2 conservative: `warnings[]` / `errors[]` left empty. The
+ * structured `report.checks[]` + `report.suggestion` in payload
+ * still carry the granular signal; lifting them into top-level
+ * AgentWarning / AgentError shapes is queued for the same follow-up
+ * as the nextCommands registry (PR-6).
+ */
+export function toAgentEnvelope(
+  report: JsonDoctorReport,
+  args: ToDoctorAgentEnvelopeArgs,
+): AgentEnvelope<DoctorPayload> {
+  const { schemaVersion: _legacySchemaVersion, ...doctorPayload } = report;
+  return buildAgentEnvelope<DoctorPayload>({
+    ok: report.ready.matchCommitments.ok,
+    action: 'doctor',
+    stage: 'read',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet: args.wallet,
+    walletRole: args.wallet !== null ? 'subject' : 'none',
+    signer: args.wallet,
+    payload: doctorPayload,
+  });
+}
 
 interface FetchedInputs {
   apiOk: boolean;
