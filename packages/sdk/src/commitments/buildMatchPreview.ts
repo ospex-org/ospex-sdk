@@ -36,9 +36,20 @@ import type {
   MatchPreviewSpeculation,
   MatchPreviewWarning,
 } from '../types/matchPreview.js';
-import type { PreviewApproval, SideRole } from '../types/preview.js';
+import type {
+  PreviewApproval,
+  PreviewCounterparty,
+  PreviewOutcome,
+  PreviewYou,
+  SideRole,
+} from '../types/preview.js';
 import type { Hex } from '../types/signer.js';
 import type { MarketType } from '../types/odds.js';
+import { buildPreviewOutcomes } from './outcomeView.js';
+import {
+  buildPreviewCounterparty,
+  buildPreviewYou,
+} from './perspectiveView.js';
 
 const ODDS_SCALE = 100n;
 const DEFAULT_EXPIRES_SOON_THRESHOLD_SEC = 5n * 60n;
@@ -286,6 +297,49 @@ export function buildMatchPreview(args: BuildMatchPreviewArgs): MatchPreview {
     takerReturnOnWinUSDC: wei6ToDecimalUSDC(takerReturnWei6),
   };
 
+  // ── Agent-facing "you / counterparty / outcomes" view ─────────────
+  // Mirrors the existing maker/taker fields but in first-person form.
+  // The viewer is always the taker on a match preview; the maker is the
+  // signed counterparty. Built additively under schemaVersion 1.
+  const takerPositionType: 0 | 1 = positionType === 0 ? 1 : 0;
+  const you: PreviewYou = buildPreviewYou({
+    role: 'taker',
+    address: takerLower,
+    market: marketType,
+    positionType: takerPositionType,
+    lineTicks,
+    oddsTick: takerOddsTick,
+    riskWei6: takerRiskWei6,
+    profitWei6: takerProfitWei6,
+    awayTeam: args.awayTeam,
+    homeTeam: args.homeTeam,
+  });
+  const counterparty: PreviewCounterparty = buildPreviewCounterparty({
+    role: 'maker',
+    address: makerLower,
+    market: marketType,
+    positionType,
+    lineTicks,
+    oddsTick,
+    riskWei6: fillMakerRiskWei6,
+    // Maker's profit on win = taker's risk (zero-vig protocol).
+    profitWei6: takerRiskWei6,
+    awayTeam: args.awayTeam,
+    homeTeam: args.homeTeam,
+  });
+  const outcomes: PreviewOutcome[] = buildPreviewOutcomes({
+    market: marketType,
+    lineTicks,
+    riskWei6: takerRiskWei6,
+    profitWei6: takerProfitWei6,
+    resolvedSide: {
+      role: takerRole,
+      resolvedLabel: takerLabel,
+    },
+    awayTeam: args.awayTeam,
+    homeTeam: args.homeTeam,
+  });
+
   return {
     schemaVersion: 1,
     commitment: c,
@@ -306,6 +360,9 @@ export function buildMatchPreview(args: BuildMatchPreviewArgs): MatchPreview {
     nonceInvalidated: c.nonceInvalidated,
     isLive: c.isLive,
     warnings,
+    you,
+    counterparty,
+    outcomes,
   };
 }
 

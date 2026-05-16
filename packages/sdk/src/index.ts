@@ -166,6 +166,16 @@ export {
   type BuildPerspectiveArgs,
 } from './commitments/perspectiveView.js';
 export {
+  buildPreviewOutcomes,
+  type BuildOutcomesArgs,
+} from './commitments/outcomeView.js';
+export {
+  computeMatchYouView,
+  computeSubmitYouView,
+  type MatchYouView,
+  type SubmitYouView,
+} from './commitments/youView.js';
+export {
   MIN_PREFIX_HEX_LEN,
   PAGE_LIMIT,
 } from './commitments/resolveByPrefix.js';
