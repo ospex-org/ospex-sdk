@@ -482,14 +482,22 @@ export async function deriveSignerAddress(
     }
   }
 
-  // (3) Session cache. Predates the Foundry-first stance but still
-  //     in use by some agents; honor it before any heavier path.
-  const session = await readSession();
-  if (session && isValidAddress(session.address)) {
-    return {
-      address: session.address.toLowerCase() as Hex,
-      source: 'session-cache',
-    };
+  // (3) Session cache — ONLY when the walker's resolution says the
+  //     legacy session path is the active one. Mirrors
+  //     `loadSigner`'s "explicit sources skip session" precedence —
+  //     same rule `resolvePasswordField` uses to compute
+  //     `password.provenance`. Without this gate a fresh session for
+  //     wallet B leaks past a config-pinned Foundry signer A, and
+  //     the doctor reports B's address even though `config.signer`
+  //     correctly says A was selected (Hermes PR 55 round-2 blocker).
+  if (resolution.password.provenance === 'session-cache') {
+    const session = await readSession();
+    if (session && isValidAddress(session.address)) {
+      return {
+        address: session.address.toLowerCase() as Hex,
+        source: 'session-cache',
+      };
+    }
   }
 
   // (4) Non-interactive unlock when the walker shows a credentialed

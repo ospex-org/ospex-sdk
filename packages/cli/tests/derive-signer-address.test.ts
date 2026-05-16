@@ -277,6 +277,150 @@ describe('deriveSignerAddress — no-prompt failure modes', () => {
   });
 });
 
+describe('deriveSignerAddress — session cache precedence (Hermes PR 55 round-2)', () => {
+  // Wallet B = "the stale session wallet" that must NOT be returned
+  // when the walker resolved an explicit Foundry signer (wallet A).
+  const SESSION_PK_B =
+    '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as const;
+  const SESSION_ADDRESS_B = '0x70997970c51812dc3a010c7d01b50e0d17dc79c8' as const;
+  const SESSION_TTL_MS = 15 * 60 * 1000;
+
+  async function writeSessionForWalletB(homeDir: string): Promise<void> {
+    await fs.mkdir(homeDir, { recursive: true });
+    const sessionPath = path.join(homeDir, 'session');
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        address: SESSION_ADDRESS_B,
+        privateKey: SESSION_PK_B,
+        expiresAt: Date.now() + SESSION_TTL_MS,
+      }) + '\n',
+    );
+  }
+
+  // Hermes PR 55 round-2 blocker repro. Config pins Foundry signer A
+  // via foundryAccount + passwordFile (walker reports
+  // passwordProvenance: 'config-passwordFile'). A fresh legacy
+  // session exists for an unrelated wallet B. `auth check --json`
+  // would correctly unlock A; `doctor --json` previously returned B
+  // because `deriveSignerAddress` consulted `readSession()` before
+  // the non-interactive unlock branch.
+  it('explicit Foundry source + fresh session for a DIFFERENT wallet → unlock A, do NOT use session B', async () => {
+    await writeSessionForWalletB(tmpDir);
+
+    const keystoresDir = path.join(tmpDir, 'foundry-keystores');
+    const accountName = 'maker-a';
+    await fs.mkdir(keystoresDir, { recursive: true });
+    const keystorePath = path.join(keystoresDir, accountName);
+    await fs.writeFile(keystorePath, foundryStyleKeystoreJson, 'utf8');
+
+    const pwPath = path.join(tmpDir, 'maker-a.pass');
+    await fs.writeFile(pwPath, PASSPHRASE, 'utf8');
+    if (process.platform !== 'win32') await fs.chmod(pwPath, 0o600);
+
+    const r = await deriveSignerAddress({
+      override: undefined,
+      resolution: makeResolution({
+        keystore: {
+          provenance: 'config-foundryAccount',
+          path: keystorePath,
+          account: accountName,
+          exists: true,
+        },
+        // CRITICAL: walker reports config-passwordFile, NOT
+        // session-cache (because keystore is non-legacy). The
+        // derive helper must trust that signal and skip session.
+        password: {
+          provenance: 'config-passwordFile',
+          path: pwPath,
+          exists: true,
+        },
+        foundryKeystoresDir: { provenance: 'default', value: keystoresDir },
+      }),
+      noPrompt: true,
+    });
+
+    // MUST be wallet A from the unlock, NOT wallet B from session.
+    expect(r.address).toBe(TEST_ADDRESS);
+    expect(r.source).toBe('non-interactive-unlock');
+    expect(r.address).not.toBe(SESSION_ADDRESS_B);
+  }, 30_000);
+
+  // Positive control: when the walker reports 'session-cache'
+  // provenance (i.e. the legacy-keystore branch with a fresh
+  // session), the helper DOES use the session. Asserts the fix
+  // didn't break the legacy path.
+  it('legacy keystore + session-cache provenance → uses the session', async () => {
+    await writeSessionForWalletB(tmpDir);
+
+    const r = await deriveSignerAddress({
+      override: undefined,
+      resolution: makeResolution({
+        keystore: {
+          provenance: 'default-legacy',
+          // Path doesn't exist — legacy session path uses
+          // session.privateKey without reading the keystore file
+          // (matches `loadSigner` path-2 behavior).
+          path: path.join(tmpDir, 'nope.json'),
+          account: null,
+          exists: false,
+        },
+        password: { provenance: 'session-cache', path: null, exists: null },
+      }),
+      noPrompt: true,
+    });
+
+    expect(r.address).toBe(SESSION_ADDRESS_B);
+    expect(r.source).toBe('session-cache');
+  });
+
+  // Negative control: when the walker reports `password: none` (no
+  // session, explicit source without credentials) the session must
+  // not leak in even if one happens to exist on disk.
+  it('explicit source + password: none + stale session → throws, does NOT return session', async () => {
+    await writeSessionForWalletB(tmpDir);
+
+    const keystorePath = path.join(tmpDir, 'keystore.json');
+    await fs.writeFile(
+      keystorePath,
+      JSON.stringify({
+        id: 'placeholder',
+        version: 3,
+        crypto: {
+          cipher: 'aes-128-ctr',
+          ciphertext: '00',
+          cipherparams: { iv: '00' },
+          kdf: 'scrypt',
+          kdfparams: { dklen: 32, n: 8, p: 1, r: 8, salt: '00' },
+          mac: '00',
+        },
+      }),
+    );
+
+    let caught: unknown;
+    try {
+      await deriveSignerAddress({
+        override: undefined,
+        resolution: makeResolution({
+          keystore: {
+            provenance: 'config-foundryAccount',
+            path: keystorePath,
+            account: 'maker-a',
+            exists: true,
+          },
+          // Walker reports 'none' — no password file configured.
+          password: { provenance: 'none', path: null, exists: null },
+        }),
+        noPrompt: true,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(WalletAddressUnresolvedError);
+    expect((caught as WalletAddressUnresolvedError).reason).toBe('password_source_missing');
+  });
+});
+
 describe('deriveSignerAddress — in-keystore address field (legacy ethers)', () => {
   it('reads the top-level address from an ethers-style keystore', async () => {
     // An ethers-encrypted v3 keystore carries the address at the
