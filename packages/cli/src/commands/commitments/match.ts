@@ -59,6 +59,7 @@ const optionsSchema = z.object({
   yes: z.boolean().optional(),
   json: z.boolean().optional(),
   approveMax: z.boolean().optional(),
+  raw: z.boolean().optional(),
 });
 
 export const commitmentsMatchCommand = addSignerOptions(
@@ -83,6 +84,12 @@ export const commitmentsMatchCommand = addSignerOptions(
       'with --yes (non-interactive), approve unlimited USDC instead of the exact required amount. ' +
         'Ignored in interactive mode — to grant unlimited interactively, type "max" at the amount prompt.',
     )
+    .option(
+      '--raw',
+      'render the protocol-native dual maker/taker layout (positionType, raw approval wei6, etc.) ' +
+        'instead of the default first-person view. Useful for debugging EIP-712 hash mismatches and ' +
+        'protocol-level audits. Has no effect on --json output.',
+    )
     .addOption(
       new Option(
         '--json',
@@ -97,6 +104,7 @@ export const commitmentsMatchCommand = addSignerOptions(
     const wantJson = opts.json === true;
     const skipPrompt = opts.yes === true;
     const approveMax = opts.approveMax === true;
+    const raw = opts.raw === true;
     const isInteractive = process.stdin.isTTY === true;
     const previewOnly = wantJson && !skipPrompt;
 
@@ -165,7 +173,7 @@ export const commitmentsMatchCommand = addSignerOptions(
     }
 
     // ── 5. Render preview + confirm (unless --yes). ────────────────
-    renderMatchPreview(preview);
+    renderMatchPreview(preview, process.stderr, { raw });
     if (!skipPrompt) {
       const ok = await promptYesNo('Match?', true);
       if (!ok) {
