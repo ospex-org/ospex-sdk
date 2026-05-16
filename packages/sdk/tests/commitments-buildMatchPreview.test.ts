@@ -331,6 +331,109 @@ describe('buildMatchPreview — approvals (existing vs lazy)', () => {
   });
 });
 
+// Hermes asked that the lazy-vs-existing distinction be answerable
+// positively (read one field, act) rather than by inferring from
+// absence-of-fields. These assertions pin the wire contract for the
+// always-present `creationFee` summary and `tradeAction` tag on both
+// modes (existing, lazy, lazy + self-match).
+describe('buildMatchPreview — creationFee + tradeAction (agent contract)', () => {
+  it('existing mode: creationFee.applies===false, zeros, tradeAction==="trade-only"', () => {
+    const p = buildMatchPreview(baseArgs());
+    expect(p.tradeAction).toBe('trade-only');
+    expect(p.speculation.creationFee).toMatchObject({
+      applies: false,
+      condition: 'never',
+      totalFeeWei6: '0',
+      totalFeeUSDC: '0.000000',
+      takerShareWei6: '0',
+      makerShareWei6: '0',
+      viewerShareWei6: '0',
+      viewerShareUSDC: '0.000000',
+      spender: null,
+      spenderLabel: null,
+      approvalPurpose: null,
+      approvalNeeded: false,
+    });
+  });
+
+  it('lazy mode: applies===true, condition===if-first-match-at-execution, viewerShare===takerShare on non-self-match', () => {
+    const p = buildMatchPreview(
+      baseArgs({
+        speculation: { mode: 'lazy' },
+        speculationCreationTotalFeeWei6: 500_000n,
+        takerTreasuryAllowanceWei6: 0n,
+      }),
+    );
+    expect(p.tradeAction).toBe('trade-and-create-speculation');
+    expect(p.speculation.creationFee).toMatchObject({
+      applies: true,
+      condition: 'if-first-match-at-execution',
+      totalFeeWei6: '500000',
+      totalFeeUSDC: '0.500000',
+      takerShareWei6: '250000',
+      takerShareUSDC: '0.250000',
+      makerShareWei6: '250000',
+      makerShareUSDC: '0.250000',
+      // Match-preview viewer is the taker.
+      viewerShareWei6: '250000',
+      viewerShareUSDC: '0.250000',
+      spender: TM,
+      spenderLabel: 'TreasuryModule',
+      approvalPurpose: 'lazy-creation-fee',
+      approvalNeeded: true, // 0 allowance < 250000 viewer share
+    });
+  });
+
+  it('lazy self-match: viewerShare collapses to the FULL fee (Hermes-flagged invariant)', () => {
+    const p = buildMatchPreview(
+      baseArgs({
+        taker: MAKER,
+        speculation: { mode: 'lazy' },
+        speculationCreationTotalFeeWei6: 500_000n,
+        takerTreasuryAllowanceWei6: 0n,
+      }),
+    );
+    expect(p.selfMatch).toBe(true);
+    // Role shares stay 50/50 — the on-chain split is unchanged. Only
+    // the wallet-centric viewerShare reflects the doubling that comes
+    // from one wallet paying both halves of TreasuryModule.processSplitFee.
+    expect(p.speculation.creationFee.takerShareWei6).toBe('250000');
+    expect(p.speculation.creationFee.makerShareWei6).toBe('250000');
+    expect(p.speculation.creationFee.viewerShareWei6).toBe('500000');
+    expect(p.speculation.creationFee.viewerShareUSDC).toBe(
+      p.speculation.creationFee.totalFeeUSDC,
+    );
+  });
+
+  it('lazy mode + sufficient taker treasury allowance: approvalNeeded===false', () => {
+    const p = buildMatchPreview(
+      baseArgs({
+        speculation: { mode: 'lazy' },
+        speculationCreationTotalFeeWei6: 500_000n,
+        takerTreasuryAllowanceWei6: 250_000n, // exactly viewer share
+      }),
+    );
+    expect(p.speculation.creationFee.approvalNeeded).toBe(false);
+  });
+
+  it('lazy mode with zero total fee disables the summary (applies===false even on lazy mode)', () => {
+    // Future-chain / test-disabled case. `creationFee.applies` reflects
+    // "is there an actual fee right now" rather than "is the mode lazy",
+    // so an agent's branch is "if applies → approve" without a separate
+    // chain-config lookup.
+    const p = buildMatchPreview(
+      baseArgs({
+        speculation: { mode: 'lazy' },
+        speculationCreationTotalFeeWei6: 0n,
+      }),
+    );
+    expect(p.tradeAction).toBe('trade-and-create-speculation');
+    expect(p.speculation.creationFee.applies).toBe(false);
+    expect(p.speculation.creationFee.totalFeeWei6).toBe('0');
+    expect(p.speculation.creationFee.approvalNeeded).toBe(false);
+  });
+});
+
 describe('buildMatchPreview — self-match PositionModule allowance doubling', () => {
   // For a self-match, PositionModule.recordFill performs TWO
   // safeTransferFrom calls against the same wallet — fillMakerRisk

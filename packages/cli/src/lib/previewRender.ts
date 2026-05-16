@@ -79,28 +79,41 @@ export function renderPreview(
     );
   }
 
-  if (preview.market.speculation.mode === 'lazy') {
+  // Speculation block — always rendered. Existing mode is compact;
+  // lazy mode prints the creation-fee breakdown because the maker may
+  // be charged at match time. Both branches read the always-present
+  // `creationFee` summary plus the top-level `submitAction` tag.
+  if (preview.market.speculation.mode === 'existing') {
+    out.write(
+      `${INDENT}speculation:  already created (#${preview.market.speculation.speculationId}) — no creation fee on match\n`,
+    );
+    out.write(
+      `${INDENT}              → trade-only submit\n`,
+    );
+  } else {
+    const cf = preview.market.speculation.creationFee;
     out.write(
       `${INDENT}speculation:  not yet created — lazily created on first match\n`,
     );
     out.write(
       `${INDENT}              speculationKey=${preview.market.speculation.speculationKey}\n`,
     );
+    out.write(
+      `${INDENT}              → trade + speculation creation IF your commitment is the first to match\n`,
+    );
     // The maker's share of the protocol speculation creation fee. Paid
     // ONLY if this commitment is the first match on the speculationKey
     // (the match that triggers lazy creation); pulled from the maker's
-    // TreasuryModule allowance (a different spender from the risk).
-    // If a prior match already created the speculation by the time this
-    // commitment is filled, the fee is not charged. Disclosing it here
-    // so the maker isn't surprised by a +0.25 USDC charge at match time.
+    // TreasuryModule allowance. `viewerShare` on a submit equals the
+    // maker share — no self-match concept yet (no taker has signed).
     out.write(
-      `${INDENT}              creation fee: +${preview.market.speculation.makerCreationFeeUSDC} USDC if you're the first to match\n`,
+      `${INDENT}              your share (maker): ${cf.makerShareUSDC} USDC via TreasuryModule\n`,
     );
     out.write(
-      `${INDENT}              (your share of the protocol speculation-creation fee, split with the\n`,
+      `${INDENT}              counterparty (taker): ${cf.takerShareUSDC} USDC via TreasuryModule\n`,
     );
     out.write(
-      `${INDENT}              counterparty; not pulled if a prior match already created the speculation)\n`,
+      `${INDENT}              (not pulled if a prior match has already created the speculation by match time)\n`,
     );
   }
 

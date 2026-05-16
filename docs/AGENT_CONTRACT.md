@@ -47,7 +47,8 @@ Other write commands (`contests score`, `settle`, `claim`, `claim-all`, `commitm
 // commitments submit --json
 interface SubmitPreviewEnvelope {
   schemaVersion: 1;
-  preview: SubmitPreview;     // contest, market, side, economics, expiry, raw, approvals[], outcomes[],
+  preview: SubmitPreview;     // contest, market { speculation { creationFee, … } }, side, economics,
+                              //   expiry, raw, approvals[], outcomes[], submitAction,
                               //   you?, counterparty?
 }
 
@@ -62,7 +63,8 @@ interface SubmitJsonResult {
 interface MatchPreviewEnvelope {
   schemaVersion: 1;
   preview: MatchPreview;      // commitment, taker, selfMatch, contest, market, odds, economics,
-                              //   expiry, speculation { mode, lazyCreation? }, approvals[], warnings[],
+                              //   expiry, speculation { mode, creationFee, lazyCreation? },
+                              //   approvals[], warnings[], tradeAction,
                               //   you?, counterparty?, outcomes?
 }
 
@@ -114,6 +116,28 @@ The CLI mirror: `ospex commitments match` and `ospex commitments submit` render 
 - `commitments submit --raw` restores the `positionType=Upper/Lower` tag inside the `[sideTags]` bracket on the `side:` line. The submit render had no other protocol-leakage to suppress.
 
 `--raw` has no effect on `--json` output — the envelope is the agent contract.
+
+### Lazy creation fee semantics
+
+A commitment match whose `(contestId, scorer, lineTicks)` tuple has no speculation yet triggers **lazy speculation creation** and pulls a creation fee (0.50 USDC on Polygon mainnet / Amoy; split 50/50 between maker and taker via `TreasuryModule.processSplitFee`). Once the speculation exists, no further matches pay this fee.
+
+The agent contract surfaces this in two always-present, mode-symmetric fields. Read once; act:
+
+| Question | Field | Existing | Lazy |
+|---|---|---|---|
+| Is this trade-only or trade + speculation creation? | `tradeAction` / `submitAction` | `'trade-only'` | `'trade-and-create-speculation'` |
+| Does a fee apply on this tx? | `speculation.creationFee.applies` | `false` | `true` |
+| Is the lazy case conditional? | `speculation.creationFee.condition` | `'never'` | `'if-first-match-at-execution'` |
+| What will THIS wallet pay? | `speculation.creationFee.viewerShareUSDC` | `'0.000000'` | viewer's share (collapses on self-match) |
+| Which spender? | `speculation.creationFee.spender` + `spenderLabel` | `null` / `null` | TreasuryModule address / `'TreasuryModule'` |
+| Approval needed? | `speculation.creationFee.approvalNeeded` | `false` | `true` iff `viewerTreasuryAllowance < viewerShare` |
+| Approval-row discriminator | `speculation.creationFee.approvalPurpose` | `null` | `'lazy-creation-fee'` |
+
+`viewerShareUSDC` is the practical "wallet exposure" answer — on a `MatchPreview` the viewer is the taker, and on a self-match (taker===maker) it collapses to the FULL fee (the single wallet pays both halves of `TreasuryModule.processSplitFee`). On a `SubmitPreview` the viewer is the maker; no self-match concept yet (no taker has signed), so `viewerShare === makerShare`.
+
+`tradeAction` and `submitAction` describe the preview-time expected execution path — **not a guarantee**. On a lazy match, another tx may create the speculation first; if it lands before yours, your tx executes as trade-only and no fee is charged. The contract field `creationFee.condition === 'if-first-match-at-execution'` makes this race explicit so agents reason about it correctly.
+
+The legacy `speculation.lazyCreation` block (lazy-mode only) is still emitted for back-compat and carries the `makerTreasuryAllowance*` diagnostic + the `'maker-treasury-allowance-insufficient'` warning. New code should prefer `creationFee` for fee semantics; `lazyCreation` is marked `@deprecated` in TypeScript.
 
 ### Numeric-field rule
 

@@ -119,6 +119,7 @@ export type {
   ResolutionSource,
   SideRole,
   SpeculationMode,
+  SpeculationCreationFeeSummary,
   OutcomeResult,
 } from './types/preview.js';
 
