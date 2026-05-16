@@ -29,13 +29,14 @@ import type {
   PreviewOutcome,
   PreviewYou,
   SideRole,
+  SpeculationCreationFeeSummary,
 } from './preview.js';
 import type { Hex } from './signer.js';
 
 // Re-export the approval discriminator for downstream consumers — match
 // uses the same `commitment-risk` and `lazy-creation-fee` purposes the
 // submit preview does.
-export type { ApprovalPurpose, PreviewApproval };
+export type { ApprovalPurpose, PreviewApproval, SpeculationCreationFeeSummary };
 
 /** A single warning surfaced on the preview block. */
 export type MatchPreviewWarning =
@@ -178,7 +179,25 @@ export interface MatchPreviewSpeculation {
   /** keccak256(abi.encode(uint256, address, int32)) per
    * `deriveSpeculationKey`. */
   speculationKey: string;
-  /** Present iff `mode === 'lazy'`. */
+  /**
+   * Always-present canonical agent-facing creation-fee summary.
+   * Existing-mode emits zeros + `applies:false` + `condition:'never'`;
+   * lazy-mode emits the on-chain split plus `viewerShare*` (self-match
+   * aware), `spender*`, `approvalNeeded`. See
+   * `SpeculationCreationFeeSummary` for the full contract.
+   */
+  creationFee: SpeculationCreationFeeSummary;
+  /**
+   * Legacy lazy-only block — kept for backwards compatibility with
+   * consumers built before the symmetric `creationFee` field landed.
+   * Adds `makerTreasuryAllowance*` data that `creationFee` deliberately
+   * does not carry (it's a lazy-only diagnostic, not a fee-semantic
+   * concern). Still present iff `mode === 'lazy'`.
+   *
+   * @deprecated Prefer `creationFee` for agent-safe fee semantics. The
+   * maker-allowance diagnostic remains accessible via this field and via
+   * the `'maker-treasury-allowance-insufficient'` entry in `warnings`.
+   */
   lazyCreation?: LazyCreationFee;
 }
 
@@ -239,6 +258,22 @@ export interface MatchPreview {
    * previews share the same downstream rendering surface.
    */
   outcomes?: PreviewOutcome[];
+  /**
+   * Coarse action tag in operator/agent vocabulary:
+   *
+   *   'trade-only' — speculation exists at preview time; tx records a
+   *     position fill only, no creation fee.
+   *   'trade-and-create-speculation' — speculation does NOT yet exist
+   *     at preview time; tx would record the position fill AND create
+   *     the speculation, pulling the fee. NOT a guarantee — another
+   *     match may create the speculation first, in which case the
+   *     action collapses back to trade-only at execution time.
+   *
+   * Always present. Redundant with `speculation.mode` but stated in
+   * the operator vocabulary an agent uses to reason about the
+   * transaction, rather than the protocol's `lazy`/`existing` jargon.
+   */
+  tradeAction: 'trade-only' | 'trade-and-create-speculation';
 }
 
 /**

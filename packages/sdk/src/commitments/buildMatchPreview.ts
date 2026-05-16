@@ -42,6 +42,7 @@ import type {
   PreviewOutcome,
   PreviewYou,
   SideRole,
+  SpeculationCreationFeeSummary,
 } from '../types/preview.js';
 import type { Hex } from '../types/signer.js';
 import type { MarketType } from '../types/odds.js';
@@ -50,6 +51,7 @@ import {
   buildPreviewCounterparty,
   buildPreviewYou,
 } from './perspectiveView.js';
+import { buildCreationFeeSummary } from './creationFeeSummary.js';
 
 const ODDS_SCALE = 100n;
 const DEFAULT_EXPIRES_SOON_THRESHOLD_SEC = 5n * 60n;
@@ -172,24 +174,47 @@ export function buildMatchPreview(args: BuildMatchPreviewArgs): MatchPreview {
   const takerLower = args.taker.toLowerCase() as Hex;
   const selfMatch = makerLower === takerLower;
 
-  // ── Speculation discriminator + lazy fee block ────────────────────
+  // ── Speculation discriminator + creation-fee summary ──────────────
+  // `creationFee` is ALWAYS emitted — existing-mode produces zeros so
+  // an agent can read `applies` / `viewerShareUSDC` / `approvalNeeded`
+  // without branching on absence of fields. The legacy `lazyCreation`
+  // block remains only on lazy mode for back-compat (carries the
+  // maker-allowance diagnostic that `creationFee` deliberately omits).
+  const creationFee = buildCreationFeeSummary({
+    mode: args.speculation.mode,
+    totalFeeWei6: args.speculationCreationTotalFeeWei6,
+    selfMatch,
+    viewerRole: 'taker',
+    viewerTreasuryAllowanceWei6: args.takerTreasuryAllowanceWei6,
+    treasuryModuleAddress: args.treasuryModuleAddress,
+    speculationId:
+      args.speculation.mode === 'existing'
+        ? args.speculation.speculationId
+        : null,
+  });
   const speculation: MatchPreviewSpeculation =
     args.speculation.mode === 'existing'
       ? {
           mode: 'existing',
           speculationId: args.speculation.speculationId,
           speculationKey: args.speculationKey,
+          creationFee,
         }
       : {
           mode: 'lazy',
           speculationId: null,
           speculationKey: args.speculationKey,
+          creationFee,
           lazyCreation: buildLazyCreationFee(
             args.speculationCreationTotalFeeWei6,
             args.makerTreasuryAllowanceWei6,
             selfMatch,
           ),
         };
+  const tradeAction: MatchPreview['tradeAction'] =
+    args.speculation.mode === 'lazy'
+      ? 'trade-and-create-speculation'
+      : 'trade-only';
 
   // ── Approvals[] ───────────────────────────────────────────────────
   // PositionModule.recordFill performs TWO safeTransferFrom calls — one
@@ -363,6 +388,7 @@ export function buildMatchPreview(args: BuildMatchPreviewArgs): MatchPreview {
     you,
     counterparty,
     outcomes,
+    tradeAction,
   };
 }
 

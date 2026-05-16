@@ -206,7 +206,7 @@ describe('prepareSubmit — --speculation happy path', () => {
     const ctx = buildContext({ allowance: 1_000_000n });
     const preview = await prepareSubmit(ctx, speculationArgs());
 
-    expect(preview.market.speculation).toEqual({ mode: 'existing', speculationId: '100' });
+    expect(preview.market.speculation).toMatchObject({ mode: 'existing', speculationId: '100' });
     expect(preview.market.type).toBe('moneyline');
     expect(preview.side.role).toBe('away');
     expect(preview.side.positionType).toBe(0);
@@ -247,7 +247,7 @@ describe('prepareSubmit — --contest mode', () => {
       odds: '2.50',
       riskUsdc: '1',
     });
-    expect(preview.market.speculation).toEqual({ mode: 'existing', speculationId: '100' });
+    expect(preview.market.speculation).toMatchObject({ mode: 'existing', speculationId: '100' });
     expect(preview.market.lineTicks).toBe(0);
   });
 
@@ -369,7 +369,7 @@ describe('prepareSubmit — --contest mode', () => {
       odds: '1.91',
       riskUsdc: '25',
     });
-    expect(preview.market.speculation).toEqual({ mode: 'existing', speculationId: '100' });
+    expect(preview.market.speculation).toMatchObject({ mode: 'existing', speculationId: '100' });
     expect(preview.market.lineTicks).toBe(-35);
   });
 });
@@ -414,7 +414,7 @@ describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', ()
       odds: '1.91',
       riskUsdc: '25',
     });
-    expect(preview.market.speculation).toEqual({ mode: 'existing', speculationId: '100' });
+    expect(preview.market.speculation).toMatchObject({ mode: 'existing', speculationId: '100' });
     expect(preview.market.lineTicks).toBe(-35);
   });
 
@@ -647,7 +647,7 @@ describe('prepareSubmit — total negative-line guard (review #4 blocker 2)', ()
       riskUsdc: '10',
     });
     expect(preview.market.lineTicks).toBe(85);
-    expect(preview.market.speculation).toEqual({ mode: 'existing', speculationId: '720' });
+    expect(preview.market.speculation).toMatchObject({ mode: 'existing', speculationId: '720' });
   });
 });
 

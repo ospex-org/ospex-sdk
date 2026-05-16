@@ -120,24 +120,59 @@ function renderMatchPreviewDefault(
     // promises warnings are shared across layouts).
   }
 
-  // Lazy speculation: surface the creation-fee exposure as a separate
-  // line so the user doesn't conflate it with the position stake.
-  if (preview.speculation.mode === 'lazy') {
-    out.write('\n');
+  // Speculation block — always rendered. Existing mode is compact
+  // (two lines) so normal trades stay quiet; lazy mode renders a full
+  // creation-fee breakdown because extra money + a second spender are
+  // involved. Both branches read the always-present `creationFee`
+  // summary plus the top-level `tradeAction` tag — agents asked for the
+  // distinction to be answerable from one place in the model.
+  const cf = preview.speculation.creationFee;
+  out.write('\n');
+  if (preview.speculation.mode === 'existing') {
     out.write(
-      `${INDENT}Speculation:    lazy — created on first match\n`,
+      `${INDENT}Speculation:    #${preview.speculation.speculationId} — already created, no creation fee\n`,
     );
-    const lc = preview.speculation.lazyCreation!;
+    out.write(`${INDENT}Action:         trade only\n`);
+  } else {
+    out.write(
+      `${INDENT}Speculation:    lazy — will be created on first match\n`,
+    );
+    out.write(
+      `${INDENT}Action:         trade + speculation creation (if still first at execution time)\n`,
+    );
+    out.write('\n');
     if (preview.selfMatch) {
       out.write(
-        `${INDENT}Creation fee exposure: +${lc.totalFeeUSDC} USDC via TreasuryModule  (self-match: same wallet pays both halves)\n`,
+        `${INDENT}Creation fee:   ${cf.totalFeeUSDC} USDC total\n`,
+      );
+      out.write(
+        `${INDENT}                  ⚠ self-match: your wallet pays BOTH halves\n`,
+      );
+      out.write(
+        `${INDENT}                  your wallet exposure: ${cf.viewerShareUSDC} USDC → TreasuryModule\n`,
+      );
+      out.write(
+        `${INDENT}                  ⚠ pulled only if this tx is still the first match at execution time\n`,
       );
     } else {
       out.write(
-        `${INDENT}Creation fee exposure: +${lc.takerShareUSDC} USDC via TreasuryModule  (your share if this match triggers creation)\n`,
+        `${INDENT}Creation fee:   ${cf.totalFeeUSDC} USDC total, split 50/50\n`,
+      );
+      out.write(
+        `${INDENT}                  your share (taker):     ${cf.takerShareUSDC} USDC → TreasuryModule\n`,
+      );
+      out.write(
+        `${INDENT}                  counterparty (maker):   ${cf.makerShareUSDC} USDC → TreasuryModule\n`,
+      );
+      out.write(
+        `${INDENT}                  your wallet exposure:   ${cf.viewerShareUSDC} USDC\n`,
+      );
+      out.write(
+        `${INDENT}                  ⚠ pulled only if this tx is still the first match at execution time\n`,
       );
     }
     if (preview.warnings.includes('maker-treasury-allowance-insufficient')) {
+      const lc = preview.speculation.lazyCreation!;
       out.write(
         `${INDENT}                ⚠ maker's TreasuryModule allowance (${lc.makerTreasuryAllowanceUSDC} USDC) is below the maker's share (${lc.makerShareUSDC} USDC).\n`,
       );
@@ -311,22 +346,39 @@ function renderMatchPreviewRaw(
     );
   }
 
-  if (preview.speculation.mode === 'lazy') {
+  // Speculation block — always rendered. Existing mode is one-line;
+  // lazy mode keeps the protocol-native multi-line breakdown.
+  const cf = preview.speculation.creationFee;
+  if (preview.speculation.mode === 'existing') {
+    out.write(`${INDENT}speculation:  #${preview.speculation.speculationId} (exists)\n`);
+    out.write(
+      `${INDENT}              → trade only — no creation fee on this match\n`,
+    );
+  } else {
     out.write(`${INDENT}speculation:  lazy — created on first match\n`);
     out.write(
       `${INDENT}              speculationKey=${preview.speculation.speculationKey}\n`,
     );
-    const lc = preview.speculation.lazyCreation!;
+    out.write(
+      `${INDENT}              → trade + speculation creation (if still first match at execution)\n`,
+    );
     if (preview.selfMatch) {
       out.write(
-        `${INDENT}              creation fee: +${lc.totalFeeUSDC} USDC (self-match: same wallet pays both halves)\n`,
+        `${INDENT}              fee: total ${cf.totalFeeUSDC} USDC → TreasuryModule (self-match: same wallet pays both halves)\n`,
+      );
+      out.write(
+        `${INDENT}              your wallet exposure: ${cf.viewerShareUSDC} USDC\n`,
       );
     } else {
       out.write(
-        `${INDENT}              creation fee: +${lc.takerShareUSDC} USDC taker share / +${lc.makerShareUSDC} USDC maker share (total ${lc.totalFeeUSDC} USDC)\n`,
+        `${INDENT}              fee: total ${cf.totalFeeUSDC} USDC (taker ${cf.takerShareUSDC} / maker ${cf.makerShareUSDC}) → TreasuryModule\n`,
+      );
+      out.write(
+        `${INDENT}              your wallet exposure: ${cf.viewerShareUSDC} USDC\n`,
       );
     }
     if (preview.warnings.includes('maker-treasury-allowance-insufficient')) {
+      const lc = preview.speculation.lazyCreation!;
       out.write(
         `${INDENT}              ⚠ maker's TreasuryModule allowance (${lc.makerTreasuryAllowanceUSDC} USDC) is below the maker's share (${lc.makerShareUSDC} USDC).\n`,
       );

@@ -210,7 +210,7 @@ These are NOT Ospex liquidity — they're a sanity-check from external markets, 
 ospex commitments match 0xe900c6dd
 ```
 
-Renders a first-person preview block — `You back: <team> at <american>`, `Counterparty: <team> at <american> — maker 0x…`, `Your risk:`, `Your profit: +N USDC if <team> wins`, and `Maker fill: X of Y remaining (full|partial fill)` so you can verify both sides of the trade at a glance (at +260 odds, e.g., a taker risking 1.6 USDC fully fills a maker risking 1 USDC). Self-matches replace the `You back / Counterparty` lines with a dual-stake block and an explicit `Position stake from your wallet:` total. If the commitment is on a not-yet-created speculation, the preview discloses the lazy creation fee on a separate `Creation fee exposure:` line. Pass `--raw` if you need the pre-perspective-view dual maker/taker layout for protocol debugging.
+Renders a first-person preview block — `You back: <team> at <american>`, `Counterparty: <team> at <american> — maker 0x…`, `Your risk:`, `Your profit: +N USDC if <team> wins`, and `Maker fill: X of Y remaining (full|partial fill)` so you can verify both sides of the trade at a glance (at +260 odds, e.g., a taker risking 1.6 USDC fully fills a maker risking 1 USDC). Self-matches replace the `You back / Counterparty` lines with a dual-stake block and an explicit `Position stake from your wallet:` total. The preview ALSO carries an explicit `Speculation:` / `Action:` block that says either `trade only` (no creation fee — speculation already exists) or `trade + speculation creation` (a per-side 0.25 USDC creation fee may be pulled if your tx is still the first match at execution time). Pass `--raw` if you need the pre-perspective-view dual maker/taker layout for protocol debugging.
 
 Confirm with Enter (or `y`) to sign and send. The CLI prompts for your Foundry passphrase once; the resulting position appears in `ospex positions status <yourAddress>`.
 
@@ -303,14 +303,22 @@ Confirm with Enter (or `y`) and the CLI signs and posts the EIP-712 commitment. 
 ospex commitments list --maker <yourAddress>
 ```
 
-If the speculation hasn't been created yet (no prior matches on this `(contestId, scorer, lineTicks)` tuple), the preview surfaces the per-side speculation creation fee — paid only if YOUR commitment turns out to be the first match:
+If the speculation already exists (a prior commitment has been matched on the same `(contestId, scorer, lineTicks)` tuple), the preview spells out that **no creation fee applies** on this submit:
+
+```
+speculation:  already created (#123) — no creation fee on match
+              → trade-only submit
+```
+
+If the speculation hasn't been created yet, the preview surfaces the per-side speculation creation fee — paid only if YOUR commitment turns out to be the first match:
 
 ```
 speculation:  not yet created — lazily created on first match
               speculationKey=0x3b7b…
-              creation fee: +0.250000 USDC if you're the first to match
-              (your share of the protocol speculation-creation fee, split with the
-              counterparty; not pulled if a prior match already created the speculation)
+              → trade + speculation creation IF your commitment is the first to match
+              your share (maker): 0.250000 USDC via TreasuryModule
+              counterparty (taker): 0.250000 USDC via TreasuryModule
+              (not pulled if a prior match has already created the speculation by match time)
 ```
 
 ### Key flags

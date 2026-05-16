@@ -139,20 +139,65 @@ describe('buildSubmitPreview — raw EIP-712 block', () => {
     const p = buildSubmitPreview(
       baseArgs({ speculation: { mode: 'existing', speculationId: '999' } }),
     );
-    expect(p.market.speculation).toEqual({ mode: 'existing', speculationId: '999' });
+    expect(p.market.speculation).toMatchObject({ mode: 'existing', speculationId: '999' });
     expect(p.market.speculation).not.toHaveProperty('makerCreationFeeUSDC');
   });
 
-  it('passes existing speculation through unchanged (already canonical)', () => {
+  it('passes existing speculation through and enriches with a zero-fee creationFee block', () => {
     const p = buildSubmitPreview(
       baseArgs({
         speculation: { mode: 'existing', speculationId: '999' },
       }),
     );
-    expect(p.market.speculation).toEqual({
+    expect(p.market.speculation).toMatchObject({
       mode: 'existing',
       speculationId: '999',
     });
+    // Always-present creationFee — existing-mode emits zeros so an agent
+    // can answer "is there a fee on this match" without inferring from
+    // missing fields.
+    expect(p.market.speculation.creationFee).toMatchObject({
+      applies: false,
+      condition: 'never',
+      totalFeeWei6: '0',
+      totalFeeUSDC: '0.000000',
+      takerShareWei6: '0',
+      makerShareWei6: '0',
+      viewerShareWei6: '0',
+      spender: null,
+      spenderLabel: null,
+      approvalPurpose: null,
+      approvalNeeded: false,
+    });
+    expect(p.submitAction).toBe('trade-only');
+  });
+
+  it('lazy variant emits a full creationFee block: applies=true, condition=if-first-match-at-execution, viewerShare=makerShare', () => {
+    const p = buildSubmitPreview(
+      baseArgs({
+        speculation: { mode: 'lazy', speculationId: null, speculationKey: '0xabcd' },
+        makerCreationFeeWei6: 250_000n,
+        treasuryUsdcCurrentAllowanceWei6: 0n,
+      }),
+    );
+    expect(p.market.speculation.creationFee).toMatchObject({
+      applies: true,
+      condition: 'if-first-match-at-execution',
+      totalFeeWei6: '500000',
+      totalFeeUSDC: '0.500000',
+      takerShareWei6: '250000',
+      takerShareUSDC: '0.250000',
+      makerShareWei6: '250000',
+      makerShareUSDC: '0.250000',
+      // Submit preview viewer is the maker (no taker has signed yet),
+      // so viewer share equals maker share — no self-match concept.
+      viewerShareWei6: '250000',
+      viewerShareUSDC: '0.250000',
+      spenderLabel: 'TreasuryModule',
+      approvalPurpose: 'lazy-creation-fee',
+      approvalNeeded: true,
+    });
+    expect(p.submitAction).toBe('trade-and-create-speculation');
   });
 });
 

@@ -34,6 +34,7 @@ import {
   buildPreviewYou,
   inverseOddsTick,
 } from './perspectiveView.js';
+import { buildCreationFeeSummary } from './creationFeeSummary.js';
 import type { ResolveSideResult } from './resolveSide.js';
 import type { MarketType } from '../types/odds.js';
 import type {
@@ -48,7 +49,6 @@ import type {
   PreviewRaw,
   PreviewSide,
   PreviewYou,
-  SpeculationMode,
   SubmitPreview,
 } from '../types/preview.js';
 import type { Hex } from '../types/signer.js';
@@ -215,6 +215,25 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
     args.homeTeam,
   );
 
+  // ── Speculation creation-fee summary ──────────────────────────────
+  // Always present on both modes — agent reads one field, no inference
+  // from missing fields. The on-chain split is exactly 50/50, so the
+  // total = `makerCreationFeeWei6 * 2`. On a submit preview the viewer
+  // is the maker (no taker has signed yet, no self-match concept).
+  const totalFeeWei6 = args.makerCreationFeeWei6 * 2n;
+  const creationFee = buildCreationFeeSummary({
+    mode: args.speculation.mode,
+    totalFeeWei6,
+    selfMatch: false,
+    viewerRole: 'maker',
+    viewerTreasuryAllowanceWei6: args.treasuryUsdcCurrentAllowanceWei6,
+    treasuryModuleAddress: args.treasuryModuleAddress,
+    speculationId:
+      args.speculation.mode === 'existing'
+        ? args.speculation.speculationId
+        : null,
+  });
+
   const market: PreviewMarket = {
     type: args.market,
     speculation:
@@ -224,11 +243,20 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
             speculationId: null,
             speculationKey,
             makerCreationFeeUSDC: wei6ToDecimalUSDC(args.makerCreationFeeWei6),
+            creationFee,
           }
-        : args.speculation,
+        : {
+            mode: 'existing',
+            speculationId: args.speculation.speculationId,
+            creationFee,
+          },
     lineTicks: args.lineTicks,
     displayLine,
   };
+  const submitAction: 'trade-only' | 'trade-and-create-speculation' =
+    args.speculation.mode === 'lazy'
+      ? 'trade-and-create-speculation'
+      : 'trade-only';
 
   const side: PreviewSide = {
     input: args.sideInput,
@@ -296,6 +324,7 @@ export function buildSubmitPreview(args: BuildSubmitPreviewArgs): SubmitPreview 
     outcomes,
     you,
     counterparty,
+    submitAction,
   };
 }
 

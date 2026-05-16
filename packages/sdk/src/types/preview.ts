@@ -19,9 +19,90 @@ export type ResolutionSource = 'exact' | 'nickname' | 'alias' | 'over' | 'under'
 /** Which entity the resolved side maps to on the speculation. */
 export type SideRole = 'away' | 'home' | 'over' | 'under';
 
+/**
+ * Always-present, agent-facing summary of the speculation creation fee
+ * for a single preview (submit or match). Answers Hermes's six core
+ * questions in one block without forcing consumers to inspect
+ * `approvals[]`, decode protocol vocabulary, or sum role shares.
+ *
+ * Symmetric across modes: existing-mode emits zeros + `applies:false` +
+ * `condition:'never'` so an agent's branch is "read one field, act"
+ * instead of "infer absence of fields." Lazy-mode emits the on-chain
+ * fee split + the viewer's actual wallet exposure (self-match-aware).
+ *
+ * See `MatchPreviewSpeculation.creationFee` and the lazy `SpeculationMode`
+ * branch's `creationFee` for wiring; emitted unconditionally by
+ * `buildSubmitPreview` and `buildMatchPreview`.
+ */
+export interface SpeculationCreationFeeSummary {
+  /**
+   * Does a creation fee apply on this tx?
+   *
+   *   false — speculation already exists; no fee under any circumstance.
+   *   true  — speculation does not yet exist AT PREVIEW TIME, so this
+   *           tx would trigger lazy creation and pull the fee IF it is
+   *           still the first match on the speculationKey at execution
+   *           time. NOT a guarantee — another tx may create the
+   *           speculation first, in which case no fee is pulled.
+   */
+  applies: boolean;
+  /**
+   *   'never' — `applies===false`; the speculation is already created.
+   *   'if-first-match-at-execution' — `applies===true`; fee is pulled
+   *     IFF this tx is still the first match when it lands. If a prior
+   *     match creates the speculation first, the fee is not charged.
+   */
+  condition: 'never' | 'if-first-match-at-execution';
+  /** Full fee in wei6. `"0"` when `applies===false`. */
+  totalFeeWei6: string;
+  totalFeeUSDC: string;
+  /** Taker's role-based share. `"0"` when `applies===false`. */
+  takerShareWei6: string;
+  takerShareUSDC: string;
+  /** Maker's role-based share. `"0"` when `applies===false`. */
+  makerShareWei6: string;
+  makerShareUSDC: string;
+  /**
+   * What THIS wallet (the viewer) actually pays. Collapses self-match
+   * doubling automatically: on a match preview the viewer is the
+   * taker, and on self-match `viewerShare === totalFee` (the single
+   * wallet pays both role shares). On a submit preview the viewer is
+   * the maker and `viewerShare === makerShare` (no self-match concept
+   * yet — no taker has signed). `"0"` when `applies===false`.
+   */
+  viewerShareWei6: string;
+  viewerShareUSDC: string;
+  /** TreasuryModule address when `applies===true`; null otherwise. */
+  spender: `0x${string}` | null;
+  /** Symbolic spender name — saves agents an address-book lookup. */
+  spenderLabel: 'TreasuryModule' | null;
+  /** Approval-row discriminator; null when `applies===false`. */
+  approvalPurpose: 'lazy-creation-fee' | null;
+  /**
+   * Does the viewer's current TreasuryModule allowance need to be
+   * raised before signing? Equivalent to `approvals[].needsApproval`
+   * for `purpose === 'lazy-creation-fee'` (computed against
+   * `viewerShare`, not the role share — accounts for self-match).
+   * Always `false` when `applies===false`.
+   */
+  approvalNeeded: boolean;
+  /** Human-readable one-liner — see render copy in `matchPreviewRender.ts`. */
+  note: string;
+}
+
 /** Discriminator for speculation existence at preview time. */
 export type SpeculationMode =
-  | { mode: 'existing'; speculationId: string }
+  | {
+      mode: 'existing';
+      speculationId: string;
+      /**
+       * Always-present canonical agent-facing fee summary. On existing
+       * mode every numeric field is `"0"`, `applies===false`,
+       * `condition==='never'`, `spender===null`. See
+       * `SpeculationCreationFeeSummary` for the full contract.
+       */
+      creationFee: SpeculationCreationFeeSummary;
+    }
   | {
       mode: 'lazy';
       speculationId: null;
@@ -45,8 +126,17 @@ export type SpeculationMode =
        * `maker-treasury-allowance-insufficient` warning when the
        * maker's TreasuryModule allowance is short), so a taker can
        * abort before signing rather than wait for an on-chain revert.
+       *
+       * @deprecated Prefer `creationFee.makerShareUSDC` for
+       * agent-safe fee semantics. Retained for backwards compatibility
+       * with earlier lazy-only consumers.
        */
       makerCreationFeeUSDC: string;
+      /**
+       * Always-present canonical fee summary. On a SubmitPreview the
+       * viewer is the maker, so `viewerShare === makerShare`.
+       */
+      creationFee: SpeculationCreationFeeSummary;
     };
 
 /** Three-valued outcome result on a single condition row. */
@@ -359,6 +449,23 @@ export interface SubmitPreview {
    * submit preview because no taker has signed yet.
    */
   counterparty?: PreviewCounterparty;
+  /**
+   * Coarse action tag in operator/agent vocabulary:
+   *
+   *   'trade-only' — speculation already exists at preview time; the
+   *     match this commitment is eventually filled by will record a
+   *     position only, no creation fee.
+   *   'trade-and-create-speculation' — speculation does NOT yet exist
+   *     at preview time; IF this commitment is the first to be matched,
+   *     that match would record the position AND create the
+   *     speculation, pulling the creation fee.
+   *
+   * Always present. Mirrors `market.speculation.mode` but in operator
+   * vocabulary. Documents a PREVIEW-TIME view of the expected execution
+   * path — another commit can be matched first, in which case the
+   * action collapses back to trade-only at execution time.
+   */
+  submitAction: 'trade-only' | 'trade-and-create-speculation';
 }
 
 /**

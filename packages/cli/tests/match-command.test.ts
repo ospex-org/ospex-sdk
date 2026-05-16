@@ -167,11 +167,16 @@ describe('commitments match — preview renderer (--raw, existing speculation)',
     expect(out).toMatch(/taker 1\.63 \/ -159/);
   });
 
-  it('does not show a lazy approval block when speculation is existing', () => {
+  it('shows an explicit existing-mode line stating no creation fee applies', () => {
     const preview = buildExisting();
     const out = captureRender(preview, { raw: true });
-    expect(out).not.toMatch(/lazy/i);
-    expect(out).not.toMatch(/creation fee/i);
+    // The existing-mode block is now always rendered so an agent (and a
+    // reader) sees a positive "no creation fee" answer rather than
+    // having to infer it from absence of fields. Lazy-mode copy must
+    // not appear (no fee math, no TreasuryModule spender).
+    expect(out).toMatch(/speculation:\s+#\d+ \(exists\)/);
+    expect(out).toMatch(/→ trade only — no creation fee on this match/);
+    expect(out).not.toMatch(/lazy — created on first match/);
   });
 
   it('shows the full commitment hash on the commitment: line', () => {
@@ -189,18 +194,23 @@ describe('commitments match — preview renderer (--raw, existing speculation)',
 });
 
 describe('commitments match — preview renderer (--raw, lazy speculation)', () => {
-  it('shows the lazy creation fee block with taker-share and maker-share', () => {
+  it('shows the lazy creation fee block with taker / maker / total split', () => {
     const preview = buildExisting({
       speculation: { mode: 'lazy' },
       speculationCreationTotalFeeWei6: 500_000n,
     });
     const out = captureRender(preview, { raw: true });
     expect(out).toMatch(/speculation:\s+lazy/);
-    expect(out).toMatch(/creation fee:.*0\.250000 USDC taker share/);
-    expect(out).toMatch(/0\.250000 USDC maker share/);
+    expect(out).toMatch(
+      /fee: total 0\.500000 USDC \(taker 0\.250000 \/ maker 0\.250000\) → TreasuryModule/,
+    );
+    expect(out).toMatch(/your wallet exposure: 0\.250000 USDC/);
+    expect(out).toMatch(
+      /→ trade \+ speculation creation \(if still first match at execution\)/,
+    );
   });
 
-  it('self-match shows the FULL fee on a single line (same wallet pays both halves)', () => {
+  it('self-match collapses creation fee to a single wallet exposure line', () => {
     const preview = buildExisting({
       taker: MAKER,
       speculation: { mode: 'lazy' },
@@ -208,7 +218,10 @@ describe('commitments match — preview renderer (--raw, lazy speculation)', () 
     });
     const out = captureRender(preview, { raw: true });
     expect(out).toMatch(/⚠ self-match/);
-    expect(out).toMatch(/creation fee:\s*\+0\.500000 USDC \(self-match/);
+    expect(out).toMatch(
+      /fee: total 0\.500000 USDC → TreasuryModule \(self-match: same wallet pays both halves\)/,
+    );
+    expect(out).toMatch(/your wallet exposure: 0\.500000 USDC/);
   });
 
   it('emits a maker-allowance warning when the maker treasury allowance is short', () => {
@@ -410,6 +423,19 @@ describe('commitments match — default first-person renderer', () => {
     expect(out).toMatch(/Los Angeles Lakers @ Denver Nuggets/);
     expect(out).toMatch(/market:\s+moneyline/);
   });
+
+  it('renders an explicit existing-mode Speculation/Action block (no creation fee)', () => {
+    // Hermes asked that the existing-mode case be EXPLICIT in the
+    // preview — not inferable from the absence of a fee block. The
+    // existing-mode render is intentionally compact (two lines) so
+    // normal trades stay quiet but the answer is still visible.
+    const preview = buildExisting();
+    const out = captureRender(preview);
+    expect(out).toMatch(/Speculation:\s+#\d+ — already created, no creation fee/);
+    expect(out).toMatch(/Action:\s+trade only/);
+    expect(out).not.toMatch(/lazy — will be created/);
+    expect(out).not.toMatch(/Creation fee:/);
+  });
 });
 
 describe('commitments match — default renderer (warnings)', () => {
@@ -505,14 +531,22 @@ describe('commitments match — default renderer (self-match)', () => {
 });
 
 describe('commitments match — default renderer (lazy speculation)', () => {
-  it('shows "Creation fee exposure: +X via TreasuryModule" (separate from position stake)', () => {
+  it('renders Speculation/Action header + a 50/50 fee split + wallet exposure line', () => {
     const preview = buildExisting({
       speculation: { mode: 'lazy' },
       speculationCreationTotalFeeWei6: 500_000n,
     });
     const out = captureRender(preview);
+    expect(out).toMatch(/Speculation:\s+lazy — will be created on first match/);
     expect(out).toMatch(
-      /Creation fee exposure:\s*\+0\.250000 USDC via TreasuryModule\s+\(your share if this match triggers creation\)/,
+      /Action:\s+trade \+ speculation creation \(if still first at execution time\)/,
+    );
+    expect(out).toMatch(/Creation fee:\s+0\.500000 USDC total, split 50\/50/);
+    expect(out).toMatch(/your share \(taker\):\s+0\.250000 USDC → TreasuryModule/);
+    expect(out).toMatch(/counterparty \(maker\):\s+0\.250000 USDC → TreasuryModule/);
+    expect(out).toMatch(/your wallet exposure:\s+0\.250000 USDC/);
+    expect(out).toMatch(
+      /⚠ pulled only if this tx is still the first match at execution time/,
     );
   });
 
@@ -523,9 +557,9 @@ describe('commitments match — default renderer (lazy speculation)', () => {
       speculationCreationTotalFeeWei6: 500_000n,
     });
     const out = captureRender(preview);
-    expect(out).toMatch(
-      /Creation fee exposure:\s*\+0\.500000 USDC via TreasuryModule\s+\(self-match:/,
-    );
+    expect(out).toMatch(/Creation fee:\s+0\.500000 USDC total/);
+    expect(out).toMatch(/⚠ self-match: your wallet pays BOTH halves/);
+    expect(out).toMatch(/your wallet exposure: 0\.500000 USDC → TreasuryModule/);
   });
 
   it('maker-allowance warning still fires (cross-layout invariant)', () => {
