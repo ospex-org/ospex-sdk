@@ -5,25 +5,55 @@
  * The renderer reads from the structured model — never re-derives
  * win/lose/push semantics, never re-formats numbers. The SDK's
  * `buildSubmitPreview` is the source of truth; this is dumb formatting.
+ *
+ * Two layouts (mirrors `commitments match` from PR D):
+ *
+ *   default → first-person framing; the `[sideTags]` bracket drops
+ *             `positionType=Upper/Lower` (protocol-internal naming
+ *             that has no meaning outside the Ospex codebase).
+ *   --raw   → restores the `positionType=Upper/Lower` tag for
+ *             debugging EIP-712 hash mismatches and protocol-level
+ *             audits.
  */
 
 import type { SubmitPreview } from '@ospex/sdk';
 
+export interface RenderPreviewOptions {
+  /**
+   * When true, render the protocol-native `positionType=Upper/Lower`
+   * tag inside the `[sideTags]` bracket. When false / unset, the tag
+   * is dropped — agents and humans see a cleaner side line.
+   */
+  raw?: boolean;
+}
+
 const INDENT = '  ';
 const stderr = process.stderr;
 
-export function renderPreview(preview: SubmitPreview, out: NodeJS.WritableStream = stderr): void {
+export function renderPreview(
+  preview: SubmitPreview,
+  out: NodeJS.WritableStream = stderr,
+  opts: RenderPreviewOptions = {},
+): void {
   out.write('\nResolved commitment:\n');
   out.write(`${INDENT}contest:      ${preview.contest.label}\n`);
 
   const speculationLabel = formatSpeculationLabel(preview);
   out.write(`${INDENT}market:       ${preview.market.type}${speculationLabel}\n`);
 
-  const sideTags = [
-    `positionType=${preview.side.positionType === 0 ? 'Upper' : 'Lower'}`,
-    `scorer=${shortAddr(preview.raw.scorer)}`,
-    `source=${preview.side.resolutionSource}`,
-  ];
+  // Side tags. `positionType=Upper/Lower` is Ospex-internal protocol
+  // naming and never reaches the default render — only `--raw`. The
+  // scorer + source tags stay because they're informational (scorer
+  // address pins the market type; source documents how the side was
+  // resolved from user input — alias, exact, over/under, etc.).
+  const sideTags: string[] = [];
+  if (opts.raw === true) {
+    sideTags.push(
+      `positionType=${preview.side.positionType === 0 ? 'Upper' : 'Lower'}`,
+    );
+  }
+  sideTags.push(`scorer=${shortAddr(preview.raw.scorer)}`);
+  sideTags.push(`source=${preview.side.resolutionSource}`);
   out.write(
     `${INDENT}side:         ${preview.side.resolvedLabel} (${preview.side.role})  [${sideTags.join(', ')}]\n`,
   );
