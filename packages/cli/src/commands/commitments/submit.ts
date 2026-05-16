@@ -82,6 +82,7 @@ const optionsSchema = z.object({
   yes: z.boolean().optional(),
   json: z.boolean().optional(),
   approveMax: z.boolean().optional(),
+  raw: z.boolean().optional(),
 });
 
 export const commitmentsSubmitCommand = addSignerOptions(
@@ -109,6 +110,11 @@ export const commitmentsSubmitCommand = addSignerOptions(
     .option(
       '--approve-max',
       'with --yes (non-interactive), approve unlimited USDC instead of the exact required amount. Ignored in interactive mode — to grant unlimited interactively, type "max" at the amount prompt.',
+    )
+    .option(
+      '--raw',
+      'render the protocol-native side tags (positionType=Upper/Lower) inside the side: line. ' +
+        'Useful for debugging EIP-712 hash mismatches; has no effect on --json output.',
     )
     .addOption(
       new Option(
@@ -175,7 +181,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
 
     // 4. Render the preview to stderr so stdout JSON (under --yes
     //    --json) stays parseable.
-    renderPreview(preview);
+    renderPreview(preview, process.stderr, { raw: opts.raw === true });
 
     // 5. Confirm (unless --yes). 'n' or empty exits with 130 (matches
     //    the Ctrl-C convention so scripts can distinguish "user
