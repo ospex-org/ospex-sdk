@@ -31,8 +31,13 @@ import {
 export interface RenderMatchPreviewOptions {
   /**
    * When true, render the protocol-native dual maker/taker layout
-   * (positionType=Upper/Lower exposed, raw approval wei6, etc.). When
-   * false / unset, render the agent-facing first-person layout.
+   * (maker side / taker side lines, [oddsTick=…], protocol line ticks,
+   * raw approval wei6 figures). When false / unset, render the
+   * agent-facing first-person layout sourced from `preview.you` /
+   * `preview.counterparty` / `preview.outcomes`. Note: this layout
+   * does NOT expose `positionType=Upper/Lower` — that tag was a
+   * submit-render artefact (see `previewRender.ts`); the match
+   * render has never emitted it.
    */
   raw?: boolean;
 }
