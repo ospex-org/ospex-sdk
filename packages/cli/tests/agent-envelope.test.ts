@@ -12,6 +12,7 @@ import {
   SDK_VERSION,
   buildAgentEnvelope,
   buildFailureEnvelope,
+  networkForChainId,
   writeAgentEnvelope,
 } from '../src/lib/agentEnvelope.js';
 
@@ -252,5 +253,12 @@ describe('writeAgentEnvelope', () => {
     // Compact: exactly one line plus trailing newline.
     expect(sink.buf.trimEnd().split('\n')).toHaveLength(1);
     expect(JSON.parse(sink.buf.trim())).toBeTypeOf('object');
+  });
+});
+
+describe('networkForChainId', () => {
+  it('maps 137 to polygon and 80002 to amoy', () => {
+    expect(networkForChainId(137)).toBe('polygon');
+    expect(networkForChainId(80002)).toBe('amoy');
   });
 });

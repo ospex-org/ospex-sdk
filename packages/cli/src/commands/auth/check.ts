@@ -78,16 +78,29 @@ import { z } from 'zod';
 import {
   OspexError,
   OspexSignerResolutionError,
+  type AgentEnvelope,
+  type AgentWarning,
+  type ChainId,
+  type Hex,
   type Signer,
+  type WalletRole,
 } from '@ospex/sdk';
 import {
   KeystoreSigner,
   type FromFoundryAccountArgs,
   type FromKeystoreFileArgs,
 } from '@ospex/sdk/signers/keystore';
-import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { readSession } from '../../lib/client.js';
-import { loadConfigFile, type CliConfigFile } from '../../lib/config.js';
+import {
+  loadConfigFile,
+  resolveCliConfig,
+  type CliConfigFile,
+} from '../../lib/config.js';
 import {
   addSignerOptions,
   parseSignerIntent,
@@ -230,12 +243,114 @@ export const authCheckCommand = addSignerOptions(
     });
 
     if (json) {
-      formatOutput(envelope, { json: true });
+      // Resolve chainId for the v2 envelope shoulder block. Auth
+      // check itself doesn't construct an OspexClient (it only walks
+      // signer resolution), so pull from CLI config + fall back to
+      // mainnet.
+      const cfg = await resolveCliConfig();
+      const chainId = (cfg.chainId ?? 137) as ChainId;
+      writeAgentEnvelope(
+        toAgentEnvelope(envelope, { chainId, signChallengeRequested }),
+      );
     } else {
       renderHuman(envelope, process.stdout);
     }
     process.exit(envelope.ok ? 0 : 1);
   });
+
+// ── v1 → v2 envelope transform ──────────────────────────────────────
+
+export interface ToAgentEnvelopeArgs {
+  chainId: ChainId;
+  /** Mirrors the action handler's `--sign-challenge` flag. Drives walletRole. */
+  signChallengeRequested: boolean;
+}
+
+/**
+ * Wrap the existing v1 `AuthCheckJsonEnvelope` in the v2 agent
+ * envelope. Hoists `ok` / `warnings` / `errors` to the outer shoulder
+ * block; leaves `strict` / `resolution` / `unlock` /
+ * `passwordFilePermissions` / `challenge` inside `payload`.
+ *
+ * Exposed so tests can assert on the v2 transform without booting a
+ * full CLI invocation.
+ */
+export function toAgentEnvelope(
+  v1: AuthCheckJsonEnvelope,
+  args: ToAgentEnvelopeArgs,
+): AgentEnvelope<AuthCheckPayload> {
+  const wallet: Hex | null = v1.unlock.address;
+  // The wallet role distinguishes "we're inspecting this signer's
+  // config" (default, --sign-challenge omitted) from "we're asking
+  // this signer to sign something" (--sign-challenge set). Both
+  // resolve to the same address, but the role tells agents whether
+  // they should treat the address as a signing identity.
+  const walletRole: WalletRole = wallet === null
+    ? 'none'
+    : args.signChallengeRequested
+      ? 'signer'
+      : 'subject';
+  return buildAgentEnvelope<AuthCheckPayload>({
+    ok: v1.ok,
+    action: 'auth.check',
+    stage: 'read',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet,
+    walletRole,
+    signer: wallet,
+    warnings: liftAuthCheckWarnings(v1.warnings),
+    errors: v1.errors,
+    payload: {
+      strict: v1.strict,
+      resolution: v1.resolution,
+      unlock: v1.unlock,
+      passwordFilePermissions: v1.passwordFilePermissions,
+      challenge: v1.challenge,
+    },
+  });
+}
+
+/**
+ * v1 `AuthCheckJsonEnvelope.warnings` is a plain `string[]`. Lift
+ * each known message into a structured `AgentWarning` with a stable
+ * `code`. Today the only warning produced by `buildEnvelope` is the
+ * loose-password-file-perms case; unknown messages fall back to a
+ * generic `'auth-check-warning'` code so unfamiliar copy still
+ * surfaces structurally (agents log + ignore).
+ */
+export function liftAuthCheckWarnings(messages: string[]): AgentWarning[] {
+  return messages.map((message) => {
+    if (
+      /^Password file .* readable by group\/other/i.test(message) ||
+      /password file .* mode 0/i.test(message)
+    ) {
+      return {
+        code: 'password-file-permissions-loose',
+        message,
+        severity: 'warning',
+      };
+    }
+    return {
+      code: 'auth-check-warning',
+      message,
+      severity: 'warning',
+    };
+  });
+}
+
+/**
+ * Shape of `payload` for `ospex auth check --json` under v2.
+ * Mirrors `AuthCheckJsonEnvelope` minus the four fields hoisted to
+ * the outer envelope (`schemaVersion`, `ok`, `warnings`, `errors`).
+ */
+export interface AuthCheckPayload {
+  strict: boolean;
+  resolution: AuthCheckJsonEnvelope['resolution'];
+  unlock: AuthCheckJsonEnvelope['unlock'];
+  passwordFilePermissions: AuthCheckJsonEnvelope['passwordFilePermissions'];
+  challenge: AuthCheckJsonEnvelope['challenge'];
+}
 
 // ── Envelope assembly ───────────────────────────────────────────────
 

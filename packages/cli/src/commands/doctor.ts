@@ -27,9 +27,15 @@ import { z } from 'zod';
 import type {
   ApprovalsSnapshot,
   BalancesSnapshot,
+  Hex,
   OspexClient,
 } from '@ospex/sdk';
 import { formatOutput } from '../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../lib/agentEnvelope.js';
 import { getClient } from '../lib/client.js';
 import {
   buildDoctorReport,
@@ -168,7 +174,26 @@ export const doctorCommand = new Command('doctor')
     const report = buildDoctorReport(reportInputs);
 
     if (opts.json === true) {
-      formatOutput(report, { json: true });
+      const chainId = expectedChainId.value;
+      const wallet = owner !== null ? (owner.toLowerCase() as Hex) : null;
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: report.ready.matchCommitments.ok,
+          action: 'doctor',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          wallet,
+          walletRole: wallet !== null ? 'subject' : 'none',
+          signer: wallet,
+          payload: report,
+          // PR-2 conservative: keep envelope warnings/errors empty.
+          // The structured `report.checks[]` + `report.suggestion`
+          // already carry the granular signal; lifting them into
+          // top-level AgentWarning / AgentError shapes is a separate
+          // pass (see agent-envelope-spec.md §9).
+        }),
+      );
     } else {
       renderDoctorReport(report, process.stdout);
     }

@@ -268,6 +268,18 @@ export function writeAgentEnvelope(
 /* ------------------------------------------------------------------------- */
 
 /**
+ * Derive the `Network` enum value from a `ChainId`. Used by every
+ * Class A command to populate `envelope.network` alongside `chainId`.
+ *
+ * Polygon mainnet = 137 → 'polygon'; Polygon Amoy = 80002 → 'amoy'.
+ * The ChainId type already pins the input to one of these two
+ * literals, so the implementation is total at the type level.
+ */
+export function networkForChainId(chainId: ChainId): Network {
+  return chainId === 137 ? 'polygon' : 'amoy';
+}
+
+/**
  * BigInt-safe JSON replacer. Matches `lib/format.ts`'s replacer; kept
  * inline here so the envelope writer has no dependency on the legacy
  * formatter (which has table-rendering logic agents don't need).
