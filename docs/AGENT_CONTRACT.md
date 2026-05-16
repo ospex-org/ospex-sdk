@@ -108,7 +108,12 @@ USDC values inside `you` / `counterparty` are always 6 fractional digits, round-
 
 The fields are **optional** under `schemaVersion: 1`. Envelopes produced by older SDK builds may omit them. The `@ospex/sdk` exports `computeMatchYouView(preview)` and `computeSubmitYouView(preview)` — pure accessors that return the view directly when present and backfill from the legacy `makerSide` / `takerSide` / `odds` / `economics` (or `side` / `economics` on submit) blocks when absent, so agents handling mixed-SDK-version envelopes never branch.
 
-The CLI mirror: `ospex commitments match` and `ospex commitments submit` render this view by default in human mode. Pass `--raw` to render the protocol-native dual maker/taker layout (including `positionType=Upper/Lower`) for debugging EIP-712 hash mismatches and protocol-level audits. `--raw` has no effect on `--json` output — the envelope is the agent contract.
+The CLI mirror: `ospex commitments match` and `ospex commitments submit` render this view by default in human mode. Pass `--raw` to fall back to the pre-perspective-view layout for debugging EIP-712 hash mismatches and protocol-level audits — the exact restored content differs by command:
+
+- `commitments match --raw` restores the dual `maker side:` / `taker side:` layout, the both-perspective `line:` and `odds:` lines (with `[oddsTick=…]` and protocol `line_ticks`), the `taker risks:` / `maker fill:` block, and raw approval-row wei6 figures.
+- `commitments submit --raw` restores the `positionType=Upper/Lower` tag inside the `[sideTags]` bracket on the `side:` line. The submit render had no other protocol-leakage to suppress.
+
+`--raw` has no effect on `--json` output — the envelope is the agent contract.
 
 ### Numeric-field rule
 
