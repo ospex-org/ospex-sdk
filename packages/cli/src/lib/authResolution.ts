@@ -33,10 +33,20 @@
 import path from 'node:path';
 import os from 'node:os';
 import { promises as fs } from 'node:fs';
-import { checkPasswordFilePermissions } from '@ospex/sdk/signers/keystore';
+import {
+  KeystoreSigner,
+  checkPasswordFilePermissions,
+} from '@ospex/sdk/signers/keystore';
 import { readSession } from './client.js';
 import { expandTilde, getKeystorePath, type CliConfigFile } from './config.js';
+import { getKeystoreAddressIfPresent } from './keystore.js';
+import { promptHidden } from './prompt.js';
 import type { SignerIntent } from './signer-options.js';
+import {
+  isValidAddress,
+  WalletAddressUnresolvedError,
+  type Hex,
+} from './walletAddress.js';
 
 // ── Provenance enums (stable agent contract) ────────────────────────
 
@@ -386,4 +396,182 @@ export async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ── Walker-aware address derivation ─────────────────────────────────
+
+/**
+ * Stable enum recording WHICH source produced the resolved wallet
+ * address. The doctor's `signer.address_known.data.derivedFrom`
+ * surfaces this so agents can distinguish a flag override from a
+ * keystore unlock without re-doing the work.
+ */
+export type WalletAddressSource =
+  | 'flag-address'
+  | 'keystore-field'
+  | 'session-cache'
+  | 'non-interactive-unlock'
+  | 'expected-address-pin'
+  | 'interactive-prompt';
+
+export interface DeriveSignerAddressArgs {
+  /** `--address <0x...>` override. Wins everything; zero I/O. */
+  override: string | undefined;
+  /** Output of `resolveAuthSources` — the walker's view of which
+   *  keystore + password + pin would resolve. */
+  resolution: AuthSourceResolution;
+  /** When true, never trigger a passphrase prompt. Suppresses the
+   *  interactive-prompt fallback; throws instead. */
+  noPrompt: boolean;
+}
+
+/**
+ * Derive the configured wallet's address using the walker's
+ * resolution data — closes the Hermes PR 55 blocker where the
+ * doctor's legacy `resolveWalletAddress(...)` only consulted
+ * `getKeystorePath()` and never saw a config-pinned `foundryAccount`.
+ *
+ * Resolution order (cheapest → heaviest, never prompts under
+ * `noPrompt: true`):
+ *
+ *   1. `override` (--address flag). Zero I/O.
+ *   2. In-keystore `address` field — ethers-produced keystores carry
+ *      one. Foundry-produced ones don't; the rest of the ladder picks
+ *      up the slack.
+ *   3. Active session cache (`ospex wallet unlock`). Returns
+ *      `session.address` without a decrypt.
+ *   4. Non-interactive unlock via the SDK helpers — uses the
+ *      configured `passwordFile` or `--password-stdin`. Same code
+ *      path `auth check --json` uses; matches `loadSigner` for
+ *      live writes.
+ *   5. Configured `expectedAddress` pin. Declaration-only — used as
+ *      a last cheap signal when no credentials are available to
+ *      verify. The pin is a stated invariant; we surface it so
+ *      bettors who set it via `auth use-foundry --expected-address`
+ *      see their address even without a password file present.
+ *   6. Interactive prompt (only when `noPrompt: false`). Throws
+ *      `WalletAddressUnresolvedError` under `noPrompt`.
+ */
+export async function deriveSignerAddress(
+  args: DeriveSignerAddressArgs,
+): Promise<{ address: Hex; source: WalletAddressSource }> {
+  const { override, resolution, noPrompt } = args;
+
+  // (1) Override — fast path that respects the agent's "I told you
+  //     who I am" assertion without any keystore touch.
+  if (override !== undefined) {
+    if (!isValidAddress(override)) {
+      throw new Error(
+        `--address must be a 0x-prefixed 20-byte hex address, got "${override}".`,
+      );
+    }
+    return { address: override.toLowerCase() as Hex, source: 'flag-address' };
+  }
+
+  // (2) In-keystore address field — only Ethers-style v3 keystores
+  //     carry one; Foundry omits it. Cheap when present.
+  if (resolution.keystore.exists) {
+    try {
+      const raw = await fs.readFile(resolution.keystore.path, 'utf8');
+      const fromFile = getKeystoreAddressIfPresent(raw);
+      if (fromFile !== null && isValidAddress(fromFile)) {
+        return { address: fromFile.toLowerCase() as Hex, source: 'keystore-field' };
+      }
+    } catch {
+      // Best-effort — keystore is read-broken or malformed; fall through.
+    }
+  }
+
+  // (3) Session cache. Predates the Foundry-first stance but still
+  //     in use by some agents; honor it before any heavier path.
+  const session = await readSession();
+  if (session && isValidAddress(session.address)) {
+    return {
+      address: session.address.toLowerCase() as Hex,
+      source: 'session-cache',
+    };
+  }
+
+  // (4) Non-interactive unlock when the walker shows a credentialed
+  //     password source. This is the path that fixes Hermes PR 55
+  //     blocker #1 — `auth use-foundry`-pinned setups land here.
+  if (resolution.keystore.exists && hasNonInteractivePassword(resolution.password.provenance)) {
+    try {
+      const signer = await unlockNonInteractively(resolution);
+      const addr = (await signer.getAddress()).toLowerCase() as Hex;
+      return { address: addr, source: 'non-interactive-unlock' };
+    } catch {
+      // Decryption / passphrase mismatch — fall through to the pin
+      // (if any) so the user at least sees their declared address.
+    }
+  }
+
+  // (5) Expected-address pin (set via `auth use-foundry --expected-address`
+  //     or the --expected-address flag). Declaration, not verification.
+  if (resolution.expectedAddress.value !== null) {
+    return {
+      address: resolution.expectedAddress.value,
+      source: 'expected-address-pin',
+    };
+  }
+
+  // (6) No-prompt failure / interactive fallback.
+  if (noPrompt) {
+    if (!resolution.keystore.exists) {
+      throw new WalletAddressUnresolvedError(
+        'keystore_not_found',
+        `no keystore at ${resolution.keystore.path}`,
+      );
+    }
+    throw new WalletAddressUnresolvedError(
+      'password_source_missing',
+      'address could not be derived without unlocking the keystore',
+    );
+  }
+
+  if (!resolution.keystore.exists) {
+    throw new WalletAddressUnresolvedError(
+      'keystore_not_found',
+      `no keystore at ${resolution.keystore.path}`,
+    );
+  }
+  const raw = await fs.readFile(resolution.keystore.path, 'utf8');
+  const passphrase = await promptHidden('Keystore passphrase: ');
+  const signer = await KeystoreSigner.unlock(raw, passphrase);
+  const addr = (await signer.getAddress()).toLowerCase() as Hex;
+  return { address: addr, source: 'interactive-prompt' };
+}
+
+function hasNonInteractivePassword(provenance: PasswordProvenance): boolean {
+  return (
+    provenance === 'flag-password-file' ||
+    provenance === 'flag-password-stdin' ||
+    provenance === 'env-OSPEX_PASSWORD_FILE' ||
+    provenance === 'config-passwordFile'
+  );
+}
+
+/**
+ * Invoke the SDK keystore helper that matches the walker's keystore
+ * + password provenance. Throws on decryption failure / mismatch —
+ * the caller catches and falls through to the pin path.
+ */
+async function unlockNonInteractively(resolution: AuthSourceResolution) {
+  const passphraseArg: { passwordFile?: string; fromStdin?: boolean } = {};
+  if (resolution.password.provenance === 'flag-password-stdin') {
+    passphraseArg.fromStdin = true;
+  } else if (resolution.password.path !== null) {
+    passphraseArg.passwordFile = resolution.password.path;
+  }
+  if (resolution.keystore.account !== null) {
+    return KeystoreSigner.fromFoundryAccount({
+      account: resolution.keystore.account,
+      foundryKeystoresDir: resolution.foundryKeystoresDir.value,
+      ...passphraseArg,
+    });
+  }
+  return KeystoreSigner.fromKeystoreFile({
+    keystorePath: resolution.keystore.path,
+    ...passphraseArg,
+  });
 }

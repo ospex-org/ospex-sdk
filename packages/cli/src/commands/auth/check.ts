@@ -1,4 +1,4 @@
-﻿/**
+/**
  * `ospex auth check [signer-flags...] [--strict] [--sign-challenge] [--json]`
  *
  * Diagnostic command that walks the same signer-resolution ladder a
@@ -584,4 +584,3 @@ function formatProvenance(p: string): string {
     default: return p;
   }
 }
-

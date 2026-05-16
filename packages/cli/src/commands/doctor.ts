@@ -1,4 +1,4 @@
-﻿/**
+/**
  * `ospex doctor` — comprehensive readiness check for the configured
  * wallet. Composes Core API health + USDC/LINK approvals + POL/USDC/
  * LINK balances into a single report and tells the user (or agent)
@@ -43,16 +43,14 @@ import {
   type RpcProbeResult,
 } from '../lib/doctorProbe.js';
 import { sanitizeMessageForUrl } from '../lib/redact.js';
-import {
-  resolveWalletAddress,
-  WalletAddressUnresolvedError,
-} from '../lib/walletAddress.js';
+import { WalletAddressUnresolvedError } from '../lib/walletAddress.js';
 import {
   loadConfigFile,
   resolveCliConfigDetailed,
 } from '../lib/config.js';
 import {
   checkPasswordFilePerms,
+  deriveSignerAddress,
   resolveAuthSources,
 } from '../lib/authResolution.js';
 import { parseSignerIntent } from '../lib/signer-options.js';
@@ -84,19 +82,6 @@ export const doctorCommand = new Command('doctor')
     // `signer.address_known: fail` rather than hanging.
     const noPrompt = opts.json === true || process.stdin.isTTY !== true;
 
-    let owner: `0x${string}` | null = null;
-    let signerAddressError: string | undefined;
-    try {
-      owner = await resolveWalletAddress(opts.address, { noPrompt });
-    } catch (err) {
-      if (err instanceof WalletAddressUnresolvedError) {
-        owner = null;
-        signerAddressError = err.message;
-      } else {
-        throw err;
-      }
-    }
-
     // PR 3: pull all three configs in one read so the envelope can
     // surface provenance + the doctor can probe upstream URLs.
     const cliConfig = await resolveCliConfigDetailed();
@@ -105,9 +90,9 @@ export const doctorCommand = new Command('doctor')
     const rpcUrlMissing = rpcUrlValue === null;
 
     // PR 4: run the same signer-resolution walker `ospex auth check`
-    // uses, in non-unlocking mode. The walker is pure resolution —
-    // no decrypt, no prompt — so the doctor's no-prompt guarantee
-    // is preserved. Permission check fans out separately.
+    // uses. The walker is pure resolution — no decrypt, no prompt —
+    // so the doctor's no-prompt guarantee is preserved. Permission
+    // check fans out separately.
     const rawFile = await loadConfigFile();
     const signerIntent = parseSignerIntent(rawOpts);
     const authResolution = await resolveAuthSources(
@@ -118,6 +103,30 @@ export const doctorCommand = new Command('doctor')
     const passwordFilePermissions = await checkPasswordFilePerms(
       authResolution.password,
     );
+
+    // PR 4 fix (Hermes PR 55 review): derive the wallet address from
+    // the walker resolution — NOT the legacy `~/.ospex/keystore.json`
+    // path. With a config-pinned `foundryAccount` + `passwordFile` the
+    // pre-fix code would say "no keystore at the default path" while
+    // the SAME config let `auth check --json` unlock cleanly. Using the
+    // walker keeps the doctor and auth-check in lockstep.
+    let owner: `0x${string}` | null = null;
+    let signerAddressError: string | undefined;
+    try {
+      const derived = await deriveSignerAddress({
+        override: opts.address,
+        resolution: authResolution,
+        noPrompt,
+      });
+      owner = derived.address;
+    } catch (err) {
+      if (err instanceof WalletAddressUnresolvedError) {
+        owner = null;
+        signerAddressError = err.message;
+      } else {
+        throw err;
+      }
+    }
 
     // PR 2: probe RPC + contracts in parallel before chain reads.
     // PR 3: also probe /v1/config/public (Realtime bootstrap) so the
