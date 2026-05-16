@@ -25,6 +25,9 @@ import type { MarketType } from './odds.js';
 import type {
   ApprovalPurpose,
   PreviewApproval,
+  PreviewCounterparty,
+  PreviewOutcome,
+  PreviewYou,
   SideRole,
 } from './preview.js';
 import type { Hex } from './signer.js';
@@ -216,6 +219,26 @@ export interface MatchPreview {
   /** Snapshot of the row's `isLive` predicate at fetch time. */
   isLive: boolean;
   warnings: MatchPreviewWarning[];
+  /**
+   * Taker-perspective (you) view of this commitment. Populated by
+   * builders shipped after the perspective-view addition; agents
+   * should treat the field as optional and fall back to the legacy
+   * `takerSide` / `odds` / `economics` fields via
+   * `computeMatchYouView` for mixed-version compatibility.
+   */
+  you?: PreviewYou;
+  /**
+   * Maker counterparty. `address` is always non-null on a match
+   * preview (the maker has signed). The field is typed nullable on
+   * `PreviewCounterparty` for shape uniformity with `SubmitPreview`.
+   */
+  counterparty?: PreviewCounterparty;
+  /**
+   * Win / lose / push outcomes from the viewer's (taker) perspective.
+   * Mirrors the existing `SubmitPreview.outcomes` block so both
+   * previews share the same downstream rendering surface.
+   */
+  outcomes?: PreviewOutcome[];
 }
 
 /**

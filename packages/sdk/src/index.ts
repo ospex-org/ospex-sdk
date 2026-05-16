@@ -111,6 +111,10 @@ export type {
   ApprovalPurpose,
   PreviewApproval,
   PreviewOutcome,
+  PerspectiveAmount,
+  PerspectiveOdds,
+  PreviewYou,
+  PreviewCounterparty,
   ExpirySource,
   ResolutionSource,
   SideRole,
@@ -148,6 +152,19 @@ export {
   type TakerView,
   type TakerViewContext,
 } from './commitments/takerView.js';
+export {
+  buildBackingLabel,
+  buildPerspectiveAmount,
+  buildPerspectiveOdds,
+  buildPreviewCounterparty,
+  buildPreviewYou,
+  invertSideRole,
+  inverseOddsTick,
+  sideRoleFor,
+  type BuildBackingLabelArgs,
+  type BuildCounterpartyArgs,
+  type BuildPerspectiveArgs,
+} from './commitments/perspectiveView.js';
 export {
   MIN_PREFIX_HEX_LEN,
   PAGE_LIMIT,
