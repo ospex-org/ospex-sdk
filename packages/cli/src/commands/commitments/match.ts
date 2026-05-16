@@ -86,9 +86,12 @@ export const commitmentsMatchCommand = addSignerOptions(
     )
     .option(
       '--raw',
-      'render the protocol-native dual maker/taker layout (positionType, raw approval wei6, etc.) ' +
-        'instead of the default first-person view. Useful for debugging EIP-712 hash mismatches and ' +
-        'protocol-level audits. Has no effect on --json output.',
+      'render the protocol-native dual maker/taker layout (maker side / taker side lines, ' +
+        '[oddsTick=…], protocol line ticks, raw approval wei6 figures) instead of the default ' +
+        'first-person view. Useful for debugging EIP-712 hash mismatches and protocol-level audits. ' +
+        '(Note: only `commitments submit --raw` restores the `positionType=Upper/Lower` tag; ' +
+        'the match render never emitted positionType in any layout.) ' +
+        'Has no effect on --json output.',
     )
     .addOption(
       new Option(
