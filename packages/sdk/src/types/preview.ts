@@ -210,6 +210,100 @@ export interface PreviewOutcome {
   payoutUSDC: string;
 }
 
+/**
+ * Wei6 integer + formatted decimal USDC string, used for every amount
+ * surfaced inside the `you` / `counterparty` perspective blocks. The
+ * `usdc` form is always 6 fractional digits (matches the agent
+ * contract: `wei6ToDecimalUSDC` round-trip with `usdcDecimalToWei6`).
+ */
+export interface PerspectiveAmount {
+  /** wei6 (USDC × 10^6) as a decimal string, BigInt-safe over JSON. */
+  wei6: string;
+  /** Formatted decimal USDC with exactly 6 fractional digits, e.g. "4.999918". */
+  usdc: string;
+}
+
+/** Decimal + American + tick representation of a single perspective's effective odds. */
+export interface PerspectiveOdds {
+  /** Decimal odds with 2 fractional digits, e.g. "1.65". */
+  decimal: string;
+  /** Signed American odds, e.g. "-154". */
+  american: string;
+  /** Decimal × 100. Exposed for sorting / exact arithmetic. */
+  oddsTick: number;
+}
+
+/**
+ * The executing party's perspective. Populated by `buildSubmitPreview`
+ * (role: 'maker') and `buildMatchPreview` (role: 'taker'). Marked
+ * OPTIONAL in `SubmitPreview` / `MatchPreview` because the field is an
+ * additive extension under `schemaVersion: 1`; consumers built against
+ * the legacy envelope shape continue to compile. The helper functions
+ * `computeMatchYouView` / `computeSubmitYouView` backfill from the
+ * legacy fields on previews that predate the addition.
+ */
+export interface PreviewYou {
+  /** Which protocol role the viewer is playing. */
+  role: 'maker' | 'taker';
+  /** Viewer's wallet (lowercased 0x-hex). */
+  address: `0x${string}`;
+  /**
+   * What the viewer is backing in concise display form. Examples:
+   *   moneyline → "Los Angeles Dodgers"
+   *   spread    → "Los Angeles Lakers -3.5"
+   *   total     → "Over 220.5" / "Under 220.5"
+   *
+   * Treat as display/readback only. Structured consumers that need the
+   * underlying integers should read `role`, `market.type`, and
+   * `market.lineTicks` from the parent envelope.
+   */
+  backing: string;
+  /** The viewer's effective odds (already inverted for the taker role). */
+  odds: PerspectiveOdds;
+  /** What the viewer is risking. */
+  risk: PerspectiveAmount;
+  /** Profit if the viewer wins. */
+  profit: PerspectiveAmount;
+  /**
+   * risk + profit. Named `totalReturn` (not `return`) so polyglot
+   * codegen doesn't trip on the JavaScript reserved word.
+   */
+  totalReturn: PerspectiveAmount;
+}
+
+/**
+ * The other party's perspective. Mirrors `PreviewYou` field-for-field
+ * with one nullability difference: `address` is `null` on a fresh
+ * `SubmitPreview` because no taker has signed yet. On a `MatchPreview`
+ * the counterparty is the (signed) maker and the address is known.
+ *
+ * Optional on the public interfaces for the same reason as `PreviewYou`.
+ */
+export interface PreviewCounterparty {
+  /** Which protocol role the counterparty is playing. */
+  role: 'maker' | 'taker';
+  /** Counterparty's wallet, or `null` when no counterparty has signed yet (submit-preview hypothetical). */
+  address: `0x${string}` | null;
+  backing: string;
+  odds: PerspectiveOdds;
+  /**
+   * The counterparty's risk. On `MatchPreview` this is the maker's
+   * `fillMakerRisk` (their realized risk against this fill). On
+   * `SubmitPreview` this is what a full-fill counterparty would need
+   * to risk — equals `economics.counterpartyRiskUSDC` already on the
+   * envelope.
+   */
+  risk: PerspectiveAmount;
+  /**
+   * Counterparty's profit if they win. Under the zero-vig protocol
+   * this always equals the viewer's `risk` (one side's loss is the
+   * other side's win).
+   */
+  profit: PerspectiveAmount;
+  /** risk + profit. */
+  totalReturn: PerspectiveAmount;
+}
+
 export interface PreviewContest {
   contestId: string;
   /** "Away @ Home, ISO-date — SPORT". */
@@ -252,6 +346,19 @@ export interface SubmitPreview {
   raw: PreviewRaw;
   approvals: PreviewApproval[];
   outcomes: PreviewOutcome[];
+  /**
+   * Maker-perspective (you) view of this commitment. Populated by
+   * builders shipped after the perspective-view addition; agents
+   * should treat the field as optional and fall back to the legacy
+   * `side` / `economics` fields via `computeSubmitYouView` for
+   * mixed-version compatibility.
+   */
+  you?: PreviewYou;
+  /**
+   * Hypothetical taker counterparty. `address` is always `null` on a
+   * submit preview because no taker has signed yet.
+   */
+  counterparty?: PreviewCounterparty;
 }
 
 /**
