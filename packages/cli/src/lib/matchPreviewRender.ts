@@ -107,12 +107,12 @@ function renderMatchPreviewDefault(
     );
     if (preview.warnings.includes('partial-fill')) {
       out.write('  (partial fill)\n');
-      out.write(
-        `${INDENT}                ⚠ this match leaves capacity on the maker commitment\n`,
-      );
     } else {
       out.write('  (full fill)\n');
     }
+    // The ⚠ partial-fill warning is rendered below in the cross-layout
+    // warnings section so it also fires for self-match (the file header
+    // promises warnings are shared across layouts).
   }
 
   // Lazy speculation: surface the creation-fee exposure as a separate
@@ -158,10 +158,25 @@ function renderMatchPreviewDefault(
       `${INDENT}                ⚠ commitment's nonce is invalidated — match will revert\n`,
     );
   }
+  if (preview.warnings.includes('partial-fill')) {
+    out.write(
+      `${INDENT}                ⚠ partial fill: this match leaves capacity on the maker commitment\n`,
+    );
+  }
 
-  // Outcomes — taker-perspective win / lose / push rows. Mirrors the
-  // existing SubmitPreview render so both flows look the same.
-  if (view.outcomes.length > 0) {
+  // Outcomes block. On non-self-match this is the taker-perspective
+  // win / lose / push table (mirrors the existing SubmitPreview
+  // render). On self-match the same wallet owns both positions, so
+  // wallet-level `you win` / `you lose` rows would be misleading —
+  // settlement nets to zero aside from gas/fees. We replace the table
+  // with a single explanatory line so the block is still
+  // discoverable but never claims wallet-level wins or losses.
+  if (preview.selfMatch) {
+    out.write('\nOutcomes:\n');
+    out.write(
+      `${INDENT}Self-match — settlement is wallet-neutral aside from gas/fees.\n`,
+    );
+  } else if (view.outcomes.length > 0) {
     out.write('\nOutcomes:\n');
     for (const o of view.outcomes) {
       out.write(`${INDENT}${formatOutcomeLine(o)}\n`);

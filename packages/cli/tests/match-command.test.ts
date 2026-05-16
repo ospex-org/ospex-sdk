@@ -461,6 +461,47 @@ describe('commitments match — default renderer (self-match)', () => {
     expect(out).not.toMatch(/You back:/);
     expect(out).not.toMatch(/Counterparty:/);
   });
+
+  // Regression guard for Hermes PR #59 blocker (comment 4466248942).
+  // The default self-match render used to emit `you win` / `you lose`
+  // rows from the taker-perspective outcomes block, but on a
+  // self-match both positions belong to the same wallet — settlement
+  // is wallet-neutral (modulo gas/fees), so the wallet-level wording
+  // was a payoff misstatement. The Outcomes section is now replaced
+  // by a single explanatory line on self-match.
+  it('self-match does NOT render wallet-level "you win" / "you lose" rows', () => {
+    const preview = buildExisting({ taker: MAKER });
+    const out = captureRender(preview);
+    expect(out).not.toMatch(/you win /);
+    expect(out).not.toMatch(/you lose /);
+  });
+
+  it('self-match renders an Outcomes block with the wallet-neutral explainer', () => {
+    const preview = buildExisting({ taker: MAKER });
+    const out = captureRender(preview);
+    expect(out).toMatch(/Outcomes:/);
+    expect(out).toMatch(
+      /Self-match — settlement is wallet-neutral aside from gas\/fees\./,
+    );
+  });
+
+  // The file-header docstring promises that warning blocks (including
+  // partial-fill) are shared across both layouts. Before this fix,
+  // partial-fill lived only inside the non-self-match branch; a
+  // self-match preview that partial-filled would have lost the
+  // warning. Hermes flagged this alongside the outcomes blocker.
+  it('self-match + partial fill still surfaces the ⚠ partial-fill warning', () => {
+    const preview = buildExisting({
+      taker: MAKER,
+      takerDesiredRiskWei6: 500_000n, // partial fill of the 1.0 USDC maker
+    });
+    expect(preview.selfMatch).toBe(true);
+    expect(preview.warnings).toContain('partial-fill');
+    const out = captureRender(preview);
+    expect(out).toMatch(
+      /⚠ partial fill: this match leaves capacity on the maker commitment/,
+    );
+  });
 });
 
 describe('commitments match — default renderer (lazy speculation)', () => {
