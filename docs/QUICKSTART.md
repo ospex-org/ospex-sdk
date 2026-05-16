@@ -210,7 +210,7 @@ These are NOT Ospex liquidity — they're a sanity-check from external markets, 
 ospex commitments match 0xe900c6dd
 ```
 
-Renders a preview block showing both **taker risk** (what you risk) and **maker fill** (how much of the maker's order you fill) — at +260 odds, e.g., a taker risking 1.6 USDC fully fills a maker risking 1 USDC; both numbers are visible so you can verify the trade. Self-matches surface a warning. If the commitment is on a not-yet-created speculation, the preview discloses the lazy creation fee (split 50/50 between maker and taker; if maker and taker are the same wallet, that wallet effectively covers both halves).
+Renders a first-person preview block — `You back: <team> at <american>`, `Counterparty: <team> at <american> — maker 0x…`, `Your risk:`, `Your profit: +N USDC if <team> wins`, and `Maker fill: X of Y remaining (full|partial fill)` so you can verify both sides of the trade at a glance (at +260 odds, e.g., a taker risking 1.6 USDC fully fills a maker risking 1 USDC). Self-matches replace the `You back / Counterparty` lines with a dual-stake block and an explicit `Position stake from your wallet:` total. If the commitment is on a not-yet-created speculation, the preview discloses the lazy creation fee on a separate `Creation fee exposure:` line. Pass `--raw` if you need the pre-perspective-view dual maker/taker layout for protocol debugging.
 
 Confirm with Enter (or `y`) to sign and send. The CLI prompts for your Foundry passphrase once; the resulting position appears in `ospex positions status <yourAddress>`.
 
@@ -283,7 +283,7 @@ The CLI prints a preview block before signing — contest, market, side, odds, r
 Resolved commitment:
   contest:      Cardinals @ Padres, 2026-05-08 — MLB
   market:       moneyline (#123)
-  side:         San Diego Padres (home)  [positionType=Lower, scorer=0xd846…, source=nickname]
+  side:         San Diego Padres (home)  [scorer=0xd846…, source=nickname]
   odds:         2.50 decimal / +150 american  [oddsTick=250]
   risk:         1.000000 USDC
   to win:       1.500000 USDC  (return = 2.500000 USDC)
