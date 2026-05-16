@@ -278,7 +278,7 @@ describe('buildMatchPreview — approvals (existing vs lazy)', () => {
     expect(p.speculation.lazyCreation?.totalFeeWei6).toBe('500000');
   });
 
-  it('lazy self-match: 2 rows; lazy required = FULL fee', () => {
+  it('lazy self-match: 2 rows; lazy required = FULL fee; shares sum to total (taker carries the full fee, maker is 0)', () => {
     const p = buildMatchPreview(
       baseArgs({
         taker: MAKER,
@@ -289,9 +289,19 @@ describe('buildMatchPreview — approvals (existing vs lazy)', () => {
     expect(p.selfMatch).toBe(true);
     expect(p.approvals).toHaveLength(2);
     const lazyRow = p.approvals.find((r) => r.purpose === 'lazy-creation-fee');
-    expect(BigInt(lazyRow!.required)).toBe(500_000n); // full fee — same wallet pays both halves
+    // Same wallet pays both halves; the approvals[] row asks for the
+    // full fee against the wallet's TreasuryModule allowance.
+    expect(BigInt(lazyRow!.required)).toBe(500_000n);
+    // Share fields sum to totalFeeWei6 so dashboards don't double-
+    // count. The full fee is attributed to the taker side (the
+    // executing party in the match flow); the maker share is 0.
+    // Mirrors the docstring on `LazyCreationFee`.
     expect(p.speculation.lazyCreation?.takerShareWei6).toBe('500000');
-    expect(p.speculation.lazyCreation?.makerShareWei6).toBe('500000');
+    expect(p.speculation.lazyCreation?.makerShareWei6).toBe('0');
+    // `makerTreasuryAllowanceSufficient` is trivially true on self-
+    // match (any allowance covers a 0 share); the maker-allowance
+    // warning is gated on !selfMatch separately.
+    expect(p.speculation.lazyCreation?.makerTreasuryAllowanceSufficient).toBe(true);
   });
 
   it('lazy with zero total fee disables the lazy row', () => {
