@@ -29,7 +29,6 @@ import type {
   BalancesSnapshot,
   OspexClient,
 } from '@ospex/sdk';
-import { checkPasswordFilePermissions } from '@ospex/sdk/signers/keystore';
 import { formatOutput } from '../lib/format.js';
 import { getClient } from '../lib/client.js';
 import {
@@ -44,15 +43,17 @@ import {
   type RpcProbeResult,
 } from '../lib/doctorProbe.js';
 import { sanitizeMessageForUrl } from '../lib/redact.js';
+import { WalletAddressUnresolvedError } from '../lib/walletAddress.js';
 import {
-  resolveWalletAddress,
-  WalletAddressUnresolvedError,
-} from '../lib/walletAddress.js';
-import {
-  expandTilde,
   loadConfigFile,
   resolveCliConfigDetailed,
 } from '../lib/config.js';
+import {
+  checkPasswordFilePerms,
+  deriveSignerAddress,
+  resolveAuthSources,
+} from '../lib/authResolution.js';
+import { parseSignerIntent } from '../lib/signer-options.js';
 
 const optionsSchema = z.object({
   address: z.string().optional(),
@@ -72,7 +73,7 @@ export const doctorCommand = new Command('doctor')
   .option('--json', 'machine-readable output')
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
-    await runPasswordFilePermissionGate(opts.strict === true);
+    const strict = opts.strict === true;
 
     // No-prompt guarantee: in --json mode or when stdin isn't a TTY,
     // the doctor must never block on hidden-input read. Address
@@ -81,10 +82,43 @@ export const doctorCommand = new Command('doctor')
     // `signer.address_known: fail` rather than hanging.
     const noPrompt = opts.json === true || process.stdin.isTTY !== true;
 
+    // PR 3: pull all three configs in one read so the envelope can
+    // surface provenance + the doctor can probe upstream URLs.
+    const cliConfig = await resolveCliConfigDetailed();
+    const { apiUrl, rpcUrl, chainId: expectedChainId } = cliConfig;
+    const rpcUrlValue = rpcUrl.value;
+    const rpcUrlMissing = rpcUrlValue === null;
+
+    // PR 4: run the same signer-resolution walker `ospex auth check`
+    // uses. The walker is pure resolution — no decrypt, no prompt —
+    // so the doctor's no-prompt guarantee is preserved. Permission
+    // check fans out separately.
+    const rawFile = await loadConfigFile();
+    const signerIntent = parseSignerIntent(rawOpts);
+    const authResolution = await resolveAuthSources(
+      signerIntent,
+      process.env,
+      rawFile,
+    );
+    const passwordFilePermissions = await checkPasswordFilePerms(
+      authResolution.password,
+    );
+
+    // PR 4 fix (Hermes PR 55 review): derive the wallet address from
+    // the walker resolution — NOT the legacy `~/.ospex/keystore.json`
+    // path. With a config-pinned `foundryAccount` + `passwordFile` the
+    // pre-fix code would say "no keystore at the default path" while
+    // the SAME config let `auth check --json` unlock cleanly. Using the
+    // walker keeps the doctor and auth-check in lockstep.
     let owner: `0x${string}` | null = null;
     let signerAddressError: string | undefined;
     try {
-      owner = await resolveWalletAddress(opts.address, { noPrompt });
+      const derived = await deriveSignerAddress({
+        override: opts.address,
+        resolution: authResolution,
+        noPrompt,
+      });
+      owner = derived.address;
     } catch (err) {
       if (err instanceof WalletAddressUnresolvedError) {
         owner = null;
@@ -93,13 +127,6 @@ export const doctorCommand = new Command('doctor')
         throw err;
       }
     }
-
-    // PR 3: pull all three configs in one read so the envelope can
-    // surface provenance + the doctor can probe upstream URLs.
-    const cliConfig = await resolveCliConfigDetailed();
-    const { apiUrl, rpcUrl, chainId: expectedChainId } = cliConfig;
-    const rpcUrlValue = rpcUrl.value;
-    const rpcUrlMissing = rpcUrlValue === null;
 
     // PR 2: probe RPC + contracts in parallel before chain reads.
     // PR 3: also probe /v1/config/public (Realtime bootstrap) so the
@@ -127,6 +154,9 @@ export const doctorCommand = new Command('doctor')
       apiUrl,
       rpcUrl,
       apiPublicConfigOk: apiPublicConfigResult.ok,
+      authResolution,
+      passwordFilePermissions,
+      strict,
       ...(inputs.balancesError !== undefined ? { balancesError: inputs.balancesError } : {}),
       ...(inputs.approvalsError !== undefined ? { approvalsError: inputs.approvalsError } : {}),
       ...(signerAddressError !== undefined ? { signerAddressError } : {}),
@@ -336,51 +366,4 @@ async function probeApiPublicConfig(
   } finally {
     clearTimeout(timer);
   }
-}
-
-/**
- * Check the permissions of the configured password file (env >
- * config). Loose perms → warning by default; with `--strict` they
- * become a hard exit before any chain work runs.
- *
- * Resolves in the same order `loadSigner` would consult: flag is not
- * a doctor surface, so env wins, then config. A missing file or
- * Windows / non-POSIX host short-circuits silently (no perm semantics
- * to enforce).
- *
- * Exported for tests via the dedicated `runPasswordFilePermissionGate`
- * import — keeps the test fixture from needing to round-trip through
- * the full doctor pipeline just to assert the strict-mode gate.
- */
-export async function runPasswordFilePermissionGate(strict: boolean): Promise<void> {
-  const envFile = process.env.OSPEX_PASSWORD_FILE;
-  let passwordFile: string | undefined;
-  if (envFile !== undefined && envFile.length > 0) {
-    passwordFile = expandTilde(envFile);
-  } else {
-    const config = await loadConfigFile();
-    if (config.passwordFile !== undefined && config.passwordFile.length > 0) {
-      passwordFile = expandTilde(config.passwordFile);
-    }
-  }
-  if (passwordFile === undefined) return;
-  let perms;
-  try {
-    perms = await checkPasswordFilePermissions(passwordFile);
-  } catch {
-    // File doesn't exist or stat failed — not this gate's problem.
-    return;
-  }
-  if (perms.platformSkipped) return;
-  if (!perms.loose) return;
-
-  const octal = perms.mode.toString(8).padStart(3, '0');
-  const msg =
-    `password file ${passwordFile} is readable by group/other (mode 0${octal}). ` +
-    'Tighten with `chmod 600 <file>`.';
-  if (strict) {
-    process.stderr.write(`error (password_file_permissions_loose): ${msg}\n`);
-    process.exit(1);
-  }
-  process.stderr.write(`warning: ${msg}\n`);
 }

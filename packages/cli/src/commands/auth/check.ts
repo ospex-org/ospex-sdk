@@ -73,9 +73,6 @@
  *      A while real `loadSigner({})` returned B.
  */
 
-import path from 'node:path';
-import os from 'node:os';
-import { promises as fs } from 'node:fs';
 import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import {
@@ -85,59 +82,29 @@ import {
 } from '@ospex/sdk';
 import {
   KeystoreSigner,
-  checkPasswordFilePermissions,
   type FromFoundryAccountArgs,
   type FromKeystoreFileArgs,
 } from '@ospex/sdk/signers/keystore';
 import { formatOutput } from '../../lib/format.js';
 import { readSession } from '../../lib/client.js';
-import {
-  expandTilde,
-  getKeystorePath,
-  loadConfigFile,
-  type CliConfigFile,
-} from '../../lib/config.js';
+import { loadConfigFile, type CliConfigFile } from '../../lib/config.js';
 import {
   addSignerOptions,
   parseSignerIntent,
   type SignerIntent,
 } from '../../lib/signer-options.js';
-
-// ── Provenance enum (stable agent contract) ─────────────────────────
-
-/**
- * Every place the resolver could pick a keystore from. Distinguishes
- * the new sticky-signer fields (`foundryAccount`, `foundryKeystorePath`)
- * from the legacy `ospex init` field (`keystorePath`) and from the
- * hard-coded default (`~/.ospex/keystore.json`) so agents can tell at
- * a glance whether the user is on the Foundry-native path or the
- * legacy session-cache path.
- */
-type KeystoreProvenance =
-  | 'flag-account'
-  | 'flag-keystore-path'
-  | 'env-OSPEX_KEYSTORE_PATH'
-  | 'config-foundryAccount'
-  | 'config-foundryKeystorePath'
-  | 'config-keystorePath-legacy'
-  | 'default-legacy';
-
-type PasswordProvenance =
-  | 'flag-password-file'
-  | 'flag-password-stdin'
-  | 'env-OSPEX_PASSWORD_FILE'
-  | 'config-passwordFile'
-  | 'session-cache'
-  | 'none';
-
-type ExpectedAddressProvenance = 'flag' | 'config' | 'none';
-
-type FoundryKeystoresDirProvenance =
-  | 'flag'
-  | 'env-OSPEX_FOUNDRY_KEYSTORES_DIR'
-  | 'env-FOUNDRY_DIR'
-  | 'config'
-  | 'default';
+import {
+  checkPasswordFilePerms,
+  resolveAuthSources,
+  type ExpectedAddressProvenance,
+  type FoundryKeystoresDirProvenance,
+  type KeystoreProvenance,
+  type PasswordProvenance,
+  type ResolvedExpectedAddressField,
+  type ResolvedFoundryKeystoresDirField,
+  type ResolvedKeystoreField,
+  type ResolvedPasswordField,
+} from '../../lib/authResolution.js';
 
 // ── Static EIP-712 challenge (deterministic) ────────────────────────
 
@@ -292,10 +259,8 @@ export async function buildEnvelope(args: BuildEnvelopeArgs): Promise<AuthCheckJ
   const warnings: string[] = [];
   const errors: Array<{ code: string; message: string }> = [];
 
-  const keystore = await resolveKeystoreField(intent, env, config);
-  const foundryKeystoresDir = resolveFoundryDirField(intent, env, config);
-  const password = await resolvePasswordField(intent, env, config, keystore);
-  const expectedAddress = resolveExpectedAddressField(intent, config, keystore);
+  const { keystore, password, expectedAddress, foundryKeystoresDir } =
+    await resolveAuthSources(intent, env, config);
 
   // Hermes PR 50 blocker #2: a missing keystore file is not a fatal
   // error when the session cache is the unlock path. Real `loadSigner`
@@ -317,7 +282,7 @@ export async function buildEnvelope(args: BuildEnvelopeArgs): Promise<AuthCheckJ
 
   // Permission check — runs whenever we have a password FILE (not
   // stdin / session). Strict mode promotes a loose result to an error.
-  const passwordFilePermissions = await checkPermissions(password);
+  const passwordFilePermissions = await checkPasswordFilePerms(password);
   if (
     passwordFilePermissions.checked &&
     passwordFilePermissions.loose === true
@@ -429,301 +394,6 @@ export async function buildEnvelope(args: BuildEnvelopeArgs): Promise<AuthCheckJ
     challenge,
     warnings,
     errors,
-  };
-}
-
-// ── Resolution walkers ──────────────────────────────────────────────
-
-/**
- * Walk the keystore resolution ladder (mirrors `loadSigner`'s
- * combined `materializeIntent` + `mergeIntentFromConfig` + path-3
- * fallback) and track which source contributed the resolved path.
- */
-async function resolveKeystoreField(
-  intent: SignerIntent,
-  env: NodeJS.ProcessEnv,
-  config: CliConfigFile,
-): Promise<AuthCheckJsonEnvelope['resolution']['keystore']> {
-  let provenance: KeystoreProvenance;
-  let resolvedPath: string;
-  let account: string | null = null;
-
-  if (intent.account !== undefined) {
-    provenance = 'flag-account';
-    account = intent.account;
-    resolvedPath = path.join(
-      resolveFoundryKeystoresDir(intent, env, config),
-      intent.account,
-    );
-  } else if (intent.keystorePath !== undefined) {
-    provenance = 'flag-keystore-path';
-    resolvedPath = expandTilde(intent.keystorePath);
-  } else if (
-    typeof env.OSPEX_KEYSTORE_PATH === 'string' &&
-    env.OSPEX_KEYSTORE_PATH.length > 0
-  ) {
-    provenance = 'env-OSPEX_KEYSTORE_PATH';
-    resolvedPath = expandTilde(env.OSPEX_KEYSTORE_PATH);
-  } else if (
-    config.foundryAccount !== undefined &&
-    config.foundryAccount.length > 0
-  ) {
-    provenance = 'config-foundryAccount';
-    account = config.foundryAccount;
-    resolvedPath = path.join(
-      resolveFoundryKeystoresDir(intent, env, config),
-      config.foundryAccount,
-    );
-  } else if (
-    config.foundryKeystorePath !== undefined &&
-    config.foundryKeystorePath.length > 0
-  ) {
-    provenance = 'config-foundryKeystorePath';
-    resolvedPath = expandTilde(config.foundryKeystorePath);
-  } else if (
-    config.keystorePath !== undefined &&
-    config.keystorePath.length > 0
-  ) {
-    provenance = 'config-keystorePath-legacy';
-    resolvedPath = expandTilde(config.keystorePath);
-  } else {
-    provenance = 'default-legacy';
-    // Same fallback `loadSigner` ends up at via `readKeystore` → `getKeystorePath`.
-    resolvedPath = await getKeystorePath();
-  }
-
-  return {
-    provenance,
-    path: resolvedPath,
-    account,
-    exists: await fileExists(resolvedPath),
-  };
-}
-
-async function resolvePasswordField(
-  intent: SignerIntent,
-  env: NodeJS.ProcessEnv,
-  config: CliConfigFile,
-  keystore: AuthCheckJsonEnvelope['resolution']['keystore'],
-): Promise<AuthCheckJsonEnvelope['resolution']['password']> {
-  const isLegacyKeystore =
-    keystore.provenance === 'config-keystorePath-legacy' ||
-    keystore.provenance === 'default-legacy';
-
-  if (isLegacyKeystore) {
-    // Hermes PR 50 round-2 blocker: in the legacy-keystore branch,
-    // real `loadSigner` skips path-1 (no explicit source in intent),
-    // checks path-2 (session) next, and only falls back to path-3
-    // (`readKeystore` + `promptHidden`). Path-3 does its own
-    // interactive prompt and IGNORES any `intent.passwordFile`
-    // lifted from flag / env / config — so a legacy setup with
-    // `config.passwordFile` set but an active session for a
-    // different wallet actually unlocks the session's wallet, not
-    // the one `config.passwordFile` would decrypt.
-    //
-    // To stay faithful, only session-cache produces a real
-    // non-interactive unlock here; everything else collapses to
-    // 'none' (would prompt). Surfacing the otherwise-configured
-    // sources as usable would let `--sign-challenge` happily sign
-    // with a wallet that real loadSigner never picks.
-    const session = await readSession();
-    if (session) {
-      return { provenance: 'session-cache', path: null, exists: null };
-    }
-    return { provenance: 'none', path: null, exists: null };
-  }
-
-  // Non-legacy (explicit) keystore source — path-1 of
-  // `resolveSignerByPrecedence` fires, and `mergeIntentFromConfig`
-  // lifts flag / env / config password sources into intent.passwordFile
-  // before it's consumed. Standard precedence: flag > env > config.
-  if (intent.passwordFile !== undefined) {
-    const p = expandTilde(intent.passwordFile);
-    return {
-      provenance: 'flag-password-file',
-      path: p,
-      exists: await fileExists(p),
-    };
-  }
-  if (intent.fromStdin === true) {
-    return { provenance: 'flag-password-stdin', path: null, exists: null };
-  }
-  if (
-    typeof env.OSPEX_PASSWORD_FILE === 'string' &&
-    env.OSPEX_PASSWORD_FILE.length > 0
-  ) {
-    const p = expandTilde(env.OSPEX_PASSWORD_FILE);
-    return {
-      provenance: 'env-OSPEX_PASSWORD_FILE',
-      path: p,
-      exists: await fileExists(p),
-    };
-  }
-  if (config.passwordFile !== undefined && config.passwordFile.length > 0) {
-    const p = expandTilde(config.passwordFile);
-    return {
-      provenance: 'config-passwordFile',
-      path: p,
-      exists: await fileExists(p),
-    };
-  }
-  return { provenance: 'none', path: null, exists: null };
-}
-
-/**
- * Mirror the conditional `expectedAddress` lift from
- * `client.ts:mergeIntentFromConfig`. The config-pinned address is a
- * guardrail for "the configured signer always resolves to this
- * address"; it applies only when the resolved keystore source
- * corresponds to the configured one.
- *
- * Hermes PR 50 blocker #3: the previous implementation used an
- * intent-only check (`intent.account === undefined && intent.keystorePath === undefined`)
- * which was true when env `OSPEX_KEYSTORE_PATH` was set without a
- * flag — making the config pin falsely apply to an env-selected
- * keystore. Real `loadSigner`'s `materializeIntent` lifts env into
- * the intent first, so `noExplicitSource` is false in that case.
- * We mirror that by deriving "explicitness" from `keystore.provenance`
- * (which already factors in env), not from raw intent fields.
- */
-function resolveExpectedAddressField(
-  intent: SignerIntent,
-  config: CliConfigFile,
-  keystore: AuthCheckJsonEnvelope['resolution']['keystore'],
-): AuthCheckJsonEnvelope['resolution']['expectedAddress'] {
-  if (intent.expectedAddress !== undefined) {
-    return { provenance: 'flag', value: intent.expectedAddress };
-  }
-  if (config.expectedAddress === undefined || config.expectedAddress.length === 0) {
-    return { provenance: 'none', value: null };
-  }
-
-  // "Explicit" mirrors what `materializeIntent` + the path-1 check
-  // in `resolveSignerByPrecedence` consider an explicit signer source:
-  // flag account, flag keystore-path, OR env `OSPEX_KEYSTORE_PATH`
-  // (lifted into intent.keystorePath at runtime).
-  const cameFromExplicitSource =
-    keystore.provenance === 'flag-account' ||
-    keystore.provenance === 'flag-keystore-path' ||
-    keystore.provenance === 'env-OSPEX_KEYSTORE_PATH';
-
-  if (!cameFromExplicitSource) {
-    // Keystore came from config-foundryAccount / config-foundryKeystorePath
-    // (caller inherited the configured source) OR a legacy fallback
-    // (config-keystorePath-legacy / default-legacy — `mergeIntentFromConfig`
-    // also lifts the pin when `noExplicitSource` is true). Pin applies.
-    return {
-      provenance: 'config',
-      value: config.expectedAddress.toLowerCase() as `0x${string}`,
-    };
-  }
-
-  // Explicit source — pin applies only on an exact match with the
-  // configured account or keystore-path.
-  const flagAccountMatchesConfig =
-    keystore.provenance === 'flag-account' &&
-    config.foundryAccount !== undefined &&
-    config.foundryAccount.length > 0 &&
-    intent.account === config.foundryAccount;
-
-  // `keystore.path` is already expanded for both flag-keystore-path
-  // and env-OSPEX_KEYSTORE_PATH; expand config.foundryKeystorePath
-  // for the comparison.
-  const explicitPathMatchesConfigPath =
-    (keystore.provenance === 'flag-keystore-path' ||
-      keystore.provenance === 'env-OSPEX_KEYSTORE_PATH') &&
-    config.foundryKeystorePath !== undefined &&
-    config.foundryKeystorePath.length > 0 &&
-    keystore.path === expandTilde(config.foundryKeystorePath);
-
-  if (flagAccountMatchesConfig || explicitPathMatchesConfigPath) {
-    return {
-      provenance: 'config',
-      value: config.expectedAddress.toLowerCase() as `0x${string}`,
-    };
-  }
-  return { provenance: 'none', value: null };
-}
-
-function resolveFoundryDirField(
-  intent: SignerIntent,
-  env: NodeJS.ProcessEnv,
-  config: CliConfigFile,
-): AuthCheckJsonEnvelope['resolution']['foundryKeystoresDir'] {
-  if (intent.foundryKeystoresDir !== undefined) {
-    return { provenance: 'flag', value: expandTilde(intent.foundryKeystoresDir) };
-  }
-  if (
-    typeof env.OSPEX_FOUNDRY_KEYSTORES_DIR === 'string' &&
-    env.OSPEX_FOUNDRY_KEYSTORES_DIR.length > 0
-  ) {
-    return {
-      provenance: 'env-OSPEX_FOUNDRY_KEYSTORES_DIR',
-      value: expandTilde(env.OSPEX_FOUNDRY_KEYSTORES_DIR),
-    };
-  }
-  if (typeof env.FOUNDRY_DIR === 'string' && env.FOUNDRY_DIR.length > 0) {
-    return {
-      provenance: 'env-FOUNDRY_DIR',
-      value: path.join(expandTilde(env.FOUNDRY_DIR), 'keystores'),
-    };
-  }
-  if (
-    config.foundryKeystoresDir !== undefined &&
-    config.foundryKeystoresDir.length > 0
-  ) {
-    return {
-      provenance: 'config',
-      value: expandTilde(config.foundryKeystoresDir),
-    };
-  }
-  return {
-    provenance: 'default',
-    value: path.join(os.homedir(), '.foundry', 'keystores'),
-  };
-}
-
-/** Same selection logic as resolveFoundryDirField but returns only the path. */
-function resolveFoundryKeystoresDir(
-  intent: SignerIntent,
-  env: NodeJS.ProcessEnv,
-  config: CliConfigFile,
-): string {
-  return resolveFoundryDirField(intent, env, config).value;
-}
-
-// ── Permission check ────────────────────────────────────────────────
-
-async function checkPermissions(
-  password: AuthCheckJsonEnvelope['resolution']['password'],
-): Promise<AuthCheckJsonEnvelope['passwordFilePermissions']> {
-  // Only file-backed password sources have meaningful POSIX perms.
-  // stdin / session / none → nothing to check.
-  if (password.path === null || password.exists === false) {
-    return {
-      checked: false,
-      platformSkipped: false,
-      mode: null,
-      octal: null,
-      loose: null,
-    };
-  }
-  const result = await checkPasswordFilePermissions(password.path);
-  if (result.platformSkipped) {
-    return {
-      checked: false,
-      platformSkipped: true,
-      mode: null,
-      octal: null,
-      loose: null,
-    };
-  }
-  return {
-    checked: true,
-    platformSkipped: false,
-    mode: result.mode,
-    octal: result.mode.toString(8).padStart(3, '0'),
-    loose: result.loose,
   };
 }
 
@@ -912,16 +582,5 @@ function formatProvenance(p: string): string {
     case 'config': return 'config';
     case 'default': return 'default (~/.foundry/keystores)';
     default: return p;
-  }
-}
-
-// ── small helpers ───────────────────────────────────────────────────
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
   }
 }

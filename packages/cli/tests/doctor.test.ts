@@ -16,6 +16,10 @@ import {
   renderDoctorReport,
 } from '../src/lib/doctorRender.js';
 import type { ContractCheckResult, RpcProbeResult } from '../src/lib/doctorProbe.js';
+import type {
+  AuthSourceResolution,
+  PasswordFilePermissions,
+} from '../src/lib/authResolution.js';
 
 class StringSink extends Writable {
   buf = '';
@@ -58,6 +62,32 @@ const HAPPY_CONTRACT_CHECK: ContractCheckResult = {
   missing: [],
   unknown: [],
 };
+const HAPPY_AUTH_RESOLUTION: AuthSourceResolution = {
+  keystore: {
+    provenance: 'config-foundryAccount',
+    path: '/home/agent/.foundry/keystores/maker-a',
+    account: 'maker-a',
+    exists: true,
+  },
+  password: {
+    provenance: 'config-passwordFile',
+    path: '/home/agent/.ospex/secrets/maker-a.pass',
+    exists: true,
+  },
+  expectedAddress: { provenance: 'none', value: null },
+  foundryKeystoresDir: {
+    provenance: 'default',
+    value: '/home/agent/.foundry/keystores',
+  },
+};
+const HAPPY_PASSWORD_FILE_PERMS: PasswordFilePermissions = {
+  checked: true,
+  platformSkipped: false,
+  mode: 0o600,
+  octal: '600',
+  loose: false,
+};
+
 const HAPPY_PROBES = {
   expectedChainId: { value: 137 as const, source: 'env-OSPEX_CHAIN_ID' as const },
   rpcProbe: HAPPY_RPC_PROBE,
@@ -68,6 +98,8 @@ const HAPPY_PROBES = {
     source: 'env-OSPEX_RPC_URL' as const,
   },
   apiPublicConfigOk: true,
+  authResolution: HAPPY_AUTH_RESOLUTION,
+  passwordFilePermissions: HAPPY_PASSWORD_FILE_PERMS,
 };
 
 function makeApprovals(overrides: {

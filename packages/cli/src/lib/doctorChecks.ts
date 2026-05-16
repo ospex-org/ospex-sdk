@@ -28,6 +28,10 @@ import type {
   ResolvedRpcUrl,
   RpcUrlSource,
 } from './config.js';
+import type {
+  AuthSourceResolution,
+  PasswordFilePermissions,
+} from './authResolution.js';
 import type { ContractCheckResult, RpcProbeResult } from './doctorProbe.js';
 
 // ── thresholds (mirrored from doctorRender.ts) ────────────────────────
@@ -54,7 +58,10 @@ export type CheckId =
   | 'connectivity.rpc'
   | 'network.chain_id_match'
   | 'network.contracts_deployed'
+  | 'signer.resolved'
   | 'signer.address_known'
+  | 'signer.password_source'
+  | 'signer.password_file_perms'
   | 'balances.native'
   | 'balances.usdc'
   | 'balances.link'
@@ -73,6 +80,8 @@ export type ErrorCode =
   | 'balance_zero'
   | 'allowance_zero'
   | 'password_source_missing'
+  | 'password_file_perms_loose'
+  | 'signer_unresolvable'
   | 'config_not_set';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'skip';
@@ -164,6 +173,15 @@ export interface ChecksInputs {
    *  the probe wasn't attempted (typical unit-test path). */
   apiPublicConfigOk?: boolean | null;
   apiPublicConfigError?: string;
+  // PR 4 additions: signer provenance via the shared auth-check
+  // walker. `authResolution` is the walker's output; the doctor
+  // always runs it in non-unlocking mode. `passwordFilePermissions`
+  // comes from the same lib helper auth-check uses. `strict` mirrors
+  // the user's --strict flag — drives `signer.password_file_perms`
+  // from warn (default) to fail.
+  authResolution?: AuthSourceResolution | null;
+  passwordFilePermissions?: PasswordFilePermissions | null;
+  strict?: boolean;
 }
 
 interface NormalizedChecksInputs extends ChecksInputs {
@@ -174,6 +192,9 @@ interface NormalizedChecksInputs extends ChecksInputs {
   apiUrl: ResolvedApiUrl | null;
   rpcUrl: ResolvedRpcUrl | null;
   apiPublicConfigOk: boolean | null;
+  authResolution: AuthSourceResolution | null;
+  passwordFilePermissions: PasswordFilePermissions | null;
+  strict: boolean;
 }
 
 function normalize(inputs: ChecksInputs): NormalizedChecksInputs {
@@ -192,6 +213,9 @@ function normalize(inputs: ChecksInputs): NormalizedChecksInputs {
     apiUrl,
     rpcUrl,
     apiPublicConfigOk: inputs.apiPublicConfigOk ?? null,
+    authResolution: inputs.authResolution ?? null,
+    passwordFilePermissions: inputs.passwordFilePermissions ?? null,
+    strict: inputs.strict ?? false,
   };
 }
 
@@ -217,7 +241,10 @@ export function runDoctorChecks(rawInputs: ChecksInputs): CheckResult[] {
     checkConnectivityRpc(inputs),
     checkNetworkChainIdMatch(inputs),
     checkNetworkContractsDeployed(inputs),
+    checkSignerResolved(inputs),
     checkSignerAddressKnown(inputs),
+    checkSignerPasswordSource(inputs),
+    checkSignerPasswordFilePerms(inputs),
     checkBalancesNative(inputs),
     checkBalancesUsdc(inputs),
     checkBalancesLink(inputs),
@@ -587,18 +614,80 @@ function checkConnectivityApi(inputs: NormalizedChecksInputs): CheckResult {
   return result;
 }
 
+// ── PR 4: signer provenance via the shared auth-check walker ────────
+
+// "Is there a usable keystore at all?" Walker resolves a path and
+// checks existence. The default-legacy fallback can still produce
+// `provenance: 'default-legacy'` with `exists: false` — that's the
+// signer-not-configured case. Session-cache path is a carve-out:
+// when the session has a fresh entry, the keystore file isn't
+// consulted, so a non-existent legacy keystore still permits unlock.
+function checkSignerResolved(inputs: NormalizedChecksInputs): CheckResult {
+  const res = inputs.authResolution;
+  if (res === null) {
+    return {
+      id: 'signer.resolved',
+      label: 'Signer source resolved',
+      status: 'skip',
+      blockingFor: [...ALL_CAPABILITIES],
+      details: 'auth resolution not run',
+    };
+  }
+  const sessionWillUnlock = res.password.provenance === 'session-cache';
+  if (!res.keystore.exists && !sessionWillUnlock) {
+    return {
+      id: 'signer.resolved',
+      label: 'Signer source resolved',
+      status: 'fail',
+      blockingFor: [...ALL_CAPABILITIES],
+      details: `no keystore at ${res.keystore.path}`,
+      remediation:
+        'Create a Foundry keystore (`cast wallet new ~/.foundry/keystores <name>`), ' +
+        'then run `ospex auth use-foundry --account <name> --password-file <path>`.',
+      data: {
+        keystoreProvenance: res.keystore.provenance,
+        keystorePath: res.keystore.path,
+      },
+      error: { code: 'signer_unresolvable', retryable: false },
+    };
+  }
+  return {
+    id: 'signer.resolved',
+    label: 'Signer source resolved',
+    status: 'ok',
+    blockingFor: [...ALL_CAPABILITIES],
+    data: {
+      keystoreProvenance: res.keystore.provenance,
+      keystorePath: res.keystore.path,
+      account: res.keystore.account,
+    },
+  };
+}
+
 // Doctor-side enforcement of the no-prompt rule in §12. The doctor
 // command sets `signerAddress: null` when --json / non-TTY mode would
 // otherwise require an interactive unlock; this check turns that into a
-// structured failure instead of a hang.
+// structured failure instead of a hang. PR 4 enriches the data field
+// with the resolver's provenance — agents can switch on how the
+// address was obtained (flag-address vs in-keystore vs session cache).
 function checkSignerAddressKnown(inputs: NormalizedChecksInputs): CheckResult {
   if (inputs.signerAddress !== null) {
+    const data: Record<string, unknown> = {
+      address: inputs.signerAddress.toLowerCase(),
+    };
+    // When walker data is available, surface where the address came
+    // from. The flag-address override (no walker involvement) is the
+    // typical agent-friendly path; we mark it explicitly.
+    if (inputs.authResolution !== null) {
+      data.keystoreProvenance = inputs.authResolution.keystore.provenance;
+      data.passwordProvenance = inputs.authResolution.password.provenance;
+    }
     return {
       id: 'signer.address_known',
       label: 'Wallet address resolved',
       status: 'ok',
       blockingFor: [...ALL_CAPABILITIES],
-      data: { address: inputs.signerAddress.toLowerCase() },
+      data,
     };
   }
   const result: CheckResult = {
@@ -615,6 +704,135 @@ function checkSignerAddressKnown(inputs: NormalizedChecksInputs): CheckResult {
     error: { code: 'password_source_missing', retryable: false },
   };
   return result;
+}
+
+// Informational: warn when no non-interactive password source is
+// configured. Doesn't block any capability — agents that pass
+// --address never need a password source; humans in interactive mode
+// can answer a prompt. The structured warn lets an agent operator
+// notice they'd hang in non-interactive mode without setting one up.
+function checkSignerPasswordSource(inputs: NormalizedChecksInputs): CheckResult {
+  const res = inputs.authResolution;
+  if (res === null) {
+    return {
+      id: 'signer.password_source',
+      label: 'Non-interactive password source configured',
+      status: 'skip',
+      blockingFor: [],
+      details: 'auth resolution not run',
+    };
+  }
+  const haveNonInteractive =
+    res.password.provenance !== 'none' &&
+    res.password.provenance !== 'session-cache';
+  if (haveNonInteractive) {
+    return {
+      id: 'signer.password_source',
+      label: 'Non-interactive password source configured',
+      status: 'ok',
+      blockingFor: [],
+      data: { passwordProvenance: res.password.provenance },
+    };
+  }
+  // session-cache works for non-interactive unlock but is the
+  // soft-deprecated legacy path. Report as ok but distinguish.
+  if (res.password.provenance === 'session-cache') {
+    return {
+      id: 'signer.password_source',
+      label: 'Non-interactive password source configured',
+      status: 'ok',
+      blockingFor: [],
+      details: 'using cached session (legacy `ospex wallet unlock`)',
+      data: { passwordProvenance: 'session-cache' },
+    };
+  }
+  return {
+    id: 'signer.password_source',
+    label: 'Non-interactive password source configured',
+    status: 'warn',
+    blockingFor: [],
+    details:
+      'no non-interactive password source — write commands would prompt for the passphrase',
+    remediation:
+      'Run `ospex auth use-foundry --account <name> --password-file <path>` to pin one, ' +
+      'or pass --password-file / OSPEX_PASSWORD_FILE per invocation.',
+    data: { passwordProvenance: 'none' },
+  };
+}
+
+// Loose password-file perms (POSIX `mode & 0o077 !== 0`). Default
+// `warn` so a developer on their own box isn't blocked; `--strict`
+// promotes to `fail` and blocks every capability — the rollup then
+// drives the exit-1 outcome that the legacy early-exit gate used to
+// produce.
+function checkSignerPasswordFilePerms(inputs: NormalizedChecksInputs): CheckResult {
+  const perms = inputs.passwordFilePermissions;
+  if (perms === null) {
+    return {
+      id: 'signer.password_file_perms',
+      label: 'Password file permissions tight',
+      status: 'skip',
+      blockingFor: [],
+      details: 'perms not checked',
+    };
+  }
+  if (perms.platformSkipped) {
+    return {
+      id: 'signer.password_file_perms',
+      label: 'Password file permissions tight',
+      status: 'skip',
+      blockingFor: [],
+      details: 'non-POSIX host — perms not applicable',
+      data: { platformSkipped: true },
+    };
+  }
+  if (!perms.checked) {
+    return {
+      id: 'signer.password_file_perms',
+      label: 'Password file permissions tight',
+      status: 'skip',
+      blockingFor: [],
+      details: 'no password file configured',
+    };
+  }
+  const data: Record<string, unknown> = {
+    mode: perms.mode,
+    octal: perms.octal,
+    loose: perms.loose,
+  };
+  if (perms.loose === true) {
+    if (inputs.strict) {
+      return {
+        id: 'signer.password_file_perms',
+        label: 'Password file permissions tight',
+        status: 'fail',
+        // --strict makes this fully blocking; the rollup converts it
+        // into exit-1 via the readiness derivation. Matches what the
+        // pre-PR-4 `runPasswordFilePermissionGate` early-exit produced.
+        blockingFor: [...ALL_CAPABILITIES],
+        details: `mode 0${perms.octal as string} (group/other readable) — rejected by --strict`,
+        remediation: 'Tighten with `chmod 600 <password-file>`.',
+        data,
+        error: { code: 'password_file_perms_loose', retryable: false },
+      };
+    }
+    return {
+      id: 'signer.password_file_perms',
+      label: 'Password file permissions tight',
+      status: 'warn',
+      blockingFor: [],
+      details: `mode 0${perms.octal as string} (group/other readable)`,
+      remediation: 'Tighten with `chmod 600 <password-file>`, or run with --strict to fail.',
+      data,
+    };
+  }
+  return {
+    id: 'signer.password_file_perms',
+    label: 'Password file permissions tight',
+    status: 'ok',
+    blockingFor: [],
+    data,
+  };
 }
 
 function checkBalancesNative(inputs: NormalizedChecksInputs): CheckResult {
