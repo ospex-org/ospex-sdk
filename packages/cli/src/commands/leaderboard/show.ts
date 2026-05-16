@@ -1,6 +1,11 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { getClient } from '../../lib/client.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
 
 const optionsSchema = z.object({
@@ -14,5 +19,19 @@ export const leaderboardShowCommand = new Command('show')
     const parsed = optionsSchema.parse(opts);
     const client = await getClient({ requiresSigner: false });
     const entries = await client.leaderboard.active();
-    formatOutput(entries, { json: parsed.json === true });
+    if (parsed.json === true) {
+      const chainId = client.chainId();
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'leaderboard.show',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          payload: entries,
+        }),
+      );
+      return;
+    }
+    formatOutput(entries, { json: false });
   });

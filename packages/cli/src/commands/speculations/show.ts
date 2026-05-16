@@ -10,6 +10,11 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { getClient } from '../../lib/client.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { formatMatchTime, formatOutput } from '../../lib/format.js';
 
 const optionsSchema = z.object({ json: z.boolean().optional() });
@@ -24,7 +29,23 @@ export const speculationsShowCommand = new Command('show')
     const detail = await client.speculations.get(speculationIdArg);
 
     if (opts.json === true) {
-      formatOutput(detail, { json: true });
+      const chainId = client.chainId();
+      // Top-level `contest` / `speculation` shoulder fields not
+      // populated: the v1 SpeculationDetail and v2 PreviewContest /
+      // SpeculationMode shoulder shapes differ (the latter are
+      // resolver-preview-specific). Mappers queued for PR-6. Full
+      // detail (including parent-contest context block + orderbook)
+      // still lives in payload.
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'speculations.show',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          payload: detail,
+        }),
+      );
       return;
     }
     formatOutput(

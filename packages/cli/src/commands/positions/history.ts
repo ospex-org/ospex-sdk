@@ -13,7 +13,13 @@
 
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
+import type { Hex } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
 
 const optionsSchema = z.object({
@@ -44,5 +50,22 @@ export const positionsHistoryCommand = new Command('history')
     const all = await client.positions.byAddress(address);
     const filtered = includeClaimed ? all : all.filter((p) => !p.claimed);
 
-    formatOutput(filtered, { json: opts.json === true });
+    if (opts.json === true) {
+      const chainId = client.chainId();
+      const wallet = address.toLowerCase() as Hex;
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'positions.history',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          wallet,
+          walletRole: 'subject',
+          payload: filtered,
+        }),
+      );
+      return;
+    }
+    formatOutput(filtered, { json: false });
   });

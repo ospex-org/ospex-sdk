@@ -46,9 +46,16 @@ import {
   wei6ToDecimalUSDC,
   type Commitment,
   type Contest,
+  type Hex,
   type TakerView,
+  type WalletRole,
 } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
 
 const SORT_VALUES = ['size', 'odds', 'newest'] as const;
@@ -122,7 +129,22 @@ export const commitmentsListCommand = new Command('list')
     // --json: keep the on-chain commitment shape stable for agents.
     // Filters / sort are taker-view concerns and don't apply here.
     if (parsed.json === true) {
-      formatOutput(commitments, { json: true });
+      const chainId = client.chainId();
+      const wallet: Hex | null =
+        parsed.maker !== undefined ? (parsed.maker.toLowerCase() as Hex) : null;
+      const walletRole: WalletRole = wallet !== null ? 'filter' : 'none';
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'commitments.list',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          wallet,
+          walletRole,
+          payload: commitments,
+        }),
+      );
       return;
     }
 

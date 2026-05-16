@@ -5,6 +5,11 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { getClient } from '../../lib/client.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { formatMatchTime, formatOutput } from '../../lib/format.js';
 
 const optionsSchema = z.object({
@@ -36,7 +41,17 @@ export const contestListCommand = new Command('list')
 
     const contests = await client.contests.list(listOpts);
     if (opts.json === true) {
-      formatOutput(contests, { json: true });
+      const chainId = client.chainId();
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'contests.list',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          payload: contests,
+        }),
+      );
       return;
     }
     formatOutput(

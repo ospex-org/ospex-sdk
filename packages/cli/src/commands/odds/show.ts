@@ -25,7 +25,11 @@ import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import type { MoneylineOdds, SpreadOdds, TotalOdds } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
-import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 
 const MARKET_VALUES = ['moneyline', 'spread', 'total'] as const;
 
@@ -57,19 +61,31 @@ export const oddsShowCommand = new Command('show')
     ]);
 
     if (opts.json === true) {
-      formatOutput(
-        {
-          contest: {
-            contestId: contest.contestId,
-            awayTeam: contest.awayTeam,
-            homeTeam: contest.homeTeam,
-            sport: contest.sport,
-            matchTime: contest.matchTime,
-            jsonoddsId: snapshot.jsonoddsId,
+      const chainId = client.chainId();
+      // Top-level `contest` shoulder field not populated: the v1
+      // Contest summary inside payload differs from the v2
+      // PreviewContest shoulder shape (latter is preview-resolver-
+      // specific). Contest→PreviewContest mapper queued for PR-6.
+      // Payload's `contest` sub-object still carries the full info.
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'odds.show',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          payload: {
+            contest: {
+              contestId: contest.contestId,
+              awayTeam: contest.awayTeam,
+              homeTeam: contest.homeTeam,
+              sport: contest.sport,
+              matchTime: contest.matchTime,
+              jsonoddsId: snapshot.jsonoddsId,
+            },
+            odds: snapshot.odds,
           },
-          odds: snapshot.odds,
-        },
-        { json: true },
+        }),
       );
       return;
     }
