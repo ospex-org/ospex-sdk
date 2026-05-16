@@ -47,7 +47,8 @@ Other write commands (`contests score`, `settle`, `claim`, `claim-all`, `commitm
 // commitments submit --json
 interface SubmitPreviewEnvelope {
   schemaVersion: 1;
-  preview: SubmitPreview;     // contest, market, side, economics, expiry, raw, approvals[], outcomes[]
+  preview: SubmitPreview;     // contest, market, side, economics, expiry, raw, approvals[], outcomes[],
+                              //   you?, counterparty?
 }
 
 // commitments submit --yes --json
@@ -61,7 +62,8 @@ interface SubmitJsonResult {
 interface MatchPreviewEnvelope {
   schemaVersion: 1;
   preview: MatchPreview;      // commitment, taker, selfMatch, contest, market, odds, economics,
-                              //   expiry, speculation { mode, lazyCreation? }, approvals[], warnings[]
+                              //   expiry, speculation { mode, lazyCreation? }, approvals[], warnings[],
+                              //   you?, counterparty?, outcomes?
 }
 
 // commitments match --yes --json
@@ -79,6 +81,39 @@ interface MatchJsonResult {
 ```
 
 Authoritative source: [`packages/sdk/src/types/preview.ts`](../packages/sdk/src/types/preview.ts) and [`packages/sdk/src/types/matchPreview.ts`](../packages/sdk/src/types/matchPreview.ts).
+
+### Perspective view (`you` / `counterparty` / `outcomes`)
+
+Both envelopes carry an optional first-person view of the trade alongside the existing maker/taker fields. The blocks normalize the protocol's "maker on Upper / Lower" / "taker on the inverted side" semantics into one shape the executing party (the agent) can read directly:
+
+```ts
+interface PreviewYou {
+  role: 'maker' | 'taker';                  // which protocol role the viewer is playing
+  address: `0x${string}`;                   // viewer's wallet (lowercased)
+  backing: string;                          // "Los Angeles Dodgers" / "Lakers -3.5" / "Over 220.5"
+  odds: { decimal: string; american: string; oddsTick: number };
+  risk: { wei6: string; usdc: string };     // 6dp USDC ("4.999918")
+  profit: { wei6: string; usdc: string };
+  totalReturn: { wei6: string; usdc: string };  // risk + profit (not "return" — polyglot-codegen safe)
+}
+
+interface PreviewCounterparty extends Omit<PreviewYou, 'address'> {
+  address: `0x${string}` | null;            // null on SubmitPreview (no taker has signed yet)
+}
+```
+
+On `MatchPreview` the viewer is the taker (`you.role === 'taker'`) and the counterparty is the named maker. On `SubmitPreview` the viewer is the maker (`you.role === 'maker'`) and the counterparty is a hypothetical full-fill taker (`address: null`). The shape is uniform across both envelopes so polyglot agent code can dispatch on one accessor path.
+
+USDC values inside `you` / `counterparty` are always 6 fractional digits, round-tripping with `wei6ToDecimalUSDC` / `usdcDecimalToWei6` — concise formats (`"5.00"`) appear only in human renderers, never in JSON.
+
+The fields are **optional** under `schemaVersion: 1`. Envelopes produced by older SDK builds may omit them. The `@ospex/sdk` exports `computeMatchYouView(preview)` and `computeSubmitYouView(preview)` — pure accessors that return the view directly when present and backfill from the legacy `makerSide` / `takerSide` / `odds` / `economics` (or `side` / `economics` on submit) blocks when absent, so agents handling mixed-SDK-version envelopes never branch.
+
+The CLI mirror: `ospex commitments match` and `ospex commitments submit` render this view by default in human mode. Pass `--raw` to fall back to the pre-perspective-view layout for debugging EIP-712 hash mismatches and protocol-level audits — the exact restored content differs by command:
+
+- `commitments match --raw` restores the dual `maker side:` / `taker side:` layout, the both-perspective `line:` and `odds:` lines (with `[oddsTick=…]` and protocol `line_ticks`), the `taker risks:` / `maker fill:` block, and raw approval-row wei6 figures.
+- `commitments submit --raw` restores the `positionType=Upper/Lower` tag inside the `[sideTags]` bracket on the `side:` line. The submit render had no other protocol-leakage to suppress.
+
+`--raw` has no effect on `--json` output — the envelope is the agent contract.
 
 ### Numeric-field rule
 
