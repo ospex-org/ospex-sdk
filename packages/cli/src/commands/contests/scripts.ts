@@ -6,6 +6,11 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { getClient } from '../../lib/client.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
 
 const optionsSchema = z.object({ json: z.boolean().optional() });
@@ -22,7 +27,17 @@ export const contestScriptsCommand = new Command('scripts')
     const data = await client.contests.scripts();
 
     if (opts.json === true) {
-      formatOutput(data, { json: true });
+      const chainId = client.chainId();
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'contests.scripts',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          payload: data,
+        }),
+      );
       return;
     }
     formatOutput(

@@ -11,6 +11,11 @@ import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import type { Hex } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { getClient } from '../../lib/client.js';
 
 const optionsSchema = z.object({
@@ -38,15 +43,29 @@ export const commitmentsNonceFloorCommand = new Command('nonce-floor')
       lineTicks: Number(opts.line),
     });
     if (opts.json === true) {
-      formatOutput(
-        {
-          maker: opts.maker.toLowerCase(),
-          contestId: opts.contestId,
-          scorer: opts.scorer.toLowerCase(),
-          lineTicks: Number(opts.line),
-          minNonce: floor.toString(),
-        },
-        { json: true },
+      const chainId = client.chainId();
+      const wallet = opts.maker.toLowerCase() as Hex;
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'commitments.nonce-floor',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          wallet,
+          walletRole: 'subject',
+          // Top-level `contest` / `speculation` shoulder fields not
+          // populated: would require Contest→PreviewContest +
+          // SpeculationDetail→SpeculationMode mappers that don't
+          // exist yet. Payload carries the IDs; PR-6 enriches.
+          payload: {
+            maker: opts.maker.toLowerCase(),
+            contestId: opts.contestId,
+            scorer: opts.scorer.toLowerCase(),
+            lineTicks: Number(opts.line),
+            minNonce: floor.toString(),
+          },
+        }),
       );
       return;
     }

@@ -7,7 +7,13 @@
  */
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
+import type { Hex } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
 
 const optionsSchema = z.object({ json: z.boolean().optional() });
@@ -28,7 +34,25 @@ export const commitmentsShowCommand = new Command('show')
     }
 
     if (opts.json === true) {
-      formatOutput(commitment, { json: true });
+      const chainId = client.chainId();
+      const wallet = commitment.maker.toLowerCase() as Hex;
+      // Detail-fetch command: per spec §3.4, populate the
+      // `commitment` shoulder field even though the full object is
+      // also in `payload`. Lets generic agents render context from
+      // the shoulder block without inspecting payload shape.
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'commitments.show',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          wallet,
+          walletRole: 'subject',
+          commitment,
+          payload: commitment,
+        }),
+      );
       return;
     }
     formatOutput(

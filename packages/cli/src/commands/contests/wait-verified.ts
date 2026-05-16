@@ -6,6 +6,11 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { getClient } from '../../lib/client.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
 
 const optionsSchema = z.object({
@@ -27,9 +32,16 @@ export const contestWaitVerifiedCommand = new Command('wait-verified')
 
     const result = await client.contests.waitForVerified(BigInt(contestIdArg), waitOpts);
     if (opts.json === true) {
-      formatOutput(
-        { contestId: result.contestId.toString(), status: result.status },
-        { json: true },
+      const chainId = client.chainId();
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'contests.wait-verified',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          payload: { contestId: result.contestId.toString(), status: result.status },
+        }),
       );
     } else {
       formatOutput(`Verified. Status: ${result.status}.`, { json: false });

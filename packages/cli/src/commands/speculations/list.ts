@@ -10,6 +10,11 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { getClient } from '../../lib/client.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
 
 const optionsSchema = z.object({
@@ -43,7 +48,17 @@ export const speculationsListCommand = new Command('list')
     const speculations = await client.speculations.list(listOpts);
 
     if (opts.json === true) {
-      formatOutput(speculations, { json: true });
+      const chainId = client.chainId();
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'speculations.list',
+          stage: 'read',
+          network: networkForChainId(chainId),
+          chainId,
+          payload: speculations,
+        }),
+      );
       return;
     }
     formatOutput(
