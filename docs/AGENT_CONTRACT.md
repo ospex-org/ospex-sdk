@@ -41,9 +41,9 @@ Three commands ship a **dual-mode** `--json`: preview-only without `--yes`, exec
 
 | Command | `--json` alone | `--yes --json` |
 |---|---|---|
-| `ospex commitments submit` | `stage: 'preview'`, `payload: SubmitPreview`. **No signing, no POST.** | `stage: 'execute'`, `payload: SubmitResult`. Signs and posts. |
-| `ospex commitments match` | `stage: 'preview'`, `payload: MatchPreview`. **No tx.** The signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight) — only when a non-interactive credential is configured. See §4 (lazy-unlock contract). | `stage: 'execute'`, `payload: MatchResult`. Sends a tx. |
-| `ospex approvals setup` | `stage: 'preview'`, `payload: ApprovalsPlan`. No tx. | `stage: 'execute'`, `payload: ApprovalsResult`. Executes the plan. |
+| `ospex commitments submit` | `stage: 'preview'`, `payload: SubmitPreview`. **No signing, no POST.** | `stage: 'execute'`, `payload: { preview: SubmitPreview; result: SubmitResult }`. Signs and posts. The `preview` mirrors the `--json`-alone envelope so agents can audit what they signed for; `result` carries the post-sign artifacts (`hash`, `commitment`). |
+| `ospex commitments match` | `stage: 'preview'`, `payload: MatchPreview`. **No tx.** The signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight) — only when a non-interactive credential is configured. See §4 (lazy-unlock contract). | `stage: 'execute'`, `payload: { preview: MatchPreview; result: MatchResult }`. Sends a tx. Same audit-friendly shape as submit — `preview` mirrors the preview envelope; `result` carries `txHash`, `status`, `blockNumber`, and the per-side risk wei6 figures. |
+| `ospex approvals setup` | `stage: 'preview'`, `payload: { plan: SetupPlan }`. No tx. | `stage: 'execute'`, `payload: { plan: SetupPlan; results: SetupResult[] }`. Executes the plan; one entry in `results` per approval tx. |
 
 Other write commands (`contests score`, `settle`, `claim`, `claim-all`, `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`) treat `--json` as **output format only** — they may still send a transaction. Use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
 
@@ -59,9 +59,14 @@ type SubmitPreviewEnvelope = AgentEnvelope<SubmitPreview>;
 
 // commitments submit --yes --json
 type SubmitResultEnvelope = AgentEnvelope<{
-  hash: string;
-  commitment: Commitment;
+  preview: SubmitPreview;
+  result: {
+    hash: string;
+    commitment: Commitment;
+  };
 }>;
+// payload.preview mirrors the --json-alone envelope verbatim.
+// payload.result.hash is the commitment hash; payload.result.commitment is the persisted row.
 
 // commitments match --json (no --yes)
 type MatchPreviewEnvelope = AgentEnvelope<MatchPreview>;
@@ -71,13 +76,18 @@ type MatchPreviewEnvelope = AgentEnvelope<MatchPreview>;
 
 // commitments match --yes --json
 type MatchResultEnvelope = AgentEnvelope<{
-  txHash: `0x${string}`;
-  status: 'success' | 'reverted';
-  blockNumber: string;            // decimal string (bigint-safe)
-  takerRiskWei6: string;
-  fillMakerRiskWei6: string;
+  preview: MatchPreview;
+  result: {
+    txHash: `0x${string}`;
+    status: 'success' | 'reverted';
+    blockNumber: string;            // decimal string (bigint-safe)
+    takerRiskWei6: string;
+    fillMakerRiskWei6: string;
+  };
 }>;
 ```
+
+The `{ preview, result }` shape on execute envelopes is deliberate: agents reading the result can verify the preview block in the same envelope against the preview block they accepted at signing time, without holding state across two invocations. Reach for `payload.result.txHash` (not `payload.txHash`); `payload.preview` is identical-shape to the preview envelope and carries the same audit fields.
 
 Authoritative payload sources: [`packages/sdk/src/types/preview.ts`](../packages/sdk/src/types/preview.ts) and [`packages/sdk/src/types/matchPreview.ts`](../packages/sdk/src/types/matchPreview.ts). Authoritative envelope source: [`packages/sdk/src/types/agentEnvelope.ts`](../packages/sdk/src/types/agentEnvelope.ts).
 
