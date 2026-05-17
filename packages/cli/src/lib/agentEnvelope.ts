@@ -16,9 +16,8 @@
  *     module load via `createRequire` (works without TypeScript
  *     rootDir gymnastics; portable across Windows + Linux).
  *
- * Full spec + per-field rules live in `agent-envelope-spec.md`
- * (repo root) and `docs/AGENT_CONTRACT.md` (rewritten for v2 in the
- * next PR).
+ * Full spec + per-field rules live in `docs/AGENT_ENVELOPE_SPEC.md`;
+ * the integration contract is `docs/AGENT_CONTRACT.md`.
  */
 
 import { createRequire } from 'node:module';
@@ -157,8 +156,7 @@ export function buildAgentEnvelope<TPayload>(
     throw new Error(
       'buildAgentEnvelope: payload object carries an inner `schemaVersion` field. ' +
         'The outer v2 envelope is the only schemaVersion marker — strip it from the ' +
-        'payload (e.g. via destructure) before wrapping. See spec §6 + ' +
-        'agent-envelope-spec.md.',
+        'payload (e.g. via destructure) before wrapping. See docs/AGENT_ENVELOPE_SPEC.md.',
     );
   }
   return {

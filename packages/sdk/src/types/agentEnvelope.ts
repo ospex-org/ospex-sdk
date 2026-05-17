@@ -4,16 +4,11 @@
  * agents can route, preflight, explain, remediate, and verify with one
  * consistent shape instead of learning each command's bespoke JSON.
  *
- * Locked design — full rationale + field-by-field rules live in
- * `agent-envelope-spec.md` (repo root). Authoritative shape; only
- * additive changes inside schemaVersion: 2 are permitted (new optional
- * fields, new enum values). Consumers MUST log + ignore unknown enum
- * values and unknown fields.
- *
- * Migration: v2 replaces the v1 envelopes documented in `docs/AGENT_CONTRACT.md`.
- * Pre-public — no `--json-version` transition flag. The rebuilding
- * market-maker is the only known consumer; it will pick up v2 on its
- * next SDK pull.
+ * Authoritative shape — full field-by-field rules + per-command matrix
+ * live in `docs/AGENT_ENVELOPE_SPEC.md`. Only additive changes inside
+ * schemaVersion: 2 are permitted (new optional fields, new enum
+ * values). Consumers MUST log + ignore unknown enum values and unknown
+ * fields.
  */
 
 import type { Hex } from './signer.js';
