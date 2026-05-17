@@ -24,7 +24,7 @@ Ospex never asks for your private key. You manage your wallet entirely via Found
   - **LINK** — only required if you want to *create* a contest. You don't need LINK to bet on contests someone else created.
 - **Node.js** ≥ 20.
 
-This guide assumes Polygon mainnet (chain id 137). For Polygon Amoy testnet substitute `chainId=80002`. The bettor and maker paths (commitments, positions, leaderboard, odds) work on both networks. `contests create` / `contests score` are mainnet-only today — the Amoy contracts are deployed but the EIP-712 script approvals served by `ospex-core-api` haven't been generated against the current `OracleModule` deploy. To try the create/score path now, run a small mainnet experiment (0.01 USDC is enough for the creation fee).
+This guide assumes Polygon mainnet (chain id 137). For Polygon Amoy testnet substitute `chainId=80002`. The bettor and maker paths (commitments, positions, leaderboard, odds) work on both networks. `contests create` / `contests score` are mainnet-only today — the Amoy contracts are deployed but the EIP-712 script approvals served by `ospex-core-api` haven't been generated against the current `OracleModule` deploy. **Most agents don't need to test create/score** — validate end-to-end by matching an open commitment on an existing mainnet contest, where there are no protocol fees and the only cost is the commitment risk you commit.
 
 ## Vocabulary
 
@@ -379,7 +379,7 @@ Same arguments mirror the on-chain `OspexCommitment` struct. No preview block, n
 
 ## Create a contest
 
-Permissionless contest creation. Anyone can create a contest, but it requires LINK (for the Chainlink Functions verification call) and a small USDC fee. **Mainnet only today** — the Amoy contracts are deployed but the script approvals that `OracleModule.createContestFromOracle` requires haven't been signed against the current deploy and committed to `ospex-core-api`. To try this path, start small on mainnet: 0.01 USDC for the creation fee is enough, and a typical verify call costs about 0.005 LINK. **Skip this section if you just want to bet** — the bettor and maker paths above don't need any of this.
+Permissionless contest creation. Anyone can create a contest, but it requires LINK (for the Chainlink Functions verification call) and a USDC fee read from `TreasuryModule.s_feeRates(0)` at runtime (1 USDC on Polygon mainnet at time of writing). **Mainnet only today** — the Amoy contracts are deployed but the script approvals that `OracleModule.createContestFromOracle` requires haven't been signed against the current deploy and committed to `ospex-core-api`. The SDK's allowance preflight quotes the exact LINK and USDC amounts you need to fund before signing. **Skip this section if you just want to bet** — the bettor and maker paths above don't need any of this, and most integrations can validate end-to-end against existing contests.
 
 ### 1. Set up the operator-grade approvals
 
