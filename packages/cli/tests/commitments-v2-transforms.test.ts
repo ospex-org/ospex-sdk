@@ -17,6 +17,7 @@ import {
   buildMatchPreview,
   buildSubmitPreview,
   getAddresses,
+  type AgentEffect,
   type BuildMatchPreviewArgs,
   type BuildSubmitPreviewArgs,
   type Commitment,
@@ -202,6 +203,17 @@ describe('toSubmitExecuteEnvelope', () => {
     commitmentHash: '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
   });
 
+  function approveEffect(txHash: string): AgentEffect {
+    return {
+      type: 'transaction',
+      purpose: 'approve-usdc',
+      ok: true,
+      txHash: txHash as Hex,
+      blockNumber: '999',
+      status: 'confirmed',
+    };
+  }
+
   it('stage execute, requiresSignature/Transaction false', () => {
     const env = toSubmitExecuteEnvelope(
       preview,
@@ -222,7 +234,7 @@ describe('toSubmitExecuteEnvelope', () => {
     expect(env.commitment).toBe(stubCommitment);
   });
 
-  it('records eip712-signature + offchain-write effects', () => {
+  it('records eip712-signature + offchain-write effects (0 approvals)', () => {
     const env = toSubmitExecuteEnvelope(
       preview,
       { hash: '0xdead', commitment: stubCommitment },
@@ -232,6 +244,53 @@ describe('toSubmitExecuteEnvelope', () => {
     expect(env.effects[0]?.type).toBe('eip712-signature');
     expect(env.effects[1]?.type).toBe('offchain-write');
     expect(env.effects.every((e) => e.ok === true)).toBe(true);
+  });
+
+  // Hermes PR-69 review: when `commitments submit --yes --json` runs
+  // approve txs before the final submit, those txs MUST appear in
+  // effects[] — agents need the tx hash/status, not just stderr text.
+  // Regression tests cover 1- and 2-approval scenarios per Hermes's
+  // request.
+  it('prepends a single approve effect (commitment-risk only)', () => {
+    const approve = approveEffect('0xa1');
+    const env = toSubmitExecuteEnvelope(
+      preview,
+      { hash: '0xdead', commitment: stubCommitment },
+      { chainId: POLYGON, approveEffects: [approve] },
+    );
+    expect(env.effects).toHaveLength(3);
+    expect(env.effects[0]).toBe(approve);
+    expect(env.effects[1]?.type).toBe('eip712-signature');
+    expect(env.effects[2]?.type).toBe('offchain-write');
+  });
+
+  it('prepends two approve effects (commitment-risk + lazy-creation-fee), preserving chronological order', () => {
+    const a1 = approveEffect('0xa1');
+    const a2 = approveEffect('0xa2');
+    const env = toSubmitExecuteEnvelope(
+      preview,
+      { hash: '0xdead', commitment: stubCommitment },
+      { chainId: POLYGON, approveEffects: [a1, a2] },
+    );
+    expect(env.effects).toHaveLength(4);
+    expect(env.effects[0]?.txHash).toBe('0xa1');
+    expect(env.effects[1]?.txHash).toBe('0xa2');
+    expect(env.effects[2]?.type).toBe('eip712-signature');
+    expect(env.effects[3]?.type).toBe('offchain-write');
+  });
+
+  it('envelope.ok reflects any reverted approve effect', () => {
+    const revertedApprove: AgentEffect = {
+      ...approveEffect('0xa1'),
+      ok: false,
+      status: 'reverted',
+    };
+    const env = toSubmitExecuteEnvelope(
+      preview,
+      { hash: '0xdead', commitment: stubCommitment },
+      { chainId: POLYGON, approveEffects: [revertedApprove] },
+    );
+    expect(env.ok).toBe(false);
   });
 
   it('payload carries { preview, result }; outer has no schemaVersion at the payload top', () => {
@@ -322,6 +381,17 @@ describe('toMatchPreviewEnvelope', () => {
 describe('toMatchExecuteEnvelope', () => {
   const preview = buildMatchPreview(makeMatchPreviewArgs());
 
+  function approveEffect(txHash: string): AgentEffect {
+    return {
+      type: 'transaction',
+      purpose: 'approve-usdc',
+      ok: true,
+      txHash: txHash as Hex,
+      blockNumber: '999',
+      status: 'confirmed',
+    };
+  }
+
   it('stage execute, requiresSignature/Transaction false', () => {
     const env = toMatchExecuteEnvelope(
       preview,
@@ -366,7 +436,7 @@ describe('toMatchExecuteEnvelope', () => {
     expect(reverted.ok).toBe(false);
   });
 
-  it('records a transaction effect with the match txHash and confirmed status', () => {
+  it('records a transaction effect with the match txHash and confirmed status (0 approvals)', () => {
     const env = toMatchExecuteEnvelope(
       preview,
       {
@@ -384,6 +454,68 @@ describe('toMatchExecuteEnvelope', () => {
     expect(eff?.purpose).toBe('match-commitment');
     expect(eff?.txHash).toBe('0xdead');
     expect(eff?.status).toBe('confirmed');
+  });
+
+  // Hermes PR-69 review: when `commitments match --yes --json` runs
+  // approve txs before the final match, those txs MUST appear in
+  // effects[]. Regression tests cover 1- and 2-approval scenarios.
+  it('prepends a single approve effect (commitment-risk only)', () => {
+    const approve = approveEffect('0xa1');
+    const env = toMatchExecuteEnvelope(
+      preview,
+      {
+        txHash: '0xmatch',
+        status: 'success',
+        blockNumber: '1000',
+        takerRiskWei6: '1500000',
+        fillMakerRiskWei6: '1000000',
+      },
+      { chainId: POLYGON, approveEffects: [approve] },
+    );
+    expect(env.effects).toHaveLength(2);
+    expect(env.effects[0]).toBe(approve);
+    expect(env.effects[1]?.purpose).toBe('match-commitment');
+  });
+
+  it('prepends two approve effects (commitment-risk + lazy-creation-fee), match last', () => {
+    const a1 = approveEffect('0xa1');
+    const a2 = approveEffect('0xa2');
+    const env = toMatchExecuteEnvelope(
+      preview,
+      {
+        txHash: '0xmatch',
+        status: 'success',
+        blockNumber: '1000',
+        takerRiskWei6: '1500000',
+        fillMakerRiskWei6: '1000000',
+      },
+      { chainId: POLYGON, approveEffects: [a1, a2] },
+    );
+    expect(env.effects).toHaveLength(3);
+    expect(env.effects[0]?.txHash).toBe('0xa1');
+    expect(env.effects[1]?.txHash).toBe('0xa2');
+    expect(env.effects[2]?.purpose).toBe('match-commitment');
+    expect(env.effects[2]?.txHash).toBe('0xmatch');
+  });
+
+  it('envelope.ok reflects any reverted approve effect even when match succeeds', () => {
+    const revertedApprove: AgentEffect = {
+      ...approveEffect('0xa1'),
+      ok: false,
+      status: 'reverted',
+    };
+    const env = toMatchExecuteEnvelope(
+      preview,
+      {
+        txHash: '0xmatch',
+        status: 'success',
+        blockNumber: '1000',
+        takerRiskWei6: '1500000',
+        fillMakerRiskWei6: '1000000',
+      },
+      { chainId: POLYGON, approveEffects: [revertedApprove] },
+    );
+    expect(env.ok).toBe(false);
   });
 
   it('payload.preview drops schemaVersion; payload.result preserved', () => {

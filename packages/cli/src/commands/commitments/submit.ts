@@ -58,6 +58,7 @@ import {
   computeSubmitYouView,
   usdcDecimalToWei6,
   wei6ToDecimalUSDC,
+  type AgentEffect,
   type AgentEnvelope,
   type AgentPayout,
   type AgentWarning,
@@ -233,6 +234,14 @@ export const commitmentsSubmitCommand = addSignerOptions(
     //    Non-interactive (--yes) skips the prompts entirely:
     //    --approve-max → unlimited; otherwise → the exact required
     //    amount on each row.
+    //
+    //    Hermes PR-69 fix: each approve tx is recorded as an
+    //    AgentEffect (collected in `approveEffects`) and prepended
+    //    to the execute envelope's effects[] below. Agents that
+    //    parse --json need the approve tx hashes/statuses, not just
+    //    the final submit effect — those approvals are real
+    //    on-chain side effects the command performed.
+    const approveEffects: AgentEffect[] = [];
     for (const row of preview.approvals) {
       if (!row.needsApproval || row.token !== 'USDC') continue;
       const requiredWei6 = BigInt(row.required);
@@ -299,6 +308,14 @@ export const commitmentsSubmitCommand = addSignerOptions(
       process.stderr.write(
         `approve tx: ${approveResult.txHash} (status ${approveResult.receipt.status})\n`,
       );
+      approveEffects.push({
+        type: 'transaction',
+        purpose: 'approve-usdc',
+        ok: approveResult.receipt.status === 'success',
+        txHash: approveResult.txHash as Hex,
+        blockNumber: approveResult.receipt.blockNumber.toString(),
+        status: approveResult.receipt.status === 'success' ? 'confirmed' : 'reverted',
+      });
     }
 
     // 8. Sign + post the EIP-712 commitment.
@@ -324,7 +341,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
         toSubmitExecuteEnvelope(
           preview,
           { hash: result.hash, commitment: result.commitment },
-          { chainId },
+          { chainId, approveEffects },
         ),
       );
       return;
@@ -354,6 +371,19 @@ export interface SubmitExecutePayload {
 
 export interface ToSubmitEnvelopeArgs {
   chainId: ChainId;
+}
+
+export interface ToSubmitExecuteEnvelopeArgs extends ToSubmitEnvelopeArgs {
+  /**
+   * Effects from any approve txs that ran before the final
+   * submit/POST. Prepended to the envelope's `effects[]` so agents
+   * see the full chronological log of what the command actually
+   * did on chain — `commitment-risk` approve, `lazy-creation-fee`
+   * approve, then the EIP-712 signature + offchain write.
+   *
+   * Empty (or omitted) when no approvals were needed.
+   */
+  approveEffects?: AgentEffect[];
 }
 
 /**
@@ -411,12 +441,28 @@ export function toSubmitPreviewEnvelope(
 export function toSubmitExecuteEnvelope(
   preview: SubmitPreview,
   result: { hash: Hex; commitment: Commitment },
-  args: ToSubmitEnvelopeArgs,
+  args: ToSubmitExecuteEnvelopeArgs,
 ): AgentEnvelope<SubmitExecutePayload> {
   const wallet = lowerHex(preview.raw.maker);
   const shoulder = deriveSubmitShoulder(preview, args.chainId);
+  const approveEffects = args.approveEffects ?? [];
+  // Order is chronological: approve txs ran first, then the
+  // EIP-712 signature + off-chain POST. Agents reading effects[]
+  // in order see exactly what landed in what sequence.
+  const finalEffects: AgentEffect[] = [
+    {
+      type: 'eip712-signature',
+      purpose: 'submit-commitment',
+      ok: true,
+    },
+    {
+      type: 'offchain-write',
+      purpose: 'submit-commitment',
+      ok: true,
+    },
+  ];
   return buildAgentEnvelope<SubmitExecutePayload>({
-    ok: true,
+    ok: approveEffects.every((e) => e.ok) && finalEffects.every((e) => e.ok),
     action: 'commitments.submit',
     stage: 'execute',
     network: networkForChainId(args.chainId),
@@ -431,18 +477,7 @@ export function toSubmitExecuteEnvelope(
     commitment: result.commitment,
     sideSummary: shoulder.sideSummary,
     warnings: shoulder.warnings,
-    effects: [
-      {
-        type: 'eip712-signature',
-        purpose: 'submit-commitment',
-        ok: true,
-      },
-      {
-        type: 'offchain-write',
-        purpose: 'submit-commitment',
-        ok: true,
-      },
-    ],
+    effects: [...approveEffects, ...finalEffects],
     payload: { preview, result },
   });
 }

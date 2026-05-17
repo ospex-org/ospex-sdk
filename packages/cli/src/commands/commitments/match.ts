@@ -210,6 +210,14 @@ export const commitmentsMatchCommand = addSignerOptions(
     // ── 6. Run approvals if needed. ────────────────────────────────
     // commitment-risk → PositionModule (always present); lazy-creation-fee
     // → TreasuryModule (present iff speculation.mode === 'lazy').
+    //
+    // Hermes PR-69 fix: each approve tx is recorded as an
+    // AgentEffect (collected in `approveEffects`) and prepended to
+    // the execute envelope's effects[] below. Agents that parse
+    // --json need the approve tx hashes/statuses alongside the
+    // final match tx — those approvals are real on-chain side
+    // effects the command performed.
+    const approveEffects: AgentEffect[] = [];
     for (const row of preview.approvals) {
       if (!row.needsApproval || row.token !== 'USDC') continue;
       const requiredWei6 = BigInt(row.required);
@@ -273,6 +281,14 @@ export const commitmentsMatchCommand = addSignerOptions(
       process.stderr.write(
         `approve tx: ${approveResult.txHash} (status ${approveResult.receipt.status})\n`,
       );
+      approveEffects.push({
+        type: 'transaction',
+        purpose: 'approve-usdc',
+        ok: approveResult.receipt.status === 'success',
+        txHash: approveResult.txHash as Hex,
+        blockNumber: approveResult.receipt.blockNumber.toString(),
+        status: approveResult.receipt.status === 'success' ? 'confirmed' : 'reverted',
+      });
     }
 
     // ── 7. Sign + send. matchFromPreview always re-fetches first. ──
@@ -300,7 +316,7 @@ export const commitmentsMatchCommand = addSignerOptions(
             takerRiskWei6: result.takerRisk.toString(),
             fillMakerRiskWei6: result.fillMakerRisk.toString(),
           },
-          { chainId },
+          { chainId, approveEffects },
         ),
       );
       return;
@@ -343,6 +359,18 @@ export interface MatchExecutePayload {
 
 export interface ToMatchEnvelopeArgs {
   chainId: ChainId;
+}
+
+export interface ToMatchExecuteEnvelopeArgs extends ToMatchEnvelopeArgs {
+  /**
+   * Effects from any approve txs that ran before the final match
+   * tx. Prepended to the envelope's `effects[]` so agents see the
+   * full chronological log of on-chain actions — `commitment-risk`
+   * approve, `lazy-creation-fee` approve, then the match tx.
+   *
+   * Empty (or omitted) when no approvals were needed.
+   */
+  approveEffects?: AgentEffect[];
 }
 
 /**
@@ -390,12 +418,13 @@ export function toMatchPreviewEnvelope(
 export function toMatchExecuteEnvelope(
   preview: MatchPreview,
   result: MatchExecuteResult,
-  args: ToMatchEnvelopeArgs,
+  args: ToMatchExecuteEnvelopeArgs,
 ): AgentEnvelope<MatchExecutePayload> {
   const { schemaVersion: _legacy, ...previewPayload } = preview;
   const wallet = preview.taker.toLowerCase() as Hex;
   const shoulder = deriveMatchShoulder(preview, args.chainId);
-  const effect: AgentEffect = {
+  const approveEffects = args.approveEffects ?? [];
+  const matchEffect: AgentEffect = {
     type: 'transaction',
     purpose: 'match-commitment',
     ok: result.status === 'success',
@@ -403,8 +432,10 @@ export function toMatchExecuteEnvelope(
     blockNumber: result.blockNumber,
     status: result.status === 'success' ? 'confirmed' : 'reverted',
   };
+  // Chronological order: approve txs land first, then the match tx.
+  const effects: AgentEffect[] = [...approveEffects, matchEffect];
   return buildAgentEnvelope<MatchExecutePayload>({
-    ok: result.status === 'success',
+    ok: effects.every((e) => e.ok),
     action: 'commitments.match',
     stage: 'execute',
     network: networkForChainId(args.chainId),
@@ -419,7 +450,7 @@ export function toMatchExecuteEnvelope(
     commitment: preview.commitment,
     sideSummary: shoulder.sideSummary,
     warnings: shoulder.warnings,
-    effects: [effect],
+    effects,
     payload: { preview: previewPayload, result },
   });
 }
