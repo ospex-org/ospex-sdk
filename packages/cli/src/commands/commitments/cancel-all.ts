@@ -14,8 +14,19 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { OspexChainError } from '@ospex/sdk';
-import type { Commitment, Hex } from '@ospex/sdk';
+import type {
+  AgentEnvelope,
+  ChainId,
+  Commitment,
+  Hex,
+  OspexClient,
+} from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { polygonscanTxUrl } from '../../lib/explorer.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
@@ -53,14 +64,9 @@ export const commitmentsCancelAllCommand = addSignerOptions(
 
     const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
     const maker = (await client.signer().getAddress()).toLowerCase() as Hex;
+    const chainId = client.chainId();
 
     if (opts.dryRun === true) {
-      // Mirror the SDK's cancel-all targeting filter: only this maker's
-      // currently-matchable rows on this speculation. The list endpoint
-      // caps at 1000 per page, so paginate until we've exhausted the
-      // result set — otherwise the preview undercounts at >1000 rows
-      // and diverges from what cancel-all (no --dry-run) would actually
-      // do.
       const rawRows: Commitment[] = [];
       let offset = 0;
       for (let page = 0; page < DRY_RUN_MAX_PAGES; page++) {
@@ -85,19 +91,16 @@ export const commitmentsCancelAllCommand = addSignerOptions(
       const rows = rawRows.filter((c) => c.lineTicks === lineTicks);
       const count = rows.length;
       if (opts.json === true) {
-        formatOutput(
-          {
-            dryRun: true,
+        writeAgentEnvelope(
+          toCancelAllDryRunEnvelope({
+            chainId,
+            signerAddress: maker,
+            contestId,
+            scorer,
+            lineTicks,
             invalidatedCount: count,
-            commitments: rows.map((c) => ({
-              hash: c.commitmentHash,
-              status: c.status,
-              nonce: c.nonce,
-              riskAmount: c.riskAmount,
-              remainingRiskAmount: c.remainingRiskAmount,
-            })),
-          },
-          { json: true },
+            commitments: rows,
+          }),
         );
         return;
       }
@@ -135,17 +138,17 @@ export const commitmentsCancelAllCommand = addSignerOptions(
       throw err;
     }
 
-    const explorerUrl = polygonscanTxUrl(client.chainId(), result.txHash);
+    const explorerUrl = polygonscanTxUrl(chainId, result.txHash);
     if (opts.json === true) {
-      formatOutput(
-        {
-          txHash: result.txHash,
-          blockNumber: result.receipt.blockNumber.toString(),
-          newMinNonce: result.newMinNonce.toString(),
-          invalidatedCount: result.invalidatedCount,
+      writeAgentEnvelope(
+        toCancelAllExecuteEnvelope(result, {
+          chainId,
+          signerAddress: maker,
+          contestId,
+          scorer,
+          lineTicks,
           explorer: explorerUrl,
-        },
-        { json: true },
+        }),
       );
       return;
     }
@@ -160,3 +163,120 @@ export const commitmentsCancelAllCommand = addSignerOptions(
       { json: false },
     );
   });
+
+// ── v1 → v2 envelope transforms ─────────────────────────────────────
+
+export type CancelAllResult = Awaited<
+  ReturnType<OspexClient['commitments']['cancelAllOnSpeculation']>
+>;
+
+export interface CancelAllDryRunPayload {
+  contestId: string;
+  scorer: Hex;
+  lineTicks: number;
+  dryRun: true;
+  invalidatedCount: number;
+  commitments: Array<{
+    hash: string;
+    status: string;
+    nonce: string;
+    riskAmount: string;
+    remainingRiskAmount: string;
+  }>;
+}
+
+export interface CancelAllExecutePayload {
+  contestId: string;
+  scorer: Hex;
+  lineTicks: number;
+  txHash: string;
+  blockNumber: string;
+  newMinNonce: string;
+  invalidatedCount: number;
+  explorer: string;
+}
+
+export interface ToCancelAllEnvelopeBaseArgs {
+  chainId: ChainId;
+  signerAddress: Hex;
+  contestId: bigint;
+  scorer: Hex;
+  lineTicks: number;
+}
+
+export interface ToCancelAllDryRunArgs extends ToCancelAllEnvelopeBaseArgs {
+  invalidatedCount: number;
+  commitments: Commitment[];
+}
+
+export function toCancelAllDryRunEnvelope(
+  args: ToCancelAllDryRunArgs,
+): AgentEnvelope<CancelAllDryRunPayload> {
+  return buildAgentEnvelope<CancelAllDryRunPayload>({
+    ok: true,
+    action: 'commitments.cancel-all',
+    stage: 'dry-run',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet: args.signerAddress,
+    walletRole: 'signer',
+    signer: args.signerAddress,
+    requiresSignature: true,
+    requiresTransaction: true,
+    payload: {
+      contestId: args.contestId.toString(),
+      scorer: args.scorer,
+      lineTicks: args.lineTicks,
+      dryRun: true,
+      invalidatedCount: args.invalidatedCount,
+      commitments: args.commitments.map((c) => ({
+        hash: c.commitmentHash,
+        status: c.status,
+        nonce: c.nonce,
+        riskAmount: c.riskAmount,
+        remainingRiskAmount: c.remainingRiskAmount,
+      })),
+    },
+  });
+}
+
+export interface ToCancelAllExecuteArgs extends ToCancelAllEnvelopeBaseArgs {
+  explorer: string;
+}
+
+export function toCancelAllExecuteEnvelope(
+  result: CancelAllResult,
+  args: ToCancelAllExecuteArgs,
+): AgentEnvelope<CancelAllExecutePayload> {
+  const status = result.receipt.status === 'success' ? 'confirmed' : 'reverted';
+  return buildAgentEnvelope<CancelAllExecutePayload>({
+    ok: result.receipt.status === 'success',
+    action: 'commitments.cancel-all',
+    stage: 'execute',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet: args.signerAddress,
+    walletRole: 'signer',
+    signer: args.signerAddress,
+    effects: [
+      {
+        type: 'transaction',
+        purpose: 'cancel-all-onchain',
+        ok: result.receipt.status === 'success',
+        txHash: result.txHash as Hex,
+        blockNumber: result.receipt.blockNumber.toString(),
+        status,
+      },
+    ],
+    payload: {
+      contestId: args.contestId.toString(),
+      scorer: args.scorer,
+      lineTicks: args.lineTicks,
+      txHash: result.txHash,
+      blockNumber: result.receipt.blockNumber.toString(),
+      newMinNonce: result.newMinNonce.toString(),
+      invalidatedCount: result.invalidatedCount,
+      explorer: args.explorer,
+    },
+  });
+}

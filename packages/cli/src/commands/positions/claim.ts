@@ -10,8 +10,21 @@
 
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
-import { OspexChainError } from '@ospex/sdk';
+import type {
+  AgentEnvelope,
+  AgentPayout,
+  ChainId,
+  Hex,
+  OspexClient,
+  PerspectiveAmount,
+} from '@ospex/sdk';
+import { OspexChainError, wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 
@@ -58,14 +71,14 @@ export const positionsClaimCommand = addSignerOptions(
     }
 
     if (opts.json === true) {
-      formatOutput(
-        {
-          txHash: result.txHash,
-          blockNumber: result.blockNumber.toString(),
-          payoutWei6: result.payoutWei6.toString(),
-          payoutUSDC: result.payoutUSDC,
-        },
-        { json: true },
+      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+      writeAgentEnvelope(
+        toClaimAgentEnvelope(result, {
+          chainId: client.chainId(),
+          signerAddress,
+          speculationId,
+          positionType,
+        }),
       );
       return;
     }
@@ -79,3 +92,70 @@ export const positionsClaimCommand = addSignerOptions(
       { json: false },
     );
   });
+
+// ── v1 → v2 envelope transform ──────────────────────────────────────
+
+export type ClaimResult = Awaited<ReturnType<OspexClient['positions']['claim']>>;
+
+export interface ClaimPayload {
+  txHash: string;
+  blockNumber: string;
+  payoutWei6: string;
+  payoutUSDC: number;
+  speculationId: string;
+  positionType: 0 | 1;
+}
+
+export interface ToClaimEnvelopeArgs {
+  chainId: ChainId;
+  signerAddress: Hex;
+  speculationId: bigint;
+  positionType: 0 | 1;
+}
+
+export function toClaimAgentEnvelope(
+  result: ClaimResult,
+  args: ToClaimEnvelopeArgs,
+): AgentEnvelope<ClaimPayload> {
+  const status = result.receipt.status === 'success' ? 'confirmed' : 'reverted';
+  // Build a PerspectiveAmount-shaped payout: profit and totalReturn
+  // are the same on a settled claim (the payout IS the return — the
+  // risk was locked in long ago at submit/match time).
+  const payoutAmount: PerspectiveAmount = {
+    wei6: result.payoutWei6.toString(),
+    usdc: wei6ToDecimalUSDC(result.payoutWei6),
+  };
+  const payout: AgentPayout = {
+    profit: payoutAmount,
+    totalReturn: payoutAmount,
+  };
+  return buildAgentEnvelope<ClaimPayload>({
+    ok: result.receipt.status === 'success',
+    action: 'claim',
+    stage: 'execute',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet: args.signerAddress,
+    walletRole: 'signer',
+    signer: args.signerAddress,
+    payout,
+    effects: [
+      {
+        type: 'transaction',
+        purpose: 'claim-position',
+        ok: result.receipt.status === 'success',
+        txHash: result.txHash as Hex,
+        blockNumber: result.blockNumber.toString(),
+        status,
+      },
+    ],
+    payload: {
+      txHash: result.txHash,
+      blockNumber: result.blockNumber.toString(),
+      payoutWei6: result.payoutWei6.toString(),
+      payoutUSDC: result.payoutUSDC,
+      speculationId: args.speculationId.toString(),
+      positionType: args.positionType,
+    },
+  });
+}

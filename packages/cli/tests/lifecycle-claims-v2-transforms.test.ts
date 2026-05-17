@@ -1,0 +1,306 @@
+/**
+ * Unit tests for the v1 → v2 envelope transforms used by the claim
+ * family of lifecycle writes:
+ *   - settle
+ *   - claim
+ *   - claim-all (execute + --dry-run; multi-tx effects)
+ */
+
+import { describe, expect, it } from 'vitest';
+import type { Hex } from '@ospex/sdk';
+import { toSettleAgentEnvelope } from '../src/commands/positions/settle.js';
+import { toClaimAgentEnvelope } from '../src/commands/positions/claim.js';
+import { toClaimAllAgentEnvelope } from '../src/commands/positions/claim-all.js';
+
+const POLYGON = 137 as const;
+const SIGNER: Hex = '0xaabbccddeeff00112233445566778899aabbccdd';
+
+describe('toSettleAgentEnvelope', () => {
+  it('action settle, stage execute, single settle-speculation effect', () => {
+    const env = toSettleAgentEnvelope(
+      {
+        txHash: '0xtx',
+        blockNumber: 1000n,
+        winSide: 'away',
+        receipt: { status: 'success', blockNumber: 1000n } as never,
+      },
+      { chainId: POLYGON, signerAddress: SIGNER, speculationId: 101n },
+    );
+    expect(env.action).toBe('settle');
+    expect(env.stage).toBe('execute');
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.purpose).toBe('settle-speculation');
+    expect(env.effects[0]?.status).toBe('confirmed');
+    expect(env.payload.winSide).toBe('away');
+    expect(env.payload.speculationId).toBe('101');
+  });
+
+  it('envelope.ok reflects reverted receipt', () => {
+    const env = toSettleAgentEnvelope(
+      {
+        txHash: '0xtx',
+        blockNumber: 1000n,
+        winSide: 'tbd',
+        receipt: { status: 'reverted', blockNumber: 1000n } as never,
+      },
+      { chainId: POLYGON, signerAddress: SIGNER, speculationId: 101n },
+    );
+    expect(env.ok).toBe(false);
+    expect(env.effects[0]?.status).toBe('reverted');
+  });
+});
+
+describe('toClaimAgentEnvelope', () => {
+  it('action claim, payout shoulder populated from payoutWei6', () => {
+    const env = toClaimAgentEnvelope(
+      {
+        txHash: '0xtx',
+        blockNumber: 1000n,
+        payoutWei6: 5_000_000n,
+        payoutUSDC: 5,
+        receipt: { status: 'success', blockNumber: 1000n } as never,
+      },
+      {
+        chainId: POLYGON,
+        signerAddress: SIGNER,
+        speculationId: 101n,
+        positionType: 0,
+      },
+    );
+    expect(env.action).toBe('claim');
+    expect(env.payout?.profit.usdc).toBe('5.000000');
+    expect(env.payout?.totalReturn.wei6).toBe('5000000');
+    expect(env.effects[0]?.purpose).toBe('claim-position');
+  });
+});
+
+describe('toClaimAllAgentEnvelope', () => {
+  function makeEntry(overrides: Record<string, unknown> = {}) {
+    return {
+      positionId: '1',
+      speculationId: '101',
+      bucket: 'claimable',
+      description: 'Lakers @ Nuggets / moneyline / Lakers',
+      success: true,
+      txHashes: ['0xclaim1'],
+      payoutUSDC: 5,
+      payoutWei6: '5000000',
+      winSide: 'away',
+      error: undefined,
+      ...overrides,
+    };
+  }
+
+  // Hermes PR-70 blocker 1: the SDK intentionally returns
+  // `success: false` for dry-runs (because no live sweep happened),
+  // but the v2 envelope's top-level `ok` is COMMAND/envelope success,
+  // not domain-level "claimed at least one thing". Dry-runs and live
+  // no-op sweeps must emit ok:true. The SDK's dry-run shape uses
+  // `success:false` + `totals.failed:0`, so envelope.ok now keys off
+  // `totals.failed` instead of `result.success`.
+  it('dry-run with success:false from SDK still emits envelope.ok=true', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: false, // SDK dry-run shape
+        totals: {
+          claimed: 1,
+          failed: 0,
+          totalPayoutWei6: '5000000',
+          totalPayoutUSDC: 5,
+        } as never,
+        entries: [makeEntry({ success: true })] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: true },
+    );
+    expect(env.stage).toBe('dry-run');
+    expect(env.requiresSignature).toBe(true);
+    expect(env.requiresTransaction).toBe(true);
+    expect(env.effects).toEqual([]);
+    expect(env.ok).toBe(true); // dry-run completed successfully
+  });
+
+  it('live no-op (no entries) emits envelope.ok=true even though result.success is false', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: false, // SDK: success requires entries.length > 0
+        totals: {
+          claimed: 0,
+          failed: 0,
+          totalPayoutWei6: '0',
+          totalPayoutUSDC: 0,
+        } as never,
+        entries: [] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.ok).toBe(true);
+    expect(env.effects).toEqual([]);
+    expect(env.payout).toBeNull();
+  });
+
+  it('execute: one effect per recorded tx; pendingSettle entries produce settle + claim in order', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: true,
+        totals: {
+          claimed: 2,
+          failed: 0,
+          totalPayoutWei6: '10000000',
+          totalPayoutUSDC: 10,
+        } as never,
+        entries: [
+          makeEntry({
+            bucket: 'pendingSettle',
+            txHashes: ['0xsettle', '0xclaim'],
+          }),
+          makeEntry({ bucket: 'claimable', txHashes: ['0xc2'] }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.stage).toBe('execute');
+    expect(env.effects).toHaveLength(3);
+    expect(env.effects[0]?.purpose).toBe('settle-speculation');
+    expect(env.effects[0]?.txHash).toBe('0xsettle');
+    expect(env.effects[0]?.status).toBe('confirmed');
+    expect(env.effects[1]?.purpose).toBe('claim-position');
+    expect(env.effects[1]?.txHash).toBe('0xclaim');
+    expect(env.effects[2]?.purpose).toBe('claim-position');
+    expect(env.effects[2]?.txHash).toBe('0xc2');
+    expect(env.ok).toBe(true);
+  });
+
+  // Hermes PR-70 blocker 2: recorded txHashes are confirmed-
+  // successful (SDK throws on revert before pushing). A partial
+  // pendingSettle (settle landed, claim failed) MUST emit the settle
+  // tx as confirmed and the claim as a separate failure effect, not
+  // mislabel the settle as reverted.
+  it('partial pendingSettle (settle confirmed, claim failed): settle ok=true, separate claim failure effect', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: false,
+        totals: {
+          claimed: 0,
+          failed: 1,
+          totalPayoutWei6: '0',
+          totalPayoutUSDC: 0,
+        } as never,
+        entries: [
+          makeEntry({
+            bucket: 'pendingSettle',
+            success: false,
+            txHashes: ['0xsettle'],
+            payoutUSDC: undefined,
+            payoutWei6: undefined,
+            error: {
+              code: 'CHAIN_ERROR',
+              message: 'claim reverted',
+              txHash: '0xrevertedclaim',
+            },
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.effects).toHaveLength(2);
+    // The settle tx was confirmed — earlier mistake collapsed this
+    // to ok=false/reverted.
+    expect(env.effects[0]?.purpose).toBe('settle-speculation');
+    expect(env.effects[0]?.txHash).toBe('0xsettle');
+    expect(env.effects[0]?.ok).toBe(true);
+    expect(env.effects[0]?.status).toBe('confirmed');
+    // The claim step failed; recorded as a separate failure effect.
+    // When the chain-error carries a txHash (reverted send), it is
+    // surfaced with status: 'reverted'.
+    expect(env.effects[1]?.purpose).toBe('claim-position');
+    expect(env.effects[1]?.ok).toBe(false);
+    expect(env.effects[1]?.txHash).toBe('0xrevertedclaim');
+    expect(env.effects[1]?.status).toBe('reverted');
+    expect(env.effects[1]?.errorCode).toBe('CHAIN_ERROR');
+    expect(env.ok).toBe(false);
+  });
+
+  it('failed claimable entry with no recorded tx emits one failure claim-position effect (no txHash)', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: false,
+        totals: {
+          claimed: 0,
+          failed: 1,
+          totalPayoutWei6: '0',
+          totalPayoutUSDC: 0,
+        } as never,
+        entries: [
+          makeEntry({
+            bucket: 'claimable',
+            success: false,
+            txHashes: [],
+            payoutUSDC: undefined,
+            payoutWei6: undefined,
+            error: { code: 'API_ERROR', message: 'precheck failed' },
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.purpose).toBe('claim-position');
+    expect(env.effects[0]?.ok).toBe(false);
+    expect(env.effects[0]?.txHash).toBeUndefined();
+    expect(env.effects[0]?.errorCode).toBe('API_ERROR');
+  });
+
+  // Hermes PR-70 blocker 3: payout shoulder must preserve exact
+  // wei6 from the SDK's totals.totalPayoutWei6. Going through
+  // totalPayoutUSDC (a JS number) loses precision past 2^53.
+  it('payout shoulder uses exact totalPayoutWei6 (no number round-trip)', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: true,
+        totals: {
+          claimed: 1,
+          failed: 0,
+          totalPayoutWei6: '1000000000000000001',
+          totalPayoutUSDC: 1e12, // lossy approximation
+        } as never,
+        entries: [
+          makeEntry({
+            payoutWei6: '1000000000000000001',
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    // The shoulder must carry the EXACT wei6 string from the SDK.
+    expect(env.payout?.profit.wei6).toBe('1000000000000000001');
+    expect(env.payout?.totalReturn.wei6).toBe('1000000000000000001');
+  });
+
+  it('envelope.ok=false only when execute has failed entries (totals.failed > 0)', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: false,
+        totals: {
+          claimed: 1,
+          failed: 1,
+          totalPayoutWei6: '5000000',
+          totalPayoutUSDC: 5,
+        } as never,
+        entries: [
+          makeEntry({ success: true }),
+          makeEntry({ success: false, error: { code: 'CHAIN_ERROR', message: 'boom' } }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.ok).toBe(false);
+    expect(env.payload.entries[1]?.error).toBe('boom');
+  });
+});

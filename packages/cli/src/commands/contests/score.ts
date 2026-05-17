@@ -6,16 +6,26 @@
  */
 import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
-import { OspexAllowanceError, type OspexClient } from '@ospex/sdk';
+import {
+  OspexAllowanceError,
+  type AgentEffect,
+  type AgentEnvelope,
+  type ChainId,
+  type Hex,
+  type OspexClient,
+} from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptYesNo, promptValue } from '../../lib/prompt.js';
 
 const optionsSchema = z.object({
   subscriptionId: z.string().regex(/^[0-9]+$/).optional(),
-  // Mirror create.ts — Chainlink Functions Router caps callback gas at
-  // 300_000 on every supported chain.
   gasLimit: z.coerce.number().int().positive().max(300_000).optional(),
   json: z.boolean().optional(),
 });
@@ -39,6 +49,11 @@ export const contestScoreCommand = addSignerOptions(
     if (opts.subscriptionId !== undefined) args.subscriptionId = BigInt(opts.subscriptionId);
     if (opts.gasLimit !== undefined) args.gasLimit = opts.gasLimit;
 
+    // Mirrors PR-69 fix on submit/match + contests create: collect
+    // any approve txs that ran before the final score tx into a list
+    // that gets prepended to the envelope's effects[].
+    const approveEffects: AgentEffect[] = [];
+
     const tryScore = async () => client.contests.score(args);
 
     let result;
@@ -46,20 +61,19 @@ export const contestScoreCommand = addSignerOptions(
       result = await tryScore();
     } catch (err) {
       if (!(err instanceof OspexAllowanceError)) throw err;
-      const handled = await handleLinkAllowance(client, err);
+      const handled = await handleLinkAllowance(client, err, opts.json === true, approveEffects);
       if (!handled) throw err;
       result = await tryScore();
     }
 
     if (opts.json === true) {
-      formatOutput(
-        {
-          contestId: result.contestId.toString(),
-          txHash: result.txHash,
-          requestId: result.requestId,
-          status: result.receipt.status,
-        },
-        { json: true },
+      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+      writeAgentEnvelope(
+        toContestScoreAgentEnvelope(result, {
+          chainId: client.chainId(),
+          signerAddress,
+          approveEffects,
+        }),
       );
     } else {
       process.stdout.write(
@@ -74,7 +88,14 @@ export const contestScoreCommand = addSignerOptions(
 async function handleLinkAllowance(
   client: OspexClient,
   err: OspexAllowanceError,
+  jsonMode: boolean,
+  approveEffects: AgentEffect[],
 ): Promise<boolean> {
+  // JSON mode is non-interactive — surface the error rather than
+  // prompting. Agents pre-approve via `approvals setup` or
+  // `commitments approve` before scoring.
+  if (jsonMode) return false;
+
   process.stdout.write(
     `\nInsufficient LINK allowance.\n` +
       `  Required: ${err.required.toString()}\n` +
@@ -88,5 +109,66 @@ async function handleLinkAllowance(
   const approveAmount = choice === 'max' ? 'max' : BigInt(choice);
   const tx = await client.contests.approveLink(approveAmount);
   process.stdout.write(`approve tx: ${tx.txHash} (status ${tx.receipt.status})\n`);
+  approveEffects.push({
+    type: 'transaction',
+    purpose: 'approve-link',
+    ok: tx.receipt.status === 'success',
+    txHash: tx.txHash as Hex,
+    blockNumber: tx.receipt.blockNumber.toString(),
+    status: tx.receipt.status === 'success' ? 'confirmed' : 'reverted',
+  });
   return true;
+}
+
+// ── v1 → v2 envelope transform ──────────────────────────────────────
+
+export type ContestScoreResult = Awaited<
+  ReturnType<OspexClient['contests']['score']>
+>;
+
+export interface ContestScorePayload {
+  contestId: string;
+  txHash: string;
+  requestId: string | null;
+  status: 'success' | 'reverted';
+}
+
+export interface ToContestScoreEnvelopeArgs {
+  chainId: ChainId;
+  signerAddress: Hex;
+  approveEffects?: AgentEffect[];
+}
+
+export function toContestScoreAgentEnvelope(
+  result: ContestScoreResult,
+  args: ToContestScoreEnvelopeArgs,
+): AgentEnvelope<ContestScorePayload> {
+  const status = result.receipt.status === 'success' ? 'confirmed' : 'reverted';
+  const approveEffects = args.approveEffects ?? [];
+  const scoreEffect: AgentEffect = {
+    type: 'transaction',
+    purpose: 'score-contest',
+    ok: result.receipt.status === 'success',
+    txHash: result.txHash as Hex,
+    blockNumber: result.receipt.blockNumber.toString(),
+    status,
+  };
+  const effects: AgentEffect[] = [...approveEffects, scoreEffect];
+  return buildAgentEnvelope<ContestScorePayload>({
+    ok: effects.every((e) => e.ok),
+    action: 'contests.score',
+    stage: 'execute',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet: args.signerAddress,
+    walletRole: 'signer',
+    signer: args.signerAddress,
+    effects,
+    payload: {
+      contestId: result.contestId.toString(),
+      txHash: result.txHash,
+      requestId: result.requestId,
+      status: result.receipt.status,
+    },
+  });
 }

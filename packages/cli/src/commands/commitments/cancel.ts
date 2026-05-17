@@ -16,10 +16,22 @@ import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { OspexChainError } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { polygonscanTxUrl } from '../../lib/explorer.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
-import type { Hex } from '@ospex/sdk';
+import type {
+  AgentEffect,
+  AgentEnvelope,
+  ChainId,
+  Commitment,
+  Hex,
+  OspexClient,
+} from '@ospex/sdk';
 
 const optionsSchema = z.object({
   alsoOnchain: z.boolean().optional(),
@@ -43,19 +55,14 @@ export const commitmentsCancelCommand = addSignerOptions(
     const opts = optionsSchema.parse(rawOpts);
     const signerIntent = parseSignerIntent(rawOpts);
     const wantsOnchain = opts.alsoOnchain === true;
+    const wantJson = opts.json === true;
 
-    // The off-chain DELETE only needs a signer (for the EIP-712 cancel
-    // signature). The on-chain leg additionally needs an rpcUrl.
     const client = await getClient({
       requiresSigner: true,
       requiresChain: wantsOnchain,
       signerIntent,
     });
 
-    // Cancel scope: only live commitments (open + partially_filled).
-    // Cancelling a cancelled row is a no-op; resolving a non-live row
-    // here surfaces a "no match within scope" error which is clearer
-    // than letting the API return success on a row that wasn't open.
     const commitment = await client.commitments.resolveByPrefix(hashArg, {
       status: ['open', 'partially_filled'],
     });
@@ -67,28 +74,73 @@ export const commitmentsCancelCommand = addSignerOptions(
     const offChainResult = await client.commitments.cancel(hash);
 
     if (!wantsOnchain) {
-      if (opts.json === true) {
-        formatOutput(offChainResult, { json: true });
+      if (wantJson) {
+        const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+        writeAgentEnvelope(
+          toCancelOffchainAgentEnvelope(offChainResult, commitment, {
+            chainId: client.chainId(),
+            signerAddress,
+            hash,
+          }),
+        );
         return;
       }
       formatOutput({ ok: offChainResult.ok, hash }, { json: false });
       return;
     }
 
-    let onChainResult;
+    // --also-onchain: run the on-chain leg. Per spec §6 (partial-
+    // success contract): if the off-chain leg succeeded but the
+    // on-chain leg reverts, the v2 envelope MUST surface both phases
+    // in effects[] and `ok: false`. We catch OspexChainError so we
+    // can emit the envelope; other errors still re-throw.
+    let onChainResult: Awaited<ReturnType<OspexClient['commitments']['cancelOnchain']>> | null = null;
+    let onChainError: { code: string; message: string } | null = null;
     try {
       onChainResult = await client.commitments.cancelOnchain(hash);
     } catch (err) {
-      if (err instanceof OspexChainError && err.reason === 'NotCommitmentMaker') {
+      if (err instanceof OspexChainError) {
         process.stderr.write(
-          'On-chain cancel reverted: signer is not the commitment maker. ' +
+          'On-chain cancel reverted: ' +
+            (err.reason === 'NotCommitmentMaker'
+              ? 'signer is not the commitment maker. '
+              : '') +
             'Off-chain DELETE already applied; the row is hidden from the relay but the taker is not blocked.\n',
         );
+        onChainError = { code: err.code, message: err.message };
+      } else {
+        throw err;
       }
-      throw err;
+    }
+
+    if (wantJson) {
+      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+      const explorerUrl = onChainResult !== null
+        ? polygonscanTxUrl(client.chainId(), onChainResult.txHash)
+        : null;
+      writeAgentEnvelope(
+        toCancelDualAgentEnvelope(
+          { offChainResult, onChainResult, onChainError, explorer: explorerUrl },
+          commitment,
+          {
+            chainId: client.chainId(),
+            signerAddress,
+            hash,
+          },
+        ),
+      );
+      // Surface non-zero exit on partial failure so shell pipelines
+      // catch it without parsing the envelope.
+      if (onChainError !== null) process.exit(1);
+      return;
+    }
+
+    if (onChainResult === null) {
+      // Human mode: re-throw the original chain error so the user
+      // sees the standard error surface.
+      throw new OspexChainError(onChainError?.message ?? 'on-chain cancel failed');
     }
     const explorerUrl = polygonscanTxUrl(client.chainId(), onChainResult.txHash);
-
     const summary = {
       hash,
       offChainOk: offChainResult.ok,
@@ -96,5 +148,153 @@ export const commitmentsCancelCommand = addSignerOptions(
       blockNumber: onChainResult.receipt.blockNumber.toString(),
       explorer: explorerUrl,
     };
-    formatOutput(summary, { json: opts.json === true });
+    formatOutput(summary, { json: false });
   });
+
+// ── v1 → v2 envelope transforms ─────────────────────────────────────
+
+export type CancelOffchainResult = Awaited<
+  ReturnType<OspexClient['commitments']['cancel']>
+>;
+export type CancelOnchainResult = Awaited<
+  ReturnType<OspexClient['commitments']['cancelOnchain']>
+>;
+
+export interface CancelOffchainPayload {
+  hash: Hex;
+  ok: boolean;
+}
+
+export interface CancelDualPayload {
+  hash: Hex;
+  offChainOk: boolean;
+  /** Present iff the on-chain leg landed (success or revert). */
+  txHash: string | null;
+  blockNumber: string | null;
+  explorer: string | null;
+  /** Present iff the on-chain leg failed before sending a tx (rare). */
+  onChainError: { code: string; message: string } | null;
+}
+
+export interface ToCancelEnvelopeArgs {
+  chainId: ChainId;
+  signerAddress: Hex;
+  hash: Hex;
+}
+
+/**
+ * Off-chain-only cancel. Records the EIP-712 signature + off-chain
+ * write as effects so agents see both phases (even though they
+ * happen in one SDK call).
+ */
+export function toCancelOffchainAgentEnvelope(
+  result: CancelOffchainResult,
+  commitment: Commitment,
+  args: ToCancelEnvelopeArgs,
+): AgentEnvelope<CancelOffchainPayload> {
+  return buildAgentEnvelope<CancelOffchainPayload>({
+    ok: result.ok,
+    action: 'commitments.cancel',
+    stage: 'execute',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet: args.signerAddress,
+    walletRole: 'signer',
+    signer: args.signerAddress,
+    commitment,
+    effects: [
+      {
+        type: 'eip712-signature',
+        purpose: 'offchain-cancel',
+        ok: result.ok,
+      },
+      {
+        type: 'offchain-write',
+        purpose: 'offchain-cancel',
+        ok: result.ok,
+      },
+    ],
+    payload: { hash: args.hash, ok: result.ok },
+  });
+}
+
+/**
+ * Dual-phase cancel (off-chain DELETE + on-chain cancel tx). The
+ * spec §6 example: a partial-success envelope where off-chain
+ * succeeded but on-chain reverted MUST show both phases via
+ * `effects[]` with per-effect `ok`. Top-level `envelope.ok` is the
+ * AND of all phases.
+ */
+export interface CancelDualInputs {
+  offChainResult: CancelOffchainResult;
+  onChainResult: CancelOnchainResult | null;
+  onChainError: { code: string; message: string } | null;
+  explorer: string | null;
+}
+
+export function toCancelDualAgentEnvelope(
+  inputs: CancelDualInputs,
+  commitment: Commitment,
+  args: ToCancelEnvelopeArgs,
+): AgentEnvelope<CancelDualPayload> {
+  const offOk = inputs.offChainResult.ok;
+  const onTxOk =
+    inputs.onChainResult !== null
+      ? inputs.onChainResult.receipt.status === 'success'
+      : false;
+  const offSig: AgentEffect = {
+    type: 'eip712-signature',
+    purpose: 'offchain-cancel',
+    ok: offOk,
+  };
+  const offWrite: AgentEffect = {
+    type: 'offchain-write',
+    purpose: 'offchain-cancel',
+    ok: offOk,
+  };
+  const onChainEffect: AgentEffect | null =
+    inputs.onChainResult !== null
+      ? {
+          type: 'transaction',
+          purpose: 'onchain-cancel',
+          ok: onTxOk,
+          txHash: inputs.onChainResult.txHash as Hex,
+          blockNumber: inputs.onChainResult.receipt.blockNumber.toString(),
+          status: onTxOk ? 'confirmed' : 'reverted',
+        }
+      : inputs.onChainError !== null
+        ? {
+            type: 'transaction',
+            purpose: 'onchain-cancel',
+            ok: false,
+            errorCode: inputs.onChainError.code,
+          }
+        : null;
+  const effects: AgentEffect[] = [offSig, offWrite];
+  if (onChainEffect !== null) effects.push(onChainEffect);
+  return buildAgentEnvelope<CancelDualPayload>({
+    ok: effects.every((e) => e.ok),
+    action: 'commitments.cancel',
+    stage: 'execute',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet: args.signerAddress,
+    walletRole: 'signer',
+    signer: args.signerAddress,
+    commitment,
+    errors:
+      inputs.onChainError !== null
+        ? [inputs.onChainError]
+        : [],
+    effects,
+    payload: {
+      hash: args.hash,
+      offChainOk: offOk,
+      txHash: inputs.onChainResult?.txHash ?? null,
+      blockNumber:
+        inputs.onChainResult?.receipt.blockNumber.toString() ?? null,
+      explorer: inputs.explorer,
+      onChainError: inputs.onChainError,
+    },
+  });
+}

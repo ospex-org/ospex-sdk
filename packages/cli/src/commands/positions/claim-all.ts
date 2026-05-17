@@ -13,7 +13,22 @@
 
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
+import type {
+  AgentEffect,
+  AgentEnvelope,
+  AgentPayout,
+  ChainId,
+  Hex,
+  OspexClient,
+  PerspectiveAmount,
+} from '@ospex/sdk';
+import { wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 
@@ -35,7 +50,6 @@ export const positionsClaimAllCommand = addSignerOptions(
     const signerIntent = parseSignerIntent(rawOpts);
     const dryRun = opts.dryRun === true;
 
-    // Dry-run only needs read paths — no signer required if --address is set.
     const requiresSigner = !dryRun || opts.address === undefined;
     const requiresChain = !dryRun;
     const client = await getClient({ requiresSigner, requiresChain, signerIntent });
@@ -46,26 +60,15 @@ export const positionsClaimAllCommand = addSignerOptions(
     });
 
     if (opts.json === true) {
-      formatOutput(
-        {
-          address: result.address,
+      const signerAddress = requiresSigner
+        ? (((await client.signer().getAddress()) as string).toLowerCase() as Hex)
+        : null;
+      writeAgentEnvelope(
+        toClaimAllAgentEnvelope(result, {
+          chainId: client.chainId(),
+          signerAddress,
           dryRun,
-          success: result.success,
-          totals: result.totals,
-          entries: result.entries.map((e) => ({
-            positionId: e.positionId,
-            speculationId: e.speculationId,
-            bucket: e.bucket,
-            description: e.description,
-            success: e.success,
-            txHashes: e.txHashes,
-            payoutUSDC: e.payoutUSDC,
-            payoutWei6: e.payoutWei6,
-            winSide: e.winSide,
-            error: e.error?.message,
-          })),
-        },
-        { json: true },
+        }),
       );
       return;
     }
@@ -106,3 +109,184 @@ export const positionsClaimAllCommand = addSignerOptions(
         `total payout ${result.totals.totalPayoutUSDC.toFixed(2)} USDC.\n`,
     );
   });
+
+// ── v1 → v2 envelope transform ──────────────────────────────────────
+
+export type ClaimAllResult = Awaited<
+  ReturnType<OspexClient['positions']['claimAll']>
+>;
+
+export interface ClaimAllPayload {
+  address: string;
+  dryRun: boolean;
+  success: boolean;
+  totals: ClaimAllResult['totals'];
+  entries: Array<{
+    positionId: string;
+    speculationId: string;
+    bucket: string;
+    description: string;
+    success: boolean;
+    txHashes: string[];
+    payoutUSDC: number | undefined;
+    payoutWei6: string | undefined;
+    winSide: string | undefined;
+    error: string | undefined;
+  }>;
+}
+
+export interface ToClaimAllEnvelopeArgs {
+  chainId: ChainId;
+  signerAddress: Hex | null;
+  dryRun: boolean;
+}
+
+/**
+ * Wrap a `claimAll` result in the v2 envelope. Per spec §3.1:
+ *   dry-run: stage 'dry-run', no effects, requiresSignature/Transaction true
+ *   execute: stage 'execute', effects per actual on-chain tx (per
+ *            entry: 0–2 confirmed + optional failure marker).
+ *
+ * Payout shoulder uses the SDK's exact `totals.totalPayoutWei6`
+ * bigint string — preserves wei6 precision (Hermes PR-70 review).
+ *
+ * `envelope.ok` is `true` for any cleanly-produced envelope: dry-run
+ * plans, live no-op sweeps, and successful live sweeps. `false` only
+ * when at least one execute entry failed (`totals.failed > 0`). The
+ * SDK's `result.success` is dry-run-aware (intentionally `false` for
+ * dry-runs) and so doesn't map to envelope-level success.
+ */
+export function toClaimAllAgentEnvelope(
+  result: ClaimAllResult,
+  args: ToClaimAllEnvelopeArgs,
+): AgentEnvelope<ClaimAllPayload> {
+  const subjectAddress = result.address.toLowerCase() as Hex;
+  // Wallet is the signer (the one being asked to sign each tx).
+  // Subject (--address) goes in payload. For self-sweep they're
+  // the same.
+  const wallet = args.signerAddress;
+  const effects: AgentEffect[] = args.dryRun
+    ? []
+    : buildClaimAllEffects(result);
+  const payout = buildClaimAllPayout(result);
+
+  // Hermes PR-70 blocker 1: envelope-level ok is "command produced a
+  // valid response" — not "domain-level claimed at least one thing".
+  // Dry-run + live no-op are normal successful completions; only
+  // live execute with failed entries flips ok to false.
+  const ok = result.totals.failed === 0;
+
+  return buildAgentEnvelope<ClaimAllPayload>({
+    ok,
+    action: 'claim-all',
+    stage: args.dryRun ? 'dry-run' : 'execute',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet,
+    walletRole: wallet !== null ? 'signer' : 'none',
+    signer: wallet,
+    requiresSignature: args.dryRun,
+    requiresTransaction: args.dryRun,
+    payout,
+    effects,
+    payload: {
+      address: subjectAddress,
+      dryRun: args.dryRun,
+      success: result.success,
+      totals: result.totals,
+      entries: result.entries.map((e) => ({
+        positionId: e.positionId,
+        speculationId: e.speculationId,
+        bucket: e.bucket,
+        description: e.description,
+        success: e.success,
+        txHashes: e.txHashes,
+        payoutUSDC: e.payoutUSDC,
+        payoutWei6: e.payoutWei6,
+        winSide: e.winSide,
+        error: e.error?.message,
+      })),
+    },
+  });
+}
+
+/**
+ * Flatten claim-all entries into a chronological list of transaction
+ * effects. Hermes PR-70 blocker 2: every recorded txHash is a
+ * confirmed-successful tx because the SDK's chain client throws on
+ * a reverted receipt before pushing — so collapsing per-tx status
+ * to `entry.success` would mislabel a successful earlier tx as
+ * reverted when a later step fails.
+ *
+ * Each tx in entry.txHashes → confirmed effect.
+ * Entry failed (`!entry.success`) + step incomplete → emit an
+ * additional failure effect for the step that didn't land. The
+ * effect carries `errorCode` from the OspexError code; if the
+ * underlying OspexChainError attached a `txHash` (a reverted send),
+ * include it with `status: 'reverted'`.
+ */
+function buildClaimAllEffects(result: ClaimAllResult): AgentEffect[] {
+  const out: AgentEffect[] = [];
+  for (const entry of result.entries) {
+    // 1. Recorded txs are confirmed-successful.
+    for (let i = 0; i < entry.txHashes.length; i++) {
+      const txHash = entry.txHashes[i] as string;
+      const isSettle = entry.bucket === 'pendingSettle' && i === 0;
+      out.push({
+        type: 'transaction',
+        purpose: isSettle ? 'settle-speculation' : 'claim-position',
+        ok: true,
+        txHash: txHash as Hex,
+        status: 'confirmed',
+      });
+    }
+    // 2. If the entry failed, the failure is the step AFTER the last
+    //    recorded txHash. Emit one failure effect for it.
+    if (!entry.success) {
+      const completedSteps = entry.txHashes.length;
+      const totalSteps = entry.bucket === 'pendingSettle' ? 2 : 1;
+      if (completedSteps < totalSteps) {
+        const failedStepIsSettle =
+          entry.bucket === 'pendingSettle' && completedSteps === 0;
+        const errAsChain = entry.error as
+          | { code?: string; txHash?: string }
+          | undefined;
+        const failureEffect: AgentEffect = {
+          type: 'transaction',
+          purpose: failedStepIsSettle ? 'settle-speculation' : 'claim-position',
+          ok: false,
+        };
+        if (errAsChain?.txHash !== undefined) {
+          failureEffect.txHash = errAsChain.txHash as Hex;
+          failureEffect.status = 'reverted';
+        }
+        if (errAsChain?.code !== undefined) {
+          failureEffect.errorCode = errAsChain.code;
+        }
+        out.push(failureEffect);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Aggregate payout shoulder. Hermes PR-70 blocker 3: use the SDK's
+ * exact `totals.totalPayoutWei6` bigint string — going through
+ * `totalPayoutUSDC` (a JS `number`) loses precision past
+ * `Number.MAX_SAFE_INTEGER` and even on values like 1000000000000000001
+ * which round to 1e18 (dropping one wei6 unit). For a financial
+ * shoulder, exact wei6 is non-negotiable.
+ *
+ * profit and totalReturn are both the swept total — at claim time
+ * the risk was settled long ago, so payout IS profit IS return.
+ */
+function buildClaimAllPayout(result: ClaimAllResult): AgentPayout | null {
+  if (result.entries.length === 0) return null;
+  const wei6Str = result.totals.totalPayoutWei6;
+  const amount: PerspectiveAmount = {
+    wei6: wei6Str,
+    usdc: wei6ToDecimalUSDC(BigInt(wei6Str)),
+  };
+  return { profit: amount, totalReturn: amount };
+}

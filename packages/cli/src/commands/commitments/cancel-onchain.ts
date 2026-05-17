@@ -19,8 +19,19 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { OspexChainError } from '@ospex/sdk';
-import type { Hex } from '@ospex/sdk';
+import type {
+  AgentEnvelope,
+  ChainId,
+  Commitment,
+  Hex,
+  OspexClient,
+} from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { polygonscanTxUrl } from '../../lib/explorer.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
@@ -67,14 +78,13 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
 
     const explorerUrl = polygonscanTxUrl(client.chainId(), result.txHash);
     if (opts.json === true) {
-      formatOutput(
-        {
-          txHash: result.txHash,
-          commitmentHash: result.commitmentHash,
-          blockNumber: result.receipt.blockNumber.toString(),
+      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+      writeAgentEnvelope(
+        toCancelOnchainAgentEnvelope(result, commitment, {
+          chainId: client.chainId(),
+          signerAddress,
           explorer: explorerUrl,
-        },
-        { json: true },
+        }),
       );
       return;
     }
@@ -88,3 +98,57 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
       { json: false },
     );
   });
+
+// ── v1 → v2 envelope transform ──────────────────────────────────────
+
+export type CancelOnchainResult = Awaited<
+  ReturnType<OspexClient['commitments']['cancelOnchain']>
+>;
+
+export interface CancelOnchainPayload {
+  txHash: string;
+  commitmentHash: string;
+  blockNumber: string;
+  explorer: string;
+}
+
+export interface ToCancelOnchainEnvelopeArgs {
+  chainId: ChainId;
+  signerAddress: Hex;
+  explorer: string;
+}
+
+export function toCancelOnchainAgentEnvelope(
+  result: CancelOnchainResult,
+  commitment: Commitment,
+  args: ToCancelOnchainEnvelopeArgs,
+): AgentEnvelope<CancelOnchainPayload> {
+  const status = result.receipt.status === 'success' ? 'confirmed' : 'reverted';
+  return buildAgentEnvelope<CancelOnchainPayload>({
+    ok: result.receipt.status === 'success',
+    action: 'commitments.cancel-onchain',
+    stage: 'execute',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet: args.signerAddress,
+    walletRole: 'signer',
+    signer: args.signerAddress,
+    commitment,
+    effects: [
+      {
+        type: 'transaction',
+        purpose: 'onchain-cancel',
+        ok: result.receipt.status === 'success',
+        txHash: result.txHash as Hex,
+        blockNumber: result.receipt.blockNumber.toString(),
+        status,
+      },
+    ],
+    payload: {
+      txHash: result.txHash,
+      commitmentHash: result.commitmentHash,
+      blockNumber: result.receipt.blockNumber.toString(),
+      explorer: args.explorer,
+    },
+  });
+}

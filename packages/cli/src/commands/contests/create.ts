@@ -20,8 +20,22 @@
 import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { formatUnits, parseUnits } from 'viem';
-import { getAddresses, OspexAllowanceError, OspexValidationError, type OspexClient } from '@ospex/sdk';
+import {
+  getAddresses,
+  OspexAllowanceError,
+  OspexValidationError,
+  type AgentEffect,
+  type AgentEnvelope,
+  type ChainId,
+  type Hex,
+  type OspexClient,
+} from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptYesNo, promptValue } from '../../lib/prompt.js';
@@ -30,13 +44,7 @@ const optionsSchema = z.object({
   gameId: z.string().min(1).optional(),
   game: z.string().min(1).optional(),
   subscriptionId: z.string().regex(/^[0-9]+$/).optional(),
-  // 300_000 is the Chainlink Functions Router cap on every supported
-  // chain. SDK does the same chain-aware check; rejecting at parse time
-  // gives a typed CLI error without round-tripping through the SDK.
   gasLimit: z.coerce.number().int().positive().max(300_000).optional(),
-  // Commander's `--no-wait` attribute name is `wait` (default true).
-  // The schema must mirror commander's naming or Zod silently strips the
-  // value and the wait branch always runs.
   wait: z.boolean().optional(),
   json: z.boolean().optional(),
   yes: z.boolean().optional(),
@@ -63,10 +71,6 @@ export const contestCreateCommand = addSignerOptions(
     const opts = optionsSchema.parse(rawOpts);
     const signerIntent = parseSignerIntent(rawOpts);
 
-    // Resolve --game / --game-id: exactly one must be set. --game
-    // accepts either a UUID (passed through) or a slug (resolved
-    // via the SDK's resolver against `games.slug`). Multiple matches
-    // or no match fail closed inside the SDK.
     const hasGame = opts.game !== undefined;
     const hasGameId = opts.gameId !== undefined;
     if (hasGame && hasGameId) {
@@ -86,11 +90,6 @@ export const contestCreateCommand = addSignerOptions(
     } else {
       const resolved = await client.games.resolveGameId(opts.game as string);
       gameId = resolved.gameId;
-      // Show a confirmation block when the input was a slug — slugs
-      // are mutable + human-readable, so it's easy to fat-finger one
-      // and end up creating a contest for the wrong game (which burns
-      // real LINK + USDC). Skip the prompt under --yes or --json
-      // (scripted/agent contexts).
       if (resolved.source === 'slug' && resolved.game !== null) {
         const g = resolved.game;
         const lines = [
@@ -105,9 +104,6 @@ export const contestCreateCommand = addSignerOptions(
         ];
         process.stderr.write(lines.join('\n'));
 
-        // Consent rule: --yes is the consent flag; --json is output
-        // format only. They are orthogonal — --json alone DOES NOT
-        // auto-consent. Same contract as `commitments submit`.
         const skipPrompt = opts.yes === true;
         const isInteractive = process.stdin.isTTY === true;
         if (!skipPrompt && !isInteractive) {
@@ -132,10 +128,11 @@ export const contestCreateCommand = addSignerOptions(
     if (opts.subscriptionId !== undefined) args.subscriptionId = BigInt(opts.subscriptionId);
     if (opts.gasLimit !== undefined) args.gasLimit = opts.gasLimit;
 
-    // A fresh wallet typically needs two approvals (USDC fee, LINK
-    // payment). Loop the catch so the second approval prompt fires
-    // automatically after the first one succeeds — otherwise the user
-    // sees a successful approve tx followed by a hard error.
+    // Approve-effect collection: mirrors the PR-69 fix on submit/match.
+    // Each on-chain approval that runs in the retry loop is captured
+    // here and prepended to the final envelope's effects[].
+    const approveEffects: AgentEffect[] = [];
+
     const MAX_APPROVAL_RETRIES = 2;
     let result: Awaited<ReturnType<typeof client.contests.create>> | undefined;
     let lastErr: unknown;
@@ -147,7 +144,12 @@ export const contestCreateCommand = addSignerOptions(
         lastErr = err;
         if (!(err instanceof OspexAllowanceError)) throw err;
         if (attempt === MAX_APPROVAL_RETRIES) throw err;
-        const handled = await handleContestAllowance(client, err, opts.json === true);
+        const handled = await handleContestAllowance(
+          client,
+          err,
+          opts.json === true,
+          approveEffects,
+        );
         if (!handled) throw err;
       }
     }
@@ -155,10 +157,6 @@ export const contestCreateCommand = addSignerOptions(
       throw lastErr ?? new Error('Contest creation did not return a result.');
     }
 
-    // Pretty-print the create result immediately; defer JSON emission
-    // to the end so a single combined document covers create +
-    // verification. Two separate JSON docs on stdout aren't parseable
-    // by automation.
     if (opts.json !== true) {
       process.stdout.write(
         `Contest ${result.contestId} created (tx ${result.txHash}).\n` +
@@ -194,15 +192,14 @@ export const contestCreateCommand = addSignerOptions(
     }
 
     if (opts.json === true) {
-      formatOutput(
-        {
-          contestId: result.contestId.toString(),
-          txHash: result.txHash,
-          requestId: result.requestId,
-          status: result.receipt.status,
+      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+      writeAgentEnvelope(
+        toContestCreateAgentEnvelope(result, {
+          chainId: client.chainId(),
+          signerAddress,
           verification,
-        },
-        { json: true },
+          approveEffects,
+        }),
       );
     }
 
@@ -217,7 +214,6 @@ interface AllowanceCopy {
 }
 
 function describeAllowance(client: OspexClient, err: OspexAllowanceError): AllowanceCopy {
-  // Distinguish LINK→OracleModule from USDC→TreasuryModule by spender.
   const oracleModule = getAddresses(client.chainId()).oracleModule.toLowerCase();
   const isLink = err.spender.toLowerCase() === oracleModule;
   return isLink
@@ -239,15 +235,15 @@ async function handleContestAllowance(
   client: OspexClient,
   err: OspexAllowanceError,
   jsonMode: boolean,
+  approveEffects: AgentEffect[],
 ): Promise<boolean> {
   const copy = describeAllowance(client, err);
   const requiredHuman = formatUnits(err.required, copy.decimals);
   const currentHuman = formatUnits(err.current, copy.decimals);
 
-  // In --json mode, the user is scripting and probably doesn't want a
-  // half-open interactive flow. Surface the error so they can supply
-  // the approval out-of-band (`ospex contests approve …` is the SDK
-  // surface; the CLI subcommand for it is on the M3 backlog).
+  // JSON mode is non-interactive — surface the error without prompting.
+  // Agents are expected to pre-approve via `approvals setup` or
+  // `commitments approve` before invoking `contests create --json`.
   if (jsonMode) return false;
 
   process.stderr.write(
@@ -295,5 +291,69 @@ async function handleContestAllowance(
       ? await client.contests.approveLink(approveAmount)
       : await client.contests.approveFee(approveAmount);
   process.stdout.write(`approve tx: ${tx.txHash} (status ${tx.receipt.status})\n`);
+  approveEffects.push({
+    type: 'transaction',
+    purpose: copy.symbol === 'LINK' ? 'approve-link' : 'approve-usdc',
+    ok: tx.receipt.status === 'success',
+    txHash: tx.txHash as Hex,
+    blockNumber: tx.receipt.blockNumber.toString(),
+    status: tx.receipt.status === 'success' ? 'confirmed' : 'reverted',
+  });
   return true;
+}
+
+// ── v1 → v2 envelope transform ──────────────────────────────────────
+
+export type ContestCreateResult = Awaited<
+  ReturnType<OspexClient['contests']['create']>
+>;
+
+export interface ContestCreatePayload {
+  contestId: string;
+  txHash: string;
+  requestId: string | null;
+  status: 'success' | 'reverted';
+  verification: { contestId: string; status: string } | null;
+}
+
+export interface ToContestCreateEnvelopeArgs {
+  chainId: ChainId;
+  signerAddress: Hex;
+  verification: { contestId: string; status: string } | null;
+  approveEffects?: AgentEffect[];
+}
+
+export function toContestCreateAgentEnvelope(
+  result: ContestCreateResult,
+  args: ToContestCreateEnvelopeArgs,
+): AgentEnvelope<ContestCreatePayload> {
+  const status = result.receipt.status === 'success' ? 'confirmed' : 'reverted';
+  const approveEffects = args.approveEffects ?? [];
+  const createEffect: AgentEffect = {
+    type: 'transaction',
+    purpose: 'create-contest',
+    ok: result.receipt.status === 'success',
+    txHash: result.txHash as Hex,
+    blockNumber: result.receipt.blockNumber.toString(),
+    status,
+  };
+  const effects: AgentEffect[] = [...approveEffects, createEffect];
+  return buildAgentEnvelope<ContestCreatePayload>({
+    ok: effects.every((e) => e.ok),
+    action: 'contests.create',
+    stage: 'execute',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet: args.signerAddress,
+    walletRole: 'signer',
+    signer: args.signerAddress,
+    effects,
+    payload: {
+      contestId: result.contestId.toString(),
+      txHash: result.txHash,
+      requestId: result.requestId,
+      status: result.receipt.status,
+      verification: args.verification,
+    },
+  });
 }
