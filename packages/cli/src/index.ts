@@ -8,6 +8,7 @@
  * stack trace is noise.
  */
 
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Command } from '@commander-js/extra-typings';
 import { OspexError } from '@ospex/sdk';
@@ -181,10 +182,33 @@ function writeCauseChain(err: unknown): void {
   }
 }
 
-// Only run main() when this file is the entry point (not when
-// imported by tests). Without this guard, importing `makeProgram`
-// in tests would trigger `main()` which tries to parseAsync the
-// vitest CLI's argv and process.exit(1) on the unknown command.
-if (process.argv[1] !== undefined && process.argv[1] === fileURLToPath(import.meta.url)) {
+/**
+ * True when this module is the program entry point — i.e. invoked
+ * directly via `node dist/index.js` OR via the `ospex` bin symlink
+ * that `npm install` / `yarn add` creates in `node_modules/.bin`.
+ *
+ * The naive comparison `process.argv[1] === fileURLToPath(import.meta.url)`
+ * fails through the bin symlink: argv[1] points at
+ * `node_modules/.bin/ospex` while import.meta.url resolves to
+ * `node_modules/@ospex/cli/dist/index.js`, so main() never runs and
+ * the installed CLI becomes a no-op (Hermes PR-72 blocker).
+ *
+ * Fix: resolve BOTH paths via `realpathSync` so symlinks collapse
+ * to their canonical targets before comparison. realpathSync can
+ * throw on a path that doesn't exist; defensive try/catch returns
+ * false so test imports never accidentally fire main().
+ */
+export function isMainModule(argv1: string | undefined, metaUrl: string): boolean {
+  if (argv1 === undefined) return false;
+  try {
+    const argvReal = realpathSync(argv1);
+    const moduleReal = realpathSync(fileURLToPath(metaUrl));
+    return argvReal === moduleReal;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule(process.argv[1], import.meta.url)) {
   void main();
 }
