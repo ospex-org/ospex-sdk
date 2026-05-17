@@ -30,8 +30,8 @@ const LINK = '0xb0897686c545045aFc77CF20eC7A532E3120E0F1' as `0x${string}`;
 
 const STUB_META: MetaBlock = {
   generatedAt: '2026-05-15T00:00:00.000Z',
-  cliVersion: '0.1.0',
-  sdkVersion: '0.1.0',
+  cliVersion: '0.2.0',
+  sdkVersion: '0.2.0',
 };
 
 function makeApprovals(overrides: {

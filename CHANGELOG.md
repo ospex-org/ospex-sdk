@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.2.0] — 2026-05-17
+
 ### SDK (`@ospex/sdk`)
 
 - **`SpeculationCreationFeeSummary`** — new always-present, mode-symmetric block on `MatchPreview.speculation.creationFee` and `SubmitPreview.market.speculation.creationFee`. Replaces the previous "no `lazyCreation` block ⇒ no fee" negative inference with positive, machine-readable fields: `applies`, `condition` (`'never'` | `'if-first-match-at-execution'`), `totalFee*`, role-based `taker/makerShare*`, wallet-centric `viewerShare*` (collapses self-match doubling), `spender`, `spenderLabel`, `approvalPurpose`, `approvalNeeded`, and a human `note`. On existing mode every numeric is `"0"` and `applies===false` so an agent reads one field and acts. Driven from the on-chain `SPECULATION_CREATION_FEE_WEI6` constant via a shared `buildCreationFeeSummary` helper used by both builders. Type exported from the main SDK barrel. Additive under `schemaVersion: 1`.
@@ -97,5 +101,6 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.1.0

@@ -60,7 +60,7 @@ export function makeProgram(): Command {
   const program = new Command()
     .name('ospex')
     .description('Command-line interface for the Ospex protocol.')
-    .version('0.1.0');
+    .version('0.2.0');
 
   program.addCommand(healthCommand);
   program.addCommand(doctorCommand);
