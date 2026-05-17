@@ -751,7 +751,7 @@ Once the SDK reaches `1.0.0`, caret pinning will float across additive minors as
 For the CLI installed via tarball, pin the exact tarball path:
 
 ```jsonc
-"@ospex/cli": "file:./vendor/ospex-cli-0.1.0.tgz"
+"@ospex/cli": "file:./vendor/ospex-cli-0.2.0.tgz"
 ```
 
 Re-vendor when you choose to upgrade — there is no auto-update story for tarballs.
