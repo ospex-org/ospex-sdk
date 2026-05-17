@@ -7,7 +7,7 @@ Runbook for cutting a new `@ospex/sdk` + `@ospex/cli` release. Both packages ver
 Releases are cut on demand, not on a schedule. Trigger conditions:
 
 - Substantive new SDK / CLI surface area.
-- Any change to the stable agent contract (`docs/AGENT_CONTRACT.md`) — even additive ones that don't break `schemaVersion: 1` get a release so consumers can pin to a known version.
+- Any change to the stable agent contract (`docs/AGENT_CONTRACT.md` / `docs/AGENT_ENVELOPE_SPEC.md`) — even additive ones that don't break `schemaVersion: 2` get a release so consumers can pin to a known version.
 - Security fixes — out-of-band, prioritized.
 
 ## Pre-release checklist

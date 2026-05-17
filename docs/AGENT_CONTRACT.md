@@ -15,7 +15,7 @@ The contract is deliberately narrow. Promises here are load-bearing — once an 
 | `@ospex/sdk` package barrel exports | Stable | major version |
 | `@ospex/sdk/signers/keystore` subpath | Stable | major version |
 | CLI command names + flag names | Stable | major version |
-| CLI **JSON envelope shapes** (`schemaVersion: 1`) | Stable while `schemaVersion === 1` | bump to `schemaVersion: 2` |
+| CLI **JSON envelope shape** (`AgentEnvelope<TPayload>`, `schemaVersion: 2`) | Stable while `schemaVersion === 2` | bump to `schemaVersion: 3` |
 | Typed `error.code` strings (e.g. `'ALLOWANCE_INSUFFICIENT'`) | Stable | major version |
 | Typed `error.reason` enum strings (e.g. `'NotCommitmentMaker'`) | Stable | major version |
 | CLI **human-readable text output** | NOT stable | any release |
@@ -25,64 +25,61 @@ The contract is deliberately narrow. Promises here are load-bearing — once an 
 
 **Rule of thumb for agents.** Always pass `--json` for CLI output you intend to parse. Always switch on `error.code` or `error.reason`, never on `error.message`. Read the JSON envelope's `schemaVersion` and refuse to proceed if it's not the version you were built for.
 
-Additive changes inside `schemaVersion: 1` (new optional fields, new enum values) are explicitly allowed without a schema bump. Treat unknown fields and unknown enum values as forward-compatible — log + ignore, don't crash.
+Additive changes inside `schemaVersion: 2` (new optional fields on the envelope or its payloads, new enum values) are explicitly allowed without a schema bump. Treat unknown fields and unknown enum values as forward-compatible — log + ignore, don't crash.
 
 ---
 
 ## 2. CLI: the `--json` contract
 
-Three CLI commands ship a **dual-mode** `--json`: preview-only without `--yes`, execute-and-emit with `--yes`. These are the agent-friendly commands:
+Every Class A `--json` invocation emits a single envelope matching `AgentEnvelope<TPayload>` — a shared shoulder block (`ok`, `action`, `stage`, `network`, `wallet`, `warnings`, `errors`, `effects`, `nextCommands`, …) wrapped around a command-specific `payload`. Agents route on the shoulder fields and read the payload only when they need command-specific data.
+
+The full envelope shape, per-stage population rules, per-command field matrix, and failure envelope contract live in [`AGENT_ENVELOPE_SPEC.md`](./AGENT_ENVELOPE_SPEC.md). This section covers only the rules and payload shapes specific to the preview-bearing CLI surface.
+
+### Dual-mode `--json`
+
+Three commands ship a **dual-mode** `--json`: preview-only without `--yes`, execute-and-emit with `--yes`. These are the canonical agent-friendly commands:
 
 | Command | `--json` alone | `--yes --json` |
 |---|---|---|
-| `ospex commitments submit` | Emits `SubmitPreviewEnvelope`. **No signing, no POST.** | Emits `SubmitJsonResult`. Signs and posts. |
-| `ospex commitments match` | Emits `MatchPreviewEnvelope`. **No tx.** Signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight) — only when a non-interactive credential is configured. See §4 (lazy-unlock contract) for the full rules. | Emits `MatchJsonResult`. Sends a tx. |
-| `ospex approvals setup` | Plan-only envelope (no tx). | Executes the plan, emits the result envelope. |
+| `ospex commitments submit` | `stage: 'preview'`, `payload: SubmitPreview`. **No signing, no POST.** | `stage: 'execute'`, `payload: SubmitResult`. Signs and posts. |
+| `ospex commitments match` | `stage: 'preview'`, `payload: MatchPreview`. **No tx.** The signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight) — only when a non-interactive credential is configured. See §4 (lazy-unlock contract). | `stage: 'execute'`, `payload: MatchResult`. Sends a tx. |
+| `ospex approvals setup` | `stage: 'preview'`, `payload: ApprovalsPlan`. No tx. | `stage: 'execute'`, `payload: ApprovalsResult`. Executes the plan. |
 
-Other write commands (`contests score`, `settle`, `claim`, `claim-all`, `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`) treat `--json` as **output format only** — they may still send a transaction. For these, use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
+Other write commands (`contests score`, `settle`, `claim`, `claim-all`, `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`) treat `--json` as **output format only** — they may still send a transaction. Use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
 
-### Envelope shapes (TypeScript)
+### Payload TypeScript shapes
+
+The per-command `payload` types are the existing SDK preview/result models — `AgentEnvelope` adds the shoulder block around them, not new fields.
 
 ```ts
-// commitments submit --json
-interface SubmitPreviewEnvelope {
-  schemaVersion: 1;
-  preview: SubmitPreview;     // contest, market { speculation { creationFee, … } }, side, economics,
-                              //   expiry, raw, approvals[], outcomes[], submitAction,
-                              //   you?, counterparty?
-}
+// commitments submit --json (no --yes)
+type SubmitPreviewEnvelope = AgentEnvelope<SubmitPreview>;
+// SubmitPreview: contest, market { speculation { creationFee, … } }, side, economics, expiry,
+//                raw, approvals[], outcomes[], submitAction, you?, counterparty?
 
 // commitments submit --yes --json
-interface SubmitJsonResult {
-  schemaVersion: 1;
-  preview: SubmitPreview;
-  result: { hash: string; commitment: Commitment };
-}
+type SubmitResultEnvelope = AgentEnvelope<{
+  hash: string;
+  commitment: Commitment;
+}>;
 
-// commitments match --json
-interface MatchPreviewEnvelope {
-  schemaVersion: 1;
-  preview: MatchPreview;      // commitment, taker, selfMatch, contest, market, odds, economics,
-                              //   expiry, speculation { mode, creationFee, lazyCreation? },
-                              //   approvals[], warnings[], tradeAction,
-                              //   you?, counterparty?, outcomes?
-}
+// commitments match --json (no --yes)
+type MatchPreviewEnvelope = AgentEnvelope<MatchPreview>;
+// MatchPreview: commitment, taker, selfMatch, contest, market, odds, economics, expiry,
+//               speculation { mode, creationFee, lazyCreation? }, approvals[], warnings[],
+//               tradeAction, you?, counterparty?, outcomes?
 
 // commitments match --yes --json
-interface MatchJsonResult {
-  schemaVersion: 1;
-  preview: MatchPreview;
-  result: {
-    txHash: `0x${string}`;
-    status: 'success' | 'reverted';
-    blockNumber: string;        // decimal string (bigint-safe)
-    takerRiskWei6: string;
-    fillMakerRiskWei6: string;
-  };
-}
+type MatchResultEnvelope = AgentEnvelope<{
+  txHash: `0x${string}`;
+  status: 'success' | 'reverted';
+  blockNumber: string;            // decimal string (bigint-safe)
+  takerRiskWei6: string;
+  fillMakerRiskWei6: string;
+}>;
 ```
 
-Authoritative source: [`packages/sdk/src/types/preview.ts`](../packages/sdk/src/types/preview.ts) and [`packages/sdk/src/types/matchPreview.ts`](../packages/sdk/src/types/matchPreview.ts).
+Authoritative payload sources: [`packages/sdk/src/types/preview.ts`](../packages/sdk/src/types/preview.ts) and [`packages/sdk/src/types/matchPreview.ts`](../packages/sdk/src/types/matchPreview.ts). Authoritative envelope source: [`packages/sdk/src/types/agentEnvelope.ts`](../packages/sdk/src/types/agentEnvelope.ts).
 
 ### Perspective view (`you` / `counterparty` / `outcomes`)
 
@@ -108,7 +105,7 @@ On `MatchPreview` the viewer is the taker (`you.role === 'taker'`) and the count
 
 USDC values inside `you` / `counterparty` are always 6 fractional digits, round-tripping with `wei6ToDecimalUSDC` / `usdcDecimalToWei6` — concise formats (`"5.00"`) appear only in human renderers, never in JSON.
 
-The fields are **optional** under `schemaVersion: 1`. Envelopes produced by older SDK builds may omit them. The `@ospex/sdk` exports `computeMatchYouView(preview)` and `computeSubmitYouView(preview)` — pure accessors that return the view directly when present and backfill from the legacy `makerSide` / `takerSide` / `odds` / `economics` (or `side` / `economics` on submit) blocks when absent, so agents handling mixed-SDK-version envelopes never branch.
+The perspective fields are **optional on the payload**. The `@ospex/sdk` exports `computeMatchYouView(preview)` and `computeSubmitYouView(preview)` — pure accessors that return the view directly when present and backfill from the legacy `makerSide` / `takerSide` / `odds` / `economics` (or `side` / `economics` on submit) blocks when absent. Agents consuming either shape call one helper and never branch.
 
 The CLI mirror: `ospex commitments match` and `ospex commitments submit` render this view by default in human mode. Pass `--raw` to fall back to the pre-perspective-view layout for debugging EIP-712 hash mismatches and protocol-level audits — the exact restored content differs by command:
 
@@ -287,17 +284,17 @@ A diagnostic command that walks the same resolution ladder a real write command 
 ospex auth check                            # walk + report
 ospex auth check --strict                   # promote loose password-file perms to a hard error
 ospex auth check --sign-challenge           # also sign a deterministic challenge to prove end-to-end signing
-ospex auth check --json                     # machine-readable envelope (schemaVersion: 1)
+ospex auth check --json                     # machine-readable AgentEnvelope<AuthCheckPayload>
 ```
 
 It also accepts the full signer flag group (`--account`, `--keystore-path`, etc.) so agents can validate a candidate configuration before committing it via `auth use-foundry`.
 
-#### Envelope shape (`schemaVersion: 1`)
+#### Envelope shape: `AgentEnvelope<AuthCheckPayload>`
+
+The `--json` output is the v2 wrapper around an `AuthCheckPayload`. The shoulder block (`schemaVersion: 2`, `ok`, `action: 'auth.check'`, `stage: 'read'`, `warnings`, `errors`, `nextCommands`, etc.) follows the rules in [`AGENT_ENVELOPE_SPEC.md`](./AGENT_ENVELOPE_SPEC.md). The payload carries the diagnostic detail:
 
 ```ts
-interface AuthCheckJsonEnvelope {
-  schemaVersion: 1;
-  ok: boolean;
+interface AuthCheckPayload {
   strict: boolean;
   resolution: {
     keystore: {
@@ -343,8 +340,6 @@ interface AuthCheckJsonEnvelope {
     signed: boolean;
     signature: `0x${string}` | null;
   };
-  warnings: string[];
-  errors: Array<{ code: string; message: string }>;
 }
 
 type KeystoreProvenance =
@@ -365,9 +360,15 @@ type PasswordProvenance =
   | 'none';
 ```
 
+Shoulder-block notes specific to this command:
+
+- Top-level `ok` mirrors the diagnostic verdict — `true` when the resolved signer is usable for the requested check (unlock or sign-challenge, when set).
+- `warnings[]` follows the structured `AgentWarning` shape; loose password-file permissions surface as `code: 'password-file-permissions-loose'` (severity `warning`, promoted to `blocking` under `--strict`).
+- `errors[]` uses the `OspexError.code` taxonomy (see §7).
+
 Provenance enum values are stable; new values may be added (forward-compatible — log + ignore unknown). Authoritative source: [`packages/cli/src/commands/auth/check.ts`](../packages/cli/src/commands/auth/check.ts).
 
-Exit code: `0` if `ok === true`, `1` otherwise. `--strict` promotes loose password-file permissions from a warning to an `errors[]` entry with code `'password_file_permissions_loose'`.
+Exit code: `0` if `ok === true`, `1` otherwise.
 
 #### `--sign-challenge` payload
 
@@ -753,12 +754,14 @@ If you observe a runtime difference between this contract and the SDK:
 
 1. **The contract is the source of truth for promises**, but the code is the source of truth for behavior. If they conflict, treat the contract as the bug — open an issue with a minimal repro.
 2. The authoritative source files for shapes:
+   - Envelope wrapper + shoulder types: [`packages/sdk/src/types/agentEnvelope.ts`](../packages/sdk/src/types/agentEnvelope.ts)
+   - Envelope field-by-field rules + per-command matrix: [`AGENT_ENVELOPE_SPEC.md`](./AGENT_ENVELOPE_SPEC.md)
    - Error codes: [`packages/sdk/src/errors.ts`](../packages/sdk/src/errors.ts)
-   - Submit envelope: [`packages/sdk/src/types/preview.ts`](../packages/sdk/src/types/preview.ts)
-   - Match envelope: [`packages/sdk/src/types/matchPreview.ts`](../packages/sdk/src/types/matchPreview.ts)
+   - Submit payload: [`packages/sdk/src/types/preview.ts`](../packages/sdk/src/types/preview.ts)
+   - Match payload: [`packages/sdk/src/types/matchPreview.ts`](../packages/sdk/src/types/matchPreview.ts)
    - Odds wire shapes (watch + show): [`packages/sdk/src/types/odds.ts`](../packages/sdk/src/types/odds.ts)
    - Public types barrel: [`packages/sdk/src/types/index.ts`](../packages/sdk/src/types/index.ts)
-   - `auth check` envelope + resolution walker: [`packages/cli/src/commands/auth/check.ts`](../packages/cli/src/commands/auth/check.ts)
+   - `auth check` payload + resolution walker: [`packages/cli/src/commands/auth/check.ts`](../packages/cli/src/commands/auth/check.ts)
    - Non-interactive signer helpers + reason codes: [`packages/sdk/src/signers/foundry.ts`](../packages/sdk/src/signers/foundry.ts) and [`packages/sdk/src/signers/keystore.ts`](../packages/sdk/src/signers/keystore.ts)
 3. The integration playbook (which exercises every promise here against the live testnet) is [`MANUAL_INTEGRATION_TESTING.md`](./MANUAL_INTEGRATION_TESTING.md).
 
@@ -767,17 +770,18 @@ If you observe a runtime difference between this contract and the SDK:
 ## Quick reference
 
 ```
-schemaVersion === 1                    Locked envelope contract
+schemaVersion === 2                    Locked envelope contract (AgentEnvelope<TPayload>)
+field-by-field envelope rules          See docs/AGENT_ENVELOPE_SPEC.md
 --json alone (preview-bearing cmds)    Preview only, no signing/tx (submit, match, approvals setup)
 --json (other write cmds)              Output format only — may still send a tx (cancel, claim, settle, …)
 --yes --json                           Execute and emit (preview-bearing cmds)
 --yes for non-TTY                      Required only for preview-bearing commands (see §3)
 --json on stdout                       Always parseable; logs/prompts go to stderr
 NDJSON for `odds watch`                One JSON object per line, numbers (not strings) for line/odds, SIGINT clean exit
-single envelope for `odds show`        NOT NDJSON; { contest, odds: { moneyline, spread, total } }
+single envelope for `odds show`        AgentEnvelope<OddsShowEnvelope>; NOT NDJSON
 non-interactive signing                --account + --password-file (or auth use-foundry pin); see §4
-auth check                             Diagnostic that mirrors loadSigner's resolution ladder; --json envelope locked
+auth check                             Diagnostic that mirrors loadSigner's resolution ladder; emits AgentEnvelope<AuthCheckPayload>
 err.code                               Switch on this for routing
 err.reason                             Switch on this for fine dispatch (chain/script-approval/subscription/signer-resolution)
-schemaVersion: 2                       Will signal a breaking envelope change (not before v1.0.0)
+schemaVersion: 3                       Will signal the next breaking envelope change (not before v1.0.0)
 ```

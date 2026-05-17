@@ -193,7 +193,7 @@ export const doctorCommand = new Command('doctor')
  * Shape of `payload` for `ospex doctor --json` under v2. Mirrors
  * `JsonDoctorReport` minus the inner `schemaVersion: 1` marker —
  * the outer v2 envelope is the only schemaVersion source. See
- * `agent-envelope-spec.md` §6.
+ * `docs/AGENT_ENVELOPE_SPEC.md`.
  */
 export type DoctorPayload = Omit<JsonDoctorReport, 'schemaVersion'>;
 

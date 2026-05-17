@@ -39,7 +39,7 @@ Keep the subject line short; put detail in the body if needed.
 - Branch from `main`. Branch naming: `feature/`, `fix/`, `docs/`, `chore/`.
 - Keep PRs focused — one concern per PR makes review faster.
 - Update the [`CHANGELOG.md`](./CHANGELOG.md) `Unreleased` section if your change is user-visible.
-- Update the [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) only if you're changing the stable agent surface (JSON envelopes, typed error codes, idempotency, etc.). Schema changes inside `schemaVersion: 1` must be additive.
+- Update the [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) and/or [`docs/AGENT_ENVELOPE_SPEC.md`](./docs/AGENT_ENVELOPE_SPEC.md) only if you're changing the stable agent surface (JSON envelopes, typed error codes, idempotency, etc.). Schema changes inside `schemaVersion: 2` must be additive.
 
 ## License
 
