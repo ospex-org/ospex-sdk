@@ -30,6 +30,10 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import {
+  VERIFY_ALLOWANCES,
+  deriveRemediationNextCommands,
+} from '../../lib/nextCommandTemplates.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptYesNo } from '../../lib/prompt.js';
@@ -110,6 +114,7 @@ export const commitmentsApproveCommand = addSignerOptions(
               status: result.receipt.status === 'success' ? 'confirmed' : 'reverted',
             },
           ],
+          nextCommands: [VERIFY_ALLOWANCES.build({ address: signerAddress })],
           payload: {
             txHash: result.txHash,
             spender: result.spender,
@@ -144,6 +149,7 @@ export const commitmentsApproveCommand = addSignerOptions(
           wallet: signerAddress,
           walletRole: 'signer',
           signer: signerAddress,
+          nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
         process.exit(1);

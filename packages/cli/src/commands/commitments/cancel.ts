@@ -22,6 +22,10 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import {
+  VERIFY_COMMITMENT,
+  deriveRemediationNextCommands,
+} from '../../lib/nextCommandTemplates.js';
 import { polygonscanTxUrl } from '../../lib/explorer.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
@@ -167,6 +171,7 @@ export const commitmentsCancelCommand = addSignerOptions(
           wallet: signerAddress,
           walletRole: 'signer',
           signer: signerAddress,
+          nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
         process.exit(1);
@@ -238,6 +243,7 @@ export function toCancelOffchainAgentEnvelope(
         ok: result.ok,
       },
     ],
+    nextCommands: [VERIFY_COMMITMENT.build({ hash: args.hash })],
     payload: { hash: args.hash, ok: result.ok },
   });
 }
@@ -311,6 +317,7 @@ export function toCancelDualAgentEnvelope(
         ? [inputs.onChainError]
         : [],
     effects,
+    nextCommands: [VERIFY_COMMITMENT.build({ hash: args.hash })],
     payload: {
       hash: args.hash,
       offChainOk: offOk,

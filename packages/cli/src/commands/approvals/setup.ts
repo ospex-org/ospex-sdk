@@ -44,6 +44,10 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import {
+  VERIFY_ALLOWANCES,
+  deriveRemediationNextCommands,
+} from '../../lib/nextCommandTemplates.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
@@ -232,6 +236,7 @@ export const approvalsSetupCommand = addSignerOptions(
           walletRole: 'signer',
           signer: owner,
           effects: setupResultsToEffects(plan, results),
+          nextCommands: [VERIFY_ALLOWANCES.build({ address: owner })],
           payload: { plan: setupPlanToJson(plan), results },
         }),
       );
@@ -254,6 +259,7 @@ export const approvalsSetupCommand = addSignerOptions(
           walletRole: 'signer',
           signer: owner,
           effects,
+          nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
         process.exit(1);

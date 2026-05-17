@@ -30,6 +30,11 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import {
+  COMPLETE_CLAIM_ALL,
+  VERIFY_POSITION_STATUS,
+  deriveRemediationNextCommands,
+} from '../../lib/nextCommandTemplates.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 
@@ -127,6 +132,7 @@ export const positionsClaimAllCommand = addSignerOptions(
           wallet: signerAddress,
           walletRole: signerAddress !== null ? 'signer' : 'none',
           signer: signerAddress,
+          nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
         process.exit(1);
@@ -201,6 +207,14 @@ export function toClaimAllAgentEnvelope(
   // live execute with failed entries flips ok to false.
   const ok = result.totals.failed === 0;
 
+  // nextCommands: dry-run suggests completing via execute form;
+  // live execute suggests verifying the new position status. Subject
+  // address (result.address) is what the user cares about; signer
+  // executes but the data being inspected belongs to the subject.
+  const nextCommands = args.dryRun
+    ? [COMPLETE_CLAIM_ALL.build({ address: subjectAddress })]
+    : [VERIFY_POSITION_STATUS.build({ address: subjectAddress })];
+
   return buildAgentEnvelope<ClaimAllPayload>({
     ok,
     action: 'claim-all',
@@ -214,6 +228,7 @@ export function toClaimAllAgentEnvelope(
     requiresTransaction: args.dryRun,
     payout,
     effects,
+    nextCommands,
     payload: {
       address: subjectAddress,
       dryRun: args.dryRun,
