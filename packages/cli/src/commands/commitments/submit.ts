@@ -55,13 +55,30 @@ import { z } from 'zod';
 import {
   OspexAPIError,
   OspexValidationError,
+  computeSubmitYouView,
   usdcDecimalToWei6,
   wei6ToDecimalUSDC,
+  type AgentEffect,
+  type AgentEnvelope,
+  type AgentPayout,
+  type AgentWarning,
   type ApprovalPurpose,
+  type ApprovalRequirement,
+  type ChainId,
+  type Commitment,
+  type Hex,
   type HighLevelSubmitArgs,
+  type PerspectiveAmount,
   type SubmitParent,
+  type SubmitPreview,
 } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  mapPreviewApprovals,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { getClient, resolvePreviewAddress } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
@@ -163,10 +180,10 @@ export const commitmentsSubmitCommand = addSignerOptions(
     const preview = await client.commitments.prepareSubmit(prepArgs);
 
     // 2. `--json` alone (no --yes) is the preview-only mode — emit
-    //    the SubmitPreviewEnvelope and exit without prompting or
-    //    signing.
+    //    the v2 agent envelope and exit without prompting or signing.
     if (previewOnly) {
-      formatOutput({ schemaVersion: 1, preview }, { json: true });
+      const chainId = client.chainId();
+      writeAgentEnvelope(toSubmitPreviewEnvelope(preview, { chainId }));
       return;
     }
 
@@ -217,6 +234,14 @@ export const commitmentsSubmitCommand = addSignerOptions(
     //    Non-interactive (--yes) skips the prompts entirely:
     //    --approve-max → unlimited; otherwise → the exact required
     //    amount on each row.
+    //
+    //    Hermes PR-69 fix: each approve tx is recorded as an
+    //    AgentEffect (collected in `approveEffects`) and prepended
+    //    to the execute envelope's effects[] below. Agents that
+    //    parse --json need the approve tx hashes/statuses, not just
+    //    the final submit effect — those approvals are real
+    //    on-chain side effects the command performed.
+    const approveEffects: AgentEffect[] = [];
     for (const row of preview.approvals) {
       if (!row.needsApproval || row.token !== 'USDC') continue;
       const requiredWei6 = BigInt(row.required);
@@ -283,6 +308,14 @@ export const commitmentsSubmitCommand = addSignerOptions(
       process.stderr.write(
         `approve tx: ${approveResult.txHash} (status ${approveResult.receipt.status})\n`,
       );
+      approveEffects.push({
+        type: 'transaction',
+        purpose: 'approve-usdc',
+        ok: approveResult.receipt.status === 'success',
+        txHash: approveResult.txHash as Hex,
+        blockNumber: approveResult.receipt.blockNumber.toString(),
+        status: approveResult.receipt.status === 'success' ? 'confirmed' : 'reverted',
+      });
     }
 
     // 8. Sign + post the EIP-712 commitment.
@@ -299,12 +332,17 @@ export const commitmentsSubmitCommand = addSignerOptions(
       throw err;
     }
 
-    // 9. Output. With --yes --json, emit the full SubmitJsonResult
-    //    envelope (preview + result). Otherwise pretty text.
+    // 9. Output. With --yes --json, emit the v2 execute envelope
+    //    (preview + result under payload, effects logged).
+    //    Otherwise pretty text.
     if (wantJson) {
-      formatOutput(
-        { schemaVersion: 1, preview, result: { hash: result.hash, commitment: result.commitment } },
-        { json: true },
+      const chainId = client.chainId();
+      writeAgentEnvelope(
+        toSubmitExecuteEnvelope(
+          preview,
+          { hash: result.hash, commitment: result.commitment },
+          { chainId, approveEffects },
+        ),
       );
       return;
     }
@@ -319,6 +357,178 @@ export const commitmentsSubmitCommand = addSignerOptions(
       { json: false },
     );
   });
+
+// ── v1 → v2 envelope transforms ────────────────────────────────────
+
+/** `payload` shape for `commitments submit --json` (preview-only). */
+export type SubmitPreviewPayload = SubmitPreview;
+
+/** `payload` shape for `commitments submit --yes --json` (executed). */
+export interface SubmitExecutePayload {
+  preview: SubmitPreview;
+  result: { hash: Hex; commitment: Commitment };
+}
+
+export interface ToSubmitEnvelopeArgs {
+  chainId: ChainId;
+}
+
+export interface ToSubmitExecuteEnvelopeArgs extends ToSubmitEnvelopeArgs {
+  /**
+   * Effects from any approve txs that ran before the final
+   * submit/POST. Prepended to the envelope's `effects[]` so agents
+   * see the full chronological log of what the command actually
+   * did on chain — `commitment-risk` approve, `lazy-creation-fee`
+   * approve, then the EIP-712 signature + offchain write.
+   *
+   * Empty (or omitted) when no approvals were needed.
+   */
+  approveEffects?: AgentEffect[];
+}
+
+/**
+ * Build the v2 envelope for the preview-only (`--json`, no `--yes`)
+ * branch. Spec §3.1 + per-command matrix:
+ *   stage: 'preview'
+ *   requiresSignature: true  (signing is the next step the user would take)
+ *   requiresTransaction: false (submit POSTs the EIP-712 commitment
+ *     off-chain; the match later is what hits chain)
+ *   approvalRequirements: derived from preview.approvals[]
+ *   risk / payout / contest / speculation / sideSummary: hoisted from preview.you
+ *   commitment: null (no signed commitment exists yet)
+ *   warnings: derived from preview.expiry.afterMatchTime + any allowance-short row
+ */
+export function toSubmitPreviewEnvelope(
+  preview: SubmitPreview,
+  args: ToSubmitEnvelopeArgs,
+): AgentEnvelope<SubmitPreviewPayload> {
+  const wallet = lowerHex(preview.raw.maker);
+  const shoulder = deriveSubmitShoulder(preview, args.chainId);
+  return buildAgentEnvelope<SubmitPreviewPayload>({
+    ok: true,
+    action: 'commitments.submit',
+    stage: 'preview',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet,
+    walletRole: 'signer',
+    signer: wallet,
+    requiresSignature: true,
+    requiresTransaction: false,
+    approvalRequirements: shoulder.approvalRequirements,
+    risk: shoulder.risk,
+    payout: shoulder.payout,
+    contest: preview.contest,
+    speculation: preview.market.speculation,
+    sideSummary: shoulder.sideSummary,
+    warnings: shoulder.warnings,
+    payload: preview,
+  });
+}
+
+/**
+ * Build the v2 envelope for the executed (`--yes --json`) branch.
+ *   stage: 'execute'
+ *   requiresSignature / requiresTransaction: false (already done)
+ *   approvalRequirements: empty (consumed during execution)
+ *   commitment: the signed commitment from result
+ *   effects: eip712-signature + offchain-write (no on-chain tx for submit)
+ *
+ * `risk` / `payout` / `contest` / `speculation` / `sideSummary` remain
+ * populated from `preview` so agents reading the execute envelope see
+ * the same context they would on the preview.
+ */
+export function toSubmitExecuteEnvelope(
+  preview: SubmitPreview,
+  result: { hash: Hex; commitment: Commitment },
+  args: ToSubmitExecuteEnvelopeArgs,
+): AgentEnvelope<SubmitExecutePayload> {
+  const wallet = lowerHex(preview.raw.maker);
+  const shoulder = deriveSubmitShoulder(preview, args.chainId);
+  const approveEffects = args.approveEffects ?? [];
+  // Order is chronological: approve txs ran first, then the
+  // EIP-712 signature + off-chain POST. Agents reading effects[]
+  // in order see exactly what landed in what sequence.
+  const finalEffects: AgentEffect[] = [
+    {
+      type: 'eip712-signature',
+      purpose: 'submit-commitment',
+      ok: true,
+    },
+    {
+      type: 'offchain-write',
+      purpose: 'submit-commitment',
+      ok: true,
+    },
+  ];
+  return buildAgentEnvelope<SubmitExecutePayload>({
+    ok: approveEffects.every((e) => e.ok) && finalEffects.every((e) => e.ok),
+    action: 'commitments.submit',
+    stage: 'execute',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet,
+    walletRole: 'signer',
+    signer: wallet,
+    risk: shoulder.risk,
+    payout: shoulder.payout,
+    contest: preview.contest,
+    speculation: preview.market.speculation,
+    commitment: result.commitment,
+    sideSummary: shoulder.sideSummary,
+    warnings: shoulder.warnings,
+    effects: [...approveEffects, ...finalEffects],
+    payload: { preview, result },
+  });
+}
+
+interface SubmitShoulder {
+  approvalRequirements: ApprovalRequirement[];
+  risk: PerspectiveAmount | null;
+  payout: AgentPayout | null;
+  sideSummary: string | null;
+  warnings: AgentWarning[];
+}
+
+/**
+ * Pull the cross-stage shoulder fields out of a SubmitPreview so the
+ * preview and execute envelope builders share one derivation. Goes
+ * through the SDK's `computeSubmitYouView` shim so mixed-version
+ * previews (where `preview.you` might be undefined on older builds)
+ * still resolve.
+ */
+function deriveSubmitShoulder(preview: SubmitPreview, chainId: ChainId): SubmitShoulder {
+  const { you } = computeSubmitYouView(preview);
+  const approvalRequirements = mapPreviewApprovals(preview.approvals, chainId);
+  const warnings: AgentWarning[] = [];
+  if (preview.expiry.afterMatchTime) {
+    warnings.push({
+      code: 'expiry-after-match-time',
+      message:
+        'Expiry is after the contest match time — this commitment can remain matchable after start.',
+      severity: 'warning',
+    });
+  }
+  if (approvalRequirements.some((r) => r.needsApproval)) {
+    warnings.push({
+      code: 'allowance-short',
+      message: 'At least one approval is short. Executing this commitment will require approve txs first.',
+      severity: 'blocking',
+      blockingFor: ['submit'],
+    });
+  }
+  return {
+    approvalRequirements,
+    risk: you.risk,
+    payout: { profit: you.profit, totalReturn: you.totalReturn },
+    sideSummary: you.backing,
+    warnings,
+  };
+}
+
+function lowerHex(addr: string): Hex {
+  return addr.toLowerCase() as Hex;
+}
 
 function parseParent(opts: z.infer<typeof optionsSchema>): SubmitParent {
   const hasSpec = opts.speculation !== undefined;

@@ -28,8 +28,21 @@
 
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
-import { OspexValidationError, type ApprovalsSnapshot } from '@ospex/sdk';
-import { formatOutput } from '../../lib/format.js';
+import {
+  OspexValidationError,
+  type AgentApprovalPurpose,
+  type AgentApprovalSpenderLabel,
+  type AgentEffect,
+  type ApprovalRequirement,
+  type ApprovalsSnapshot,
+  type Hex,
+} from '@ospex/sdk';
+import {
+  buildAgentEnvelope,
+  formatTokenAmount,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
@@ -40,11 +53,11 @@ import {
   type ApprovalSpenderKey,
   type PlanItem,
   type SetupInput,
+  type SetupPlan,
 } from '../../lib/approvalsPlan.js';
 import {
-  buildSetupPreviewEnvelope,
-  buildSetupResultEnvelope,
   renderSetupPlan,
+  setupPlanToJson,
   type JsonSetupResult,
 } from '../../lib/approvalsRender.js';
 
@@ -131,10 +144,26 @@ export const approvalsSetupCommand = addSignerOptions(
       : { riskUsdc: opts.riskUsdc, feeUsdc: opts.feeUsdc, link: opts.link };
 
     const plan = buildSetupPlan(input, current);
+    const chainId = client.chainId();
 
     // --json without --yes → preview-only envelope, no signing.
     if (wantJson && !skipPrompt) {
-      formatOutput(buildSetupPreviewEnvelope(plan), { json: true });
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: true,
+          action: 'approvals.setup',
+          stage: 'preview',
+          network: networkForChainId(chainId),
+          chainId,
+          wallet: owner,
+          walletRole: 'signer',
+          signer: owner,
+          requiresSignature: plan.willSendCount > 0,
+          requiresTransaction: plan.willSendCount > 0,
+          approvalRequirements: planItemsToApprovalRequirements(plan),
+          payload: { plan: setupPlanToJson(plan) },
+        }),
+      );
       return;
     }
     if (!wantJson) {
@@ -146,7 +175,19 @@ export const approvalsSetupCommand = addSignerOptions(
     // renderer already printed "Nothing to do").
     if (plan.willSendCount === 0) {
       if (wantJson) {
-        formatOutput(buildSetupResultEnvelope(plan, []), { json: true });
+        writeAgentEnvelope(
+          buildAgentEnvelope({
+            ok: true,
+            action: 'approvals.setup',
+            stage: 'execute',
+            network: networkForChainId(chainId),
+            chainId,
+            wallet: owner,
+            walletRole: 'signer',
+            signer: owner,
+            payload: { plan: setupPlanToJson(plan), results: [] },
+          }),
+        );
       }
       return;
     }
@@ -175,13 +216,100 @@ export const approvalsSetupCommand = addSignerOptions(
     }
 
     if (wantJson) {
-      formatOutput(buildSetupResultEnvelope(plan, results), { json: true });
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: results.every((r) => r.status === 'success'),
+          action: 'approvals.setup',
+          stage: 'execute',
+          network: networkForChainId(chainId),
+          chainId,
+          wallet: owner,
+          walletRole: 'signer',
+          signer: owner,
+          effects: setupResultsToEffects(plan, results),
+          payload: { plan: setupPlanToJson(plan), results },
+        }),
+      );
       return;
     }
     process.stderr.write(
       `\nDone. Run \`ospex approvals show\` to verify the new state.\n`,
     );
   });
+
+/**
+ * Map every plan item that targets a real allowance change (send OR
+ * skip-already-approved) into the v2 `ApprovalRequirement` shoulder
+ * shape. `skip-not-requested` items are omitted — they don't represent
+ * an intent.
+ *
+ * `purpose` resolves the most common consumer for each (spender, token)
+ * pair. `setup` is a bundled pre-approval, so the v1 narrow purpose
+ * doesn't quite fit; agents that need finer discrimination should
+ * combine `spenderLabel` + `tokenSymbol` themselves.
+ */
+function planItemsToApprovalRequirements(plan: SetupPlan): ApprovalRequirement[] {
+  const out: ApprovalRequirement[] = [];
+  for (const item of plan.items) {
+    if (item.action.kind === 'skip-not-requested') continue;
+    const targetRaw = item.action.targetRaw;
+    out.push({
+      token: item.tokenAddress,
+      tokenSymbol: item.token,
+      spender: item.spender,
+      spenderLabel: spenderLabelFromKey(item.spenderModule),
+      purpose: approvalPurposeFor(item.spenderModule),
+      requiredWei: targetRaw.toString(),
+      requiredHuman: formatTokenAmount(item.token, targetRaw.toString()),
+      currentWei: item.currentRaw.toString(),
+      currentHuman: formatTokenAmount(item.token, item.currentRaw.toString()),
+      needsApproval: item.action.kind === 'send',
+    });
+  }
+  return out;
+}
+
+/**
+ * Build the `effects[]` shoulder for the execute envelope — one entry
+ * per tx that landed (success OR reverted). The `purpose` token
+ * encodes which spender was approved so agents can correlate without
+ * cross-referencing the payload.
+ */
+function setupResultsToEffects(
+  plan: SetupPlan,
+  results: JsonSetupResult[],
+): AgentEffect[] {
+  return results.map((r) => {
+    const item = plan.items.find((i) => i.spenderModule === r.spenderModule);
+    const tokenSymbol = item?.token ?? 'USDC';
+    return {
+      type: 'transaction',
+      purpose: `approve-${tokenSymbol.toLowerCase()}`,
+      ok: r.status === 'success',
+      txHash: r.txHash as Hex,
+      blockNumber: r.blockNumber,
+      status: r.status === 'success' ? 'confirmed' : 'reverted',
+    };
+  });
+}
+
+function spenderLabelFromKey(key: ApprovalSpenderKey): AgentApprovalSpenderLabel {
+  if (key === 'positionModule') return 'PositionModule';
+  if (key === 'treasuryModule') return 'TreasuryModule';
+  return 'OracleModule';
+}
+
+function approvalPurposeFor(spender: ApprovalSpenderKey): AgentApprovalPurpose {
+  if (spender === 'positionModule') return 'commitment-risk';
+  // TreasuryModule USDC covers both lazy-creation-fee (commitment match)
+  // and contest-creation-usdc (contest create). Pick the more common
+  // consumer; setup is a bundled pre-approval and the precise purpose
+  // depends on which downstream op consumes it first. spenderLabel
+  // + tokenSymbol are the authoritative discriminators.
+  if (spender === 'treasuryModule') return 'lazy-creation-fee';
+  // OracleModule LINK covers contest-creation-link + contest-scoring-link.
+  return 'contest-creation-link';
+}
 
 async function runInteractivePrompts(current: ApprovalsSnapshot): Promise<SetupInput> {
   process.stderr.write(`\nSetting up Ospex approvals for ${current.owner}\n`);

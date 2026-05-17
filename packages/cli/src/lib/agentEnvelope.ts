@@ -22,25 +22,30 @@
  */
 
 import { createRequire } from 'node:module';
-import type {
-  AgentEnvelope,
-  AgentFailureEnvelope,
-  AgentError,
-  AgentWarning,
-  AgentEffect,
-  AgentNextCommand,
-  AgentPayout,
-  AgentStage,
-  ApprovalRequirement,
-  ChainId,
-  Commitment,
-  EstimatedCosts,
-  Hex,
-  Network,
-  PerspectiveAmount,
-  PreviewContest,
-  SpeculationMode,
-  WalletRole,
+import { formatUnits } from 'viem';
+import {
+  getAddresses,
+  wei6ToDecimalUSDC,
+  type AgentApprovalSpenderLabel,
+  type AgentEnvelope,
+  type AgentFailureEnvelope,
+  type AgentError,
+  type AgentWarning,
+  type AgentEffect,
+  type AgentNextCommand,
+  type AgentPayout,
+  type AgentStage,
+  type ApprovalRequirement,
+  type ChainId,
+  type Commitment,
+  type EstimatedCosts,
+  type Hex,
+  type Network,
+  type PerspectiveAmount,
+  type PreviewApproval,
+  type PreviewContest,
+  type SpeculationMode,
+  type WalletRole,
 } from '@ospex/sdk';
 
 /* ------------------------------------------------------------------------- */
@@ -298,6 +303,87 @@ export function writeAgentEnvelope(
  */
 export function networkForChainId(chainId: ChainId): Network {
   return chainId === 137 ? 'polygon' : 'amoy';
+}
+
+/* ------------------------------------------------------------------------- */
+/* Preview-approval → ApprovalRequirement mapper                             */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Map a v1 `PreviewApproval` (from `SubmitPreview` / `MatchPreview`)
+ * into the v2 `ApprovalRequirement` shoulder shape used by every
+ * preview-bearing write under `--json`. Adds the symbolic
+ * `tokenSymbol` / `spenderLabel` annotations + human-formatted
+ * decimals that agents shouldn't have to derive themselves.
+ *
+ * Throws `OspexConfigError` (from `getAddresses`) when the chainId
+ * isn't deployed. Throws on an unknown spender — that's a bug, not a
+ * forward-compat path; if a new spender becomes legitimate, extend
+ * `AgentApprovalSpenderLabel` and the lookup below in lockstep.
+ */
+export function mapPreviewApprovals(
+  approvals: readonly PreviewApproval[],
+  chainId: ChainId,
+): ApprovalRequirement[] {
+  const addresses = getAddresses(chainId);
+  return approvals.map((a) => {
+    const tokenAddress = (a.token === 'USDC'
+      ? addresses.usdc.toLowerCase()
+      : addresses.linkToken.toLowerCase()) as Hex;
+    const spenderHex = a.spender.toLowerCase() as Hex;
+    const spenderLabel = spenderLabelFor(spenderHex, chainId);
+    return {
+      token: tokenAddress,
+      tokenSymbol: a.token,
+      spender: spenderHex,
+      spenderLabel,
+      purpose: a.purpose,
+      requiredWei: a.required,
+      requiredHuman: formatTokenAmount(a.token, a.required),
+      currentWei: a.current,
+      currentHuman: formatTokenAmount(a.token, a.current),
+      needsApproval: a.needsApproval,
+    };
+  });
+}
+
+/**
+ * Look up the symbolic label for a known Ospex spender on a given
+ * chain. The labels are part of the agent envelope contract — agents
+ * should never need their own module-address book to explain an
+ * approval row.
+ */
+export function spenderLabelFor(
+  spender: Hex,
+  chainId: ChainId,
+): AgentApprovalSpenderLabel {
+  const a = getAddresses(chainId);
+  const s = spender.toLowerCase();
+  if (s === a.positionModule.toLowerCase()) return 'PositionModule';
+  if (s === a.treasuryModule.toLowerCase()) return 'TreasuryModule';
+  if (s === a.oracleModule.toLowerCase()) return 'OracleModule';
+  throw new Error(
+    `spenderLabelFor: unknown spender ${spender} on chainId ${chainId}. ` +
+      'Extend AgentApprovalSpenderLabel and this lookup together when adding a new module.',
+  );
+}
+
+/**
+ * Human-format a wei-denominated decimal string for a token. USDC
+ * (6 decimals) → 6-fractional-digit decimal string via the SDK's
+ * canonical formatter; LINK (18 decimals) → viem's `formatUnits`.
+ *
+ * Exported for tests + reuse by ApprovalRequirement consumers (e.g.
+ * `approvals setup` may need to format current vs target outside the
+ * preview path).
+ */
+export function formatTokenAmount(
+  symbol: 'USDC' | 'LINK',
+  weiDecimalStr: string,
+): string {
+  const value = BigInt(weiDecimalStr);
+  if (symbol === 'USDC') return wei6ToDecimalUSDC(value);
+  return formatUnits(value, 18);
 }
 
 /**
