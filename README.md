@@ -24,6 +24,8 @@ npx ospex --version
 
 The CLI uses the SDK at runtime but does not declare it as a regular dependency — without both tarballs in the same install call, yarn 1 would try to resolve `@ospex/sdk` from the npm registry and fail. Always install both together. Pass tarball paths directly (don't use the `file:` prefix); yarn 1 detects the `.tgz` extension. `npm install` works equivalently.
 
+**Why GitHub releases (not npm)?** npm is a developer-productivity ecosystem; a sports-prediction CLI is consumer-entertainment with financial risk and doesn't share a natural audience there. GitHub releases keep the install path explicit (read the release notes, pin the tarball hash in your lockfile) and keep package-index search results uncluttered with software the user community won't generally be looking for. This is the **target distribution model**, not a pre-1.0 placeholder — if npm publishing is added later it would be a secondary channel, with GitHub releases remaining primary.
+
 For local development from a clone of this repo (workspace-link puts `ospex` on your PATH for dev iteration):
 
 ```bash
@@ -144,7 +146,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex health` | API liveness probe. |
 | `ospex contests list [--sport --status --hours --limit --offset]` | Lists upcoming contests with their speculations. |
 | `ospex contests show <contestId>` | One contest with its full orderbook. |
-| `ospex contests create --game-id <id>` (or `--game <slug-or-id>`) | Submit `OracleModule.createContestFromOracle`. `gameId` is the stable id from `ospex games list`; the SDK resolves the three external IDs server-side. `--game` is a resolver alias accepting either a slug or a UUID. Mainnet only. |
+| `ospex contests create --game-id <id>` (or `--game <slug-or-id>`) | Submit `OracleModule.createContestFromOracle`. `gameId` is the stable id from `ospex games list`; the SDK resolves the three external IDs server-side. `--game` is a resolver alias accepting either a slug or a UUID. Mainnet only today — Amoy contracts are wired but script approvals haven't been signed against the current `OracleModule` deploy ([Roadmap](#roadmap)). |
 | `ospex contests score <contestId>` | Submit `OracleModule.scoreContestFromOracle`. |
 | `ospex contests wait-verified <contestId>` | Poll until the contest reaches Verified state. |
 | `ospex contests scripts` | Show the EIP-712 script approvals (debug). |
@@ -220,7 +222,7 @@ Out of the current public surface, deferred work:
 - **Cross-process nonce coordination.** A pluggable `nonceProvider` for callers distributing submits across hosts. Today, callers serialize per `(maker, speculationKey)` themselves.
 - **Read-only nonce-floor endpoint.** A `GET /v1/makers/:address/nonce-floor` API path so callers without an RPC URL can read the floor without an `eth_call`.
 - **Bulk on-chain claim.** Multicall3-based bulk claim flow.
-- **Polygon Amoy script approvals for contest creation.** Today, M4 surfaces (`contests create`, `contests score`) work on mainnet only.
+- **Polygon Amoy script approvals for contest creation.** `contests create` and `contests score` work on mainnet only today. The Amoy contracts are wired identically, but the EIP-712 script approvals served by `ospex-core-api` are mainnet-only — the API's `scriptApprovals.amoy` bundle is `null`, so calling against Amoy throws `OspexScriptApprovalError(reason: 'not_configured')`. Most agent integrations don't need the create/score path — validate end-to-end by matching an open commitment whose preview shows `tradeAction: 'trade-only'` (the speculation already exists), where your only costs are gas and the commitment risk. A lazy match (preview shows `trade-and-create-speculation`) additionally pulls a TreasuryModule creation-fee approval; the SDK preflight quotes the exact amount before signing. Amoy support lands when approvals are signed against the current `OracleModule` deploy and committed to the API.
 - **Secondary-market position UX.** SecondaryMarketModule integration.
 
 Contributions welcome on any of these — see [`CONTRIBUTING.md`](./CONTRIBUTING.md).

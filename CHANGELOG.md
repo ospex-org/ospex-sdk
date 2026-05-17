@@ -45,6 +45,12 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 - **`ospex commitments submit` — default human render drops `positionType=Upper/Lower`** from the `[sideTags]` bracket on the `side:` line. The protocol-internal Upper / Lower terminology was the only remaining leakage in the submit-preview render. The `scorer` + `source` tags are unchanged. `--raw` restores the `positionType` tag for debugging.
 - **`ospex commitments {submit, match} --raw`** — new flag on both commands. Renders the protocol-native layout instead of the first-person default. Useful for debugging EIP-712 hash mismatches and protocol-level audits. No effect on `--json` output.
 
+### Documentation
+
+- **Agent envelope contract migrated to `schemaVersion: 2`.** `docs/AGENT_CONTRACT.md` restructured around the `AgentEnvelope<TPayload>` wrapper; new `docs/AGENT_ENVELOPE_SPEC.md` carries the authoritative field-by-field rules, per-command population matrix, and failure envelope contract. v1 preview shapes are gone (pre-public; no migration shim). `auth use-foundry` / `auth clear-foundry` intentionally retain `schemaVersion: 1` as one-shot config commands not invoked in agent loops.
+- **Amoy script-approval limitation: operational guidance.** README, QUICKSTART, and maintainer notes now explain that `contests create` / `contests score` are mainnet-only because Amoy's EIP-712 script approvals haven't been signed against the current `OracleModule` deploy and committed to `ospex-core-api`. Most agent integrations don't need the create/score path — match an open commitment whose preview shows `tradeAction: 'trade-only'` (the speculation already exists) and the only costs are gas and the commitment risk. A lazy match (preview shows `trade-and-create-speculation`) additionally pulls a TreasuryModule creation-fee approval; the SDK preflight quotes the exact amount. Operators who do need to create contests pay a USDC fee read from `TreasuryModule.s_feeRates(0)` at runtime (1 USDC on mainnet at time of writing) plus LINK for the Chainlink Functions verify and score calls. Replaces the prior "mainnet only" / "Amoy script approvals aren't shipped" phrasing.
+- **README: distribution-model rationale.** New paragraph explaining why the SDK + CLI ship as GitHub-release tarballs rather than npm packages — and that this is the target distribution model rather than a pre-1.0 temporary posture.
+
 ## [0.1.0] — 2026-05-10
 
 Initial public release.
