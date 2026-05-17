@@ -24,7 +24,7 @@ Ospex never asks for your private key. You manage your wallet entirely via Found
   - **LINK** — only required if you want to *create* a contest. You don't need LINK to bet on contests someone else created.
 - **Node.js** ≥ 20.
 
-This guide assumes Polygon mainnet (chain id 137). For Polygon Amoy testnet substitute `chainId=80002`. The bettor and maker paths (commitments, positions, leaderboard, odds) work on both networks. `contests create` / `contests score` are mainnet-only today — the Amoy contracts are deployed but the EIP-712 script approvals served by `ospex-core-api` haven't been generated against the current `OracleModule` deploy. **Most agents don't need to test create/score** — validate end-to-end by matching an open commitment on an existing mainnet contest, where there are no protocol fees and the only cost is the commitment risk you commit.
+This guide assumes Polygon mainnet (chain id 137). For Polygon Amoy testnet substitute `chainId=80002`. The bettor and maker paths (commitments, positions, leaderboard, odds) work on both networks. `contests create` / `contests score` are mainnet-only today — the Amoy contracts are deployed but the EIP-712 script approvals served by `ospex-core-api` haven't been generated against the current `OracleModule` deploy. **Most agents don't need to test create/score** — validate end-to-end by matching an open commitment whose preview shows `tradeAction: 'trade-only'` (the speculation already exists), where your only costs are gas and the commitment risk you commit. If the preview shows `trade-and-create-speculation` instead, the SDK preflight will quote the TreasuryModule creation-fee approval before signing.
 
 ## Vocabulary
 
