@@ -13,7 +13,22 @@
 
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
+import type {
+  AgentEffect,
+  AgentEnvelope,
+  AgentPayout,
+  ChainId,
+  Hex,
+  OspexClient,
+  PerspectiveAmount,
+} from '@ospex/sdk';
+import { usdcDecimalToWei6 } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 
@@ -35,7 +50,6 @@ export const positionsClaimAllCommand = addSignerOptions(
     const signerIntent = parseSignerIntent(rawOpts);
     const dryRun = opts.dryRun === true;
 
-    // Dry-run only needs read paths — no signer required if --address is set.
     const requiresSigner = !dryRun || opts.address === undefined;
     const requiresChain = !dryRun;
     const client = await getClient({ requiresSigner, requiresChain, signerIntent });
@@ -46,26 +60,15 @@ export const positionsClaimAllCommand = addSignerOptions(
     });
 
     if (opts.json === true) {
-      formatOutput(
-        {
-          address: result.address,
+      const signerAddress = requiresSigner
+        ? (((await client.signer().getAddress()) as string).toLowerCase() as Hex)
+        : null;
+      writeAgentEnvelope(
+        toClaimAllAgentEnvelope(result, {
+          chainId: client.chainId(),
+          signerAddress,
           dryRun,
-          success: result.success,
-          totals: result.totals,
-          entries: result.entries.map((e) => ({
-            positionId: e.positionId,
-            speculationId: e.speculationId,
-            bucket: e.bucket,
-            description: e.description,
-            success: e.success,
-            txHashes: e.txHashes,
-            payoutUSDC: e.payoutUSDC,
-            payoutWei6: e.payoutWei6,
-            winSide: e.winSide,
-            error: e.error?.message,
-          })),
-        },
-        { json: true },
+        }),
       );
       return;
     }
@@ -106,3 +109,143 @@ export const positionsClaimAllCommand = addSignerOptions(
         `total payout ${result.totals.totalPayoutUSDC.toFixed(2)} USDC.\n`,
     );
   });
+
+// ── v1 → v2 envelope transform ──────────────────────────────────────
+
+export type ClaimAllResult = Awaited<
+  ReturnType<OspexClient['positions']['claimAll']>
+>;
+
+export interface ClaimAllPayload {
+  address: string;
+  dryRun: boolean;
+  success: boolean;
+  totals: ClaimAllResult['totals'];
+  entries: Array<{
+    positionId: string;
+    speculationId: string;
+    bucket: string;
+    description: string;
+    success: boolean;
+    txHashes: string[];
+    payoutUSDC: number | undefined;
+    payoutWei6: string | undefined;
+    winSide: string | undefined;
+    error: string | undefined;
+  }>;
+}
+
+export interface ToClaimAllEnvelopeArgs {
+  chainId: ChainId;
+  signerAddress: Hex | null;
+  dryRun: boolean;
+}
+
+/**
+ * Wrap a `claimAll` result in the v2 envelope. Per spec §3.1:
+ *   dry-run: stage 'dry-run', no effects, requiresSignature/Transaction true
+ *   execute: stage 'execute', one transaction effect per tx across all
+ *            entries (chronological — entries iterate in order, txs
+ *            within an entry are settle-then-claim for pendingSettle).
+ *
+ * Payout shoulder aggregates the totals — agents reading top-level
+ * `payout.profit.usdc` see the swept total without scanning entries.
+ *
+ * `envelope.ok` mirrors `result.success` (true iff every entry's
+ * action(s) succeeded).
+ */
+export function toClaimAllAgentEnvelope(
+  result: ClaimAllResult,
+  args: ToClaimAllEnvelopeArgs,
+): AgentEnvelope<ClaimAllPayload> {
+  const subjectAddress = result.address.toLowerCase() as Hex;
+  // Wallet is the signer (the one being asked to sign each tx).
+  // Subject (--address) goes in payload. For self-sweep they're
+  // the same.
+  const wallet = args.signerAddress;
+  const effects: AgentEffect[] = args.dryRun
+    ? []
+    : buildClaimAllEffects(result);
+  const payout = buildClaimAllPayout(result);
+
+  return buildAgentEnvelope<ClaimAllPayload>({
+    ok: result.success,
+    action: 'claim-all',
+    stage: args.dryRun ? 'dry-run' : 'execute',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet,
+    walletRole: wallet !== null ? 'signer' : 'none',
+    signer: wallet,
+    requiresSignature: args.dryRun,
+    requiresTransaction: args.dryRun,
+    payout,
+    effects,
+    payload: {
+      address: subjectAddress,
+      dryRun: args.dryRun,
+      success: result.success,
+      totals: result.totals,
+      entries: result.entries.map((e) => ({
+        positionId: e.positionId,
+        speculationId: e.speculationId,
+        bucket: e.bucket,
+        description: e.description,
+        success: e.success,
+        txHashes: e.txHashes,
+        payoutUSDC: e.payoutUSDC,
+        payoutWei6: e.payoutWei6,
+        winSide: e.winSide,
+        error: e.error?.message,
+      })),
+    },
+  });
+}
+
+/**
+ * Flatten claim-all entries into a chronological list of transaction
+ * effects. For each entry the txHashes are ordered (settle-first for
+ * pendingSettle, then claim); top-level entries are themselves
+ * processed in the SDK's order. We don't have per-tx block numbers
+ * or per-tx success — entry.success is the aggregate. Mark each tx
+ * with the entry's outcome; a future SDK enrichment could surface
+ * per-tx receipts.
+ */
+function buildClaimAllEffects(result: ClaimAllResult): AgentEffect[] {
+  const out: AgentEffect[] = [];
+  for (const entry of result.entries) {
+    for (let i = 0; i < entry.txHashes.length; i++) {
+      const txHash = entry.txHashes[i] as string;
+      const isSettle = entry.bucket === 'pendingSettle' && i === 0;
+      out.push({
+        type: 'transaction',
+        purpose: isSettle ? 'settle-speculation' : 'claim-position',
+        ok: entry.success,
+        txHash: txHash as Hex,
+        status: entry.success ? 'confirmed' : 'reverted',
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Aggregate payout shoulder from claim-all totals. profit and
+ * totalReturn are both the swept total — at claim time the risk
+ * was settled long ago, so payout IS profit IS return.
+ */
+function buildClaimAllPayout(result: ClaimAllResult): AgentPayout | null {
+  if (result.entries.length === 0) return null;
+  const totalUsdcStr = result.totals.totalPayoutUSDC.toFixed(6);
+  let totalWei6: bigint;
+  try {
+    totalWei6 = usdcDecimalToWei6(totalUsdcStr);
+  } catch {
+    return null;
+  }
+  const amount: PerspectiveAmount = {
+    wei6: totalWei6.toString(),
+    usdc: totalUsdcStr,
+  };
+  return { profit: amount, totalReturn: amount };
+}
