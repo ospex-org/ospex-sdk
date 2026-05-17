@@ -370,7 +370,7 @@ Legend: `✓` populated · `∅` `null` / `[]` (does not apply) · `+` populated
 
 | Command (with `--json`) | stage | wallet/role/signer | reqSig | reqTx | approvalRequirements | risk | payout | contest | speculation | commitment | sideSummary | warnings | effects | nextCommands |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `commitments submit` (no `--yes`) | preview | signer (resolved-no-unlock or null) | true | true | ✓ | ✓ | ✓ | ✓ | ✓ | ∅ (not signed yet) | ✓ | ✓ | ∅ | ✓ (verify/remediate) |
+| `commitments submit` (no `--yes`) | preview | signer (resolved-no-unlock or null) | true | false | ✓ | ✓ | ✓ | ✓ | ✓ | ∅ (not signed yet) | ✓ | ✓ | ∅ | ✓ (verify/remediate) |
 | `commitments submit --yes` | execute | signer | false | false | ∅ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (eip712-signature + offchain-write) | ✓ (verify) |
 | `commitments match` (no `--yes`) | preview | signer (resolved-no-unlock or null) | true | true | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (the maker commitment) | ✓ | ✓ | ∅ | ✓ |
 | `commitments match --yes` | execute | signer | false | false | ∅ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (transaction) | ✓ |
