@@ -376,7 +376,7 @@ Legend: `✓` populated · `∅` `null` / `[]` (does not apply) · `+` populated
 | `commitments match --yes` | execute | signer | false | false | ∅ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (transaction) | ✓ |
 | `commitments approve --yes` | execute | signer | false | false | ∅ (consumed) | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ (verify allowance via `approvals show`) |
 | `commitments approve-raw --yes` | execute | signer | false | false | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ | ✓ |
-| `approvals setup` (no `--yes`) | preview | signer | true | true | ✓ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ∅ | ✓ |
+| `approvals setup` (no `--yes`) | preview | signer | true[^1] | true[^1] | ✓ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ∅ | ✓ |
 | `approvals setup --yes` | execute | signer | false | false | ∅ (consumed) | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ (one tx per approval) | ✓ |
 
 ### 5.2 Fire-and-forget writes
@@ -528,3 +528,5 @@ Explicit non-goals — the envelope will not grow to accommodate any of the foll
 - Error taxonomy: [`packages/sdk/src/errors.ts`](../packages/sdk/src/errors.ts).
 
 When the runtime and this document disagree, treat the document as the bug and open an issue with a minimal repro.
+
+[^1]: `approvals setup` preview emits `requiresSignature` and `requiresTransaction` as `true` only when the resolved plan has at least one approval to send (`plan.willSendCount > 0`) — the typical case. On an idempotent re-run where every required allowance is already in place, both fields emit `false` and the envelope is effectively a no-op confirmation. Agents should branch on the emitted values rather than the typical-case row above.
