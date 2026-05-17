@@ -7,7 +7,10 @@
 
 import { describe, expect, it } from 'vitest';
 import type { AgentEffect, Hex } from '@ospex/sdk';
-import { toContestCreateAgentEnvelope } from '../src/commands/contests/create.js';
+import {
+  buildCreateContestEffect,
+  toContestCreateAgentEnvelope,
+} from '../src/commands/contests/create.js';
 import { toContestScoreAgentEnvelope } from '../src/commands/contests/score.js';
 
 const POLYGON = 137 as const;
@@ -109,6 +112,43 @@ describe('toContestCreateAgentEnvelope', () => {
       verification: { contestId: '9001', status: 'verified' },
     });
     expect(env.payload.verification?.status).toBe('verified');
+  });
+});
+
+// Hermes PR-71 blocker: when waitForVerified throws AFTER the create
+// tx landed, the action's --json path used to emit TWO envelopes
+// (success then failure) AND the failure envelope omitted the
+// create-contest tx. Fix extracted `buildCreateContestEffect` so the
+// failure path can include it. These tests pin the helper's shape;
+// the call-site test for the action's new single-envelope behavior
+// lives in failure-envelope-scenarios.test.ts.
+describe('buildCreateContestEffect', () => {
+  it('builds a confirmed create-contest effect from a successful result', () => {
+    const eff = buildCreateContestEffect({
+      contestId: 9001n,
+      txHash: '0xcreate',
+      requestId: '0xrequest',
+      receipt: { status: 'success', blockNumber: 1000n } as never,
+    } as never);
+    expect(eff).toEqual({
+      type: 'transaction',
+      purpose: 'create-contest',
+      ok: true,
+      txHash: '0xcreate',
+      blockNumber: '1000',
+      status: 'confirmed',
+    });
+  });
+
+  it('builds a reverted create-contest effect when receipt status is reverted', () => {
+    const eff = buildCreateContestEffect({
+      contestId: 9001n,
+      txHash: '0xcreate',
+      requestId: null,
+      receipt: { status: 'reverted', blockNumber: 1000n } as never,
+    } as never);
+    expect(eff.ok).toBe(false);
+    expect(eff.status).toBe('reverted');
   });
 });
 

@@ -302,4 +302,65 @@ describe('Hermes PR-6 scenario 3: mid-flight failure after one successful effect
     expect(env.errors[0]?.code).toBe('CHAIN_ERROR');
     expect(env.errors[0]?.details).toMatchObject({ reason: 'ScriptApprovalExpired' });
   });
+
+  // Hermes PR-71 blocker regression: when contests create's verification
+  // poll throws AFTER the create tx landed, the action used to write
+  // the success envelope first and THEN throw — producing TWO envelopes
+  // on stdout and a failure envelope that omitted the create tx. Fix:
+  // single failure envelope that preserves both the approve(s) AND the
+  // successful create-contest tx. This test exercises the exact wire
+  // shape contests/create.ts's fixed action passes to emitJsonFailure,
+  // and asserts a single JSON envelope on stdout with all effects
+  // intact.
+  it('contests create: verification fails AFTER create tx — single envelope with create-contest preserved', () => {
+    const linkApprove: AgentEffect = {
+      type: 'transaction',
+      purpose: 'approve-link',
+      ok: true,
+      txHash: '0xlink' as Hex,
+      blockNumber: '999',
+      status: 'confirmed',
+    };
+    const createContestEffect: AgentEffect = {
+      type: 'transaction',
+      purpose: 'create-contest',
+      ok: true,
+      txHash: '0xcreate' as Hex,
+      blockNumber: '1000',
+      status: 'confirmed',
+    };
+    const stdout = captureStdout(() => {
+      emitJsonFailure({
+        action: 'contests.create',
+        stage: 'execute',
+        chainId: POLYGON,
+        wallet: SIGNER,
+        walletRole: 'signer',
+        signer: SIGNER,
+        effects: [linkApprove, createContestEffect],
+        // waitForVerified timed out / threw after the create tx landed.
+        // The error here is whatever waitForVerified surfaced.
+        error: new OspexChainError(
+          'Verification did not complete within timeout (120s).',
+        ),
+      });
+    });
+    // Single JSON envelope on stdout (the Hermes contract).
+    const trimmed = stdout.trim();
+    expect(() => JSON.parse(trimmed)).not.toThrow();
+    // Confirm there's only one object (no second envelope appended).
+    expect(trimmed.match(/\}\s*\{/)).toBeNull();
+    const env = parseEnvelope(trimmed);
+    expect(env.ok).toBe(false);
+    expect(env.action).toBe('contests.create');
+    expect(env.effects).toHaveLength(2);
+    expect(env.effects[0]?.purpose).toBe('approve-link');
+    expect(env.effects[0]?.ok).toBe(true);
+    // The create tx — the bit Hermes flagged as missing.
+    expect(env.effects[1]?.purpose).toBe('create-contest');
+    expect(env.effects[1]?.ok).toBe(true);
+    expect(env.effects[1]?.txHash).toBe('0xcreate');
+    expect(env.effects[1]?.status).toBe('confirmed');
+    expect(env.errors[0]?.code).toBe('CHAIN_ERROR');
+  });
 });
