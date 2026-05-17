@@ -22,6 +22,10 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import {
+  VERIFY_POSITION_STATUS,
+  deriveRemediationNextCommands,
+} from '../../lib/nextCommandTemplates.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 
@@ -76,6 +80,7 @@ export const positionsSettleCommand = addSignerOptions(
           wallet: signerAddress,
           walletRole: 'signer',
           signer: signerAddress,
+          nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
         process.exit(1);
@@ -125,6 +130,7 @@ export function toSettleAgentEnvelope(
         status,
       },
     ],
+    nextCommands: [VERIFY_POSITION_STATUS.build({ address: args.signerAddress })],
     payload: {
       txHash: result.txHash,
       blockNumber: result.blockNumber.toString(),

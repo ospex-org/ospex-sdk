@@ -8,6 +8,8 @@
  * stack trace is noise.
  */
 
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { Command } from '@commander-js/extra-typings';
 import { OspexError } from '@ospex/sdk';
 
@@ -46,7 +48,15 @@ import { authUseFoundryCommand } from './commands/auth/use-foundry.js';
 import { authClearFoundryCommand } from './commands/auth/clear-foundry.js';
 import { authCheckCommand } from './commands/auth/check.js';
 
-function makeProgram(): Command {
+/**
+ * Build the top-level commander program. Exported (rather than
+ * inlined into `main()`) so tests can construct a program instance
+ * and parse argv through it — most notably the PR-7
+ * `nextCommands` argv-roundtrip test (`tests/next-commands-argv-
+ * roundtrip.test.ts`), which validates every registered template's
+ * argv against the real command surface.
+ */
+export function makeProgram(): Command {
   const program = new Command()
     .name('ospex')
     .description('Command-line interface for the Ospex protocol.')
@@ -172,4 +182,33 @@ function writeCauseChain(err: unknown): void {
   }
 }
 
-void main();
+/**
+ * True when this module is the program entry point — i.e. invoked
+ * directly via `node dist/index.js` OR via the `ospex` bin symlink
+ * that `npm install` / `yarn add` creates in `node_modules/.bin`.
+ *
+ * The naive comparison `process.argv[1] === fileURLToPath(import.meta.url)`
+ * fails through the bin symlink: argv[1] points at
+ * `node_modules/.bin/ospex` while import.meta.url resolves to
+ * `node_modules/@ospex/cli/dist/index.js`, so main() never runs and
+ * the installed CLI becomes a no-op (Hermes PR-72 blocker).
+ *
+ * Fix: resolve BOTH paths via `realpathSync` so symlinks collapse
+ * to their canonical targets before comparison. realpathSync can
+ * throw on a path that doesn't exist; defensive try/catch returns
+ * false so test imports never accidentally fire main().
+ */
+export function isMainModule(argv1: string | undefined, metaUrl: string): boolean {
+  if (argv1 === undefined) return false;
+  try {
+    const argvReal = realpathSync(argv1);
+    const moduleReal = realpathSync(fileURLToPath(metaUrl));
+    return argvReal === moduleReal;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule(process.argv[1], import.meta.url)) {
+  void main();
+}

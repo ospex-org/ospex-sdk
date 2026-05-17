@@ -71,6 +71,10 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import {
+  VERIFY_COMMITMENT,
+  deriveRemediationNextCommands,
+} from '../../lib/nextCommandTemplates.js';
 import { getClient, resolvePreviewAddress } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
@@ -356,6 +360,7 @@ export const commitmentsMatchCommand = addSignerOptions(
           walletRole: 'signer',
           signer: wallet,
           effects: approveEffects,
+          nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
         process.exit(1);
@@ -482,6 +487,9 @@ export function toMatchExecuteEnvelope(
     sideSummary: shoulder.sideSummary,
     warnings: shoulder.warnings,
     effects,
+    nextCommands: [
+      VERIFY_COMMITMENT.build({ hash: preview.commitment.commitmentHash }),
+    ],
     payload: { preview: previewPayload, result },
   });
 }

@@ -301,6 +301,14 @@ export interface EmitJsonFailureArgs {
   effects?: AgentEffect[];
 
   warnings?: AgentWarning[];
+
+  /**
+   * Suggested remediation commands (PR-7). Typically derived from
+   * the error code via `deriveRemediationNextCommands` —
+   * ALLOWANCE_INSUFFICIENT → `remediate-approve-*` suggestions, etc.
+   * Capped at 3 by `buildAgentEnvelope`.
+   */
+  nextCommands?: AgentNextCommand[];
 }
 
 /**
@@ -328,6 +336,7 @@ export function emitJsonFailure(args: EmitJsonFailureArgs): void {
     ...(args.signer !== undefined ? { signer: args.signer } : {}),
     ...(args.effects !== undefined ? { effects: args.effects } : {}),
     ...(args.warnings !== undefined ? { warnings: args.warnings } : {}),
+    ...(args.nextCommands !== undefined ? { nextCommands: args.nextCommands } : {}),
   });
   writeAgentEnvelope(env);
 }

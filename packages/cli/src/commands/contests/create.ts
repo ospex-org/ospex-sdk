@@ -37,6 +37,11 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import {
+  COMPLETE_CONTESTS_WAIT_VERIFIED,
+  VERIFY_CONTEST,
+  deriveRemediationNextCommands,
+} from '../../lib/nextCommandTemplates.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptYesNo, promptValue } from '../../lib/prompt.js';
@@ -218,6 +223,13 @@ export const contestCreateCommand = addSignerOptions(
           walletRole: 'signer',
           signer: signerAddress,
           effects: [...approveEffects, buildCreateContestEffect(result)],
+          // Verification poll didn't land — suggest the standalone
+          // wait-verified helper so the agent can keep polling.
+          nextCommands: [
+            COMPLETE_CONTESTS_WAIT_VERIFIED.build({
+              contestId: result.contestId.toString(),
+            }),
+          ],
           error: verificationError,
         });
         process.exit(1);
@@ -251,6 +263,7 @@ export const contestCreateCommand = addSignerOptions(
           walletRole: 'signer',
           signer: signerAddress,
           effects: approveEffects,
+          nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
         process.exit(1);
@@ -383,6 +396,16 @@ export function toContestCreateAgentEnvelope(
   const approveEffects = args.approveEffects ?? [];
   const createEffect = buildCreateContestEffect(result);
   const effects: AgentEffect[] = [...approveEffects, createEffect];
+  // nextCommands: always verify the contest detail. When the verify
+  // poll didn't run / didn't land, also suggest the standalone
+  // wait-verified helper. Cap is 3; we ship 1–2 here.
+  const contestIdStr = result.contestId.toString();
+  const nextCommands = [
+    VERIFY_CONTEST.build({ contestId: contestIdStr }),
+    ...(args.verification === null
+      ? [COMPLETE_CONTESTS_WAIT_VERIFIED.build({ contestId: contestIdStr })]
+      : []),
+  ];
   return buildAgentEnvelope<ContestCreatePayload>({
     ok: effects.every((e) => e.ok),
     action: 'contests.create',
@@ -393,8 +416,9 @@ export function toContestCreateAgentEnvelope(
     walletRole: 'signer',
     signer: args.signerAddress,
     effects,
+    nextCommands,
     payload: {
-      contestId: result.contestId.toString(),
+      contestId: contestIdStr,
       txHash: result.txHash,
       requestId: result.requestId,
       status: result.receipt.status,

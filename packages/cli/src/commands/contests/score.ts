@@ -21,6 +21,10 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import {
+  VERIFY_CONTEST,
+  deriveRemediationNextCommands,
+} from '../../lib/nextCommandTemplates.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptYesNo, promptValue } from '../../lib/prompt.js';
@@ -98,6 +102,7 @@ export const contestScoreCommand = addSignerOptions(
           walletRole: 'signer',
           signer: signerAddress,
           effects: approveEffects,
+          nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
         process.exit(1);
@@ -175,6 +180,7 @@ export function toContestScoreAgentEnvelope(
     status,
   };
   const effects: AgentEffect[] = [...approveEffects, scoreEffect];
+  const contestIdStr = result.contestId.toString();
   return buildAgentEnvelope<ContestScorePayload>({
     ok: effects.every((e) => e.ok),
     action: 'contests.score',
@@ -185,8 +191,9 @@ export function toContestScoreAgentEnvelope(
     walletRole: 'signer',
     signer: args.signerAddress,
     effects,
+    nextCommands: [VERIFY_CONTEST.build({ contestId: contestIdStr })],
     payload: {
-      contestId: result.contestId.toString(),
+      contestId: contestIdStr,
       txHash: result.txHash,
       requestId: result.requestId,
       status: result.receipt.status,

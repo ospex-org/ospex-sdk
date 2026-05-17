@@ -28,6 +28,11 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import {
+  COMPLETE_CANCEL_ALL,
+  VERIFY_COMMITMENTS_EMPTY,
+  deriveRemediationNextCommands,
+} from '../../lib/nextCommandTemplates.js';
 import { polygonscanTxUrl } from '../../lib/explorer.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
@@ -175,6 +180,7 @@ export const commitmentsCancelAllCommand = addSignerOptions(
           wallet: maker,
           walletRole: 'signer',
           signer: maker,
+          nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
         process.exit(1);
@@ -242,6 +248,13 @@ export function toCancelAllDryRunEnvelope(
     signer: args.signerAddress,
     requiresSignature: true,
     requiresTransaction: true,
+    nextCommands: [
+      COMPLETE_CANCEL_ALL.build({
+        contestId: args.contestId.toString(),
+        scorer: args.scorer,
+        lineTicks: args.lineTicks,
+      }),
+    ],
     payload: {
       contestId: args.contestId.toString(),
       scorer: args.scorer,
@@ -286,6 +299,12 @@ export function toCancelAllExecuteEnvelope(
         blockNumber: result.receipt.blockNumber.toString(),
         status,
       },
+    ],
+    nextCommands: [
+      VERIFY_COMMITMENTS_EMPTY.build({
+        maker: args.signerAddress,
+        contestId: args.contestId.toString(),
+      }),
     ],
     payload: {
       contestId: args.contestId.toString(),
