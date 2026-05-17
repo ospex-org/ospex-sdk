@@ -33,6 +33,7 @@ import {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -83,7 +84,15 @@ export const contestCreateCommand = addSignerOptions(
     }
 
     const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
+    const chainId = client.chainId();
+    const wantJson = opts.json === true;
+    let signerAddress: Hex | null = null;
+    // Failure-envelope state: approveEffects accumulates during the
+    // retry loop's allowance handler (lifted out of the try block so
+    // the catch can preserve confirmed approves on a mid-flight throw).
+    const approveEffects: AgentEffect[] = [];
 
+    try {
     let gameId: string;
     if (hasGameId) {
       gameId = opts.gameId as string;
@@ -128,11 +137,10 @@ export const contestCreateCommand = addSignerOptions(
     if (opts.subscriptionId !== undefined) args.subscriptionId = BigInt(opts.subscriptionId);
     if (opts.gasLimit !== undefined) args.gasLimit = opts.gasLimit;
 
-    // Approve-effect collection: mirrors the PR-69 fix on submit/match.
-    // Each on-chain approval that runs in the retry loop is captured
-    // here and prepended to the final envelope's effects[].
-    const approveEffects: AgentEffect[] = [];
-
+    // Approve-effect collection: each on-chain approval that runs in
+    // the retry loop is captured here (declaration lifted to the
+    // action top so the failure-envelope catch can also surface
+    // already-confirmed approves on a mid-flight throw).
     const MAX_APPROVAL_RETRIES = 2;
     let result: Awaited<ReturnType<typeof client.contests.create>> | undefined;
     let lastErr: unknown;
@@ -191,11 +199,11 @@ export const contestCreateCommand = addSignerOptions(
       }
     }
 
-    if (opts.json === true) {
-      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+    if (wantJson) {
+      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       writeAgentEnvelope(
         toContestCreateAgentEnvelope(result, {
-          chainId: client.chainId(),
+          chainId,
           signerAddress,
           verification,
           approveEffects,
@@ -204,6 +212,26 @@ export const contestCreateCommand = addSignerOptions(
     }
 
     if (verificationError !== null) throw verificationError;
+    } catch (err) {
+      // Hermes PR-6 scope: preserve any approve txs that succeeded
+      // before the create call threw. Without this, a wallet that
+      // approves LINK successfully and then hits a Chainlink Functions
+      // revert would lose the approve tx hash to stderr.
+      if (wantJson) {
+        emitJsonFailure({
+          action: 'contests.create',
+          stage: 'execute',
+          chainId,
+          wallet: signerAddress,
+          walletRole: 'signer',
+          signer: signerAddress,
+          effects: approveEffects,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 interface AllowanceCopy {

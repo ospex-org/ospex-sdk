@@ -24,6 +24,7 @@ import type {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -65,8 +66,11 @@ export const commitmentsCancelAllCommand = addSignerOptions(
     const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
     const maker = (await client.signer().getAddress()).toLowerCase() as Hex;
     const chainId = client.chainId();
+    const wantJson = opts.json === true;
+    const dryRun = opts.dryRun === true;
 
-    if (opts.dryRun === true) {
+    try {
+    if (dryRun) {
       const rawRows: Commitment[] = [];
       let offset = 0;
       for (let page = 0; page < DRY_RUN_MAX_PAGES; page++) {
@@ -162,6 +166,21 @@ export const commitmentsCancelAllCommand = addSignerOptions(
       },
       { json: false },
     );
+    } catch (err) {
+      if (wantJson) {
+        emitJsonFailure({
+          action: 'commitments.cancel-all',
+          stage: dryRun ? 'dry-run' : 'execute',
+          chainId,
+          wallet: maker,
+          walletRole: 'signer',
+          signer: maker,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 // ── v1 → v2 envelope transforms ─────────────────────────────────────

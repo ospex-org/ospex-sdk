@@ -24,6 +24,7 @@
 import { createRequire } from 'node:module';
 import { formatUnits } from 'viem';
 import {
+  OspexError,
   getAddresses,
   wei6ToDecimalUSDC,
   type AgentApprovalSpenderLabel,
@@ -215,6 +216,17 @@ export interface BuildFailureEnvelopeArgs {
   requiresTransaction?: boolean;
   approvalRequirements?: ApprovalRequirement[];
 
+  /**
+   * Effects that already completed before the failure. Critical for
+   * mid-flight failures (Hermes's PR-6 scope): if a `commitments
+   * submit --yes --json` runs an approve tx that confirms and then
+   * `submitPrepared` throws NONCE_TOO_LOW, the confirmed approve tx
+   * MUST appear in the failure envelope's effects[] so agents see
+   * the on-chain side effect they need to reconcile against. Empty
+   * (default) when the failure happened before any side effect.
+   */
+  effects?: AgentEffect[];
+
   generatedAt?: string;
   cliVersion?: string;
   sdkVersion?: string;
@@ -253,6 +265,7 @@ export function buildFailureEnvelope(
     ...(args.approvalRequirements !== undefined ? { approvalRequirements: args.approvalRequirements } : {}),
     ...(args.warnings !== undefined ? { warnings: args.warnings } : {}),
     errors: args.errors,
+    ...(args.effects !== undefined ? { effects: args.effects } : {}),
     ...(args.nextCommands !== undefined ? { nextCommands: args.nextCommands } : {}),
     payload: null,
     ...(args.generatedAt !== undefined ? { generatedAt: args.generatedAt } : {}),
@@ -261,6 +274,137 @@ export function buildFailureEnvelope(
   });
   // Narrow the discriminator for callers that switch on ok.
   return env as AgentFailureEnvelope;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Per-command failure emit + raw-error → AgentError mapper                  */
+/* ------------------------------------------------------------------------- */
+
+export interface EmitJsonFailureArgs {
+  action: string;
+  stage: AgentStage;
+  chainId: ChainId;
+  /** Raw error thrown by the SDK/CLI body — converted to AgentError. */
+  error: unknown;
+
+  wallet?: Hex | null;
+  walletRole?: WalletRole;
+  signer?: Hex | null;
+
+  /**
+   * Completed on-chain / off-chain effects that landed BEFORE the
+   * failure. Preserved in the envelope per Hermes's PR-6 scope:
+   * "any already-completed effects[] when a command fails after
+   * side effects." Empty / omitted when the failure happened before
+   * any side effect.
+   */
+  effects?: AgentEffect[];
+
+  warnings?: AgentWarning[];
+}
+
+/**
+ * Build + write a v2 failure envelope to stdout. Per-command catch
+ * blocks call this when `--json` is set and a thrown error needs to
+ * surface as a structured envelope instead of legacy stderr.
+ *
+ * The caller is responsible for `process.exit(1)` after — this helper
+ * doesn't exit so call sites stay explicit about flow control (and
+ * tests can assert without process termination).
+ *
+ * Stdout-only: the envelope goes to stdout (the agent contract);
+ * anything that was already on stderr (renderers, prompts, progress
+ * lines) stays there.
+ */
+export function emitJsonFailure(args: EmitJsonFailureArgs): void {
+  const env = buildFailureEnvelope({
+    action: args.action,
+    stage: args.stage,
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    errors: [errorToAgentError(args.error)],
+    ...(args.wallet !== undefined ? { wallet: args.wallet } : {}),
+    ...(args.walletRole !== undefined ? { walletRole: args.walletRole } : {}),
+    ...(args.signer !== undefined ? { signer: args.signer } : {}),
+    ...(args.effects !== undefined ? { effects: args.effects } : {}),
+    ...(args.warnings !== undefined ? { warnings: args.warnings } : {}),
+  });
+  writeAgentEnvelope(env);
+}
+
+/**
+ * Map an arbitrary thrown value into an AgentError. SDK errors
+ * (`OspexError` subclasses) keep their `code` field — that's the
+ * stable agent-routing surface per AGENT_CONTRACT.md §7. Native
+ * `Error`s fall back to `UNKNOWN_ERROR` so the envelope's
+ * structured-error contract holds even on unexpected throws.
+ *
+ * For OspexChainError specifically the `txHash` (when present on a
+ * reverted send) and `reason` are surfaced under `details` so agents
+ * can recover the on-chain location of the failure without parsing
+ * the message text.
+ */
+export function errorToAgentError(err: unknown): AgentError {
+  if (err instanceof OspexError) {
+    const details = extractOspexErrorDetails(err);
+    const agentError: AgentError = { code: err.code, message: err.message };
+    if (details !== undefined) agentError.details = details;
+    return agentError;
+  }
+  if (err instanceof Error) {
+    return { code: 'UNKNOWN_ERROR', message: err.message };
+  }
+  return { code: 'UNKNOWN_ERROR', message: String(err) };
+}
+
+/**
+ * Pull the structured fields off a typed OspexError into a
+ * loosely-typed details bag the failure envelope can surface to
+ * agents. Returns undefined when the error has nothing extra to add
+ * (keeps the envelope tight).
+ */
+function extractOspexErrorDetails(err: OspexError): Record<string, unknown> | undefined {
+  // Defensive read — different subclasses carry different fields;
+  // we copy any of the standard typed-error fields documented in
+  // AGENT_CONTRACT.md §7 when they're present.
+  const e = err as unknown as {
+    reason?: string;
+    revertReason?: string;
+    txHash?: string;
+    field?: string;
+    apiCode?: string;
+    status?: number;
+    path?: string;
+    required?: bigint;
+    current?: bigint;
+    spender?: string;
+    token?: string;
+    expectedAddress?: string;
+    actualAddress?: string;
+    mode?: string;
+    expectedHash?: string;
+    actualHash?: string;
+    subscriptionId?: bigint;
+  };
+  const out: Record<string, unknown> = {};
+  if (typeof e.reason === 'string') out.reason = e.reason;
+  if (typeof e.revertReason === 'string') out.revertReason = e.revertReason;
+  if (typeof e.txHash === 'string') out.txHash = e.txHash;
+  if (typeof e.field === 'string') out.field = e.field;
+  if (typeof e.apiCode === 'string') out.apiCode = e.apiCode;
+  if (typeof e.status === 'number') out.status = e.status;
+  if (typeof e.path === 'string') out.path = e.path;
+  if (typeof e.required === 'bigint') out.required = e.required.toString();
+  if (typeof e.current === 'bigint') out.current = e.current.toString();
+  if (typeof e.spender === 'string') out.spender = e.spender;
+  if (typeof e.token === 'string') out.token = e.token;
+  if (typeof e.expectedAddress === 'string') out.expectedAddress = e.expectedAddress;
+  if (typeof e.actualAddress === 'string') out.actualAddress = e.actualAddress;
+  if (typeof e.mode === 'string') out.mode = e.mode;
+  if (typeof e.expectedHash === 'string') out.expectedHash = e.expectedHash;
+  if (typeof e.actualHash === 'string') out.actualHash = e.actualHash;
+  if (typeof e.subscriptionId === 'bigint') out.subscriptionId = e.subscriptionId.toString();
+  return Object.keys(out).length === 0 ? undefined : out;
 }
 
 /* ------------------------------------------------------------------------- */

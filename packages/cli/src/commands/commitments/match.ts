@@ -66,6 +66,7 @@ import type { MatchPreviewSpeculation } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   mapPreviewApprovals,
   networkForChainId,
   writeAgentEnvelope,
@@ -164,6 +165,16 @@ export const commitmentsMatchCommand = addSignerOptions(
       ? await getClient({ requiresChain: true })
       : await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
+    // Failure-envelope state (Hermes PR-6 scope) — wallet known once
+    // prepareMatch sets preview.taker; approveEffects accumulates
+    // during the approval loop. Catch at bottom emits a v2 failure
+    // envelope that preserves any confirmed approve txs.
+    const chainId = client.chainId();
+    let wallet: Hex | null = null;
+    const approveEffects: AgentEffect[] = [];
+    const stageForFailure: 'preview' | 'execute' = previewOnly ? 'preview' : 'execute';
+
+    try {
     // ── 2. Resolve input via the SDK's prefix resolver. ─────────────
     // Match scope is open + partially_filled (live commitments).
     const commitment = await client.commitments.resolveByPrefix(hashArg, {
@@ -189,10 +200,10 @@ export const commitmentsMatchCommand = addSignerOptions(
       prepArgs.taker = await resolvePreviewAddress(signerIntent);
     }
     const preview = await client.commitments.prepareMatch(prepArgs);
+    wallet = preview.taker.toLowerCase() as Hex;
 
     // ── 4. --json alone (no --yes) is preview-only — emit + exit. ──
     if (previewOnly) {
-      const chainId = client.chainId();
       writeAgentEnvelope(toMatchPreviewEnvelope(preview, { chainId }));
       return;
     }
@@ -212,12 +223,13 @@ export const commitmentsMatchCommand = addSignerOptions(
     // → TreasuryModule (present iff speculation.mode === 'lazy').
     //
     // Hermes PR-69 fix: each approve tx is recorded as an
-    // AgentEffect (collected in `approveEffects`) and prepended to
-    // the execute envelope's effects[] below. Agents that parse
-    // --json need the approve tx hashes/statuses alongside the
-    // final match tx — those approvals are real on-chain side
-    // effects the command performed.
-    const approveEffects: AgentEffect[] = [];
+    // AgentEffect (collected in `approveEffects`, declared at the
+    // top of the action so the failure-envelope catch can also
+    // surface already-confirmed approves on a mid-flight throw)
+    // and prepended to the execute envelope's effects[] below.
+    // Agents that parse --json need the approve tx hashes/statuses
+    // alongside the final match tx — those approvals are real
+    // on-chain side effects the command performed.
     for (const row of preview.approvals) {
       if (!row.needsApproval || row.token !== 'USDC') continue;
       const requiredWei6 = BigInt(row.required);
@@ -305,7 +317,6 @@ export const commitmentsMatchCommand = addSignerOptions(
     }
 
     if (wantJson) {
-      const chainId = client.chainId();
       writeAgentEnvelope(
         toMatchExecuteEnvelope(
           preview,
@@ -331,6 +342,26 @@ export const commitmentsMatchCommand = addSignerOptions(
       },
       { json: false },
     );
+    } catch (err) {
+      // Hermes PR-6 scope: --json failures emit a v2 failure envelope
+      // that preserves any approve txs already confirmed before the
+      // throw. NONCE_TOO_LOW (or any other matchFromPreview revert)
+      // would otherwise drop those approve tx hashes to stderr.
+      if (wantJson) {
+        emitJsonFailure({
+          action: 'commitments.match',
+          stage: stageForFailure,
+          chainId,
+          wallet,
+          walletRole: 'signer',
+          signer: wallet,
+          effects: approveEffects,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 // ── v1 → v2 envelope transforms ────────────────────────────────────

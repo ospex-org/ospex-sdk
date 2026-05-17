@@ -17,6 +17,7 @@ import {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -42,17 +43,21 @@ export const contestScoreCommand = addSignerOptions(
     const opts = optionsSchema.parse(rawOpts);
     const signerIntent = parseSignerIntent(rawOpts);
     const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
+    const chainId = client.chainId();
+    const wantJson = opts.json === true;
+    let signerAddress: Hex | null = null;
+    // Approve-effect collection: each LINK approval that runs in the
+    // retry handler is captured here. Lifted out of any try block so
+    // the failure-envelope catch can also surface confirmed approves
+    // on a mid-flight throw (PR-6 scope).
+    const approveEffects: AgentEffect[] = [];
 
+    try {
     const args: Parameters<typeof client.contests.score>[0] = {
       contestId: BigInt(contestIdArg),
     };
     if (opts.subscriptionId !== undefined) args.subscriptionId = BigInt(opts.subscriptionId);
     if (opts.gasLimit !== undefined) args.gasLimit = opts.gasLimit;
-
-    // Mirrors PR-69 fix on submit/match + contests create: collect
-    // any approve txs that ran before the final score tx into a list
-    // that gets prepended to the envelope's effects[].
-    const approveEffects: AgentEffect[] = [];
 
     const tryScore = async () => client.contests.score(args);
 
@@ -61,16 +66,16 @@ export const contestScoreCommand = addSignerOptions(
       result = await tryScore();
     } catch (err) {
       if (!(err instanceof OspexAllowanceError)) throw err;
-      const handled = await handleLinkAllowance(client, err, opts.json === true, approveEffects);
+      const handled = await handleLinkAllowance(client, err, wantJson, approveEffects);
       if (!handled) throw err;
       result = await tryScore();
     }
 
-    if (opts.json === true) {
-      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+    if (wantJson) {
+      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       writeAgentEnvelope(
         toContestScoreAgentEnvelope(result, {
-          chainId: client.chainId(),
+          chainId,
           signerAddress,
           approveEffects,
         }),
@@ -82,6 +87,22 @@ export const contestScoreCommand = addSignerOptions(
           `Chainlink callback typically lands within 30-90s. ` +
           `Run \`ospex contests show ${result.contestId}\` to check status.\n`,
       );
+    }
+    } catch (err) {
+      if (wantJson) {
+        emitJsonFailure({
+          action: 'contests.score',
+          stage: 'execute',
+          chainId,
+          wallet: signerAddress,
+          walletRole: 'signer',
+          signer: signerAddress,
+          effects: approveEffects,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
     }
   });
 
