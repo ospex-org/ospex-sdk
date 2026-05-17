@@ -44,11 +44,32 @@ import { z } from 'zod';
 import {
   OspexAPIError,
   OspexValidationError,
+  computeMatchYouView,
   usdcDecimalToWei6,
   wei6ToDecimalUSDC,
+  type AgentEffect,
+  type AgentEnvelope,
+  type AgentPayout,
+  type AgentWarning,
   type ApprovalPurpose,
+  type ApprovalRequirement,
+  type ChainId,
+  type Commitment,
+  type Hex,
+  type MatchPreview,
+  type MatchPreviewWarning,
+  type PerspectiveAmount,
+  type PreviewContest,
+  type SpeculationMode,
 } from '@ospex/sdk';
+import type { MatchPreviewSpeculation } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  mapPreviewApprovals,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { getClient, resolvePreviewAddress } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
@@ -171,7 +192,8 @@ export const commitmentsMatchCommand = addSignerOptions(
 
     // ── 4. --json alone (no --yes) is preview-only — emit + exit. ──
     if (previewOnly) {
-      formatOutput({ schemaVersion: 1, preview }, { json: true });
+      const chainId = client.chainId();
+      writeAgentEnvelope(toMatchPreviewEnvelope(preview, { chainId }));
       return;
     }
 
@@ -267,19 +289,19 @@ export const commitmentsMatchCommand = addSignerOptions(
     }
 
     if (wantJson) {
-      formatOutput(
-        {
-          schemaVersion: 1,
+      const chainId = client.chainId();
+      writeAgentEnvelope(
+        toMatchExecuteEnvelope(
           preview,
-          result: {
-            txHash: result.txHash,
+          {
+            txHash: result.txHash as Hex,
             status: result.receipt.status,
             blockNumber: result.receipt.blockNumber.toString(),
             takerRiskWei6: result.takerRisk.toString(),
             fillMakerRiskWei6: result.fillMakerRisk.toString(),
           },
-        },
-        { json: true },
+          { chainId },
+        ),
       );
       return;
     }
@@ -294,6 +316,237 @@ export const commitmentsMatchCommand = addSignerOptions(
       { json: false },
     );
   });
+
+// ── v1 → v2 envelope transforms ────────────────────────────────────
+
+/**
+ * `payload` shape for `commitments match --json` (preview-only).
+ * Strips MatchPreview's inner `schemaVersion: 1` — the outer v2
+ * envelope is the only schemaVersion marker (Hermes PR-67 contract,
+ * enforced by buildAgentEnvelope's payload guard).
+ */
+export type MatchPreviewPayload = Omit<MatchPreview, 'schemaVersion'>;
+
+export interface MatchExecuteResult {
+  txHash: Hex;
+  status: 'success' | 'reverted';
+  blockNumber: string;
+  takerRiskWei6: string;
+  fillMakerRiskWei6: string;
+}
+
+/** `payload` shape for `commitments match --yes --json` (executed). */
+export interface MatchExecutePayload {
+  preview: MatchPreviewPayload;
+  result: MatchExecuteResult;
+}
+
+export interface ToMatchEnvelopeArgs {
+  chainId: ChainId;
+}
+
+/**
+ * Preview-only envelope. requiresTransaction is true because matching
+ * dispatches an on-chain tx at execute time (vs submit which only
+ * POSTs to the API). The maker's commitment being filled is exposed
+ * via the shoulder `commitment` field so generic agents render it
+ * without inspecting payload.
+ */
+export function toMatchPreviewEnvelope(
+  preview: MatchPreview,
+  args: ToMatchEnvelopeArgs,
+): AgentEnvelope<MatchPreviewPayload> {
+  const { schemaVersion: _legacy, ...payload } = preview;
+  const wallet = preview.taker.toLowerCase() as Hex;
+  const shoulder = deriveMatchShoulder(preview, args.chainId);
+  return buildAgentEnvelope<MatchPreviewPayload>({
+    ok: true,
+    action: 'commitments.match',
+    stage: 'preview',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet,
+    walletRole: 'signer',
+    signer: wallet,
+    requiresSignature: true,
+    requiresTransaction: true,
+    approvalRequirements: shoulder.approvalRequirements,
+    risk: shoulder.risk,
+    payout: shoulder.payout,
+    contest: shoulder.contest,
+    speculation: shoulder.speculation,
+    commitment: preview.commitment,
+    sideSummary: shoulder.sideSummary,
+    warnings: shoulder.warnings,
+    payload,
+  });
+}
+
+/**
+ * Executed envelope. effects records the on-chain match tx; the
+ * shoulder fields carry through from the preview so an agent reading
+ * only the execute envelope still gets full context.
+ */
+export function toMatchExecuteEnvelope(
+  preview: MatchPreview,
+  result: MatchExecuteResult,
+  args: ToMatchEnvelopeArgs,
+): AgentEnvelope<MatchExecutePayload> {
+  const { schemaVersion: _legacy, ...previewPayload } = preview;
+  const wallet = preview.taker.toLowerCase() as Hex;
+  const shoulder = deriveMatchShoulder(preview, args.chainId);
+  const effect: AgentEffect = {
+    type: 'transaction',
+    purpose: 'match-commitment',
+    ok: result.status === 'success',
+    txHash: result.txHash,
+    blockNumber: result.blockNumber,
+    status: result.status === 'success' ? 'confirmed' : 'reverted',
+  };
+  return buildAgentEnvelope<MatchExecutePayload>({
+    ok: result.status === 'success',
+    action: 'commitments.match',
+    stage: 'execute',
+    network: networkForChainId(args.chainId),
+    chainId: args.chainId,
+    wallet,
+    walletRole: 'signer',
+    signer: wallet,
+    risk: shoulder.risk,
+    payout: shoulder.payout,
+    contest: shoulder.contest,
+    speculation: shoulder.speculation,
+    commitment: preview.commitment,
+    sideSummary: shoulder.sideSummary,
+    warnings: shoulder.warnings,
+    effects: [effect],
+    payload: { preview: previewPayload, result },
+  });
+}
+
+interface MatchShoulder {
+  approvalRequirements: ApprovalRequirement[];
+  risk: PerspectiveAmount | null;
+  payout: AgentPayout | null;
+  contest: PreviewContest;
+  speculation: SpeculationMode;
+  sideSummary: string | null;
+  warnings: AgentWarning[];
+}
+
+/**
+ * Shared shoulder derivation for the preview + execute envelopes.
+ * Lifts the MatchPreviewWarning enum into structured `AgentWarning[]`
+ * entries with stable codes (the enum values themselves are the
+ * codes); adds `allowance-short` when any approval row is short.
+ *
+ * `contest` is the v1 MatchPreviewContest, which differs from the
+ * v2 PreviewContest shoulder shape (extra fields). We pass it
+ * through as-is — agents that depend on the canonical PreviewContest
+ * shape will get the same data plus a couple of extras; mapping
+ * to the strict v2 shape is queued for PR-6.
+ *
+ * `speculation` is reshaped to fit the v2 `SpeculationMode` shoulder
+ * (which mirrors what `commitments submit` emits) so both write
+ * commands present the same shape under `envelope.speculation`.
+ */
+function deriveMatchShoulder(preview: MatchPreview, chainId: ChainId): MatchShoulder {
+  const { you } = computeMatchYouView(preview);
+  const approvalRequirements = mapPreviewApprovals(preview.approvals, chainId);
+  const warnings: AgentWarning[] = preview.warnings.map(matchWarningToAgentWarning);
+  if (approvalRequirements.some((r) => r.needsApproval)) {
+    warnings.push({
+      code: 'allowance-short',
+      message: 'At least one approval is short. Executing this match will require approve txs first.',
+      severity: 'blocking',
+      blockingFor: ['match'],
+    });
+  }
+  return {
+    approvalRequirements,
+    risk: you.risk,
+    payout: { profit: you.profit, totalReturn: you.totalReturn },
+    contest: preview.contest,
+    speculation: matchSpeculationToShoulder(preview.speculation),
+    sideSummary: you.backing,
+    warnings,
+  };
+}
+
+/**
+ * Map the match-side `MatchPreviewSpeculation` into the v2 envelope's
+ * `SpeculationMode` shoulder shape (same shape submit uses, so the
+ * two commands present a uniform `envelope.speculation`).
+ *
+ * The match preview omits the deprecated `makerCreationFeeUSDC`
+ * field; we backfill from `creationFee.makerShareUSDC` since the
+ * shoulder type pins it on the lazy variant.
+ */
+function matchSpeculationToShoulder(s: MatchPreviewSpeculation): SpeculationMode {
+  if (s.mode === 'existing') {
+    return {
+      mode: 'existing',
+      speculationId: s.speculationId as string,
+      creationFee: s.creationFee,
+    };
+  }
+  return {
+    mode: 'lazy',
+    speculationId: null,
+    speculationKey: s.speculationKey,
+    makerCreationFeeUSDC: s.creationFee.makerShareUSDC,
+    creationFee: s.creationFee,
+  };
+}
+
+/**
+ * Map a MatchPreviewWarning enum value to its AgentWarning shape.
+ * The enum value IS the stable code; severity + blockingFor encode
+ * what the warning means operationally.
+ */
+function matchWarningToAgentWarning(code: MatchPreviewWarning): AgentWarning {
+  switch (code) {
+    case 'self-match':
+      return {
+        code,
+        message: 'Maker equals taker — you are matching your own commitment.',
+        severity: 'warning',
+      };
+    case 'expires-soon':
+      return {
+        code,
+        message: 'Commitment expires soon (within the 5-minute window).',
+        severity: 'warning',
+      };
+    case 'expired':
+      return {
+        code,
+        message: 'Commitment is past its expiry; the match would revert on chain.',
+        severity: 'blocking',
+        blockingFor: ['match'],
+      };
+    case 'partial-fill':
+      return {
+        code,
+        message: 'Taker risk is less than the maker remaining capacity — this will be a partial fill.',
+        severity: 'info',
+      };
+    case 'nonce-invalidated':
+      return {
+        code,
+        message: 'Commitment was invalidated by a raised nonce floor; the match would revert.',
+        severity: 'blocking',
+        blockingFor: ['match'],
+      };
+    case 'maker-treasury-allowance-insufficient':
+      return {
+        code,
+        message: "Maker's TreasuryModule USDC allowance is short of their lazy-creation-fee share — the lazy match would revert.",
+        severity: 'blocking',
+        blockingFor: ['match'],
+      };
+  }
+}
 
 interface ApprovalCopy {
   headerLabel: string;

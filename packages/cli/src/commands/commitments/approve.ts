@@ -21,8 +21,14 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { parseUnits } from 'viem';
+import type { Hex } from '@ospex/sdk';
 import { OspexValidationError, wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
+import {
+  buildAgentEnvelope,
+  networkForChainId,
+  writeAgentEnvelope,
+} from '../../lib/agentEnvelope.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptYesNo } from '../../lib/prompt.js';
@@ -78,19 +84,40 @@ export const commitmentsApproveCommand = addSignerOptions(
     const result = await client.commitments.approve(parsed);
 
     if (wantJson) {
-      formatOutput(
-        {
-          schemaVersion: 1,
-          txHash: result.txHash,
-          spender: result.spender,
-          token: result.token,
-          amountRaw: result.amount.toString(),
-          amountFormatted:
-            parsed === 'max' ? 'max' : wei6ToDecimalUSDC(result.amount),
-          status: result.receipt.status,
-          blockNumber: result.receipt.blockNumber.toString(),
-        },
-        { json: true },
+      const chainId = client.chainId();
+      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+      const blockNumber = result.receipt.blockNumber.toString();
+      writeAgentEnvelope(
+        buildAgentEnvelope({
+          ok: result.receipt.status === 'success',
+          action: 'commitments.approve',
+          stage: 'execute',
+          network: networkForChainId(chainId),
+          chainId,
+          wallet: signerAddress,
+          walletRole: 'signer',
+          signer: signerAddress,
+          effects: [
+            {
+              type: 'transaction',
+              purpose: 'approve-usdc',
+              ok: result.receipt.status === 'success',
+              txHash: result.txHash,
+              blockNumber,
+              status: result.receipt.status === 'success' ? 'confirmed' : 'reverted',
+            },
+          ],
+          payload: {
+            txHash: result.txHash,
+            spender: result.spender,
+            token: result.token,
+            amountRaw: result.amount.toString(),
+            amountFormatted:
+              parsed === 'max' ? 'max' : wei6ToDecimalUSDC(result.amount),
+            status: result.receipt.status,
+            blockNumber,
+          },
+        }),
       );
       return;
     }
