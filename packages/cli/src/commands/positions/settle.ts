@@ -18,6 +18,7 @@ import type {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -40,13 +41,18 @@ export const positionsSettleCommand = addSignerOptions(
     const speculationId = BigInt(speculationIdArg);
 
     const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
+    const chainId = client.chainId();
+    const wantJson = opts.json === true;
+    let signerAddress: Hex | null = null;
+
+    try {
     const result = await client.positions.settleSpeculation({ speculationId });
 
-    if (opts.json === true) {
-      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+    if (wantJson) {
+      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       writeAgentEnvelope(
         toSettleAgentEnvelope(result, {
-          chainId: client.chainId(),
+          chainId,
           signerAddress,
           speculationId,
         }),
@@ -61,6 +67,21 @@ export const positionsSettleCommand = addSignerOptions(
       },
       { json: false },
     );
+    } catch (err) {
+      if (wantJson) {
+        emitJsonFailure({
+          action: 'settle',
+          stage: 'execute',
+          chainId,
+          wallet: signerAddress,
+          walletRole: 'signer',
+          signer: signerAddress,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 // ── v1 → v2 envelope transform ──────────────────────────────────────

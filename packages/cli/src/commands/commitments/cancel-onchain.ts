@@ -29,6 +29,7 @@ import type {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -55,7 +56,11 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
     const signerIntent = parseSignerIntent(rawOpts);
 
     const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
+    const chainId = client.chainId();
+    let signerAddress: Hex | null = null;
+    const wantJson = opts.json === true;
 
+    try {
     const commitment = await client.commitments.resolveByPrefix(hashArg, {
       status: ['open', 'partially_filled'],
     });
@@ -76,12 +81,12 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
       throw err;
     }
 
-    const explorerUrl = polygonscanTxUrl(client.chainId(), result.txHash);
-    if (opts.json === true) {
-      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+    const explorerUrl = polygonscanTxUrl(chainId, result.txHash);
+    if (wantJson) {
+      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       writeAgentEnvelope(
         toCancelOnchainAgentEnvelope(result, commitment, {
-          chainId: client.chainId(),
+          chainId,
           signerAddress,
           explorer: explorerUrl,
         }),
@@ -97,6 +102,21 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
       },
       { json: false },
     );
+    } catch (err) {
+      if (wantJson) {
+        emitJsonFailure({
+          action: 'commitments.cancel-onchain',
+          stage: 'execute',
+          chainId,
+          wallet: signerAddress,
+          walletRole: 'signer',
+          signer: signerAddress,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 // ── v1 → v2 envelope transform ──────────────────────────────────────

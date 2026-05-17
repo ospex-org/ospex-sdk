@@ -26,6 +26,7 @@ import { OspexValidationError, wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -67,7 +68,10 @@ export const commitmentsApproveCommand = addSignerOptions(
     const parsed = parseHumanUsdc(amountArg);
 
     const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
+    const chainId = client.chainId();
+    let signerAddress: Hex | null = null;
 
+    try {
     if (!skipPrompt) {
       const summary = parsed === 'max' ? 'unlimited (uint256 max)' : `${wei6ToDecimalUSDC(parsed)} USDC`;
       process.stderr.write(
@@ -84,8 +88,7 @@ export const commitmentsApproveCommand = addSignerOptions(
     const result = await client.commitments.approve(parsed);
 
     if (wantJson) {
-      const chainId = client.chainId();
-      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       const blockNumber = result.receipt.blockNumber.toString();
       writeAgentEnvelope(
         buildAgentEnvelope({
@@ -132,6 +135,21 @@ export const commitmentsApproveCommand = addSignerOptions(
       },
       { json: false },
     );
+    } catch (err) {
+      if (wantJson) {
+        emitJsonFailure({
+          action: 'commitments.approve',
+          stage: 'execute',
+          chainId,
+          wallet: signerAddress,
+          walletRole: 'signer',
+          signer: signerAddress,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 /**

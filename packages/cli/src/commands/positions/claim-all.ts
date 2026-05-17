@@ -26,6 +26,7 @@ import { wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -53,19 +54,23 @@ export const positionsClaimAllCommand = addSignerOptions(
     const requiresSigner = !dryRun || opts.address === undefined;
     const requiresChain = !dryRun;
     const client = await getClient({ requiresSigner, requiresChain, signerIntent });
+    const chainId = client.chainId();
+    const wantJson = opts.json === true;
+    let signerAddress: Hex | null = null;
 
+    try {
     const result = await client.positions.claimAll({
       ...(opts.address !== undefined ? { address: opts.address } : {}),
       opts: { dryRun },
     });
 
-    if (opts.json === true) {
-      const signerAddress = requiresSigner
+    if (wantJson) {
+      signerAddress = requiresSigner
         ? (((await client.signer().getAddress()) as string).toLowerCase() as Hex)
         : null;
       writeAgentEnvelope(
         toClaimAllAgentEnvelope(result, {
-          chainId: client.chainId(),
+          chainId,
           signerAddress,
           dryRun,
         }),
@@ -108,6 +113,26 @@ export const positionsClaimAllCommand = addSignerOptions(
       `\nSummary: ${result.totals.claimed} succeeded, ${result.totals.failed} failed, ` +
         `total payout ${result.totals.totalPayoutUSDC.toFixed(2)} USDC.\n`,
     );
+    } catch (err) {
+      // Hermes PR-6 scope: when claimAll itself throws (e.g. API
+      // fetch fails before any tx is dispatched), emit a failure
+      // envelope. Per-entry failures are NOT thrown by the SDK —
+      // they land in result.entries[].success and surface as failed
+      // effects in the success-envelope path above.
+      if (wantJson) {
+        emitJsonFailure({
+          action: 'claim-all',
+          stage: dryRun ? 'dry-run' : 'execute',
+          chainId,
+          wallet: signerAddress,
+          walletRole: signerAddress !== null ? 'signer' : 'none',
+          signer: signerAddress,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 // ── v1 → v2 envelope transform ──────────────────────────────────────

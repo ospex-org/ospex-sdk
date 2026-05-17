@@ -39,6 +39,7 @@ import {
 } from '@ospex/sdk';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   formatTokenAmount,
   networkForChainId,
   writeAgentEnvelope,
@@ -131,20 +132,25 @@ export const approvalsSetupCommand = addSignerOptions(
     if (opts.link !== undefined) parseLinkInput(opts.link);
 
     const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
-
-    // Ensure the signer is unlocked once up-front so the subsequent
-    // approve txs don't each prompt for the passphrase. The first call
-    // to `client.signer().getAddress()` triggers the unlock; subsequent
-    // signing operations reuse the in-memory signer.
+    const chainId = client.chainId();
     const owner = ((await client.signer().getAddress()) as string).toLowerCase() as `0x${string}`;
+    // Failure-envelope state: plan is computed inside the try; results
+    // accumulate during the approval loop. On mid-flight failure
+    // (e.g. tx N reverts), the catch preserves results 0..N-1 as
+    // confirmed effects via setupResultsToEffects(plan, results).
+    let plan: SetupPlan | null = null;
+    const results: JsonSetupResult[] = [];
+
+    try {
+    // Read current allowances (after signer unlock so the prompt
+    // fires here rather than mid-loop).
     const current = await client.approvals.read({ owner });
 
     const input: SetupInput = wantInteractive
       ? await runInteractivePrompts(current)
       : { riskUsdc: opts.riskUsdc, feeUsdc: opts.feeUsdc, link: opts.link };
 
-    const plan = buildSetupPlan(input, current);
-    const chainId = client.chainId();
+    plan = buildSetupPlan(input, current);
 
     // --json without --yes → preview-only envelope, no signing.
     if (wantJson && !skipPrompt) {
@@ -200,7 +206,6 @@ export const approvalsSetupCommand = addSignerOptions(
       }
     }
 
-    const results: JsonSetupResult[] = [];
     for (const item of plan.items) {
       if (item.action.kind !== 'send') continue;
       if (!wantJson) {
@@ -235,6 +240,26 @@ export const approvalsSetupCommand = addSignerOptions(
     process.stderr.write(
       `\nDone. Run \`ospex approvals show\` to verify the new state.\n`,
     );
+    } catch (err) {
+      // Hermes PR-6 scope: mid-flight failure preserves any approve
+      // txs already landed in `results[]` as effects so agents see
+      // exactly what was committed before the throw.
+      if (wantJson) {
+        const effects = plan !== null ? setupResultsToEffects(plan, results) : [];
+        emitJsonFailure({
+          action: 'approvals.setup',
+          stage: 'execute',
+          chainId,
+          wallet: owner,
+          walletRole: 'signer',
+          signer: owner,
+          effects,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 /**

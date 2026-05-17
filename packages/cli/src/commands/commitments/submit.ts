@@ -75,6 +75,7 @@ import {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   mapPreviewApprovals,
   networkForChainId,
   writeAgentEnvelope,
@@ -171,6 +172,16 @@ export const commitmentsSubmitCommand = addSignerOptions(
       ? await getClient({ requiresChain: true })
       : await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
+    // Failure-envelope state: derived progressively as the command
+    // runs. The catch at the bottom reads these (via closure) to
+    // build the failure envelope. `approveEffects` is also surfaced
+    // on success envelopes when --yes --json was set.
+    const chainId = client.chainId();
+    let wallet: Hex | null = null;
+    const approveEffects: AgentEffect[] = [];
+    const stageForFailure: 'preview' | 'execute' = previewOnly ? 'preview' : 'execute';
+
+    try {
     // 1. Prepare. Decimal parsing, side resolution, contest/spec
     //    fetches, allowance + nonce reads. No signing yet.
     const prepArgs: HighLevelSubmitArgs = { ...args };
@@ -178,6 +189,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
       prepArgs.maker = await resolvePreviewAddress(signerIntent);
     }
     const preview = await client.commitments.prepareSubmit(prepArgs);
+    wallet = preview.raw.maker.toLowerCase() as Hex;
 
     // 2. `--json` alone (no --yes) is the preview-only mode — emit
     //    the v2 agent envelope and exit without prompting or signing.
@@ -236,12 +248,14 @@ export const commitmentsSubmitCommand = addSignerOptions(
     //    amount on each row.
     //
     //    Hermes PR-69 fix: each approve tx is recorded as an
-    //    AgentEffect (collected in `approveEffects`) and prepended
-    //    to the execute envelope's effects[] below. Agents that
-    //    parse --json need the approve tx hashes/statuses, not just
-    //    the final submit effect — those approvals are real
-    //    on-chain side effects the command performed.
-    const approveEffects: AgentEffect[] = [];
+    //    AgentEffect (collected in `approveEffects`, declared at the
+    //    top of the action so the failure-envelope catch can also
+    //    surface already-confirmed approves on a mid-flight throw)
+    //    and prepended to the execute envelope's effects[] below.
+    //    Agents that parse --json need the approve tx hashes/
+    //    statuses, not just the final submit effect — those
+    //    approvals are real on-chain side effects the command
+    //    performed.
     for (const row of preview.approvals) {
       if (!row.needsApproval || row.token !== 'USDC') continue;
       const requiredWei6 = BigInt(row.required);
@@ -336,7 +350,6 @@ export const commitmentsSubmitCommand = addSignerOptions(
     //    (preview + result under payload, effects logged).
     //    Otherwise pretty text.
     if (wantJson) {
-      const chainId = client.chainId();
       writeAgentEnvelope(
         toSubmitExecuteEnvelope(
           preview,
@@ -356,6 +369,26 @@ export const commitmentsSubmitCommand = addSignerOptions(
       },
       { json: false },
     );
+    } catch (err) {
+      // Hermes PR-6 scope: --json failures emit a v2 failure envelope
+      // that preserves any approve txs that already landed before the
+      // throw. Without this, a NONCE_TOO_LOW after a successful USDC
+      // approve would lose the approve tx hash to stderr (legacy path).
+      if (wantJson) {
+        emitJsonFailure({
+          action: 'commitments.submit',
+          stage: stageForFailure,
+          chainId,
+          wallet,
+          walletRole: 'signer',
+          signer: wallet,
+          effects: approveEffects,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 // ── v1 → v2 envelope transforms ────────────────────────────────────

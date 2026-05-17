@@ -6,12 +6,15 @@ import type {
   AgentWarning,
   ApprovalRequirement,
 } from '@ospex/sdk';
+import { OspexAllowanceError, OspexAPIError, OspexChainError, OspexValidationError } from '@ospex/sdk';
 import {
   CLI_VERSION,
   MAX_NEXT_COMMANDS,
   SDK_VERSION,
   buildAgentEnvelope,
   buildFailureEnvelope,
+  emitJsonFailure,
+  errorToAgentError,
   networkForChainId,
   writeAgentEnvelope,
 } from '../src/lib/agentEnvelope.js';
@@ -293,5 +296,148 @@ describe('networkForChainId', () => {
   it('maps 137 to polygon and 80002 to amoy', () => {
     expect(networkForChainId(137)).toBe('polygon');
     expect(networkForChainId(80002)).toBe('amoy');
+  });
+});
+
+describe('buildFailureEnvelope (Hermes PR-6 scope: effects preservation)', () => {
+  const errors: AgentError[] = [{ code: 'CHAIN_ERROR', message: 'reverted' }];
+
+  it('preserves completed effects[] on mid-flight failure', () => {
+    const completedApprove = {
+      type: 'transaction' as const,
+      purpose: 'approve-usdc',
+      ok: true,
+      txHash: '0xapprove' as `0x${string}`,
+      blockNumber: '1000',
+      status: 'confirmed' as const,
+    };
+    const env = buildFailureEnvelope({
+      action: 'commitments.submit',
+      stage: 'execute',
+      network: 'polygon',
+      chainId: 137,
+      errors,
+      effects: [completedApprove],
+    });
+    expect(env.ok).toBe(false);
+    expect(env.effects).toEqual([completedApprove]);
+    expect(env.errors[0]?.code).toBe('CHAIN_ERROR');
+  });
+
+  it('defaults effects to [] when not provided', () => {
+    const env = buildFailureEnvelope({
+      action: 'commitments.submit',
+      stage: 'preview',
+      network: 'polygon',
+      chainId: 137,
+      errors,
+    });
+    expect(env.effects).toEqual([]);
+  });
+});
+
+describe('errorToAgentError', () => {
+  it('OspexError → { code, message }', () => {
+    const out = errorToAgentError(new OspexValidationError('bad field'));
+    expect(out.code).toBe('VALIDATION_ERROR');
+    expect(out.message).toBe('bad field');
+  });
+
+  it('OspexChainError with reason + txHash surfaces them via details', () => {
+    const err = new OspexChainError('reverted', {
+      reason: 'NotCommitmentMaker',
+      txHash: '0xreverted',
+    });
+    const out = errorToAgentError(err);
+    expect(out.code).toBe('CHAIN_ERROR');
+    expect(out.details).toMatchObject({
+      reason: 'NotCommitmentMaker',
+      txHash: '0xreverted',
+    });
+  });
+
+  it('OspexAllowanceError surfaces required/current/spender/token via details', () => {
+    const err = new OspexAllowanceError('short', {
+      required: 25_000_000n,
+      current: 0n,
+      spender: '0xspender' as `0x${string}`,
+      token: '0xtoken' as `0x${string}`,
+    });
+    const out = errorToAgentError(err);
+    expect(out.code).toBe('ALLOWANCE_INSUFFICIENT');
+    expect(out.details).toMatchObject({
+      required: '25000000', // bigint → decimal string
+      current: '0',
+      spender: '0xspender',
+      token: '0xtoken',
+    });
+  });
+
+  it('OspexAPIError surfaces status + apiCode via details', () => {
+    const err = new OspexAPIError('rate limited', { status: 429, apiCode: 'RATE_LIMITED' });
+    const out = errorToAgentError(err);
+    expect(out.code).toBe('API_ERROR');
+    expect(out.details).toMatchObject({ status: 429, apiCode: 'RATE_LIMITED' });
+  });
+
+  it('native Error → UNKNOWN_ERROR with original message', () => {
+    const out = errorToAgentError(new Error('boom'));
+    expect(out.code).toBe('UNKNOWN_ERROR');
+    expect(out.message).toBe('boom');
+  });
+
+  it('non-Error throw value → UNKNOWN_ERROR with stringified message', () => {
+    const out = errorToAgentError('not even an error');
+    expect(out.code).toBe('UNKNOWN_ERROR');
+    expect(out.message).toBe('not even an error');
+  });
+});
+
+describe('emitJsonFailure', () => {
+  it('writes a failure envelope to stdout with errors + preserved effects', () => {
+    const sink = new StringSink();
+    const stdout = process.stdout;
+    // Swap stdout for the duration of one call. (writeAgentEnvelope
+    // doesn't accept a stream override, so we replace via prototype
+    // descriptor; restore in finally.)
+    const writeOrig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Buffer) => {
+      sink.write(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      emitJsonFailure({
+        action: 'commitments.submit',
+        stage: 'execute',
+        chainId: 137,
+        error: new OspexChainError('NONCE_TOO_LOW'),
+        effects: [
+          {
+            type: 'transaction',
+            purpose: 'approve-usdc',
+            ok: true,
+            txHash: '0xapprove',
+            blockNumber: '1000',
+            status: 'confirmed',
+          },
+        ],
+      });
+    } finally {
+      process.stdout.write = writeOrig;
+    }
+    void stdout;
+    const parsed = JSON.parse(sink.buf.trim()) as {
+      ok: boolean;
+      action: string;
+      stage: string;
+      errors: Array<{ code: string }>;
+      effects: Array<{ purpose: string; ok: boolean }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.action).toBe('commitments.submit');
+    expect(parsed.stage).toBe('execute');
+    expect(parsed.errors[0]?.code).toBe('CHAIN_ERROR');
+    expect(parsed.effects[0]?.purpose).toBe('approve-usdc');
+    expect(parsed.effects[0]?.ok).toBe(true);
   });
 });

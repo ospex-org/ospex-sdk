@@ -18,6 +18,7 @@ import { OspexChainError } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -62,7 +63,10 @@ export const commitmentsCancelCommand = addSignerOptions(
       requiresChain: wantsOnchain,
       signerIntent,
     });
+    const chainId = client.chainId();
+    let signerAddress: Hex | null = null;
 
+    try {
     const commitment = await client.commitments.resolveByPrefix(hashArg, {
       status: ['open', 'partially_filled'],
     });
@@ -75,10 +79,10 @@ export const commitmentsCancelCommand = addSignerOptions(
 
     if (!wantsOnchain) {
       if (wantJson) {
-        const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+        signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
         writeAgentEnvelope(
           toCancelOffchainAgentEnvelope(offChainResult, commitment, {
-            chainId: client.chainId(),
+            chainId,
             signerAddress,
             hash,
           }),
@@ -114,16 +118,16 @@ export const commitmentsCancelCommand = addSignerOptions(
     }
 
     if (wantJson) {
-      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       const explorerUrl = onChainResult !== null
-        ? polygonscanTxUrl(client.chainId(), onChainResult.txHash)
+        ? polygonscanTxUrl(chainId, onChainResult.txHash)
         : null;
       writeAgentEnvelope(
         toCancelDualAgentEnvelope(
           { offChainResult, onChainResult, onChainError, explorer: explorerUrl },
           commitment,
           {
-            chainId: client.chainId(),
+            chainId,
             signerAddress,
             hash,
           },
@@ -140,7 +144,7 @@ export const commitmentsCancelCommand = addSignerOptions(
       // sees the standard error surface.
       throw new OspexChainError(onChainError?.message ?? 'on-chain cancel failed');
     }
-    const explorerUrl = polygonscanTxUrl(client.chainId(), onChainResult.txHash);
+    const explorerUrl = polygonscanTxUrl(chainId, onChainResult.txHash);
     const summary = {
       hash,
       offChainOk: offChainResult.ok,
@@ -149,6 +153,26 @@ export const commitmentsCancelCommand = addSignerOptions(
       explorer: explorerUrl,
     };
     formatOutput(summary, { json: false });
+    } catch (err) {
+      // Hermes PR-6 scope: catches the OFF-CHAIN failure case (when
+      // client.commitments.cancel itself throws). The on-chain
+      // partial-success path is handled inline above via
+      // toCancelDualAgentEnvelope which preserves the off-chain
+      // effects in its effects[] regardless of the on-chain outcome.
+      if (wantJson) {
+        emitJsonFailure({
+          action: 'commitments.cancel',
+          stage: 'execute',
+          chainId,
+          wallet: signerAddress,
+          walletRole: 'signer',
+          signer: signerAddress,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 // ── v1 → v2 envelope transforms ─────────────────────────────────────

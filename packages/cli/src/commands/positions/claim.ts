@@ -22,6 +22,7 @@ import { OspexChainError, wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  emitJsonFailure,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -54,7 +55,11 @@ export const positionsClaimCommand = addSignerOptions(
     const positionType = parsePosition(opts.type);
 
     const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
+    const chainId = client.chainId();
+    const wantJson = opts.json === true;
+    let signerAddress: Hex | null = null;
 
+    try {
     let result;
     try {
       result = await client.positions.claim({ speculationId, positionType });
@@ -70,11 +75,11 @@ export const positionsClaimCommand = addSignerOptions(
       throw err;
     }
 
-    if (opts.json === true) {
-      const signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+    if (wantJson) {
+      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       writeAgentEnvelope(
         toClaimAgentEnvelope(result, {
-          chainId: client.chainId(),
+          chainId,
           signerAddress,
           speculationId,
           positionType,
@@ -91,6 +96,21 @@ export const positionsClaimCommand = addSignerOptions(
       },
       { json: false },
     );
+    } catch (err) {
+      if (wantJson) {
+        emitJsonFailure({
+          action: 'claim',
+          stage: 'execute',
+          chainId,
+          wallet: signerAddress,
+          walletRole: 'signer',
+          signer: signerAddress,
+          error: err,
+        });
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 // ── v1 → v2 envelope transform ──────────────────────────────────────
