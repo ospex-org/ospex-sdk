@@ -6,6 +6,12 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 —
 
+## [0.2.1] — 2026-05-18
+
+### SDK (`@ospex/sdk`)
+
+- **Fix: `client.teams.aliases()` no longer 400s with `INVALID_PARAM`.** The internal pagination loop now respects the core API's `MAX_LIMIT=1000` guard. This restores the high-level `client.commitments.submit` team-resolution path; `client.commitments.submitRaw` and `client.commitments.match` were unaffected.
+
 ## [0.2.0] — 2026-05-17
 
 ### SDK (`@ospex/sdk`)
@@ -101,6 +107,7 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.1.0

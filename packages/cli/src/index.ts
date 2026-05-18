@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { Command } from '@commander-js/extra-typings';
 import { OspexError } from '@ospex/sdk';
 
+import { CLI_VERSION } from './lib/agentEnvelope.js';
+
 import { healthCommand } from './commands/health.js';
 import { initCommand } from './commands/init.js';
 import { doctorCommand } from './commands/doctor.js';
@@ -60,7 +62,7 @@ export function makeProgram(): Command {
   const program = new Command()
     .name('ospex')
     .description('Command-line interface for the Ospex protocol.')
-    .version('0.2.0');
+    .version(CLI_VERSION);
 
   program.addCommand(healthCommand);
   program.addCommand(doctorCommand);

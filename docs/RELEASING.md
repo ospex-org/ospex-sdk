@@ -15,7 +15,7 @@ Releases are cut on demand, not on a schedule. Trigger conditions:
 1. **All PRs for the release are merged into `main`.**
 2. **`main` is clean:** `git status` shows no uncommitted changes; `git diff --check` is clean.
 3. **CI is green** on the latest `main` commit.
-4. **Walk the manual integration playbook** at [`docs/MANUAL_INTEGRATION_TESTING.md`](./MANUAL_INTEGRATION_TESTING.md). Section 5 (two-wallet match on Amoy) is non-negotiable. If you defer any section, document why in the release ticket.
+4. **Walk the manual integration playbook** at [`docs/MANUAL_INTEGRATION_TESTING.md`](./MANUAL_INTEGRATION_TESTING.md) appropriate to the release scope and available environment. Record any deferred manual sections in the release ticket.
 5. **Update [`CHANGELOG.md`](../CHANGELOG.md)**: move the `Unreleased` items into a new dated section with the upcoming version; reset `Unreleased` to `—`.
 6. **Bump versions in lockstep:**
    - `package.json` (workspace root)

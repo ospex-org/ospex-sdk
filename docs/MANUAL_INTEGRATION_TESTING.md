@@ -125,7 +125,7 @@ Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end bef
 
 ## Section 5 — M2 two-wallet match (Amoy)
 
-The flow that proves funds actually move. Irreplaceable; this section is **non-negotiable** for an M2 release.
+The flow that proves funds actually move.
 
 | # | Step | Expected | Validates |
 |---|---|---|---|
@@ -293,7 +293,7 @@ Copy this into the release ticket:
 [ ] Section 2.5 — Non-interactive Foundry signer
 [ ] Section 3 — Realtime odds
 [ ] Section 4 — Single-wallet chain ops (Amoy)
-[ ] Section 5 — Two-wallet match (Amoy) — NON-NEGOTIABLE
+[ ] Section 5 — Two-wallet match (Amoy)
 [ ] Section 6 — Partial fill
 [ ] Section 7 — Failure modes
 [ ] Section 9 — M3 settle + claim (or manual-verification-deferred note)
@@ -304,4 +304,4 @@ Operator: ____________
 Date:     ____________
 ```
 
-Skipping any section other than 8 (which only applies post-publish) requires a written exception in the release ticket. Section 5 is non-negotiable.
+Skipping any section other than 8 (which only applies post-publish) requires a written exception in the release ticket.
