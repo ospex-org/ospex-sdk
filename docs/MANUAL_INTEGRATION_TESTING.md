@@ -1,12 +1,10 @@
 # Manual integration testing — `@ospex/sdk` + `@ospex/cli`
 
-The canonical pre-release validation for the SDK + CLI. Walk the sections feasible against your current testbed before tagging a release; total runtime is 15-20 minutes when the on-chain testbed is available. Each section names a prerequisite, a command, the expected output, and what to investigate if it fails.
+The canonical pre-release validation for the SDK + CLI. Walk every section in order before tagging an M2 release; total runtime is 15-20 minutes. Each section names a prerequisite, a command, the expected output, and what to investigate if it fails.
 
 Why manual: the integration surface spans on-chain testnet state, JsonOdds writes, and Supabase Realtime — three external systems whose state we don't own. A scripted suite that "passes" while one is degraded is worse than no suite. This playbook is also exactly what a third-party SDK consumer would use to verify their own setup.
 
 A vitest harness lives at `packages/sdk/tests/integration/` (gated behind `OSPEX_INTEGRATION=1`) for regression-checking after a chain client refactor. It mirrors the *automatable* subset (chain ops only — no Realtime, no JsonOdds dependence). It is **not** a substitute for this playbook.
-
-> **Current testbed state (as of 2026-05-18).** The on-chain sections (4, 5, 6, 6.5, 9 Case B, 10) need a seeded contest on the target network. Today that's **mainnet only** — `contests create` on Amoy is blocked because `ospex-core-api` doesn't carry signed `OracleModule` script approvals for Amoy (the `scriptApprovals.amoy` bundle is `null`), and no contests are seeded there out of band. Under the current pre-1.0, 0-user posture the working substitute for the Section 5 "two-wallet match on Amoy" gate is: read-side sections run against production, and on-chain regressions surface through operator self-use rather than a pre-release gate. Revisit when either Amoy approvals are signed and committed or an Amoy contest is seeded by an alternate path. Tracked in the SDK maintainer `CLAUDE.md` under M4.5 (`POLYGON_AMOY_R4_SCRIPT_APPROVALS.md` + `scriptApprovals.amoy.json`).
 
 ## Prereqs (one-time)
 
@@ -21,11 +19,11 @@ A vitest harness lives at `packages/sdk/tests/integration/` (gated behind `OSPEX
 2. Configure `~/.ospex/config.json` via `ospex init`:
    - `apiUrl` defaults to production.
    - **`rpcUrl` is required.** Use Alchemy / Infura / QuickNode for the test network. Public RPCs (`polygon-rpc.com`, `rpc-amoy.polygon.technology`) flake mid-test and `polygon-rpc.com` returns 401 since 2026-03.
-   - `chainId`: `137` for mainnet, `80002` for Amoy. The on-chain sections were originally written assuming Amoy; today they run on whichever network has a seeded testbed (see "Current testbed state" above).
+   - `chainId`: `137` for mainnet, `80002` for Amoy. Sections 4-8 assume Amoy.
 
-3. For the two-wallet match (Section 5): two funded wallets on the network you're testing against (mainnet today; Amoy when approvals land and the testbed is seeded).
-   - Each needs the network's native gas token (POL on mainnet / Amoy).
-   - Each needs USDC (real USDC on mainnet; the mock token at `0xB1D1c0A8Cc8BB165b34735972E798f64A785eaF8` on Amoy). If you're on Amoy and no public faucet/mint is exposed for the mock token, ask ops to seed the wallets.
+3. For the two-wallet match (Section 5): two funded Amoy wallets.
+   - Each needs POL for gas (Polygon faucet).
+   - Each needs mock USDC (mock token at `0xB1D1c0A8Cc8BB165b34735972E798f64A785eaF8`). If a public faucet/mint isn't exposed for that token, ask ops to seed the wallets.
 
 4. Have `cast` (Foundry) installed for the on-chain validation queries in Section 5.
 
@@ -107,9 +105,9 @@ If 3.2 produces nothing in 60s, check JsonOdds health and Supabase Realtime stat
 
 ---
 
-## Section 4 — M2 single-wallet chain ops
+## Section 4 — M2 single-wallet chain ops (Amoy)
 
-Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end before introducing a second wallet. Run on a network with at least one open speculation — mainnet today; Amoy once a testbed is seeded.
+Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end before introducing a second wallet.
 
 | # | Command | Expected | Validates |
 |---|---|---|---|
@@ -121,13 +119,13 @@ Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end bef
 | 4.6 | `ospex commitments list --maker <walletA> --status cancelled --raw` | Row now appears with `status='cancelled'`. (The default status filter is `open,partially_filled`; cancelled rows require an explicit `--status cancelled`. `--raw` keeps the status column visible — the default taker view drops it.) | Cancel propagation. |
 | 4.7 | `ospex commitments cancel <hash>` again | `{ ok: true }` (idempotent) | API CAS guard. |
 
-**Picking inputs for 4.2**: contest id from `ospex contests list --chain-id 80002` if any Amoy contests exist. Today none are seeded (see "Current testbed state" above) and the section is naturally deferred on Amoy; run it on mainnet against an open speculation if needed. Scorer = one of the three Amoy scorer addresses (moneyline `0x2e6f…`, spread `0x0de8…`, total `0xac2e…`) when on Amoy, or the mainnet scorer addresses from `packages/sdk/src/contracts/addresses.ts` otherwise. `oddsTick=250` ⇒ 2.50 odds; `riskAmount=1000` ⇒ 0.001 USDC (lot-size aligned).
+**Picking inputs for 4.2**: contest id from `ospex contests list --chain-id 80002` (assuming Amoy contests are seeded; otherwise ask ops to seed one). Scorer = one of the three Amoy scorer addresses (moneyline `0x2e6f…`, spread `0x0de8…`, total `0xac2e…`). `oddsTick=250` ⇒ 2.50 odds; `riskAmount=1000` ⇒ 0.001 USDC (lot-size aligned).
 
 ---
 
-## Section 5 — M2 two-wallet match
+## Section 5 — M2 two-wallet match (Amoy)
 
-The flow that proves funds actually move. Run this against any network with a seeded contest carrying an open speculation — mainnet today; Amoy once approvals land (see "Current testbed state" above). Under the current pre-1.0, 0-user posture this section is deferred when no testbed is available rather than blocking the release.
+The flow that proves funds actually move.
 
 | # | Step | Expected | Validates |
 |---|---|---|---|
@@ -294,8 +292,8 @@ Copy this into the release ticket:
 [ ] Section 2 — Wallet lifecycle (legacy)
 [ ] Section 2.5 — Non-interactive Foundry signer
 [ ] Section 3 — Realtime odds
-[ ] Section 4 — Single-wallet chain ops (network with a seeded contest)
-[ ] Section 5 — Two-wallet match (network with a seeded contest)
+[ ] Section 4 — Single-wallet chain ops (Amoy)
+[ ] Section 5 — Two-wallet match (Amoy)
 [ ] Section 6 — Partial fill
 [ ] Section 7 — Failure modes
 [ ] Section 9 — M3 settle + claim (or manual-verification-deferred note)
@@ -306,4 +304,4 @@ Operator: ____________
 Date:     ____________
 ```
 
-Section 8 only applies post-publish. The on-chain sections (4, 5, 6, 6.5, 9 Case B, 10) require a seeded testbed; when one isn't available they're naturally deferred under the current 0-user posture and noted as such in the release ticket. Read-side and signer sections (1, 2, 2.5, 3, 7) are always expected to pass against production.
+Skipping any section other than 8 (which only applies post-publish) requires a written exception in the release ticket.
