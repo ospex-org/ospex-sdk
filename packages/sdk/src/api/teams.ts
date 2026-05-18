@@ -5,9 +5,13 @@
  *
  * Used by `client.teams.aliases()` (caching wrapper) which the SDK's
  * commitment resolver consults to map free-form `--side` input
- * ("Lakers", "LAL") to a canonical team_id. The endpoint is paginated
- * (default page size 2000); table is ~1300+ rows but PostgREST's
- * default page is 1000, so we paginate until `hasMore=false` to
+ * ("Lakers", "LAL") to a canonical team_id. The endpoint enforces a
+ * hard cap of 1000 rows per request — see `MAX_LIMIT` in
+ * `ospex-core-api/src/v1/teams.ts`. PostgREST silently truncates above
+ * 1000, so the API rejects larger `limit` values with HTTP 400 to
+ * prevent naive `offset += pagination.limit` clients from skipping
+ * rows. The `team_aliases` table is ~1300+ rows today, so a full
+ * fetch is two round-trips. We paginate until `hasMore=false` to
  * guarantee the full set is returned.
  */
 
@@ -33,7 +37,7 @@ export class TeamsApi {
    * states throw `OspexAPIError` rather than returning partial data:
    *
    *   1. `hasMore=true` with an empty page (server bug — never expected).
-   *   2. `MAX_PAGES` (100 × 2000 = 200k rows) reached while the server
+   *   2. `MAX_PAGES` (100 × 1000 = 100k rows) reached while the server
    *      still says `hasMore=true`. The current `team_aliases` table is
    *      ~2k rows; hitting the cap means something is fundamentally
    *      wrong with the server response.
@@ -48,7 +52,7 @@ export class TeamsApi {
   async aliases(opts: TeamAliasesQuery = {}): Promise<TeamAliasBody[]> {
     const all: TeamAliasBody[] = [];
     let offset = 0;
-    const limit = 2000;
+    const limit = 1000;
     for (let page = 0; page < MAX_PAGES; page++) {
       const query: Record<string, string | number | undefined> = { limit, offset };
       if (opts.sport !== undefined) query.sport = opts.sport;

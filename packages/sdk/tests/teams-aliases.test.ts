@@ -51,7 +51,7 @@ const PAGE_BODY = (
     aliasType: r.aliasType,
     source: 'manual',
   })),
-  pagination: { limit: 2000, offset, total, hasMore },
+  pagination: { limit: 1000, offset, total, hasMore },
 });
 
 describe('client.teams.aliases — pagination', () => {
