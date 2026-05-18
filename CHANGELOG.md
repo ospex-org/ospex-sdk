@@ -6,6 +6,16 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 —
 
+## [0.2.1] — 2026-05-18
+
+### SDK (`@ospex/sdk`)
+
+- **Fix: `client.teams.aliases()` no longer 400s with `INVALID_PARAM`.** The internal pagination loop was requesting `limit=2000`, but the core API enforces `MAX_LIMIT=1000` — a deliberate guard because PostgREST silently truncates above 1000, which would break naive `offset += pagination.limit` clients. Capped to 1000; the loop advances by `body.aliases.length` so the page-size change only means two round-trips instead of one against the current ~1300-row alias table, and the result is cached per `Teams` instance (5-min TTL). This restored the high-level `client.commitments.submit` team-resolution path; `client.commitments.submitRaw` and `client.commitments.match` don't hit the alias table and were unaffected.
+
+### Documentation
+
+- **Integration testing posture reframed for current Amoy reality.** With no seeded contests on Amoy (because `contests create` requires script approvals that haven't been signed against the current `OracleModule` deploy), the on-chain sections of the manual playbook (4, 5, 6, 6.5, 9 Case B, 10) require a testbed that doesn't currently exist. The "Section 5 is non-negotiable" gate was unenforceable in practice. Reframed to "walk what's feasible against the available environment": read-side and signer sections (1, 2, 2.5, 3, 7) run against production; on-chain sections defer until either Amoy approvals land or the change is exercised against mainnet usage. Updated in [`docs/RELEASING.md`](./docs/RELEASING.md), [`docs/MANUAL_INTEGRATION_TESTING.md`](./docs/MANUAL_INTEGRATION_TESTING.md), and the testing pointer in [`README.md`](./README.md). No SDK / CLI behavior change.
+
 ## [0.2.0] — 2026-05-17
 
 ### SDK (`@ospex/sdk`)
@@ -101,6 +111,7 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.1.0

@@ -210,7 +210,7 @@ For the full SDK-level trust-boundary description (how `KeystoreSigner` holds de
 
 Unit tests run via `yarn test`. The most important one is the EIP-712 hash vector test in [`packages/sdk/tests/chain-eip712.test.ts`](./packages/sdk/tests/chain-eip712.test.ts) — it pins the SDK's typed-data declaration against the contract's `COMMITMENT_TYPEHASH` and cross-validates with ethers, so any drift in field order or types fails CI before a single bad commitment hits the wire.
 
-Integration coverage is a documented manual flow at [`docs/MANUAL_INTEGRATION_TESTING.md`](./docs/MANUAL_INTEGRATION_TESTING.md). Walk it (15-20 minutes against Polygon Amoy) before tagging a release.
+Integration coverage is a documented manual flow at [`docs/MANUAL_INTEGRATION_TESTING.md`](./docs/MANUAL_INTEGRATION_TESTING.md). Walk it before tagging a release. Read-side and signer sections run against production; the on-chain sections need a seeded testbed — mainnet today, Amoy once script approvals land there ([Roadmap](#roadmap)).
 
 CI runs install / build / typecheck / test on every PR — see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
 
