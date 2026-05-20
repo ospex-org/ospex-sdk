@@ -164,7 +164,6 @@ export async function prepareMatch(
   // MatchingModule); rely on the configured `chainId` here and trust
   // the API's network scoping (commitments scoped by `network` column
   // in Supabase). `matchFromPreview` re-checks at execute time.
-  void chainId;
 
   const isLazy = speculationMode.mode === 'lazy';
   const totalFeeWei6 = SPECULATION_CREATION_FEE_WEI6[chainId] ?? 0n;
