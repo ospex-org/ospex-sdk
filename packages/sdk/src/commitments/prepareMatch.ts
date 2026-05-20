@@ -25,7 +25,7 @@
  *   5. Call `buildMatchPreview` with everything pre-fetched.
  */
 
-import { encodeAbiParameters, keccak256 } from 'viem';
+import { deriveSpeculationKey } from '../chain/eip712.js';
 import { OspexValidationError } from '../errors.js';
 import { buildMatchPreview } from './buildMatchPreview.js';
 import { readAllowance } from './allowance.js';
@@ -243,19 +243,4 @@ async function resolveCommitment(
   }
   const api = new CommitmentsApi(ctx.api);
   return api.get(args.hash);
-}
-
-// Local re-implementation of `deriveSpeculationKey` to keep the
-// orchestrator self-contained without importing through the chain/
-// barrel. The math mirrors `chain/eip712.ts:92-106`.
-function deriveSpeculationKey(
-  contestId: bigint,
-  scorer: Hex,
-  lineTicks: number,
-): Hex {
-  const encoded = encodeAbiParameters(
-    [{ type: 'uint256' }, { type: 'address' }, { type: 'int32' }],
-    [contestId, scorer, lineTicks],
-  );
-  return keccak256(encoded);
 }
