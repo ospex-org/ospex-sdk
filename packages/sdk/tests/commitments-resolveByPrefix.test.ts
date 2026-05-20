@@ -195,20 +195,24 @@ describe('resolveByPrefix — prefix path', () => {
     expect(result.status).toBe('open');
   });
 
-  it('status: "any" passes ALL statuses + includeInvalidated + includeExpired to api.list', async () => {
+  it('status: "any" sends all STORED statuses (never the effective-only "expired" token) + includeInvalidated + includeExpired, and still resolves an effective-expired row', async () => {
     const calls: Array<{ path: string; opts?: Record<string, unknown> }> = [];
     const ctx = buildCtx({
+      // Effective `expired` row (raw stored `open`) — returned by the server via
+      // includeExpired=true, NOT by a status=expired filter.
       listResponse: {
-        commitments: [makeBody('0x' + 'a1'.repeat(32), { status: 'cancelled' })],
+        commitments: [makeBody('0x' + 'a1'.repeat(32), { status: 'expired', storedStatus: 'open' })],
       },
       calls,
     });
-    await resolveByPrefix(ctx, '0x' + 'a1'.repeat(4), { status: 'any' });
+    const result = await resolveByPrefix(ctx, '0x' + 'a1'.repeat(4), { status: 'any' });
+    expect(result.status).toBe('expired');
 
-    // The listed query must include the expanded statuses.
+    // The wire `status=` filter is the stored column — it must NOT include
+    // `expired` (core-api returns 400 for it); expired rows arrive via the flag.
     expect(calls[0]?.path).toBe('/v1/commitments');
     const query = (calls[0]?.opts as { query?: Record<string, unknown> } | undefined)?.query;
-    expect(query?.status).toBe('open,partially_filled,filled,cancelled,expired');
+    expect(query?.status).toBe('open,partially_filled,filled,cancelled');
     expect(query?.includeInvalidated).toBe(true);
     expect(query?.includeExpired).toBe(true);
   });

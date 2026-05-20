@@ -8,6 +8,7 @@ export type {
 export type {
   Commitment,
   CommitmentStatus,
+  StoredCommitmentStatus,
   CommitmentsListOptions,
 } from './commitment.js';
 export type {

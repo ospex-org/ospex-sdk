@@ -1,5 +1,9 @@
 import type { ApiClient } from './client.js';
-import type { Commitment, CommitmentsListOptions } from '../types/commitment.js';
+import type {
+  Commitment,
+  CommitmentsListOptions,
+  StoredCommitmentStatus,
+} from '../types/commitment.js';
 import type { CommitmentBody, CommitmentsListBody } from './types.js';
 import type { Hex } from '../types/signer.js';
 import { OspexValidationError } from '../errors.js';
@@ -68,7 +72,10 @@ export class CommitmentsApi {
 export function toCommitment(body: CommitmentBody): Commitment {
   return {
     ...body,
-    storedStatus: body.storedStatus ?? body.status,
+    // Old core-api builds omit storedStatus; their `status` is the raw stored
+    // value (those builds never derived an effective `expired`), so the cast is
+    // sound on that path and short-circuited when storedStatus is present.
+    storedStatus: body.storedStatus ?? (body.status as StoredCommitmentStatus),
     isLive: computeIsLive(body),
   };
 }

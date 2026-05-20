@@ -5,7 +5,7 @@
  * when the API contract changes.
  */
 
-import type { CommitmentStatus } from '../types/commitment.js';
+import type { CommitmentStatus, StoredCommitmentStatus } from '../types/commitment.js';
 import type { ChainId, Network } from '../types/protocol.js';
 
 export interface ApiErrorBody {
@@ -87,7 +87,7 @@ export interface CommitmentBody {
    * core-api builds that predate effective-status (older deploys omit it);
    * `toCommitment` falls back to `status` in that case.
    */
-  storedStatus?: CommitmentStatus;
+  storedStatus?: StoredCommitmentStatus;
   source: string;
   network: string;
   nonceInvalidated: boolean;

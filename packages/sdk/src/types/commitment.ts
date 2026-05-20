@@ -1,11 +1,22 @@
 import type { MarketType } from './odds.js';
 
-export type CommitmentStatus =
+/**
+ * Raw lifecycle status as stored by the indexer / submission relay. These are
+ * the only values the `GET /v1/commitments?status=` filter accepts — `'expired'`
+ * is never stored (the server returns 400 for it).
+ */
+export type StoredCommitmentStatus =
   | 'open'
   | 'partially_filled'
   | 'filled'
-  | 'cancelled'
-  | 'expired';
+  | 'cancelled';
+
+/**
+ * Effective lifecycle status: the stored statuses plus the time-driven
+ * `'expired'` transition the API derives. This is what `Commitment.status`
+ * reports; the raw value is on `Commitment.storedStatus`.
+ */
+export type CommitmentStatus = StoredCommitmentStatus | 'expired';
 
 /**
  * Public commitment shape. All on-chain numeric values that may exceed
@@ -43,7 +54,7 @@ export interface Commitment {
    * derivation. Falls back to {@link Commitment.status} when read from an older
    * core-api build that doesn't return it.
    */
-  storedStatus: CommitmentStatus;
+  storedStatus: StoredCommitmentStatus;
   source: string;
   network: string;
   nonceInvalidated: boolean;
@@ -75,10 +86,13 @@ export interface CommitmentsListOptions {
    */
   speculationId?: string | number;
   /**
-   * Comma-separated status list, or array. Defaults API-side to
-   * `'open,partially_filled'`.
+   * Comma-separated status list (or array) filtering the API's **stored**
+   * status column. `'expired'` is NOT accepted here — it is an effective-only
+   * status the API never stores (the server returns 400). To surface
+   * time-expired rows, pass `includeExpired: true` and read the effective
+   * `Commitment.status`. Defaults API-side to `'open,partially_filled'`.
    */
-  status?: CommitmentStatus | CommitmentStatus[] | string;
+  status?: StoredCommitmentStatus | StoredCommitmentStatus[] | string;
   includeInvalidated?: boolean;
   includeExpired?: boolean;
   limit?: number;

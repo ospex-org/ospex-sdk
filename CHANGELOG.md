@@ -11,6 +11,8 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 ### SDK (`@ospex/sdk`)
 
 - **`Commitment.status` is now the effective status; new `Commitment.storedStatus` carries the raw value.** The core API folds time-expiry and nonce invalidation into `status` — an `open`/`partially_filled` commitment past its expiry now reads `'expired'`, and a nonce-invalidated one reads `'cancelled'` — so the list/orderbook and get-by-hash surfaces agree on lifecycle. `storedStatus` exposes the raw indexed value (`open | partially_filled | filled | cancelled`) and falls back to `status` when read from an older core-api build that omits it. `isLive` is unchanged and remains the full matchability predicate — it additionally rejects the zero-remaining edge that `status` does not fold in.
+- **New `StoredCommitmentStatus` type** (`open | partially_filled | filled | cancelled`); `CommitmentStatus` is now `StoredCommitmentStatus | 'expired'`. `CommitmentsListOptions.status` is narrowed to `StoredCommitmentStatus` because the `GET /v1/commitments?status=` filter matches the **stored** column — `'expired'` is effective-only and the API rejects it as a filter value (read it off the response `status` via `includeExpired`).
+- **Fix: `commitments.resolveByPrefix({ status: 'any' })` no longer sends `status=expired` on the wire.** Against the effective-status core API (which rejects `expired` as a stored `status=` token) that produced a 400, breaking `ospex commitments show <prefix>`. It now requests all stored statuses with `includeInvalidated`/`includeExpired`, so effective expired/cancelled rows still resolve.
 
 ## [0.2.1] — 2026-05-18
 
@@ -113,7 +115,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.2
 [0.2.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.1.0
