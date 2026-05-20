@@ -23,7 +23,6 @@
 import { OspexAPIError, OspexValidationError } from '../errors.js';
 import {
   buildDomain,
-  CANCEL_COMMITMENT_TYPES,
   hashCommitment,
   OSPEX_COMMITMENT_TYPES,
   deriveSpeculationKey,
@@ -44,10 +43,6 @@ import type { CommitmentsContext } from './context.js';
 import type { Commitment } from '../types/commitment.js';
 import type { CommitmentBody } from '../api/types.js';
 import type { Hex } from '../types/signer.js';
-
-// CANCEL_COMMITMENT_TYPES is referenced via module-side imports for test
-// reachability — silence the unused-import lint if any.
-void CANCEL_COMMITMENT_TYPES;
 
 /**
  * Canonical protocol-level submit args. The high-level
