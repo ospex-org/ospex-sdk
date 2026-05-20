@@ -6,6 +6,12 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 —
 
+## [0.2.2] — 2026-05-20
+
+### SDK (`@ospex/sdk`)
+
+- **`Commitment.status` is now the effective status; new `Commitment.storedStatus` carries the raw value.** The core API folds time-expiry and nonce invalidation into `status` — an `open`/`partially_filled` commitment past its expiry now reads `'expired'`, and a nonce-invalidated one reads `'cancelled'` — so the list/orderbook and get-by-hash surfaces agree on lifecycle. `storedStatus` exposes the raw indexed value (`open | partially_filled | filled | cancelled`) and falls back to `status` when read from an older core-api build that omits it. `isLive` is unchanged and remains the full matchability predicate — it additionally rejects the zero-remaining edge that `status` does not fold in.
+
 ## [0.2.1] — 2026-05-18
 
 ### SDK (`@ospex/sdk`)

@@ -30,7 +30,20 @@ export interface Commitment {
   expiry: string | null;
   speculationKey: string | null;
   signature: string | null;
+  /**
+   * EFFECTIVE lifecycle status. The core API folds time-expiry and nonce
+   * invalidation into this value: an `open`/`partially_filled` row past its
+   * expiry reads `'expired'`, and a nonce-invalidated one reads `'cancelled'`.
+   * Use {@link Commitment.storedStatus} for the raw indexed value.
+   */
   status: CommitmentStatus;
+  /**
+   * Raw status as stored by the indexer / submission relay
+   * (`open | partially_filled | filled | cancelled`), before effective-status
+   * derivation. Falls back to {@link Commitment.status} when read from an older
+   * core-api build that doesn't return it.
+   */
+  storedStatus: CommitmentStatus;
   source: string;
   network: string;
   nonceInvalidated: boolean;
@@ -38,10 +51,12 @@ export interface Commitment {
    * Derived: status is `'open'` or `'partially_filled'`, the row isn't
    * `nonceInvalidated`, `remainingRiskAmount > 0`, and the expiry is in
    * the future. The canonical "is this commitment still matchable?"
-   * predicate — mirrors every precondition `matchCommitment` enforces
-   * on chain. Computed at API decode time, so the expiry comparison is
-   * a snapshot — a commitment held in memory across its expiry won't
-   * silently flip to `false` without re-fetching.
+   * predicate — mirrors every precondition `matchCommitment` enforces on
+   * chain. Strictly stronger than `status !== 'expired'/'cancelled'`: it also
+   * rejects the zero-remaining edge (a `partially_filled` row whose remaining
+   * is 0), which effective `status` does NOT fold in. Computed at API decode
+   * time, so the expiry comparison is a snapshot — a commitment held in memory
+   * across its expiry won't silently flip to `false` without re-fetching.
    */
   isLive: boolean;
   /** ISO-8601 string. */

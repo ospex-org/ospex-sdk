@@ -80,7 +80,14 @@ export interface CommitmentBody {
   expiry: string | null;
   speculationKey: string | null;
   signature: string | null;
+  /** EFFECTIVE status — folds in time-expiry + nonce invalidation. */
   status: CommitmentStatus;
+  /**
+   * Raw indexer/relay status. Optional on the wire for back-compat with
+   * core-api builds that predate effective-status (older deploys omit it);
+   * `toCommitment` falls back to `status` in that case.
+   */
+  storedStatus?: CommitmentStatus;
   source: string;
   network: string;
   nonceInvalidated: boolean;

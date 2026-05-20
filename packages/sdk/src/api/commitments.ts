@@ -59,10 +59,16 @@ export class CommitmentsApi {
  * in contest detail responses, the body returned by `match`, the
  * canonical row returned by `submit` — go through the same code path
  * instead of each redoing the predicate.
+ *
+ * `storedStatus` falls back to `status` for back-compat: a core-api build
+ * predating effective-status omits `storedStatus` on the wire, so an SDK
+ * pointed at an older API still yields a defined value (equal to `status`)
+ * rather than `undefined`.
  */
 export function toCommitment(body: CommitmentBody): Commitment {
   return {
     ...body,
+    storedStatus: body.storedStatus ?? body.status,
     isLive: computeIsLive(body),
   };
 }
