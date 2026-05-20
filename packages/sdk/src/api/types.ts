@@ -5,7 +5,7 @@
  * when the API contract changes.
  */
 
-import type { CommitmentStatus } from '../types/commitment.js';
+import type { CommitmentStatus, StoredCommitmentStatus } from '../types/commitment.js';
 import type { ChainId, Network } from '../types/protocol.js';
 
 export interface ApiErrorBody {
@@ -80,7 +80,14 @@ export interface CommitmentBody {
   expiry: string | null;
   speculationKey: string | null;
   signature: string | null;
+  /** EFFECTIVE status — folds in time-expiry + nonce invalidation. */
   status: CommitmentStatus;
+  /**
+   * Raw indexer/relay status. Optional on the wire for back-compat with
+   * core-api builds that predate effective-status (older deploys omit it);
+   * `toCommitment` falls back to `status` in that case.
+   */
+  storedStatus?: StoredCommitmentStatus;
   source: string;
   network: string;
   nonceInvalidated: boolean;

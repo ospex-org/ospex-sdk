@@ -1,5 +1,9 @@
 import type { ApiClient } from './client.js';
-import type { Commitment, CommitmentsListOptions } from '../types/commitment.js';
+import type {
+  Commitment,
+  CommitmentsListOptions,
+  StoredCommitmentStatus,
+} from '../types/commitment.js';
 import type { CommitmentBody, CommitmentsListBody } from './types.js';
 import type { Hex } from '../types/signer.js';
 import { OspexValidationError } from '../errors.js';
@@ -59,10 +63,19 @@ export class CommitmentsApi {
  * in contest detail responses, the body returned by `match`, the
  * canonical row returned by `submit` — go through the same code path
  * instead of each redoing the predicate.
+ *
+ * `storedStatus` falls back to `status` for back-compat: a core-api build
+ * predating effective-status omits `storedStatus` on the wire, so an SDK
+ * pointed at an older API still yields a defined value (equal to `status`)
+ * rather than `undefined`.
  */
 export function toCommitment(body: CommitmentBody): Commitment {
   return {
     ...body,
+    // Old core-api builds omit storedStatus; their `status` is the raw stored
+    // value (those builds never derived an effective `expired`), so the cast is
+    // sound on that path and short-circuited when storedStatus is present.
+    storedStatus: body.storedStatus ?? (body.status as StoredCommitmentStatus),
     isLive: computeIsLive(body),
   };
 }

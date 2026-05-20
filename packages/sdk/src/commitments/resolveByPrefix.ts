@@ -14,9 +14,12 @@
  *     on 0 / >1 / full-page-overflow.
  *   - Anything else → too-short / malformed prefix error.
  *
- * `status: 'any'` expands to ALL statuses + `includeInvalidated: true`
- * + `includeExpired: true`. We never omit `status` — the API defaults
- * to `open,partially_filled` and would silently narrow the search.
+ * `status: 'any'` expands to all STORED statuses + `includeInvalidated: true`
+ * + `includeExpired: true`. The `status=` filter is the API's stored column
+ * (it rejects the effective-only `'expired'`), so effective `expired` /
+ * `cancelled` rows come back via the include flags, labeled in the response
+ * `status`. We never omit `status` — the API defaults to `open,partially_filled`
+ * and would silently narrow the search.
  *
  * TODO (follow-up): add a `commitmentHashPrefix` query parameter to
  * `GET /v1/commitments` server-side so the resolver can rely on
@@ -30,6 +33,7 @@ import { OspexValidationError } from '../errors.js';
 import type {
   Commitment,
   CommitmentStatus,
+  StoredCommitmentStatus,
   CommitmentsListOptions,
 } from '../types/commitment.js';
 import type { CommitmentsContext } from './context.js';
@@ -140,17 +144,19 @@ export async function resolveByPrefix(
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-const ALL_STATUSES: CommitmentStatus[] = [
+// All STORED statuses — the only values the core-api `status=` filter accepts.
+// (Effective `expired`/`cancelled` are surfaced via the include flags below +
+// the response `status`, never as a `status=` token.)
+const ALL_STORED_STATUSES: StoredCommitmentStatus[] = [
   'open',
   'partially_filled',
   'filled',
   'cancelled',
-  'expired',
 ];
-const DEFAULT_STATUSES: CommitmentStatus[] = ['open', 'partially_filled'];
+const DEFAULT_STATUSES: StoredCommitmentStatus[] = ['open', 'partially_filled'];
 
 interface ExpandedStatusOpts {
-  status: CommitmentStatus[];
+  status: StoredCommitmentStatus[];
   includeInvalidated?: boolean;
   includeExpired?: boolean;
 }
@@ -158,15 +164,24 @@ interface ExpandedStatusOpts {
 function expandStatusOpts(opts: ResolveByPrefixOptions): ExpandedStatusOpts {
   if (opts.status === 'any') {
     return {
-      status: ALL_STATUSES,
+      status: ALL_STORED_STATUSES,
       includeInvalidated: true,
       includeExpired: true,
     };
   }
-  const statuses = opts.status ?? DEFAULT_STATUSES;
-  const out: ExpandedStatusOpts = { status: statuses };
+  // The scope may name effective statuses (e.g. 'expired'), but the wire
+  // `status=` filter is the stored column — drop 'expired' and opt into expired
+  // rows via the flag instead. Realistic callers pass only stored statuses, so
+  // this is a no-op for them; the fallback guards against an all-'expired' scope
+  // producing an empty (invalid) wire filter.
+  const scope = opts.status ?? DEFAULT_STATUSES;
+  const stored = scope.filter((s): s is StoredCommitmentStatus => s !== 'expired');
+  const out: ExpandedStatusOpts = {
+    status: stored.length > 0 ? stored : ALL_STORED_STATUSES,
+  };
   if (opts.includeInvalidated !== undefined) out.includeInvalidated = opts.includeInvalidated;
   if (opts.includeExpired !== undefined) out.includeExpired = opts.includeExpired;
+  else if (scope.includes('expired')) out.includeExpired = true;
   return out;
 }
 

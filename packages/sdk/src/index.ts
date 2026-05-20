@@ -51,6 +51,7 @@ export type {
   // commitment
   Commitment,
   CommitmentStatus,
+  StoredCommitmentStatus,
   CommitmentsListOptions,
   // position
   Position,
