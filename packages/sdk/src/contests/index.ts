@@ -8,8 +8,18 @@
  * resolve dependencies through ContestsContext lazily so the parent
  * OspexClient doesn't construct a chain client until a write fires.
  */
-import type { ApprovedScripts, Contest, ContestsListOptions } from '../types/contest.js';
+import type {
+  ApprovedScripts,
+  Contest,
+  ContestsListOptions,
+  ContestUpdate,
+} from '../types/contest.js';
 import type { ContestsContext } from './context.js';
+import type { Subscription } from '../types/odds.js';
+import type { ContestsSubscribeFilters, StreamSubscribeHandlers } from '../types/stream.js';
+import { subscribeToStream } from '../realtime/stream.js';
+import { contestToUpdate, decodeContestUpdate } from '../realtime/decoders.js';
+import { normalizeUint } from '../realtime/filters.js';
 import {
   approveFee,
   approveLink,
@@ -49,6 +59,38 @@ export class Contests {
 
   list(options: ContestsListOptions = {}): Promise<Contest[]> {
     return list(this.ctx, options);
+  }
+
+  /**
+   * Subscribe to live contest lifecycle deltas (SSE), optionally scoped to a
+   * `contestId`. Delivers `ContestUpdate` rows — status / score / verified /
+   * scored / voided transitions — NOT the full `Contest` (speculations have
+   * their own stream; detail enrichment stays on `contests.get`). Apply
+   * last-received-wins per `contestId`.
+   *
+   * `onSnapshot` fires only when scoped to a `contestId` (projected from the
+   * detail endpoint); an unscoped subscription streams from connect with no
+   * snapshot.
+   */
+  async subscribe(
+    filters: ContestsSubscribeFilters,
+    handlers: StreamSubscribeHandlers<ContestUpdate>,
+  ): Promise<Subscription> {
+    const contestId = normalizeUint(filters.contestId, 'contestId');
+    return subscribeToStream<ContestUpdate>({
+      api: this.ctx.api,
+      resource: 'contests',
+      filters: { contestId },
+      decode: decodeContestUpdate,
+      handlers,
+      ...(contestId !== undefined
+        ? {
+            snapshot: async (): Promise<ContestUpdate[]> => [
+              contestToUpdate(await this.get(contestId)),
+            ],
+          }
+        : {}),
+    });
   }
 
   waitForVerified(

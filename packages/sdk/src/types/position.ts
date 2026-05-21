@@ -8,6 +8,19 @@ export interface Position {
   claimed: boolean;
   /** ISO-8601 string. */
   positionCreatedAt: string | null;
+  /**
+   * Owner wallet. The address-scoped REST reads (`positions.byAddress`)
+   * leave this undefined — the address is implicit in the request — while
+   * `positions.subscribe` deltas always carry it (it is part of a
+   * position's natural key `(speculationId, userAddress, positionType)`).
+   * The subscribe snapshot fills it from the subscription's `address` filter.
+   */
+  userAddress?: string;
+  /**
+   * ISO-8601 string. When the position was claimed on-chain. Carried by
+   * `positions.subscribe` deltas; undefined on the address-scoped REST reads.
+   */
+  claimedAt?: string | null;
 }
 
 export interface PositionTotals {

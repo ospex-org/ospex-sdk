@@ -10,12 +10,17 @@
  * write actually fires.
  */
 
-import { CommitmentsApi } from '../api/commitments.js';
+import { CommitmentsApi, toCommitment } from '../api/commitments.js';
 import { OspexValidationError } from '../errors.js';
 import type { CommitmentsContext } from './context.js';
 import type { Commitment, CommitmentsListOptions } from '../types/commitment.js';
+import type { CommitmentBody } from '../api/types.js';
 import type { Hex } from '../types/signer.js';
 import type { HighLevelSubmitArgs, SubmitPreview } from '../types/preview.js';
+import type { Subscription } from '../types/odds.js';
+import type { CommitmentsSubscribeFilters, StreamSubscribeHandlers } from '../types/stream.js';
+import { subscribeToStream } from '../realtime/stream.js';
+import { assertAddress, normalizeUint } from '../realtime/filters.js';
 import {
   approve,
   approveCreationFee,
@@ -75,6 +80,38 @@ export class Commitments {
 
   get(hash: Hex): Promise<Commitment> {
     return this.api.get(hash);
+  }
+
+  /**
+   * Subscribe to live commitment deltas (SSE) for the given identity/scope
+   * filters. Delivers an open-book snapshot of currently-matchable commitments
+   * via `onSnapshot`, then live `onDelta` rows — including terminal transitions
+   * to `filled` / `cancelled`. Apply last-received-wins per `commitmentHash`.
+   *
+   * Expiry is time-based and emits no delta: re-derive it client-side from
+   * `Commitment.isLive` / `expiry` (the SDK computes `isLive` on every row).
+   * The snapshot is a single bounded page (≤ 1000); fuller backfill is the
+   * recovery surface (forthcoming).
+   */
+  async subscribe(
+    filters: CommitmentsSubscribeFilters,
+    handlers: StreamSubscribeHandlers<Commitment>,
+  ): Promise<Subscription> {
+    assertAddress(filters.maker, 'maker');
+    assertAddress(filters.scorer, 'scorer');
+    const contestId = normalizeUint(filters.contestId, 'contestId');
+    const listOpts: CommitmentsListOptions = { limit: 1000 };
+    if (filters.maker !== undefined) listOpts.maker = filters.maker;
+    if (filters.scorer !== undefined) listOpts.scorer = filters.scorer;
+    if (contestId !== undefined) listOpts.contestId = contestId;
+    return subscribeToStream<Commitment>({
+      api: this.ctx.api,
+      resource: 'commitments',
+      filters: { maker: filters.maker, scorer: filters.scorer, contestId },
+      decode: (body) => toCommitment(body as CommitmentBody),
+      snapshot: () => this.list(listOpts),
+      handlers,
+    });
   }
 
   // ── Writes (M2) ───────────────────────────────────────────────────

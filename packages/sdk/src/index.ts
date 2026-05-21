@@ -23,12 +23,14 @@ export {
   OspexScriptApprovalError,
   OspexSignerResolutionError,
   OspexSubscriptionError,
+  OspexStreamError,
 } from './errors.js';
 export type {
   OspexErrorCode,
   OspexScriptApprovalReason,
   OspexSignerResolutionReason,
   OspexSubscriptionReason,
+  OspexStreamReason,
 } from './errors.js';
 
 export type {
@@ -40,6 +42,7 @@ export type {
   Signer,
   // contest
   Contest,
+  ContestUpdate,
   ContestStatus,
   ContestsListOptions,
   Speculation,
@@ -48,6 +51,16 @@ export type {
   SpeculationsListOptions,
   ScriptApproval,
   ApprovedScripts,
+  // fills
+  Fill,
+  // streams
+  StreamStatus,
+  StreamSubscribeHandlers,
+  CommitmentsSubscribeFilters,
+  PositionsSubscribeFilters,
+  FillsSubscribeFilters,
+  SpeculationsSubscribeFilters,
+  ContestsSubscribeFilters,
   // commitment
   Commitment,
   CommitmentStatus,

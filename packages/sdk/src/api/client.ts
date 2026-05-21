@@ -120,6 +120,55 @@ export class ApiClient {
     }
   }
 
+  /**
+   * Open a long-lived streaming GET (Server-Sent Events). Unlike `request`,
+   * this applies NO timeout — a stream is meant to stay open, so the caller
+   * owns its lifetime via `signal` (abort to close) plus any idle/heartbeat
+   * watchdog. Non-2xx responses map to `OspexAPIError` exactly like `request`
+   * (so a 429 capacity cap, 404 unknown resource, or 400 stale cursor surface
+   * as typed errors with `status`); on 2xx the raw `Response` is returned so
+   * the caller can consume `response.body` as a byte stream.
+   */
+  async openStream(
+    path: string,
+    options: {
+      query?: RequestOptions['query'];
+      signal: AbortSignal;
+      headers?: Record<string, string>;
+    },
+  ): Promise<Response> {
+    const url = this.buildUrl(path, options.query);
+    const headers: Record<string, string> = { Accept: 'text/event-stream' };
+    if (options.headers !== undefined) {
+      for (const [k, v] of Object.entries(options.headers)) headers[k] = v;
+    }
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, { method: 'GET', headers, signal: options.signal });
+    } catch (err) {
+      throw new OspexAPIError(networkErrorMessage(err), { path, cause: err });
+    }
+
+    if (!response.ok) {
+      const errBody = await safeParseError(response);
+      throw new OspexAPIError(errBody.error, {
+        status: response.status,
+        ...(errBody.code !== undefined ? { apiCode: errBody.code } : {}),
+        path,
+      });
+    }
+
+    if (response.body === null) {
+      throw new OspexAPIError('Stream response had no body.', {
+        status: response.status,
+        path,
+      });
+    }
+
+    return response;
+  }
+
   private buildUrl(path: string, query: RequestOptions['query']): string {
     const normalized = path.startsWith('/') ? path : `/${path}`;
     const url = new URL(this.apiUrl + normalized);

@@ -13,6 +13,7 @@ export type OspexErrorCode =
   | 'CHAIN_ERROR'
   | 'SCRIPT_APPROVAL_INVALID'
   | 'SUBSCRIPTION_ERROR'
+  | 'STREAM_ERROR'
   | 'SIGNER_RESOLUTION_ERROR';
 
 export class OspexError extends Error {
@@ -238,6 +239,40 @@ export class OspexSubscriptionError extends OspexError {
     this.name = 'OspexSubscriptionError';
     this.reason = init.reason;
     this.subscriptionId = init.subscriptionId;
+  }
+}
+
+/**
+ * Discriminator for failures on an Ospex SSE stream (`client.<resource>.subscribe`).
+ * Distinct from `OspexSubscriptionError`, which is about Chainlink Functions LINK
+ * subscriptions — these two "subscription" concepts are unrelated.
+ *
+ *   connection_failed — a connect/transport attempt failed (network error, 5xx,
+ *                       a dropped stream). The transport retries with backoff; this
+ *                       is surfaced for observability, not a terminal state.
+ *   capacity_exceeded — the server's concurrent-connection cap was hit (HTTP 429).
+ *                       Retried with backoff.
+ *   fatal             — unrecoverable: the server rejected the request in a way a
+ *                       retry can't fix (e.g. 404 unknown resource, a 400 that isn't
+ *                       a stale cursor). The subscription stops.
+ */
+export type OspexStreamReason = 'connection_failed' | 'capacity_exceeded' | 'fatal';
+
+/**
+ * A failure on an Ospex SSE stream. Delivered to a subscription's `onError`
+ * handler. `reason` discriminates retry-vs-stop; `status` carries the HTTP
+ * status when the failure was an HTTP response (otherwise undefined for
+ * transport-level failures).
+ */
+export class OspexStreamError extends OspexError {
+  readonly reason: OspexStreamReason;
+  readonly status: number | undefined;
+
+  constructor(message: string, init: { reason: OspexStreamReason; status?: number; cause?: unknown }) {
+    super('STREAM_ERROR', message, init.cause !== undefined ? { cause: init.cause } : undefined);
+    this.name = 'OspexStreamError';
+    this.reason = init.reason;
+    this.status = init.status;
   }
 }
 

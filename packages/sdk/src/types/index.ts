@@ -27,6 +27,7 @@ export type { LeaderboardEntry } from './leaderboard.js';
 export type {
   ContestStatus,
   Contest,
+  ContestUpdate,
   Speculation,
   SpeculationDetail,
   SpeculationParentContext,
@@ -35,6 +36,16 @@ export type {
   ScriptApproval,
   ApprovedScripts,
 } from './contest.js';
+export type { Fill } from './fill.js';
+export type {
+  StreamStatus,
+  StreamSubscribeHandlers,
+  CommitmentsSubscribeFilters,
+  PositionsSubscribeFilters,
+  FillsSubscribeFilters,
+  SpeculationsSubscribeFilters,
+  ContestsSubscribeFilters,
+} from './stream.js';
 export type {
   ProtocolInfo,
   ProtocolContracts,
