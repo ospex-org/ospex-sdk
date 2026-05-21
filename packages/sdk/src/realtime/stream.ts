@@ -179,6 +179,11 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
       return 'ended';
     }
 
+    // Set once this attempt is abandoned (resync / drop / unsubscribe). A
+    // snapshot still in flight at that point must be discarded, not delivered
+    // into the next attempt — see the snapshot task below.
+    let abandoned = false;
+
     // Emit `connected` once the live tail is established (`ready`) AND, on a
     // fresh connect, the snapshot has been delivered + flushed.
     let readyReceived = false;
@@ -190,30 +195,39 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
       }
     };
 
-    // Fresh connect with a snapshot: buffer live deltas until the snapshot is
-    // delivered, so the consumer always sees snapshot-then-deltas with no gap.
+    // Fresh connect with a snapshot: buffer live deltas (with their cursors)
+    // until the snapshot is delivered, so the consumer always sees
+    // snapshot-then-deltas with no gap. The resume cursor advances only for
+    // DELIVERED deltas, so an attempt abandoned before its snapshot lands never
+    // promotes the reconnect to a resume without a baseline.
     let buffering = fresh && snapshot !== undefined;
-    const buffer: T[] = [];
-    const deliver = (row: T): void => {
+    const buffer: Array<{ row: T; id: string | undefined }> = [];
+    const deliver = (row: T, id: string | undefined): void => {
       if (buffering) {
-        buffer.push(row);
-      } else {
-        try {
-          handlers.onDelta(row);
-        } catch {
-          /* ignore */
-        }
+        buffer.push({ row, id });
+        return;
+      }
+      if (id !== undefined) cursor = id;
+      try {
+        handlers.onDelta(row);
+      } catch {
+        /* ignore */
       }
     };
 
-    // Run the snapshot concurrently with reading the stream.
+    // Run the snapshot concurrently with reading the stream. Fire-and-forget:
+    // the reconnect never waits on it, and if the attempt is abandoned
+    // (unsubscribe, resync, drop) while snapshot() is in flight, the result is
+    // discarded so a stale baseline can't repopulate state the consumer
+    // believes was stopped or reset.
     let snapshotFailed = false;
-    const snapshotTask = (async (): Promise<void> => {
+    void (async (): Promise<void> => {
       if (!(fresh && snapshot !== undefined)) return;
       let rows: T[];
       try {
         rows = await snapshot();
       } catch (err) {
+        if (closed || abandoned) return; // attempt abandoned — swallow the failure
         snapshotFailed = true;
         emitError(
           'connection_failed',
@@ -227,15 +241,17 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
         ctrl.abort();
         return;
       }
+      if (closed || abandoned) return; // abandoned while snapshot was in flight — discard
       try {
         handlers.onSnapshot?.(rows);
       } catch {
         /* ignore */
       }
       buffering = false;
-      for (const row of buffer) {
+      for (const item of buffer) {
+        if (item.id !== undefined) cursor = item.id;
         try {
-          handlers.onDelta(row);
+          handlers.onDelta(item.row);
         } catch {
           /* ignore */
         }
@@ -261,13 +277,15 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
         armIdle();
         if (frame.kind === 'comment') continue;
         if (frame.event === 'delta') {
-          if (frame.id !== undefined) cursor = frame.id;
           const row = tryDecode(frame.data);
-          if (row !== SKIP) deliver(row);
+          if (row !== SKIP) deliver(row, frame.id);
         } else if (frame.event === 'ready') {
           readyReceived = true;
           maybeConnected();
         } else if (frame.event === 'resync') {
+          // Set synchronously (before the break's `await iterator.return()`) so a
+          // snapshot resolving in that window is discarded, not delivered stale.
+          abandoned = true;
           cursor = undefined;
           emitStatus('resync');
           outcome = 'resync';
@@ -284,13 +302,14 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
         emitError('connection_failed', `Stream connection to ${resource} dropped.`, undefined, err);
       }
     } finally {
+      // The attempt is over (resync / drop / unsubscribe / EOF): a snapshot
+      // still in flight must not deliver into the next attempt. We don't await
+      // it — the reconnect proceeds immediately and the task self-discards.
+      abandoned = true;
       if (idleTimer !== undefined) clearTimeout(idleTimer);
       lifecycle.signal.removeEventListener('abort', onLifecycleAbort);
     }
 
-    await snapshotTask.catch(() => {
-      /* failure already surfaced above */
-    });
     if (snapshotFailed) return 'ended';
     return outcome;
   };

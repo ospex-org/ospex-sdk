@@ -384,6 +384,84 @@ describe('subscribeToStream — idle watchdog & unsubscribe', () => {
   });
 });
 
+describe('subscribeToStream — in-flight snapshot suppression', () => {
+  it('suppresses an in-flight snapshot (and buffered deltas) when unsubscribed before it resolves', async () => {
+    const { api, conns } = fakeStreamingApi();
+    const c = collector<{ id: string }>();
+    let resolveSnap!: (rows: Array<{ id: string }>) => void;
+    const snapshot = (): Promise<Array<{ id: string }>> =>
+      new Promise((r) => {
+        resolveSnap = r;
+      });
+    const sub = subscribeToStream({
+      api,
+      resource: 'commitments',
+      filters: {},
+      decode: passthrough,
+      snapshot,
+      handlers: c.handlers,
+    });
+    await settle();
+    conns[0]?.push('event: ready\ndata: {}\n\n'); // live, but snapshot still pending
+    conns[0]?.push('event: delta\ndata: {"id":"d1"}\nid: c1\n\n'); // buffered
+    await settle();
+    expect(c.snapshots).toEqual([]);
+
+    await sub.unsubscribe();
+    resolveSnap([{ id: 'after-unsubscribe' }]); // resolves AFTER unsubscribe
+    await settle(2000);
+
+    expect(c.snapshots).toEqual([]); // suppressed
+    expect(c.deltas).toEqual([]); // buffered delta never flushed
+    expect(c.statuses).not.toContain('connected');
+    expect(conns).toHaveLength(1); // no reconnect
+  });
+
+  it('discards an in-flight snapshot on resync; only the fresh attempt snapshots and the reconnect is not blocked', async () => {
+    const { api, conns, urls } = fakeStreamingApi();
+    const c = collector<{ id: string }>();
+    const resolvers: Array<(rows: Array<{ id: string }>) => void> = [];
+    const snapshot = (): Promise<Array<{ id: string }>> =>
+      new Promise((r) => {
+        resolvers.push(r);
+      });
+    subscribeToStream({
+      api,
+      resource: 'commitments',
+      filters: {},
+      decode: passthrough,
+      snapshot,
+      handlers: c.handlers,
+    });
+    await settle();
+    conns[0]?.push('event: ready\ndata: {}\n\n');
+    conns[0]?.push('event: delta\ndata: {"id":"d1"}\nid: c1\n\n'); // buffered (snapshot pending)
+    await settle();
+
+    // resync arrives while attempt 1's snapshot is still pending
+    conns[0]?.push('event: resync\ndata: {"reason":"backlog_too_large"}\n\n');
+    await settle(600);
+
+    // Reconnect happened immediately — not blocked on the pending snapshot.
+    expect(c.statuses).toContain('resync');
+    expect(conns).toHaveLength(2);
+    expect(urls[1]).not.toContain('cursor='); // fresh
+    expect(resolvers).toHaveLength(2); // attempt 2 started its own snapshot
+
+    // The stale (attempt-1) snapshot resolves now → must be discarded.
+    resolvers[0]?.([{ id: 'stale-pre-resync' }]);
+    await settle();
+    expect(c.snapshots).toEqual([]);
+
+    // The fresh (attempt-2) snapshot resolves → delivered; connected follows ready.
+    conns[1]?.push('event: ready\ndata: {}\n\n');
+    resolvers[1]?.([{ id: 'fresh' }]);
+    await settle();
+    expect(c.snapshots).toEqual([[{ id: 'fresh' }]]);
+    expect(c.statuses).toContain('connected');
+  });
+});
+
 describe('normalizeUint', () => {
   it('canonicalizes numbers and numeric strings; passes undefined through', () => {
     expect(normalizeUint(7, 'speculationId')).toBe('7');
