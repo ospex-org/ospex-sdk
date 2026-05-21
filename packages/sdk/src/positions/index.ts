@@ -23,7 +23,7 @@ import type { Subscription } from '../types/odds.js';
 import type { PositionsSubscribeFilters, StreamSubscribeHandlers } from '../types/stream.js';
 import { subscribeToStream } from '../realtime/stream.js';
 import { decodePositionDelta } from '../realtime/decoders.js';
-import { assertAddress } from '../realtime/filters.js';
+import { assertAddress, normalizeUint } from '../realtime/filters.js';
 import type {
   ClaimResultResponseBody,
   PositionByTxResponseBody,
@@ -88,8 +88,11 @@ export class Positions {
    *
    * `onSnapshot` fires only when scoped to an `address` (the one current-state
    * endpoint, `positions.byAddress`); a `speculationId`-only subscription
-   * streams from connect with no snapshot. The snapshot is a single bounded
-   * page; fuller backfill is the recovery surface (forthcoming).
+   * streams from connect with no snapshot. When both filters are given, the
+   * snapshot is filtered to the same `speculationId` as the stream so the two
+   * scopes agree (byAddress can't scope by speculation server-side). The
+   * snapshot is a single bounded page; fuller backfill is the recovery surface
+   * (forthcoming).
    */
   async subscribe(
     filters: PositionsSubscribeFilters,
@@ -97,16 +100,19 @@ export class Positions {
   ): Promise<Subscription> {
     assertAddress(filters.address, 'address');
     const address = filters.address?.toLowerCase();
+    const speculationId = normalizeUint(filters.speculationId, 'speculationId');
     return subscribeToStream<Position>({
       api: this.ctx.api,
       resource: 'positions',
-      filters: { address, speculationId: filters.speculationId },
+      filters: { address, speculationId },
       decode: decodePositionDelta,
       handlers,
       ...(address !== undefined
         ? {
             snapshot: async (): Promise<Position[]> =>
-              (await this.byAddress(address)).map((p) => ({ ...p, userAddress: address })),
+              (await this.byAddress(address))
+                .filter((p) => speculationId === undefined || p.speculationId === speculationId)
+                .map((p) => ({ ...p, userAddress: address })),
           }
         : {}),
     });

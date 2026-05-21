@@ -10,7 +10,7 @@ import type { Subscription } from '../types/odds.js';
 import type { FillsSubscribeFilters, StreamSubscribeHandlers } from '../types/stream.js';
 import { subscribeToStream } from '../realtime/stream.js';
 import { decodeFill } from '../realtime/decoders.js';
-import { assertAddress, assertHash } from '../realtime/filters.js';
+import { assertAddress, assertHash, normalizeUint } from '../realtime/filters.js';
 
 export class Fills {
   constructor(private readonly api: ApiClient) {}
@@ -34,8 +34,8 @@ export class Fills {
       filters: {
         maker: filters.maker,
         taker: filters.taker,
-        speculationId: filters.speculationId,
-        contestId: filters.contestId,
+        speculationId: normalizeUint(filters.speculationId, 'speculationId'),
+        contestId: normalizeUint(filters.contestId, 'contestId'),
         commitmentHash: filters.commitmentHash,
       },
       decode: decodeFill,

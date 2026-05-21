@@ -26,6 +26,7 @@ import { toSpeculation } from './contests.js';
 import type { Subscription } from '../types/odds.js';
 import type { SpeculationsSubscribeFilters, StreamSubscribeHandlers } from '../types/stream.js';
 import { subscribeToStream } from '../realtime/stream.js';
+import { normalizeUint } from '../realtime/filters.js';
 
 export class SpeculationsApi {
   constructor(private readonly client: ApiClient) {}
@@ -67,12 +68,13 @@ export class SpeculationsApi {
     filters: SpeculationsSubscribeFilters,
     handlers: StreamSubscribeHandlers<Speculation>,
   ): Promise<Subscription> {
+    const contestId = normalizeUint(filters.contestId, 'contestId');
     const listOpts: SpeculationsListOptions = { limit: 500 };
-    if (filters.contestId !== undefined) listOpts.contestId = filters.contestId;
+    if (contestId !== undefined) listOpts.contestId = contestId;
     return subscribeToStream<Speculation>({
       api: this.client,
       resource: 'speculations',
-      filters: { contestId: filters.contestId },
+      filters: { contestId },
       decode: (body) => toSpeculation(body as SpeculationBody),
       snapshot: () => this.list(listOpts),
       handlers,

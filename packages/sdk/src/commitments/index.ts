@@ -20,7 +20,7 @@ import type { HighLevelSubmitArgs, SubmitPreview } from '../types/preview.js';
 import type { Subscription } from '../types/odds.js';
 import type { CommitmentsSubscribeFilters, StreamSubscribeHandlers } from '../types/stream.js';
 import { subscribeToStream } from '../realtime/stream.js';
-import { assertAddress } from '../realtime/filters.js';
+import { assertAddress, normalizeUint } from '../realtime/filters.js';
 import {
   approve,
   approveCreationFee,
@@ -99,14 +99,15 @@ export class Commitments {
   ): Promise<Subscription> {
     assertAddress(filters.maker, 'maker');
     assertAddress(filters.scorer, 'scorer');
+    const contestId = normalizeUint(filters.contestId, 'contestId');
     const listOpts: CommitmentsListOptions = { limit: 1000 };
     if (filters.maker !== undefined) listOpts.maker = filters.maker;
     if (filters.scorer !== undefined) listOpts.scorer = filters.scorer;
-    if (filters.contestId !== undefined) listOpts.contestId = filters.contestId;
+    if (contestId !== undefined) listOpts.contestId = contestId;
     return subscribeToStream<Commitment>({
       api: this.ctx.api,
       resource: 'commitments',
-      filters: { maker: filters.maker, scorer: filters.scorer, contestId: filters.contestId },
+      filters: { maker: filters.maker, scorer: filters.scorer, contestId },
       decode: (body) => toCommitment(body as CommitmentBody),
       snapshot: () => this.list(listOpts),
       handlers,

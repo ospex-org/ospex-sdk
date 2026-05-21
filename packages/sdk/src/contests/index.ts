@@ -19,6 +19,7 @@ import type { Subscription } from '../types/odds.js';
 import type { ContestsSubscribeFilters, StreamSubscribeHandlers } from '../types/stream.js';
 import { subscribeToStream } from '../realtime/stream.js';
 import { contestToUpdate, decodeContestUpdate } from '../realtime/decoders.js';
+import { normalizeUint } from '../realtime/filters.js';
 import {
   approveFee,
   approveLink,
@@ -75,7 +76,7 @@ export class Contests {
     filters: ContestsSubscribeFilters,
     handlers: StreamSubscribeHandlers<ContestUpdate>,
   ): Promise<Subscription> {
-    const contestId = filters.contestId;
+    const contestId = normalizeUint(filters.contestId, 'contestId');
     return subscribeToStream<ContestUpdate>({
       api: this.ctx.api,
       resource: 'contests',

@@ -6,8 +6,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiClient } from '../src/api/client.js';
-import { OspexStreamError } from '../src/errors.js';
+import { OspexClient } from '../src/client.js';
+import { OspexStreamError, OspexValidationError } from '../src/errors.js';
+import { normalizeUint } from '../src/realtime/filters.js';
 import { parseSseStream, subscribeToStream, type SseFrame } from '../src/realtime/stream.js';
+import type { Position } from '../src/types/position.js';
 import type { StreamStatus, StreamSubscribeHandlers } from '../src/types/stream.js';
 
 const enc = new TextEncoder();
@@ -378,5 +381,80 @@ describe('subscribeToStream — idle watchdog & unsubscribe', () => {
     await settle(5000);
     expect(c.deltas).toHaveLength(1); // nothing after unsubscribe
     expect(conns).toHaveLength(1); // no reconnect
+  });
+});
+
+describe('normalizeUint', () => {
+  it('canonicalizes numbers and numeric strings; passes undefined through', () => {
+    expect(normalizeUint(7, 'speculationId')).toBe('7');
+    expect(normalizeUint('7', 'speculationId')).toBe('7');
+    expect(normalizeUint('007', 'speculationId')).toBe('7');
+    expect(normalizeUint(undefined, 'contestId')).toBeUndefined();
+  });
+
+  it('rejects negatives and non-integers with OspexValidationError', () => {
+    expect(() => normalizeUint(-1, 'speculationId')).toThrow(OspexValidationError);
+    expect(() => normalizeUint('abc', 'speculationId')).toThrow(OspexValidationError);
+    expect(() => normalizeUint(1.5, 'speculationId')).toThrow(OspexValidationError);
+  });
+});
+
+describe('positions.subscribe — snapshot/stream filter parity (regression)', () => {
+  function clientServingPositions(positions: Position[]): { client: OspexClient; urls: string[] } {
+    const urls: string[] = [];
+    const fetchImpl = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      const u = String(url);
+      urls.push(u);
+      if (u.includes('/v1/stream/positions')) {
+        let ctrl!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({ start: (c) => (ctrl = c) });
+        init?.signal?.addEventListener(
+          'abort',
+          () => {
+            try {
+              ctrl.error(new Error('aborted'));
+            } catch {
+              /* */
+            }
+          },
+          { once: true },
+        );
+        return { ok: true, status: 200, body: stream, async json() {} } as unknown as Response;
+      }
+      if (u.includes('/v1/positions/')) {
+        return { ok: true, status: 200, async json() {
+          return { positions };
+        } } as unknown as Response;
+      }
+      return { ok: false, status: 404, async json() {
+        return { error: 'not found' };
+      } } as unknown as Response;
+    };
+    const client = new OspexClient({
+      apiUrl: 'http://test.local',
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+    return { client, urls };
+  }
+
+  it('an address+speculationId subscription snapshots only that speculation', async () => {
+    const positions: Position[] = [
+      { speculationId: '7', positionType: 0, riskAmountUSDC: 1, profitAmountUSDC: 0, claimed: false, positionCreatedAt: 't' },
+      { speculationId: '8', positionType: 1, riskAmountUSDC: 2, profitAmountUSDC: 0, claimed: false, positionCreatedAt: 't' },
+    ];
+    const { client, urls } = clientServingPositions(positions);
+    const c = collector<Position>();
+    const addr = '0x1111111111111111111111111111111111111111';
+    await client.positions.subscribe({ address: addr, speculationId: 7 }, c.handlers);
+    await settle();
+
+    // Snapshot is filtered to the stream's speculation, with userAddress injected.
+    expect(c.snapshots).toHaveLength(1);
+    expect(c.snapshots[0]?.map((p) => p.speculationId)).toEqual(['7']);
+    expect(c.snapshots[0]?.[0]?.userAddress).toBe(addr);
+
+    // The stream is scoped to the same speculation (parity).
+    const streamUrl = urls.find((u) => u.includes('/v1/stream/positions'));
+    expect(streamUrl).toContain('speculationId=7');
   });
 });
