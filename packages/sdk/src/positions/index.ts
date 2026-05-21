@@ -19,6 +19,11 @@ import type {
   PositionStatus,
 } from '../types/position.js';
 import type { Hex } from '../types/signer.js';
+import type { Subscription } from '../types/odds.js';
+import type { PositionsSubscribeFilters, StreamSubscribeHandlers } from '../types/stream.js';
+import { subscribeToStream } from '../realtime/stream.js';
+import { decodePositionDelta } from '../realtime/decoders.js';
+import { assertAddress } from '../realtime/filters.js';
 import type {
   ClaimResultResponseBody,
   PositionByTxResponseBody,
@@ -72,6 +77,39 @@ export class Positions {
 
   claimParams(address: string): Promise<ClaimParams> {
     return claimParamsImpl(this.ctx, address);
+  }
+
+  /**
+   * Subscribe to live position deltas (SSE). Filter by `address` and/or
+   * `speculationId`. Delivers live `onDelta` rows (a fill creates positions; a
+   * claim updates them). Apply last-received-wins per
+   * `(speculationId, userAddress, positionType)` — every delta carries
+   * `userAddress`.
+   *
+   * `onSnapshot` fires only when scoped to an `address` (the one current-state
+   * endpoint, `positions.byAddress`); a `speculationId`-only subscription
+   * streams from connect with no snapshot. The snapshot is a single bounded
+   * page; fuller backfill is the recovery surface (forthcoming).
+   */
+  async subscribe(
+    filters: PositionsSubscribeFilters,
+    handlers: StreamSubscribeHandlers<Position>,
+  ): Promise<Subscription> {
+    assertAddress(filters.address, 'address');
+    const address = filters.address?.toLowerCase();
+    return subscribeToStream<Position>({
+      api: this.ctx.api,
+      resource: 'positions',
+      filters: { address, speculationId: filters.speculationId },
+      decode: decodePositionDelta,
+      handlers,
+      ...(address !== undefined
+        ? {
+            snapshot: async (): Promise<Position[]> =>
+              (await this.byAddress(address)).map((p) => ({ ...p, userAddress: address })),
+          }
+        : {}),
+    });
   }
 
   /** Parses `PositionFilled` events from a transaction receipt

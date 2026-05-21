@@ -30,6 +30,7 @@ import { Balances } from './balances/index.js';
 import { Commitments } from './commitments/index.js';
 import { NonceCounter } from './commitments/context.js';
 import { Contests } from './contests/index.js';
+import { Fills } from './fills/index.js';
 import { Games } from './games/index.js';
 import { Positions } from './positions/index.js';
 import { Teams } from './teams/index.js';
@@ -87,6 +88,7 @@ export class OspexClient {
   readonly balances: Balances;
   readonly commitments: Commitments;
   readonly contests: Contests;
+  readonly fills: Fills;
   readonly games: Games;
   readonly teams: Teams;
   readonly speculations: SpeculationsApi;
@@ -116,6 +118,7 @@ export class OspexClient {
     if (options.fetch !== undefined) apiOptions.fetch = options.fetch;
     if (options.timeoutMs !== undefined) apiOptions.timeoutMs = options.timeoutMs;
     this.api = new ApiClient(apiOptions);
+    this.fills = new Fills(this.api);
 
     this._signer = options.signer;
     this._rpcUrl = options.rpcUrl;

@@ -16,12 +16,16 @@ import type {
   SpeculationsListOptions,
 } from '../types/contest.js';
 import type {
+  SpeculationBody,
   SpeculationDetailBody,
   SpeculationParentContextBody,
   SpeculationsListBody,
 } from './types.js';
 import { toCommitment } from './commitments.js';
 import { toSpeculation } from './contests.js';
+import type { Subscription } from '../types/odds.js';
+import type { SpeculationsSubscribeFilters, StreamSubscribeHandlers } from '../types/stream.js';
+import { subscribeToStream } from '../realtime/stream.js';
 
 export class SpeculationsApi {
   constructor(private readonly client: ApiClient) {}
@@ -50,6 +54,29 @@ export class SpeculationsApi {
       orderbook: (body.orderbook ?? []).map(toCommitment),
       contest: toContext(body.contest),
     };
+  }
+
+  /**
+   * Subscribe to live speculation deltas (SSE), optionally scoped to a
+   * `contestId`. Delivers a snapshot of current speculations via `onSnapshot`,
+   * then live `onDelta` rows (status/line changes). Apply last-received-wins
+   * per `speculationId`. The stream body omits `orderbook` (commitments have
+   * their own stream). The snapshot is a single bounded page (≤ 500).
+   */
+  async subscribe(
+    filters: SpeculationsSubscribeFilters,
+    handlers: StreamSubscribeHandlers<Speculation>,
+  ): Promise<Subscription> {
+    const listOpts: SpeculationsListOptions = { limit: 500 };
+    if (filters.contestId !== undefined) listOpts.contestId = filters.contestId;
+    return subscribeToStream<Speculation>({
+      api: this.client,
+      resource: 'speculations',
+      filters: { contestId: filters.contestId },
+      decode: (body) => toSpeculation(body as SpeculationBody),
+      snapshot: () => this.list(listOpts),
+      handlers,
+    });
   }
 }
 

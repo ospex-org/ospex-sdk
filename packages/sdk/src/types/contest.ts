@@ -150,6 +150,36 @@ export interface Contest {
   homeTeamId?: string | null;
 }
 
+/**
+ * The payload delivered by `client.contests.subscribe` — a contest's
+ * lifecycle slice, not the full `Contest`. The stream exists to push
+ * status / score / verified / scored / voided transitions; it deliberately
+ * omits `speculations[]` (those have their own `speculations.subscribe`
+ * stream) and the detail-only enrichment (`jsonoddsId`, source hashes,
+ * team UUIDs, …) that only `contests.get` returns. Distinct from `Contest`
+ * so a streamed lifecycle update can't be mistaken for a full detail row.
+ */
+export interface ContestUpdate {
+  contestId: string;
+  awayTeam: string;
+  homeTeam: string;
+  sport: string;
+  sportId: number;
+  /** ISO-8601 string. */
+  matchTime: string;
+  status: string;
+  awayScore: number | null;
+  homeScore: number | null;
+  /** ISO-8601 string. CONTEST_VERIFIED projection time. */
+  verifiedAt: string | null;
+  /** ISO-8601 string. CONTEST_SCORES_SET projection time. */
+  scoredAt: string | null;
+  /** ISO-8601 string. CONTEST_VOIDED projection time. */
+  voidedAt: string | null;
+  /** ISO-8601 string. CONTEST_CREATED projection time. */
+  contestCreatedAt: string | null;
+}
+
 export interface ContestsListOptions {
   sport?: string;
   status?: string;

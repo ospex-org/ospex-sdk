@@ -4,7 +4,13 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### SDK (`@ospex/sdk`)
+
+- **Protocol stream subscriptions** — `client.{commitments,positions,speculations,contests,fills}.subscribe(filters, handlers)` open Server-Sent Events streams from `ospex-core-api` for live protocol deltas. A shared fetch-based transport (no new dependency; Node ≥20 global `fetch`) takes an initial REST snapshot, then streams live `onDelta` rows, reconnects with the stored opaque cursor on a drop, and re-snapshots on `resync`. Handlers: `onSnapshot?` / `onDelta` / `onStatus?(connected | reconnecting | resync)` / `onError?`. Apply last-received-wins per natural key (the cursor is an opaque resume token, never an ordering key).
+- **New `client.fills` namespace** — `subscribe()` over the append-only `position_fills` log. Apply every event; dedupe by `(txHash, logIndex)`.
+- **Snapshot scope** — `commitments` / `speculations` deliver an open-book snapshot before live deltas; `positions` snapshot only when scoped to an `address`, `contests` only when scoped to a `contestId`; `fills` and unscoped subscriptions stream from connect with no snapshot.
+- **New types**: `StreamStatus`, `StreamSubscribeHandlers`, `Fill`, `ContestUpdate` (the contest stream delivers a lifecycle slice, not the full `Contest`), and the per-resource subscribe filter types. `Position` gains optional `userAddress` / `claimedAt`, carried by stream deltas (part of a position's natural key) and absent on the address-scoped REST reads.
+- **New `OspexStreamError`** (`reason: connection_failed | capacity_exceeded | fatal`) — distinct from the Chainlink-Functions `OspexSubscriptionError`. Delivered to `onError`; `fatal` ends the subscription, the others are retried.
 
 ## [0.2.2] — 2026-05-20
 
