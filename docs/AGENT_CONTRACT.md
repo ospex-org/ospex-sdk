@@ -548,6 +548,7 @@ import {
   OspexChainError,
   OspexScriptApprovalError,
   OspexSubscriptionError,
+  OspexStreamError,
   OspexSignerResolutionError,
 } from '@ospex/sdk';
 

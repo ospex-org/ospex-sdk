@@ -117,7 +117,7 @@ new OspexClient({
 });
 ```
 
-The CLI reads its config in this order: env var (`OSPEX_API_URL`, `OSPEX_SUPABASE_URL`, `OSPEX_SUPABASE_ANON_KEY`, `OSPEX_RPC_URL`, `OSPEX_CHAIN_ID`) > `~/.ospex/config.json` > SDK built-in defaults.
+The CLI reads its config in this order: env var (`OSPEX_API_URL`, `OSPEX_RPC_URL`, `OSPEX_CHAIN_ID`) > `~/.ospex/config.json` > SDK built-in defaults.
 
 The keystore location follows the same precedence: `OSPEX_KEYSTORE_PATH` env var > `keystorePath` field in `~/.ospex/config.json` (set once via `ospex init`) > default `~/.ospex/keystore.json`. The recommended setup is to put a Foundry-managed keystore path in the config file (so future shells don't need to re-export anything), and reserve the env var for per-shell overrides — useful for scripts and CI. Leading `~/` in either source is expanded.
 

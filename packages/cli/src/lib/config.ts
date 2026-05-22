@@ -2,7 +2,7 @@
  * Persistent CLI config: file at `~/.ospex/config.json`, layered with
  * env-var overrides at read time. Order of precedence:
  *
- *   env var (OSPEX_API_URL, OSPEX_SUPABASE_*, OSPEX_KEYSTORE_PATH, ...)
+ *   env var (OSPEX_API_URL, OSPEX_RPC_URL, OSPEX_KEYSTORE_PATH, ...)
  *     > config file
  *     > SDK built-in default (only for apiUrl, and `~/.ospex/keystore.json`
  *       for the keystore path)

@@ -18,8 +18,6 @@ let tmpDir: string;
 const ENV_KEYS = [
   'OSPEX_HOME',
   'OSPEX_API_URL',
-  'OSPEX_SUPABASE_URL',
-  'OSPEX_SUPABASE_ANON_KEY',
   'OSPEX_KEYSTORE_PATH',
   'OSPEX_RPC_URL',
   'OSPEX_CHAIN_ID',
@@ -31,8 +29,6 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ospex-cli-test-'));
   process.env.OSPEX_HOME = tmpDir;
   delete process.env.OSPEX_API_URL;
-  delete process.env.OSPEX_SUPABASE_URL;
-  delete process.env.OSPEX_SUPABASE_ANON_KEY;
   delete process.env.OSPEX_KEYSTORE_PATH;
   delete process.env.OSPEX_RPC_URL;
   delete process.env.OSPEX_CHAIN_ID;
