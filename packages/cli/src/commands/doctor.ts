@@ -138,8 +138,6 @@ export const doctorCommand = new Command('doctor')
     }
 
     // PR 2: probe RPC + contracts in parallel before chain reads.
-    // PR 3: also probe /v1/config/public (Realtime bootstrap) so the
-    // structured `connectivity.api_public_config` line is populated.
     let rpcProbe: RpcProbeResult | null = null;
     let contractCheck: ContractCheckResult | null = null;
     if (!rpcUrlMissing && rpcUrlValue !== null) {
@@ -148,7 +146,6 @@ export const doctorCommand = new Command('doctor')
         probeContractsDeployed(rpcUrlValue, expectedChainId.value),
       ]);
     }
-    const apiPublicConfigResult = await probeApiPublicConfig(apiUrl.value);
 
     const inputs = await fetchDoctorInputs(owner, rpcUrlMissing, rpcProbe, rpcUrlValue);
     const reportInputs: DoctorReportInputs = {
@@ -162,16 +159,12 @@ export const doctorCommand = new Command('doctor')
       rpcUrlMissing,
       apiUrl,
       rpcUrl,
-      apiPublicConfigOk: apiPublicConfigResult.ok,
       authResolution,
       passwordFilePermissions,
       strict,
       ...(inputs.balancesError !== undefined ? { balancesError: inputs.balancesError } : {}),
       ...(inputs.approvalsError !== undefined ? { approvalsError: inputs.approvalsError } : {}),
       ...(signerAddressError !== undefined ? { signerAddressError } : {}),
-      ...(apiPublicConfigResult.error !== undefined
-        ? { apiPublicConfigError: apiPublicConfigResult.error }
-        : {}),
     };
 
     const report = buildDoctorReport(reportInputs);
@@ -400,36 +393,4 @@ export async function readApprovalsSafe(
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
-}
-
-const API_PUBLIC_CONFIG_TIMEOUT_MS = 5_000;
-
-/**
- * Probe `GET <apiUrl>/v1/config/public` to confirm the Realtime
- * bootstrap endpoint is reachable. Independent of `OspexClient` so it
- * works even when chain config is broken — this endpoint serves the
- * publishable Supabase URL + anon key, which Realtime consumers need
- * before they can subscribe.
- *
- * Returns `{ ok: true }` on 2xx and `{ ok: false, error }` on non-2xx
- * or transport failure. Never throws.
- */
-async function probeApiPublicConfig(
-  apiUrl: string,
-): Promise<{ ok: boolean; error?: string }> {
-  const endpoint = apiUrl.replace(/\/+$/, '') + '/v1/config/public';
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), API_PUBLIC_CONFIG_TIMEOUT_MS);
-  try {
-    const res = await fetch(endpoint, { signal: ctrl.signal });
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-    return { ok: true };
-  } catch (err) {
-    // Defense-in-depth: a custom apiUrl with auth could appear in
-    // node:fetch error text. Apply the same sanitiser the chain
-    // probes use. Hermes PR 54 blocker #1 extends to this path.
-    return { ok: false, error: sanitizeMessageForUrl(errorMessage(err), endpoint) };
-  } finally {
-    clearTimeout(timer);
-  }
 }

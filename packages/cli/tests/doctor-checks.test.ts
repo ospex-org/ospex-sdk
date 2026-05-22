@@ -169,7 +169,6 @@ const HAPPY_CHAIN_PROBES = {
   contractCheck: HAPPY_CONTRACT_CHECK,
   apiUrl: HAPPY_API_URL,
   rpcUrl: HAPPY_RPC_URL,
-  apiPublicConfigOk: true,
   authResolution: HAPPY_AUTH_RESOLUTION,
   passwordFilePermissions: HAPPY_PASSWORD_FILE_PERMS,
   strict: false,
@@ -401,9 +400,9 @@ describe('buildSummary — rollup math', () => {
     const s = buildSummary(checks);
     // PR 1: address + balances.native + balances.usdc + allowances.usdc_position = 4 ok
     // PR 2: config.chain_id_expected + connectivity.rpc + network.chain_id_match + network.contracts_deployed = 4 ok
-    // PR 3: config.api_url + config.rpc_url + connectivity.api_public_config = 3 ok
+    // PR 3: config.api_url + config.rpc_url = 2 ok
     // PR 4: signer.resolved + signer.password_source + signer.password_file_perms = 3 ok
-    expect(s.counts.ok).toBe(14);
+    expect(s.counts.ok).toBe(13);
     expect(s.counts.fail).toBe(4); // connectivity.api, balances.link, allowances.usdc_treasury, allowances.link_oracle
     expect(s.counts.skip).toBe(0);
     expect(s.counts.warn).toBe(0);
@@ -1061,7 +1060,7 @@ describe('PR 4: --strict + loose pw-file drives exit-1 via rollup', () => {
   });
 });
 
-// ── PR 3: URL provenance + Realtime-bootstrap probe ───────────────────
+// ── PR 3: URL provenance ──────────────────────────────────────────────
 
 describe('PR 3: config.api_url check', () => {
   it('ok with source=default when no env/config supplied', () => {
@@ -1155,49 +1154,6 @@ describe('PR 3: config.rpc_url check', () => {
   });
 });
 
-describe('PR 3: connectivity.api_public_config check', () => {
-  it('ok when probe returned 2xx', () => {
-    const checks = runDoctorChecks({
-      apiOk: true,
-      balances: null,
-      approvals: null,
-      signerAddress: OWNER,
-      apiPublicConfigOk: true,
-    });
-    const c = findCheck(checks, 'connectivity.api_public_config');
-    expect(c.status).toBe('ok');
-    expect(c.blockingFor).toEqual([]); // informational only
-  });
-
-  it('fail with api_error when probe failed — never blocks readiness', () => {
-    const checks = runDoctorChecks({
-      apiOk: true,
-      balances: null,
-      approvals: null,
-      signerAddress: OWNER,
-      apiPublicConfigOk: false,
-      apiPublicConfigError: 'HTTP 503',
-    });
-    const c = findCheck(checks, 'connectivity.api_public_config');
-    expect(c.status).toBe('fail');
-    expect(c.error?.code).toBe('api_error');
-    expect(c.error?.retryable).toBe(true);
-    expect(c.blockingFor).toEqual([]);
-    expect(c.details).toBe('HTTP 503');
-  });
-
-  it('skip when probe was not attempted', () => {
-    const checks = runDoctorChecks({
-      apiOk: true,
-      balances: null,
-      approvals: null,
-      signerAddress: OWNER,
-    });
-    const c = findCheck(checks, 'connectivity.api_public_config');
-    expect(c.status).toBe('skip');
-  });
-});
-
 describe('PR 3: config.{apiUrl,rpcUrl} envelope field — UrlField with redaction', () => {
   it('emits a UrlField with redactedValue, host, fingerprint for apiUrl', () => {
     const report = buildDoctorReport({
@@ -1227,7 +1183,6 @@ describe('PR 3: config.{apiUrl,rpcUrl} envelope field — UrlField with redactio
       rpcUrl: { value: raw, source: 'env-OSPEX_RPC_URL' },
       rpcProbe: HAPPY_RPC_PROBE,
       contractCheck: HAPPY_CONTRACT_CHECK,
-      apiPublicConfigOk: true,
     });
     expect(report.config.rpcUrl).not.toBeNull();
     expect(report.config.rpcUrl?.redactedValue).toBe(
@@ -1274,7 +1229,6 @@ describe('PR 3: config.{apiUrl,rpcUrl} envelope field — UrlField with redactio
       rpcUrl: { value: compositeRpcUrl, source: 'env-OSPEX_RPC_URL' },
       rpcProbe: HAPPY_RPC_PROBE,
       contractCheck: HAPPY_CONTRACT_CHECK,
-      apiPublicConfigOk: true,
     });
     const serialized = JSON.stringify(report);
     for (const secret of rawSecrets) {

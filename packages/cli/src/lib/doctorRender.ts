@@ -316,11 +316,9 @@ export interface DoctorReportInputs {
   rpcProbe?: RpcProbeResult | null;
   contractCheck?: ContractCheckResult | null;
   rpcUrlMissing?: boolean;
-  // PR 3 additive — URL provenance + Realtime-bootstrap probe.
+  // PR 3 additive — URL provenance.
   apiUrl?: ResolvedApiUrl | null;
   rpcUrl?: ResolvedRpcUrl | null;
-  apiPublicConfigOk?: boolean | null;
-  apiPublicConfigError?: string;
   // PR 4 additive — signer provenance via shared auth-check walker.
   authResolution?: AuthSourceResolution | null;
   passwordFilePermissions?: PasswordFilePermissions | null;
@@ -345,7 +343,6 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
   const contractCheck = inputs.contractCheck ?? null;
   const apiUrl = inputs.apiUrl ?? null;
   const rpcUrl = inputs.rpcUrl ?? null;
-  const apiPublicConfigOk = inputs.apiPublicConfigOk ?? null;
   const authResolution = inputs.authResolution ?? null;
   const passwordFilePermissions = inputs.passwordFilePermissions ?? null;
   const strict = inputs.strict ?? false;
@@ -365,7 +362,6 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
     rpcUrlMissing,
     apiUrl,
     rpcUrl,
-    apiPublicConfigOk,
     authResolution,
     passwordFilePermissions,
     strict,
@@ -374,9 +370,6 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
     ...(inputs.approvalsError !== undefined ? { approvalsError: inputs.approvalsError } : {}),
     ...(inputs.signerAddressError !== undefined
       ? { signerAddressError: inputs.signerAddressError }
-      : {}),
-    ...(inputs.apiPublicConfigError !== undefined
-      ? { apiPublicConfigError: inputs.apiPublicConfigError }
       : {}),
   };
 
@@ -572,8 +565,6 @@ function checkIdToReason(id: CheckId): string {
       return 'expected chain ID not configured';
     case 'connectivity.api':
       return 'Core API unreachable';
-    case 'connectivity.api_public_config':
-      return 'Realtime-bootstrap endpoint unreachable';
     case 'connectivity.rpc':
       return 'RPC unreachable';
     case 'network.chain_id_match':
