@@ -462,6 +462,104 @@ describe('subscribeToStream — in-flight snapshot suppression', () => {
   });
 });
 
+describe('subscribeToStream — polling fallback (degraded)', () => {
+  function fallbackHarness(): {
+    api: ApiClient;
+    recoverySince: string[];
+    setSseFail: (v: boolean) => void;
+    live: () => { push: (s: string) => void; error: () => void } | undefined;
+  } {
+    const recoverySince: string[] = [];
+    let sseShouldFail = false;
+    let liveStream: { push: (s: string) => void; error: () => void } | undefined;
+    const fetchImpl = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      const u = String(url);
+      if (u.includes('/v1/stream/')) {
+        if (sseShouldFail) {
+          return { ok: false, status: 503, async json() {
+            return { error: 'down' };
+          } } as unknown as Response;
+        }
+        let ctrl!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({ start: (c) => (ctrl = c) });
+        init?.signal?.addEventListener('abort', () => {
+          try {
+            ctrl.error(new Error('aborted'));
+          } catch {
+            /* */
+          }
+        }, { once: true });
+        liveStream = {
+          push: (s) => {
+            try {
+              ctrl.enqueue(enc.encode(s));
+            } catch {
+              /* */
+            }
+          },
+          error: () => {
+            try {
+              ctrl.error(new Error('drop'));
+            } catch {
+              /* */
+            }
+          },
+        };
+        return { ok: true, status: 200, body: stream, async json() {} } as unknown as Response;
+      }
+      // Recovery: GET /v1/<resource>?since=...
+      recoverySince.push(new URL(u).searchParams.get('since') ?? '');
+      const since = recoverySince[recoverySince.length - 1];
+      return { ok: true, status: 200, async json() {
+        return { fills: [{ id: `rec-${since}` }], nextCursor: `${since}+1`, hasMore: false };
+      } } as unknown as Response;
+    };
+    const api = new ApiClient({ apiUrl: 'http://test.local', fetch: fetchImpl as unknown as typeof fetch });
+    return { api, recoverySince, setSseFail: (v) => (sseShouldFail = v), live: () => liveStream };
+  }
+
+  it('falls back to REST polling after repeated SSE failures, then recovers when the stream returns', async () => {
+    const h = fallbackHarness();
+    const c = collector<{ id: string }>();
+    subscribeToStream({ api: h.api, resource: 'fills', filters: {}, decode: passthrough, handlers: c.handlers });
+    await settle();
+    // connect 1: live — deliver a delta to establish the resume cursor.
+    h.live()?.push('event: ready\ndata: {}\n\n');
+    h.live()?.push('event: delta\ndata: {"id":"d1"}\nid: cur-1\n\n');
+    await settle();
+    expect(c.statuses).toContain('connected');
+    expect(c.deltas).toEqual([{ id: 'd1' }]);
+
+    // SSE now fails on every reconnect; drop the live stream.
+    h.setSseFail(true);
+    h.live()?.error();
+    await settle(15_000); // through reconnect backoffs + into degraded + a poll cycle
+
+    expect(c.statuses).toContain('degraded');
+    expect(h.recoverySince[0]).toBe('cur-1'); // polled from the live cursor
+    expect(c.deltas).toContainEqual({ id: 'rec-cur-1' }); // a recovery row was delivered
+    expect(h.recoverySince).toContain('cur-1+1'); // cursor advanced across poll cycles
+
+    // SSE recovers.
+    h.setSseFail(false);
+    await settle(6000); // next loop iteration re-establishes the stream
+    h.live()?.push('event: ready\ndata: {}\n\n');
+    await settle();
+    expect(c.statuses[c.statuses.length - 1]).toBe('connected');
+  });
+
+  it('does not fall back to polling without a resume cursor', async () => {
+    const plan: Plan = () => ({ status: 503 }); // every SSE connect fails, never connects
+    const { api, urls } = fakeStreamingApi(plan);
+    const c = collector<{ id: string }>();
+    subscribeToStream({ api, resource: 'fills', filters: {}, decode: passthrough, handlers: c.handlers });
+    await settle(60_000);
+    expect(c.statuses).toContain('reconnecting');
+    expect(c.statuses).not.toContain('degraded'); // no cursor ⇒ never degraded
+    expect(urls.every((u) => u.includes('/v1/stream/'))).toBe(true); // recovery never polled
+  });
+});
+
 describe('normalizeUint', () => {
   it('canonicalizes numbers and numeric strings; passes undefined through', () => {
     expect(normalizeUint(7, 'speculationId')).toBe('7');

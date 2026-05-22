@@ -33,6 +33,14 @@ import type { StreamStatus, StreamSubscribeHandlers } from '../types/stream.js';
 const IDLE_TIMEOUT_MS = 60_000;
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_CAP_MS = 30_000;
+// After this many consecutive failed SSE (re)connects — and only once a resume
+// cursor exists — fall back to polling the REST recovery endpoint (status
+// 'degraded') until the stream recovers.
+const POLL_FALLBACK_THRESHOLD = 3;
+const POLL_INTERVAL_MS = 5_000;
+const RECOVERY_PAGE_LIMIT = 1000;
+// Pages drained per poll cycle — bounds a single catch-up burst.
+const POLL_MAX_PAGES = 20;
 
 export interface StreamTransportConfig<T> {
   api: ApiClient;
@@ -57,6 +65,13 @@ export interface SseFrame {
   event?: string;
   data?: string;
   id?: string;
+}
+
+/** Recovery (`?since=`) response envelope: `{ <resource>: [...], nextCursor, hasMore }`. */
+interface RecoveryBody {
+  nextCursor?: string | null;
+  hasMore?: boolean;
+  [key: string]: unknown;
 }
 
 const SKIP: unique symbol = Symbol('skip');
@@ -147,10 +162,16 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
         closed = true;
         return 'fatal';
       }
-      emitError('connection_failed', `Stream connect to ${resource} failed.`, status, err);
+      // While already degraded, a failed SSE retry is expected — the `degraded`
+      // status conveys it, so don't spam onError every poll cycle.
+      if (lastStatus !== 'degraded') {
+        emitError('connection_failed', `Stream connect to ${resource} failed.`, status, err);
+      }
       return 'ended';
     }
-    emitError('connection_failed', `Stream connect to ${resource} failed.`, undefined, err);
+    if (lastStatus !== 'degraded') {
+      emitError('connection_failed', `Stream connect to ${resource} failed.`, undefined, err);
+    }
     return 'ended';
   };
 
@@ -298,7 +319,7 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
       // The stream read aborted or errored. When we triggered the abort
       // (resync, snapshot failure, unsubscribe) the flags already reflect it;
       // otherwise it's a genuine mid-stream transport drop.
-      if (!closed && outcome !== 'resync' && !snapshotFailed) {
+      if (!closed && outcome !== 'resync' && !snapshotFailed && lastStatus !== 'degraded') {
         emitError('connection_failed', `Stream connection to ${resource} dropped.`, undefined, err);
       }
     } finally {
@@ -314,18 +335,83 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
     return outcome;
   };
 
+  // ── REST polling fallback (degraded mode) ───────────────────────────────
+  // Drain the recovery endpoint from `fromCursor`, delivering rows as deltas,
+  // and return the advanced cursor. Used only while the SSE stream is down; the
+  // recovery body equals the stream delta body, so the same `decode` applies.
+  const recoveryPath = `/v1/${resource}`;
+  const pollRecovery = async (fromCursor: string): Promise<string> => {
+    let c = fromCursor;
+    for (let page = 0; page < POLL_MAX_PAGES && !closed; page += 1) {
+      let body: RecoveryBody;
+      try {
+        body = await api.request<RecoveryBody>(recoveryPath, {
+          query: { ...buildQuery(undefined), since: c, limit: RECOVERY_PAGE_LIMIT },
+          signal: lifecycle.signal,
+        });
+      } catch (err) {
+        // The fallback itself failed — surface it (poll errors are NOT
+        // suppressed) and keep the cursor to retry next interval.
+        emitError(
+          'connection_failed',
+          `Recovery poll for ${resource} failed.`,
+          err instanceof OspexAPIError ? err.status : undefined,
+          err,
+        );
+        return c;
+      }
+      const rows = Array.isArray(body[resource]) ? (body[resource] as unknown[]) : [];
+      for (const raw of rows) {
+        let row: T;
+        try {
+          row = decode(raw);
+        } catch (err) {
+          emitError('connection_failed', `Failed to decode a ${resource} recovery row.`, undefined, err);
+          continue;
+        }
+        try {
+          handlers.onDelta(row);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (typeof body.nextCursor === 'string') c = body.nextCursor;
+      if (body.hasMore !== true) break;
+    }
+    return c;
+  };
+
   // ── reconnect loop ──────────────────────────────────────────────────────
   void (async (): Promise<void> => {
+    // While degraded, polling tracks its own forward progress here; the live
+    // `cursor` is left frozen so SSE recovery resumes with its overlap re-scan
+    // and reconciles anything polling may have missed.
+    let pollCursor: string | undefined;
     while (!closed) {
       const outcome = await connectOnce();
       if (closed || outcome === 'fatal') break;
       if (outcome === 'resync') {
         // Re-snapshot promptly — no backoff; status is already 'resync'.
         attempt = 0;
+        pollCursor = undefined;
         continue;
       }
-      emitStatus('reconnecting');
-      await abortableSleep(backoffDelay(attempt), lifecycle.signal);
+      // outcome === 'ended'. `attempt` is the pre-increment count of prior
+      // consecutive failures; `attempt + 1` counts this one (so backoff stays
+      // base-delay-first, and the increment happens after, as before).
+      if (attempt + 1 >= POLL_FALLBACK_THRESHOLD && cursor !== undefined) {
+        // SSE has stayed down but we have a resume point — poll REST instead of
+        // going dark. connectOnce keeps retrying the stream each loop; when it
+        // reconnects, `attempt` resets and we drop back out of polling.
+        if (pollCursor === undefined) pollCursor = cursor;
+        emitStatus('degraded');
+        pollCursor = await pollRecovery(pollCursor);
+        await abortableSleep(POLL_INTERVAL_MS, lifecycle.signal);
+      } else {
+        pollCursor = undefined;
+        emitStatus('reconnecting');
+        await abortableSleep(backoffDelay(attempt), lifecycle.signal);
+      }
       attempt += 1;
     }
   })();
