@@ -27,12 +27,14 @@ import { OspexAPIError, OspexStreamError, type OspexStreamReason } from '../erro
 import type { ApiClient } from '../api/client.js';
 import type { Subscription } from '../types/odds.js';
 import type { StreamStatus, StreamSubscribeHandlers } from '../types/stream.js';
+import {
+  IDLE_TIMEOUT_MS,
+  abortableSleep,
+  backoffDelay,
+  parseSseStream,
+  type SseFrame,
+} from './sse.js';
 
-/** No event or heartbeat for this long ⇒ treat the stream as dead and reconnect.
- *  The server heartbeats ~20s; 60s tolerates a couple of missed beats. */
-const IDLE_TIMEOUT_MS = 60_000;
-const BACKOFF_BASE_MS = 500;
-const BACKOFF_CAP_MS = 30_000;
 // After this many consecutive failed SSE (re)connects — and only once a resume
 // cursor exists — fall back to polling the REST recovery endpoint (status
 // 'degraded') until the stream recovers.
@@ -59,13 +61,6 @@ export interface StreamTransportConfig<T> {
 }
 
 type ConnectOutcome = 'ended' | 'resync' | 'fatal';
-
-export interface SseFrame {
-  kind: 'event' | 'comment';
-  event?: string;
-  data?: string;
-  id?: string;
-}
 
 /** Recovery (`?since=`) response envelope: `{ <resource>: [...], nextCursor, hasMore }`. */
 interface RecoveryBody {
@@ -438,105 +433,4 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
       lifecycle.abort();
     },
   };
-}
-
-/** Full-jitter exponential backoff. */
-function backoffDelay(attempt: number): number {
-  const ceil = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt);
-  return Math.floor(Math.random() * ceil);
-}
-
-/** Sleep that resolves early if `signal` aborts (e.g. unsubscribe). */
-function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const done = (): void => {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', done);
-      resolve();
-    };
-    const timer = setTimeout(done, ms);
-    timer.unref?.();
-    signal.addEventListener('abort', done, { once: true });
-  });
-}
-
-/**
- * Incremental Server-Sent Events parser over a fetch byte stream. Yields one
- * frame per dispatched event (blank-line terminated) and one per `:` comment
- * (heartbeats — so the idle watchdog sees them). Handles chunk boundaries,
- * CRLF, multi-line `data:`, and a single optional space after each field colon.
- */
-export async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator<SseFrame> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  let eventType = '';
-  let data = '';
-  let id: string | undefined;
-  let sawField = false;
-  const reset = (): void => {
-    eventType = '';
-    data = '';
-    id = undefined;
-    sawField = false;
-  };
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let nl: number;
-      while ((nl = buf.indexOf('\n')) !== -1) {
-        let line = buf.slice(0, nl);
-        buf = buf.slice(nl + 1);
-        if (line.endsWith('\r')) line = line.slice(0, -1);
-
-        if (line === '') {
-          if (sawField) {
-            const frame: SseFrame = { kind: 'event', event: eventType || 'message', data };
-            if (id !== undefined) frame.id = id;
-            yield frame;
-          }
-          reset();
-          continue;
-        }
-        if (line.startsWith(':')) {
-          yield { kind: 'comment' };
-          continue;
-        }
-        const colon = line.indexOf(':');
-        const field = colon === -1 ? line : line.slice(0, colon);
-        let value = colon === -1 ? '' : line.slice(colon + 1);
-        if (value.startsWith(' ')) value = value.slice(1);
-        switch (field) {
-          case 'event':
-            eventType = value;
-            sawField = true;
-            break;
-          case 'data':
-            data = data === '' ? value : `${data}\n${value}`;
-            sawField = true;
-            break;
-          case 'id':
-            id = value;
-            sawField = true;
-            break;
-          default:
-            // 'retry' (we own backoff) and unknown fields: ignore.
-            break;
-        }
-      }
-    }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      /* a pending read may already have errored on abort */
-    }
-  }
 }
