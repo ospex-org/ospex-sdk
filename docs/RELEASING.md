@@ -80,7 +80,8 @@ git push origin v<ver>
 ## Post-release
 
 - Verify the tarball download links resolve from a logged-out browser.
-- Update any external pointers (e.g., the [ospex.org](https://ospex.org) downloads page) to the new version or the `/releases/latest` URL.
+- **Bump the [ospex.org](https://ospex.org) downloads page.** In [`ospex-frontend`](https://github.com/ospex-org/ospex-frontend), bump the pinned `VERSION` in `src/pages/Downloads.tsx` to the new version (and refresh any now-stale copy on the page), then open a PR. That one constant drives the tarball filenames, the `releases/download` URLs, the version badge, and the install snippet. The page goes live on the next site deploy.
+- Update any other external pointers to the new version or the `/releases/latest` URL.
 - Announce as appropriate.
 
 ## If something goes wrong
