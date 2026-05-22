@@ -350,6 +350,9 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
           signal: lifecycle.signal,
         });
       } catch (err) {
+        // Unsubscribe aborts the in-flight fetch — that's not a fallback
+        // failure, and a closed subscription must not get a late onError.
+        if (closed || lifecycle.signal.aborted) return c;
         // The fallback itself failed — surface it (poll errors are NOT
         // suppressed) and keep the cursor to retry next interval.
         emitError(
@@ -360,6 +363,9 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
         );
         return c;
       }
+      // The request may have resolved after an unsubscribe raced it — don't
+      // decode, advance the cursor, or deliver into a closed subscription.
+      if (closed || lifecycle.signal.aborted) return c;
       const rows = Array.isArray(body[resource]) ? (body[resource] as unknown[]) : [];
       for (const raw of rows) {
         let row: T;
