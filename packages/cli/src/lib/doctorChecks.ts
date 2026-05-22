@@ -54,7 +54,6 @@ export type CheckId =
   | 'config.rpc_url'
   | 'config.chain_id_expected'
   | 'connectivity.api'
-  | 'connectivity.api_public_config'
   | 'connectivity.rpc'
   | 'network.chain_id_match'
   | 'network.contracts_deployed'
@@ -166,13 +165,9 @@ export interface ChecksInputs {
    *  `rpcUrl.value === null` in PR 3. When unset, the runner derives
    *  it from `rpcUrl ?? null`. */
   rpcUrlMissing?: boolean;
-  // PR 3 additions: URL provenance + Realtime-bootstrap probe.
+  // PR 3 additions: URL provenance.
   apiUrl?: ResolvedApiUrl | null;
   rpcUrl?: ResolvedRpcUrl | null;
-  /** True/false based on `GET <apiUrl>/v1/config/public`; `null` when
-   *  the probe wasn't attempted (typical unit-test path). */
-  apiPublicConfigOk?: boolean | null;
-  apiPublicConfigError?: string;
   // PR 4 additions: signer provenance via the shared auth-check
   // walker. `authResolution` is the walker's output; the doctor
   // always runs it in non-unlocking mode. `passwordFilePermissions`
@@ -191,7 +186,6 @@ interface NormalizedChecksInputs extends ChecksInputs {
   rpcUrlMissing: boolean;
   apiUrl: ResolvedApiUrl | null;
   rpcUrl: ResolvedRpcUrl | null;
-  apiPublicConfigOk: boolean | null;
   authResolution: AuthSourceResolution | null;
   passwordFilePermissions: PasswordFilePermissions | null;
   strict: boolean;
@@ -212,7 +206,6 @@ function normalize(inputs: ChecksInputs): NormalizedChecksInputs {
     rpcUrlMissing,
     apiUrl,
     rpcUrl,
-    apiPublicConfigOk: inputs.apiPublicConfigOk ?? null,
     authResolution: inputs.authResolution ?? null,
     passwordFilePermissions: inputs.passwordFilePermissions ?? null,
     strict: inputs.strict ?? false,
@@ -237,7 +230,6 @@ export function runDoctorChecks(rawInputs: ChecksInputs): CheckResult[] {
     checkConfigRpcUrl(inputs),
     checkConfigChainIdExpected(inputs),
     checkConnectivityApi(inputs),
-    checkConnectivityApiPublicConfig(inputs),
     checkConnectivityRpc(inputs),
     checkNetworkChainIdMatch(inputs),
     checkNetworkContractsDeployed(inputs),
@@ -254,7 +246,7 @@ export function runDoctorChecks(rawInputs: ChecksInputs): CheckResult[] {
   ];
 }
 
-// ── PR 3: config URL provenance + Realtime bootstrap probe ────────────
+// ── PR 3: config URL provenance ───────────────────────────────────────
 
 // API URL always has a documented default (`https://api.ospex.org`),
 // so this check never fails. It exists to surface the provenance
@@ -312,43 +304,6 @@ function checkConfigRpcUrl(inputs: NormalizedChecksInputs): CheckResult {
     blockingFor: [...ALL_CAPABILITIES],
     data: { source: inputs.rpcUrl.source },
   };
-}
-
-// `/v1/config/public` is the Supabase Realtime bootstrap. It's
-// informational for non-Realtime consumers (bettors / matchers don't
-// need it), so a fail here doesn't block any readiness capability —
-// the structured signal is just exposed for Realtime-aware agents.
-function checkConnectivityApiPublicConfig(inputs: NormalizedChecksInputs): CheckResult {
-  if (inputs.apiPublicConfigOk === null) {
-    return {
-      id: 'connectivity.api_public_config',
-      label: 'API /v1/config/public reachable (Realtime bootstrap)',
-      status: 'skip',
-      blockingFor: [],
-      details: 'probe not attempted',
-    };
-  }
-  if (inputs.apiPublicConfigOk) {
-    return {
-      id: 'connectivity.api_public_config',
-      label: 'API /v1/config/public reachable (Realtime bootstrap)',
-      status: 'ok',
-      blockingFor: [],
-    };
-  }
-  const result: CheckResult = {
-    id: 'connectivity.api_public_config',
-    label: 'API /v1/config/public reachable (Realtime bootstrap)',
-    status: 'fail',
-    blockingFor: [],
-    remediation:
-      'Realtime odds subscriptions need this endpoint; bettors / matchers can ignore it.',
-    error: { code: 'api_error', retryable: true },
-  };
-  if (inputs.apiPublicConfigError !== undefined) {
-    result.details = inputs.apiPublicConfigError;
-  }
-  return result;
 }
 
 // ── PR 2: chain provenance + probes ───────────────────────────────────

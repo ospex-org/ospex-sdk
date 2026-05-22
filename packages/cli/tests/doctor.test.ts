@@ -97,7 +97,6 @@ const HAPPY_PROBES = {
     value: 'https://polygon-mainnet.g.alchemy.com/v2/aaaaaaaaaaaaaaaaaaaa',
     source: 'env-OSPEX_RPC_URL' as const,
   },
-  apiPublicConfigOk: true,
   authResolution: HAPPY_AUTH_RESOLUTION,
   passwordFilePermissions: HAPPY_PASSWORD_FILE_PERMS,
 };
