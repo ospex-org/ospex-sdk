@@ -662,6 +662,100 @@ describe('subscribeToStream — polling fallback (degraded)', () => {
     expect(c.deltas.length).toBe(deltasBefore); // no onDelta after unsubscribe
     expect(c.deltas).not.toContainEqual({ id: 'after-unsubscribe' });
   });
+
+  it('stops delivering recovery rows when a handler unsubscribes mid-page', async () => {
+    // Recovery returns a multi-row page; the consumer unsubscribes from row 1.
+    let sseShouldFail = false;
+    let liveStream: { push: (s: string) => void; error: () => void } | undefined;
+    const fetchImpl = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      if (String(url).includes('/v1/stream/')) {
+        if (sseShouldFail) {
+          return { ok: false, status: 503, async json() {
+            return { error: 'down' };
+          } } as unknown as Response;
+        }
+        let ctrl!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({ start: (c) => (ctrl = c) });
+        init?.signal?.addEventListener('abort', () => {
+          try {
+            ctrl.error(new Error('aborted'));
+          } catch {
+            /* */
+          }
+        }, { once: true });
+        liveStream = {
+          push: (s) => {
+            try {
+              ctrl.enqueue(enc.encode(s));
+            } catch {
+              /* */
+            }
+          },
+          error: () => {
+            try {
+              ctrl.error(new Error('drop'));
+            } catch {
+              /* */
+            }
+          },
+        };
+        return { ok: true, status: 200, body: stream, async json() {} } as unknown as Response;
+      }
+      return { ok: true, status: 200, async json() {
+        return { fills: [{ id: 'rec-a' }, { id: 'rec-b' }, { id: 'rec-c' }], nextCursor: 'x', hasMore: false };
+      } } as unknown as Response;
+    };
+    const api = new ApiClient({ apiUrl: 'http://test.local', fetch: fetchImpl as unknown as typeof fetch });
+
+    const deltas: Array<{ id: string }> = [];
+    let sub: Subscription | undefined;
+    const handlers: StreamSubscribeHandlers<{ id: string }> = {
+      onDelta: (row) => {
+        deltas.push(row);
+        if (row.id === 'rec-a') void sub?.unsubscribe(); // unsubscribe from the first recovery row
+      },
+    };
+    sub = subscribeToStream({ api, resource: 'fills', filters: {}, decode: passthrough, handlers });
+    await settle();
+    liveStream?.push('event: ready\ndata: {}\n\n');
+    liveStream?.push('event: delta\ndata: {"id":"d1"}\nid: cur-1\n\n');
+    await settle();
+    sseShouldFail = true;
+    liveStream?.error();
+    await settle(15_000); // → degraded → recovery delivers the multi-row page
+
+    expect(deltas).toEqual([{ id: 'd1' }, { id: 'rec-a' }]); // only the first recovery row
+    expect(deltas).not.toContainEqual({ id: 'rec-b' });
+    expect(deltas).not.toContainEqual({ id: 'rec-c' });
+  });
+
+  it('does not flush buffered deltas when a handler unsubscribes from onSnapshot', async () => {
+    const { api, conns } = fakeStreamingApi();
+    const deltas: Array<{ id: string }> = [];
+    let sub: Subscription | undefined;
+    let resolveSnap!: (rows: Array<{ id: string }>) => void;
+    const snapshot = (): Promise<Array<{ id: string }>> =>
+      new Promise((r) => {
+        resolveSnap = r;
+      });
+    const handlers: StreamSubscribeHandlers<{ id: string }> = {
+      onSnapshot: () => {
+        void sub?.unsubscribe();
+      },
+      onDelta: (row) => {
+        deltas.push(row);
+      },
+    };
+    sub = subscribeToStream({ api, resource: 'commitments', filters: {}, decode: passthrough, snapshot, handlers });
+    await settle();
+    conns[0]?.push('event: ready\ndata: {}\n\n');
+    conns[0]?.push('event: delta\ndata: {"id":"buffered-1"}\nid: c1\n\n');
+    conns[0]?.push('event: delta\ndata: {"id":"buffered-2"}\nid: c2\n\n');
+    await settle();
+    resolveSnap([{ id: 'snap' }]); // onSnapshot fires and unsubscribes
+    await settle();
+    expect(deltas).toEqual([]); // buffered deltas not flushed into a closed subscription
+  });
 });
 
 describe('normalizeUint', () => {

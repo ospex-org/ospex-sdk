@@ -88,8 +88,10 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
   // pending backoff sleep — the single unsubscribe signal.
   const lifecycle = new AbortController();
 
+  // Once closed, no handler fires again (a consumer may unsubscribe from inside
+  // any handler — that must immediately stop all further delivery).
   const emitStatus = (s: StreamStatus): void => {
-    if (lastStatus === s) return;
+    if (closed || lastStatus === s) return;
     lastStatus = s;
     try {
       handlers.onStatus?.(s);
@@ -104,6 +106,7 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
     status?: number,
     cause?: unknown,
   ): void => {
+    if (closed) return;
     try {
       handlers.onError?.(
         new OspexStreamError(message, {
@@ -270,6 +273,9 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
       }
       buffering = false;
       for (const item of buffer) {
+        // A consumer may have unsubscribed from onSnapshot or an earlier flushed
+        // delta — stop delivering into a closed/abandoned subscription.
+        if (closed || abandoned) return;
         if (item.id !== undefined) cursor = item.id;
         try {
           handlers.onDelta(item.row);
@@ -368,6 +374,9 @@ export function subscribeToStream<T>(config: StreamTransportConfig<T>): Subscrip
       if (closed || lifecycle.signal.aborted) return c;
       const rows = Array.isArray(body[resource]) ? (body[resource] as unknown[]) : [];
       for (const raw of rows) {
+        // A consumer may unsubscribe from a delta handler mid-page — stop
+        // delivering the rest of this page into a closed subscription.
+        if (closed || lifecycle.signal.aborted) return c;
         let row: T;
         try {
           row = decode(raw);
