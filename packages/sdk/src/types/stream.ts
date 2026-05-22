@@ -18,6 +18,13 @@ import type { OspexStreamError } from '../errors.js';
  *   reconnecting — the connection dropped (or the first connect is still in
  *                  flight) and the transport is retrying with backoff. Live
  *                  delivery is paused until the next `connected`.
+ *   degraded     — the SSE stream has stayed down across several reconnect
+ *                  attempts, so the transport has fallen back to polling the
+ *                  REST recovery endpoint. Deltas still arrive via `onDelta`
+ *                  (higher latency, best-effort), and the transport keeps
+ *                  trying to re-establish the stream; it returns to `connected`
+ *                  when the stream recovers. Only reached once a resume cursor
+ *                  exists (i.e. the stream was live at least once).
  *   resync       — the server forced a re-snapshot (a backlog too large to
  *                  replay, an upstream reorg/backfill, or a cursor handoff that
  *                  raced concurrent writes), or a stored cursor was rejected.
@@ -25,7 +32,7 @@ import type { OspexStreamError } from '../errors.js';
  *                  and reconnects without a cursor; a fresh `onSnapshot`
  *                  (where supported) and `connected` follow on success.
  */
-export type StreamStatus = 'connected' | 'reconnecting' | 'resync';
+export type StreamStatus = 'connected' | 'reconnecting' | 'degraded' | 'resync';
 
 /**
  * Handlers for a protocol stream subscription. `T` is the resource's delta

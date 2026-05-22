@@ -462,6 +462,302 @@ describe('subscribeToStream — in-flight snapshot suppression', () => {
   });
 });
 
+describe('subscribeToStream — polling fallback (degraded)', () => {
+  function fallbackHarness(): {
+    api: ApiClient;
+    recoverySince: string[];
+    setSseFail: (v: boolean) => void;
+    live: () => { push: (s: string) => void; error: () => void } | undefined;
+  } {
+    const recoverySince: string[] = [];
+    let sseShouldFail = false;
+    let liveStream: { push: (s: string) => void; error: () => void } | undefined;
+    const fetchImpl = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      const u = String(url);
+      if (u.includes('/v1/stream/')) {
+        if (sseShouldFail) {
+          return { ok: false, status: 503, async json() {
+            return { error: 'down' };
+          } } as unknown as Response;
+        }
+        let ctrl!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({ start: (c) => (ctrl = c) });
+        init?.signal?.addEventListener('abort', () => {
+          try {
+            ctrl.error(new Error('aborted'));
+          } catch {
+            /* */
+          }
+        }, { once: true });
+        liveStream = {
+          push: (s) => {
+            try {
+              ctrl.enqueue(enc.encode(s));
+            } catch {
+              /* */
+            }
+          },
+          error: () => {
+            try {
+              ctrl.error(new Error('drop'));
+            } catch {
+              /* */
+            }
+          },
+        };
+        return { ok: true, status: 200, body: stream, async json() {} } as unknown as Response;
+      }
+      // Recovery: GET /v1/<resource>?since=...
+      recoverySince.push(new URL(u).searchParams.get('since') ?? '');
+      const since = recoverySince[recoverySince.length - 1];
+      return { ok: true, status: 200, async json() {
+        return { fills: [{ id: `rec-${since}` }], nextCursor: `${since}+1`, hasMore: false };
+      } } as unknown as Response;
+    };
+    const api = new ApiClient({ apiUrl: 'http://test.local', fetch: fetchImpl as unknown as typeof fetch });
+    return { api, recoverySince, setSseFail: (v) => (sseShouldFail = v), live: () => liveStream };
+  }
+
+  it('falls back to REST polling after repeated SSE failures, then recovers when the stream returns', async () => {
+    const h = fallbackHarness();
+    const c = collector<{ id: string }>();
+    subscribeToStream({ api: h.api, resource: 'fills', filters: {}, decode: passthrough, handlers: c.handlers });
+    await settle();
+    // connect 1: live — deliver a delta to establish the resume cursor.
+    h.live()?.push('event: ready\ndata: {}\n\n');
+    h.live()?.push('event: delta\ndata: {"id":"d1"}\nid: cur-1\n\n');
+    await settle();
+    expect(c.statuses).toContain('connected');
+    expect(c.deltas).toEqual([{ id: 'd1' }]);
+
+    // SSE now fails on every reconnect; drop the live stream.
+    h.setSseFail(true);
+    h.live()?.error();
+    await settle(15_000); // through reconnect backoffs + into degraded + a poll cycle
+
+    expect(c.statuses).toContain('degraded');
+    expect(h.recoverySince[0]).toBe('cur-1'); // polled from the live cursor
+    expect(c.deltas).toContainEqual({ id: 'rec-cur-1' }); // a recovery row was delivered
+    expect(h.recoverySince).toContain('cur-1+1'); // cursor advanced across poll cycles
+
+    // SSE recovers.
+    h.setSseFail(false);
+    await settle(6000); // next loop iteration re-establishes the stream
+    h.live()?.push('event: ready\ndata: {}\n\n');
+    await settle();
+    expect(c.statuses[c.statuses.length - 1]).toBe('connected');
+  });
+
+  it('does not fall back to polling without a resume cursor', async () => {
+    const plan: Plan = () => ({ status: 503 }); // every SSE connect fails, never connects
+    const { api, urls } = fakeStreamingApi(plan);
+    const c = collector<{ id: string }>();
+    subscribeToStream({ api, resource: 'fills', filters: {}, decode: passthrough, handlers: c.handlers });
+    await settle(60_000);
+    expect(c.statuses).toContain('reconnecting');
+    expect(c.statuses).not.toContain('degraded'); // no cursor ⇒ never degraded
+    expect(urls.every((u) => u.includes('/v1/stream/'))).toBe(true); // recovery never polled
+  });
+
+  // Recovery fetch is a deferred the test resolves/rejects, so the
+  // unsubscribe-vs-in-flight-poll race can be driven deterministically.
+  function deferredRecoveryHarness(): {
+    api: ApiClient;
+    setSseFail: (v: boolean) => void;
+    live: () => { push: (s: string) => void; error: () => void } | undefined;
+    recoveryDeferreds: Array<{ resolve: (r: Response) => void; reject: (e: unknown) => void }>;
+  } {
+    let sseShouldFail = false;
+    let liveStream: { push: (s: string) => void; error: () => void } | undefined;
+    const recoveryDeferreds: Array<{ resolve: (r: Response) => void; reject: (e: unknown) => void }> = [];
+    const fetchImpl = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      const u = String(url);
+      if (u.includes('/v1/stream/')) {
+        if (sseShouldFail) {
+          return { ok: false, status: 503, async json() {
+            return { error: 'down' };
+          } } as unknown as Response;
+        }
+        let ctrl!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({ start: (c) => (ctrl = c) });
+        init?.signal?.addEventListener('abort', () => {
+          try {
+            ctrl.error(new Error('aborted'));
+          } catch {
+            /* */
+          }
+        }, { once: true });
+        liveStream = {
+          push: (s) => {
+            try {
+              ctrl.enqueue(enc.encode(s));
+            } catch {
+              /* */
+            }
+          },
+          error: () => {
+            try {
+              ctrl.error(new Error('drop'));
+            } catch {
+              /* */
+            }
+          },
+        };
+        return { ok: true, status: 200, body: stream, async json() {} } as unknown as Response;
+      }
+      return new Promise<Response>((resolve, reject) => {
+        recoveryDeferreds.push({ resolve, reject });
+      });
+    };
+    const api = new ApiClient({ apiUrl: 'http://test.local', fetch: fetchImpl as unknown as typeof fetch });
+    return { api, setSseFail: (v) => (sseShouldFail = v), live: () => liveStream, recoveryDeferreds };
+  }
+
+  async function reachDegradedWithPendingPoll(
+    h: ReturnType<typeof deferredRecoveryHarness>,
+    c: ReturnType<typeof collector<{ id: string }>>,
+  ): Promise<Subscription> {
+    const sub = subscribeToStream({ api: h.api, resource: 'fills', filters: {}, decode: passthrough, handlers: c.handlers });
+    await settle();
+    h.live()?.push('event: ready\ndata: {}\n\n');
+    h.live()?.push('event: delta\ndata: {"id":"d1"}\nid: cur-1\n\n');
+    await settle();
+    h.setSseFail(true);
+    h.live()?.error();
+    await settle(15_000); // → degraded; the first recovery poll is now in flight
+    expect(c.statuses).toContain('degraded');
+    expect(h.recoveryDeferreds.length).toBeGreaterThanOrEqual(1);
+    return sub;
+  }
+
+  it('a recovery poll that rejects after unsubscribe does not emit a late onError', async () => {
+    const h = deferredRecoveryHarness();
+    const c = collector<{ id: string }>();
+    const sub = await reachDegradedWithPendingPoll(h, c);
+
+    const errorsBefore = c.errors.length;
+    await sub.unsubscribe();
+    h.recoveryDeferreds[0]?.reject(new Error('aborted')); // in-flight fetch rejects post-unsubscribe
+    await settle(2000);
+
+    expect(c.errors.length).toBe(errorsBefore); // no late onError
+  });
+
+  it('a recovery poll that resolves after unsubscribe does not call onDelta', async () => {
+    const h = deferredRecoveryHarness();
+    const c = collector<{ id: string }>();
+    const sub = await reachDegradedWithPendingPoll(h, c);
+
+    const deltasBefore = c.deltas.length;
+    await sub.unsubscribe();
+    h.recoveryDeferreds[0]?.resolve({
+      ok: true,
+      status: 200,
+      async json() {
+        return { fills: [{ id: 'after-unsubscribe' }], nextCursor: 'x', hasMore: false };
+      },
+    } as unknown as Response);
+    await settle(2000);
+
+    expect(c.deltas.length).toBe(deltasBefore); // no onDelta after unsubscribe
+    expect(c.deltas).not.toContainEqual({ id: 'after-unsubscribe' });
+  });
+
+  it('stops delivering recovery rows when a handler unsubscribes mid-page', async () => {
+    // Recovery returns a multi-row page; the consumer unsubscribes from row 1.
+    let sseShouldFail = false;
+    let liveStream: { push: (s: string) => void; error: () => void } | undefined;
+    const fetchImpl = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      if (String(url).includes('/v1/stream/')) {
+        if (sseShouldFail) {
+          return { ok: false, status: 503, async json() {
+            return { error: 'down' };
+          } } as unknown as Response;
+        }
+        let ctrl!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({ start: (c) => (ctrl = c) });
+        init?.signal?.addEventListener('abort', () => {
+          try {
+            ctrl.error(new Error('aborted'));
+          } catch {
+            /* */
+          }
+        }, { once: true });
+        liveStream = {
+          push: (s) => {
+            try {
+              ctrl.enqueue(enc.encode(s));
+            } catch {
+              /* */
+            }
+          },
+          error: () => {
+            try {
+              ctrl.error(new Error('drop'));
+            } catch {
+              /* */
+            }
+          },
+        };
+        return { ok: true, status: 200, body: stream, async json() {} } as unknown as Response;
+      }
+      return { ok: true, status: 200, async json() {
+        return { fills: [{ id: 'rec-a' }, { id: 'rec-b' }, { id: 'rec-c' }], nextCursor: 'x', hasMore: false };
+      } } as unknown as Response;
+    };
+    const api = new ApiClient({ apiUrl: 'http://test.local', fetch: fetchImpl as unknown as typeof fetch });
+
+    const deltas: Array<{ id: string }> = [];
+    let sub: Subscription | undefined;
+    const handlers: StreamSubscribeHandlers<{ id: string }> = {
+      onDelta: (row) => {
+        deltas.push(row);
+        if (row.id === 'rec-a') void sub?.unsubscribe(); // unsubscribe from the first recovery row
+      },
+    };
+    sub = subscribeToStream({ api, resource: 'fills', filters: {}, decode: passthrough, handlers });
+    await settle();
+    liveStream?.push('event: ready\ndata: {}\n\n');
+    liveStream?.push('event: delta\ndata: {"id":"d1"}\nid: cur-1\n\n');
+    await settle();
+    sseShouldFail = true;
+    liveStream?.error();
+    await settle(15_000); // → degraded → recovery delivers the multi-row page
+
+    expect(deltas).toEqual([{ id: 'd1' }, { id: 'rec-a' }]); // only the first recovery row
+    expect(deltas).not.toContainEqual({ id: 'rec-b' });
+    expect(deltas).not.toContainEqual({ id: 'rec-c' });
+  });
+
+  it('does not flush buffered deltas when a handler unsubscribes from onSnapshot', async () => {
+    const { api, conns } = fakeStreamingApi();
+    const deltas: Array<{ id: string }> = [];
+    let sub: Subscription | undefined;
+    let resolveSnap!: (rows: Array<{ id: string }>) => void;
+    const snapshot = (): Promise<Array<{ id: string }>> =>
+      new Promise((r) => {
+        resolveSnap = r;
+      });
+    const handlers: StreamSubscribeHandlers<{ id: string }> = {
+      onSnapshot: () => {
+        void sub?.unsubscribe();
+      },
+      onDelta: (row) => {
+        deltas.push(row);
+      },
+    };
+    sub = subscribeToStream({ api, resource: 'commitments', filters: {}, decode: passthrough, snapshot, handlers });
+    await settle();
+    conns[0]?.push('event: ready\ndata: {}\n\n');
+    conns[0]?.push('event: delta\ndata: {"id":"buffered-1"}\nid: c1\n\n');
+    conns[0]?.push('event: delta\ndata: {"id":"buffered-2"}\nid: c2\n\n');
+    await settle();
+    resolveSnap([{ id: 'snap' }]); // onSnapshot fires and unsubscribes
+    await settle();
+    expect(deltas).toEqual([]); // buffered deltas not flushed into a closed subscription
+  });
+});
+
 describe('normalizeUint', () => {
   it('canonicalizes numbers and numeric strings; passes undefined through', () => {
     expect(normalizeUint(7, 'speculationId')).toBe('7');
