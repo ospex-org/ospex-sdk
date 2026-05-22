@@ -1,7 +1,7 @@
 {
   "name": "@ospex/sdk",
-  "version": "0.2.2",
-  "description": "TypeScript SDK for the Ospex protocol — reads, EIP-712 helpers, Realtime odds.",
+  "version": "0.3.0",
+  "description": "TypeScript SDK for the Ospex protocol — reads, EIP-712 helpers, streaming odds.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -33,7 +33,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.4",
     "ethers": "^6.13.4",
     "viem": "^2.21.0"
   },

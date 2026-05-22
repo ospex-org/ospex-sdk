@@ -29,13 +29,6 @@ export interface HealthBody {
   timestamp: string;
 }
 
-export interface PublicConfigBody {
-  supabaseUrl: string;
-  supabaseAnonKey: string;
-  network: Network;
-  chainId: ChainId;
-}
-
 export interface ProtocolInfoBody {
   name: 'Ospex';
   network: Network;

@@ -10,7 +10,7 @@
  *   show  → "what are the current reference odds so I can decide what
  *            commitment price to write?" — single round-trip, exits.
  *   watch → "subscribe me to future upstream odds changes so I can
- *            react." — opens a Realtime channel, runs until SIGINT.
+ *            react." — opens a live odds stream, runs until SIGINT.
  *
  * --json emits a single envelope object (NOT line-delimited like watch),
  * so consumers know they got exactly one snapshot per invocation.
@@ -81,7 +81,7 @@ export const oddsShowCommand = new Command('show')
               homeTeam: contest.homeTeam,
               sport: contest.sport,
               matchTime: contest.matchTime,
-              jsonoddsId: snapshot.jsonoddsId,
+              jsonoddsId: contest.jsonoddsId ?? null,
             },
             odds: snapshot.odds,
           },
@@ -96,12 +96,12 @@ export const oddsShowCommand = new Command('show')
     );
     process.stdout.write(`  start:    ${contest.matchTime}\n`);
     process.stdout.write(`  contest:  ${contest.contestId}\n`);
-    if (snapshot.jsonoddsId !== null) {
-      process.stdout.write(`  upstream: ${snapshot.jsonoddsId}\n`);
+    if (contest.jsonoddsId) {
+      process.stdout.write(`  upstream: ${contest.jsonoddsId}\n`);
     }
     process.stdout.write('\n');
 
-    if (snapshot.jsonoddsId === null) {
+    if (!contest.jsonoddsId) {
       process.stdout.write(
         '  (no upstream odds linkage — reference odds unavailable for this contest)\n',
       );

@@ -33,14 +33,3 @@ export interface EIP712Domain {
   chainId: ChainId;
   verifyingContract: Hex;
 }
-
-/**
- * Subset of `/v1/config/public` the SDK actually uses. The full
- * endpoint includes future fields the SDK is free to ignore.
- */
-export interface PublicConfig {
-  supabaseUrl: string;
-  supabaseAnonKey: string;
-  network: Network;
-  chainId: ChainId;
-}

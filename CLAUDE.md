@@ -4,15 +4,14 @@ Maintainer notes for the Ospex SDK + CLI monorepo. Public docs live in [`README.
 
 ## Layout
 
-- `packages/sdk` — `@ospex/sdk`. Public TypeScript SDK. Reads, EIP-712 helpers, Realtime odds.
+- `packages/sdk` — `@ospex/sdk`. Public TypeScript SDK. Reads, EIP-712 helpers, SSE odds + protocol streams.
 - `packages/cli` — `@ospex/cli`. `ospex` binary on top of the SDK.
 
 Yarn 1 workspaces. Commands run from the root or scoped: `yarn workspace @ospex/sdk <cmd>`.
 
 ## Source-of-truth pointers
 
-- **Schema**: hand-written DB row types in `packages/sdk/src/db/types.ts` mirror the indexer's live SQL schema. When the indexer schema moves, refresh the SDK types in lockstep.
-- **API contract**: internal API response types in `packages/sdk/src/api/types.ts` mirror the core-API handlers. When the core API changes a response shape, update both ends in lockstep.
+- **API contract**: internal API response types in `packages/sdk/src/api/types.ts` mirror the core-API handlers. When the core API changes a response shape, update both ends in lockstep. This is the SDK's only schema-mirroring surface — the SDK reads all protocol state (and streams odds / protocol deltas) through core-api, so there are no hand-written DB row types.
 - **Contracts**: ABIs live at `packages/sdk/src/contracts/abi/`. `MatchingModule.json`, `PositionModule.json`, `SpeculationModule.json`, `ContestModule.json`, and `OracleModule.json` are full Foundry artifacts, refreshed by copying from the contracts repo on contract redeploy. `erc20.ts` is hand-written and reused for both USDC and LINK. `addresses.ts` carries deployed addresses (incl. `linkToken`) for chain id 137 (mainnet) and 80002 (Amoy) — refresh from the contracts repo's deployment artifacts on every redeploy. `constants.ts` carries chainwise constants: `LINK_PAYMENT_PER_CALL_WEI`, `OSPEX_SHARED_SUBSCRIPTION_ID`, `APPROVED_SIGNER_BY_CHAIN`, `OSPEX_API_SERVER_URL`, `OSPEX_DEFAULT_GAS_LIMIT`, verification-poll defaults.
 - **Script approvals**: `client.contests.scripts()` fetches `GET /v1/contests/scripts/approved` from the core API and caches the result for 5 minutes per Contests instance. Refreshing approvals (notably the verify-script re-sign) requires only a core-API redeploy, no SDK release. The verify JS source itself is fetched from the public URL the approval points at and hash-checked locally before any tx is built — a hash mismatch throws `OspexScriptApprovalError(reason='hash_mismatch')` and never wastes gas/USDC on a guaranteed revert.
 - **Encrypted Chainlink Functions secrets**: fetched from `https://secrets.ospex.org/api/get-encrypted-secrets` (protocol-stable alias). Override via `ContestsContext.apiServerUrl` for tests / local stubs.
@@ -41,10 +40,6 @@ Rationale: npm is overwhelmingly a developer-productivity ecosystem; a sports-be
 - **`CoreEventEmitted` event-log decoding requires double-wrapping in test fixtures.** Ospex's `OspexCore.emitCoreEvent(eventType, eventData)` declares `eventData` as a non-indexed `bytes` parameter. The log's `data` field is therefore the ABI-encoded form of a single `bytes` value (offset + length + payload), not the raw payload. When constructing fake receipts in tests, use `encodeAbiParameters([{ type: 'bytes' }], [innerEventData])` for the log data — passing the inner bytes directly will throw "Number ... is not in safe integer range" inside viem's decoder. Used by `positions/{settle,claim}.ts` for receipt parsing; tests at `tests/positions-{settle,claim,claimAll}.test.ts` follow the wrap pattern.
 - **`parseEventLogs` from JSON-imported ABIs loses `args` typing.** viem's `parseEventLogs` only narrows `args` when the ABI is `as const`. JSON-imported ABIs (`{ type: 'json' }`) are typed as a generic `Abi[]` so `args` shows up as `never`. Workaround: `as unknown as Array<{ args: { foo: T } }>` after the call — runtime values are correct, only the static narrowing is missing. Used in `contests/{create,score}.ts` for `ContestCreated` + `RequestSent` parsing.
 
-## Bootstrap config
-
-Public Realtime credentials come from `GET /v1/config/public` on `ospex-core-api`. The SDK fetches it lazily on the first realtime call. Don't bake the Supabase publishable key into client code — when it rotates, the bootstrap endpoint serves the new value without a SDK release.
-
 ## Common commands
 
 ```bash
@@ -61,7 +56,6 @@ node packages/cli/dist/index.js <command>    # run CLI without linking
 
 - Public SDK types in `packages/sdk/src/types/` — re-exported from the package barrel.
 - Internal API response shapes in `packages/sdk/src/api/types.ts` — never re-exported.
-- DB row types in `packages/sdk/src/db/types.ts` — internal, used by Realtime payloads.
 - Errors in `packages/sdk/src/errors.ts`.
 - KeystoreSigner in `packages/sdk/src/signers/keystore.ts` — exposed via subpath, NOT the main barrel.
 
@@ -89,11 +83,11 @@ The SDK + CLI use `Contest`, `Speculation`, and `Position` as the entity names �
 
 `Speculation` always carries `contestId` (mirrors the on-chain struct field 1) so a speculation row is meaningful standalone.
 
-`MarketType` (`'moneyline' | 'spread' | 'total'`) is kept as a tag for the odds-data layer — it parallels the on-chain `ContestMarket` struct and the `current_odds.market` Supabase column. It's used by `Commitment.marketType` (which scorer the wager points at) and `OddsSnapshot.market`. Not an alias for any SDK entity.
+`MarketType` (`'moneyline' | 'spread' | 'total'`) is kept as a tag for the odds-data layer — it parallels the on-chain `ContestMarket` struct and the writer's `current_odds.market` column. It's used by `Commitment.marketType` (which scorer the wager points at) and the per-market odds shapes (`MoneylineOdds` / `SpreadOdds` / `TotalOdds`). Not an alias for any SDK entity.
 
 ## What's implemented
 
-- **M1**: reads (`contests.{list, get}`, `speculations.{list, get}`, `commitments.{list, get}`, `positions`, `leaderboard`, `protocol`, `health`), Signer abstraction, KeystoreSigner, odds surface via `client.odds.{snapshot, subscribe}` — `snapshot(contestId)` reads `GET /v1/contests/:contestId/odds` (one-shot upstream reference odds for the contest's underlying game; user-facing path), `subscribe({ jsonoddsId, market }, handlers)` opens a Supabase Realtime channel (agent-facing, NDJSON contract under `--json`). CLI: read commands + `wallet {import, address, unlock, lock}` plus `ospex odds {show, watch}`.
+- **M1**: reads (`contests.{list, get}`, `speculations.{list, get}`, `commitments.{list, get}`, `positions`, `leaderboard`, `protocol`, `health`), Signer abstraction, KeystoreSigner, odds surface via `client.odds.{snapshot, subscribe}` — `snapshot(contestId)` reads `GET /v1/contests/:contestId/odds` (one-shot upstream reference odds for the contest's underlying game; user-facing path), `subscribe({ contestId, market }, handlers)` opens the core-api odds SSE stream (`GET /v1/stream/odds`) for one market and delivers the market-specific shape (agent-facing, NDJSON contract under `--json`). The odds subscribe migrated from Supabase Realtime to core-api SSE in 0.3.0. CLI: read commands + `wallet {import, address, unlock, lock}` plus `ospex odds {show, watch}`.
 - **M2**: `commitments.{submit, match, approve, cancel}` via `client.commitments`. Per-instance nonce counter (`max(floor, lastInProcess+1, unixSec)`). EIP-712 helpers in `src/chain/eip712.ts`. Chain client adapter in `src/chain/client.ts`. ABI + addresses in `src/contracts/`. Errors: `OspexAllowanceError` + `OspexChainError`. CLI: `init` + `commitments {approve, submit, match, cancel}` with allowance-prompt-and-retry.
 - **M2.5**: on-chain cancel + nonce-floor surface. `commitments.{cancelOnchain, raiseMinNonce, cancelAllOnSpeculation, getNonceFloor}` via `client.commitments`. `cancelOnchain(hash)` fetches the full struct from `/v1/commitments/:hash`, encodes `MatchingModule.cancelCommitment(commitment)`, signs and sends. `cancelAllOnSpeculation` picks `newMinNonce = max(onChainFloor, lastInProcess, supabaseMaxStored) + 1` by default (override via `newMinNonce`), counts affected rows up-front, and returns `invalidatedCount`. Known `MatchingModule__NotCommitmentMaker` / `MatchingModule__NonceMustIncrease` reverts decode (structured + raw-selector paths) into `OspexChainError({ reason })` — selector matching lives in `src/commitments/matchingErrors.ts`. `Commitment.isLive` derived predicate (`status==='open' && !nonceInvalidated`) computed in the API mapper so consumers never have to remember the second clause. CLI: `commitments {cancel-onchain, cancel-all, nonce-floor}` plus `cancel --also-onchain` for the recommended off-chain-then-on-chain pattern. Idempotent re-cancel by design (the contract has no `AlreadyCancelled` revert path — documented in `cancelOnchain` jsdoc and Section 10.4 of the manual playbook).
 - **M3**: Position lifecycle. `positions.{claimParams, claim, settleSpeculation, claimAll, byTx, claimResult}` via `client.positions`. Receipt-driven payout / winSide parsing from `OspexCore.CoreEventEmitted` logs (`POSITION_CLAIMED`, `SPECULATION_SETTLED`). Three-bucket status (`active | pendingSettle | claimable`) — pendingSettle covers winners on scored-but-not-settled speculations. CLI: `positions history`, `claim`, `settle`, `claim-all` (with `--dry-run`), and the existing `positions status` extended to show pendingSettle. Depends on the multi-step `txParams[]` shape from the core API. Implicit signer / no per-call signer arg, mirroring M2 ergonomics.
@@ -103,9 +97,9 @@ The SDK + CLI use `Contest`, `Speculation`, and `Position` as the entity names �
 
 ## What's deferred
 
-- M2.5 (still deferred): `commitments.matches.subscribe` (Realtime channel for match events); cross-process `nonceProvider` injection on `OspexClient` (waits on `ospex-market-maker` to surface concrete coordination needs); optional `GET /v1/makers/:address/nonce-floor` core-api endpoint for read-only / no-RPC clients.
-- M3.5: Realtime `positions` subscription (Supabase channel for `POSITION_CLAIMED` / `SPECULATION_SETTLED` rows). On-chain Multicall3-based bulk claim (defer to demand). Auto-claim daemon (out of SDK scope; market-maker / agent territory).
-- M4.5: `contests.updateMarkets()` + `ospex contests update-markets` (odds refresh — not lifecycle-critical, mainly for frontend display). Watcher CLI (`ospex contests watch`) for auto-update-markets / auto-score on schedule. Realtime publication membership for `contests` / `speculations` so `waitForVerified` can use a Supabase channel instead of polling (requires indexer migration). Amoy `POLYGON_AMOY_R4_SCRIPT_APPROVALS.md` + `scriptApprovals.amoy.json` so M4 is testable on Amoy too.
+- M2.5 (still deferred): `commitments.matches.subscribe` (a core-api SSE stream for match events); cross-process `nonceProvider` injection on `OspexClient` (waits on `ospex-market-maker` to surface concrete coordination needs); optional `GET /v1/makers/:address/nonce-floor` core-api endpoint for read-only / no-RPC clients.
+- M3.5: a dedicated settlement-event SSE stream for `POSITION_CLAIMED` / `SPECULATION_SETTLED` (the S1 `positions` / `fills` protocol streams already cover most of this). On-chain Multicall3-based bulk claim (defer to demand). Auto-claim daemon (out of SDK scope; market-maker / agent territory).
+- M4.5: `contests.updateMarkets()` + `ospex contests update-markets` (odds refresh — not lifecycle-critical, mainly for frontend display). Watcher CLI (`ospex contests watch`) for auto-update-markets / auto-score on schedule. A `contests` / `speculations` stream so `waitForVerified` can subscribe instead of polling (requires indexer publication membership). Amoy `POLYGON_AMOY_R4_SCRIPT_APPROVALS.md` + `scriptApprovals.amoy.json` so M4 is testable on Amoy too.
 - M5: Secondary-market position UX. Speculation-creation methods (auto-creates on first commitment match per pre-flight §3 — no operator surface needed).
 
 ## Calendar — re-sign verify approval before 2026-10-26

@@ -119,9 +119,9 @@ describe('CLI config', () => {
   });
 
   it('save → load round-trips', async () => {
-    await saveConfigFile({ apiUrl: 'https://custom.api', supabaseUrl: 'https://x.supabase.co' });
+    await saveConfigFile({ apiUrl: 'https://custom.api', rpcUrl: 'https://rpc.example' });
     const loaded = await loadConfigFile();
-    expect(loaded).toEqual({ apiUrl: 'https://custom.api', supabaseUrl: 'https://x.supabase.co' });
+    expect(loaded).toEqual({ apiUrl: 'https://custom.api', rpcUrl: 'https://rpc.example' });
   });
 
   it('save → load round-trips keystorePath', async () => {

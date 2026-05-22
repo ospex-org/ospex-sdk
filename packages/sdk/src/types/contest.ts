@@ -110,8 +110,8 @@ export interface Contest {
   speculations: Speculation[];
   // ── Detail-endpoint-only fields ───────────────────────────────────
   /**
-   * Upstream JSONOdds ID. Null when the contest has no JSONOdds
-   * linkage. Required for opening a `current_odds` Realtime channel.
+   * Upstream game id this contest is linked to (the writer's odds-provider
+   * id). Null when the contest has no upstream linkage. Detail-endpoint-only.
    */
   jsonoddsId?: string | null;
   /** External Rundown id the contest was created against. */

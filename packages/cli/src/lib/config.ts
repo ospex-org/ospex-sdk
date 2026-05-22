@@ -27,8 +27,6 @@ import { secureMkdirP, secureWriteFile } from './secure-fs.js';
 
 export interface CliConfigFile {
   apiUrl?: string;
-  supabaseUrl?: string;
-  supabaseAnonKey?: string;
   rpcUrl?: string;
   /** 137 (mainnet) or 80002 (amoy). */
   chainId?: 137 | 80002;
@@ -90,8 +88,6 @@ export interface CliConfigFile {
 
 export interface ResolvedCliConfig {
   apiUrl: string | undefined;
-  supabaseUrl: string | undefined;
-  supabaseAnonKey: string | undefined;
   rpcUrl: string | undefined;
   chainId: 137 | 80002 | undefined;
 }
@@ -155,8 +151,6 @@ export async function loadConfigFile(): Promise<CliConfigFile> {
     const obj = parsed as Record<string, unknown>;
     const out: CliConfigFile = {};
     if (typeof obj.apiUrl === 'string') out.apiUrl = obj.apiUrl;
-    if (typeof obj.supabaseUrl === 'string') out.supabaseUrl = obj.supabaseUrl;
-    if (typeof obj.supabaseAnonKey === 'string') out.supabaseAnonKey = obj.supabaseAnonKey;
     if (typeof obj.rpcUrl === 'string') out.rpcUrl = obj.rpcUrl;
     if (obj.chainId === 137 || obj.chainId === 80002) out.chainId = obj.chainId;
     if (typeof obj.keystorePath === 'string') out.keystorePath = obj.keystorePath;
@@ -193,8 +187,6 @@ export async function resolveCliConfig(): Promise<ResolvedCliConfig> {
   // env var is normalised the same way both resolvers do.
   return {
     apiUrl: nonEmpty(process.env.OSPEX_API_URL) ?? file.apiUrl,
-    supabaseUrl: nonEmpty(process.env.OSPEX_SUPABASE_URL) ?? file.supabaseUrl,
-    supabaseAnonKey: nonEmpty(process.env.OSPEX_SUPABASE_ANON_KEY) ?? file.supabaseAnonKey,
     rpcUrl: nonEmpty(process.env.OSPEX_RPC_URL) ?? file.rpcUrl,
     chainId: envChainId ?? file.chainId,
   };

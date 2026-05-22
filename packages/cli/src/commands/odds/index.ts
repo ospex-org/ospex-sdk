@@ -2,7 +2,7 @@
  * `ospex odds <subcommand>` — read upstream reference odds.
  *
  * - `show`  — one-shot snapshot for a contest (user-facing default).
- * - `watch` — Realtime streaming subscription (agent-facing primitive).
+ * - `watch` — live SSE stream subscription (agent-facing primitive).
  *
  * Distinct purposes: `show` answers "what are the odds right now so I
  * can decide what commitment price to write?", `watch` answers
@@ -18,7 +18,7 @@ import { oddsWatchCommand } from './watch.js';
 
 export function makeOddsCommand(): Command {
   const odds = new Command('odds').description(
-    'Read upstream reference odds — `show` for a one-shot snapshot, `watch` for a Realtime stream.',
+    'Read upstream reference odds — `show` for a one-shot snapshot, `watch` for a live stream.',
   );
   odds.addCommand(oddsShowCommand);
   odds.addCommand(oddsWatchCommand);

@@ -20,10 +20,10 @@
  *     --password-file`. The account stays configured; future commands
  *     will prompt or require an inline `--password-file`.
  *
- * **Unaffected fields**: `apiUrl`, `supabaseUrl`, `supabaseAnonKey`,
- * `rpcUrl`, `chainId`, and the **legacy `keystorePath`** (set by
- * `ospex init`). They're written by other commands and have their
- * own lifecycle. Removing only `foundryKeystorePath` (the sticky
+ * **Unaffected fields**: `apiUrl`, `rpcUrl`, `chainId`, and the
+ * **legacy `keystorePath`** (set by `ospex init`). They're written by
+ * other commands and have their own lifecycle. Removing only
+ * `foundryKeystorePath` (the sticky
  * signer slot) is what this command does — the legacy `init`-set
  * path is never touched.
  */

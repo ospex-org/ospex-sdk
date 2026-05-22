@@ -1,20 +1,17 @@
 /**
  * OspexClient — composes the namespaced sub-objects that make up the
  * public SDK surface. Configuration is optional: by default the client
- * points at the production API, and Supabase Realtime credentials are
- * fetched lazily from `/v1/config/public` on the first realtime call.
+ * points at the production API. Reads, writes, and streaming all go
+ * through `ospex-core-api`; the SDK opens core-api's SSE endpoints
+ * directly for live odds and protocol streams, with no external
+ * realtime credentials to bootstrap.
  *
- * Multiple instances are fully isolated — there is no module-level
- * state. The Supabase client is constructed lazily on first realtime
- * use, so no Supabase work happens when only the read endpoints are
- * called.
+ * Multiple instances are fully isolated — there is no module-level state.
  */
 
-import { createClient as createSupabaseClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { PublicClient } from 'viem';
 
 import { ApiClient } from './api/client.js';
-import { ConfigApi } from './api/config.js';
 import { ContestsApi } from './api/contests.js';
 import { GamesApi } from './api/games.js';
 import { HealthApi } from './api/health.js';
@@ -35,15 +32,19 @@ import { Games } from './games/index.js';
 import { Positions } from './positions/index.js';
 import { Teams } from './teams/index.js';
 import { getAddresses, type OspexAddresses } from './contracts/addresses.js';
-import { OspexConfigError } from './errors.js';
-import { subscribeToOdds } from './realtime/odds.js';
+import { OspexConfigError, OspexValidationError } from './errors.js';
+import { decodeOddsEvent } from './api/oddsMappers.js';
+import { normalizeUint } from './realtime/filters.js';
+import { subscribeToOddsStream } from './realtime/oddsStream.js';
 import type {
   ContestOddsSnapshot,
+  MarketType,
+  OddsForMarket,
   OddsSubscribeArgs,
   OddsSubscribeHandlers,
   Subscription,
 } from './types/odds.js';
-import type { ChainId, PublicConfig } from './types/protocol.js';
+import type { ChainId } from './types/protocol.js';
 import type { Signer } from './types/signer.js';
 
 export const DEFAULT_API_URL = 'https://api.ospex.org';
@@ -51,10 +52,6 @@ export const DEFAULT_API_URL = 'https://api.ospex.org';
 export interface OspexClientOptions {
   /** Base URL of `ospex-core-api`. Defaults to production. */
   apiUrl?: string;
-  /** Override Supabase project URL. Otherwise lazy-fetched from /v1/config/public. */
-  supabaseUrl?: string;
-  /** Override Supabase publishable / anon key. Otherwise lazy-fetched. */
-  supabaseAnonKey?: string;
   /**
    * Wallet for signed actions. Required by every M2 write method
    * (`commitments.submit`, `match`, `approve`, `cancel`); reads work
@@ -99,10 +96,7 @@ export class OspexClient {
   /** Internal — exposed for tests to mock the underlying transport. */
   readonly api: ApiClient;
 
-  private readonly configApi: ConfigApi;
   private readonly oddsApi: OddsApi;
-  private readonly options: OspexClientOptions;
-  private supabasePromise: Promise<SupabaseClient> | undefined;
   private readonly _signer: Signer | undefined;
   private readonly _rpcUrl: string | undefined;
   private readonly _chainId: ChainId;
@@ -111,7 +105,6 @@ export class OspexClient {
   private readonly _nonceCounter = new NonceCounter();
 
   constructor(options: OspexClientOptions = {}) {
-    this.options = options;
     const apiOptions: ConstructorParameters<typeof ApiClient>[0] = {
       apiUrl: options.apiUrl ?? DEFAULT_API_URL,
     };
@@ -134,7 +127,6 @@ export class OspexClient {
     this.leaderboard = new LeaderboardApi(this.api);
     this.protocol = new ProtocolApi(this.api);
     this.health = new HealthApi(this.api);
-    this.configApi = new ConfigApi(this.api);
     this.games = new Games({ gamesApi });
     this.teams = new Teams(teamsApi);
 
@@ -232,78 +224,39 @@ export class OspexClient {
   }
 
   /**
-   * Odds surface — both one-shot snapshot reads and Realtime streaming.
+   * Odds surface — one-shot snapshot reads and a live SSE stream, both
+   * served by `ospex-core-api`.
    *
    * - `snapshot(contestId)` — current upstream reference odds for the
-   *   contest's underlying game. Single round-trip, no channel. Use
-   *   when a user or agent needs to see odds *now* (e.g. before
-   *   pricing a commitment).
-   * - `subscribe({ jsonoddsId, market }, handlers)` — opens a Supabase
-   *   Realtime channel and routes change/refresh events to the
-   *   handlers. Use when an agent needs to react to upstream odds
-   *   moves over time. The args take a raw `jsonoddsId` because the
-   *   channel filter is by upstream id; resolve from a contestId via
-   *   `client.contests.get(contestId).jsonoddsId` first if needed.
+   *   contest's underlying game. Single round-trip, no stream. Use when
+   *   a user or agent needs to see odds *now* (e.g. before pricing a
+   *   commitment).
+   * - `subscribe({ contestId, market }, handlers)` — opens the core-api
+   *   odds SSE stream for one (contest, market) and routes
+   *   snapshot/change/refresh events to the handlers. Use when an agent
+   *   needs to react to upstream odds moves over time. Contest-id native
+   *   — the server resolves the upstream game, so no upstream id is
+   *   needed. The handler payload is the market-specific shape
+   *   (`MoneylineOdds` / `SpreadOdds` / `TotalOdds`).
    */
   readonly odds = {
     snapshot: (contestId: string): Promise<ContestOddsSnapshot> => {
       return this.oddsApi.snapshot(contestId);
     },
-    subscribe: async (
-      args: OddsSubscribeArgs,
-      handlers: OddsSubscribeHandlers,
+    subscribe: async <M extends MarketType>(
+      args: OddsSubscribeArgs<M>,
+      handlers: OddsSubscribeHandlers<OddsForMarket<M>>,
     ): Promise<Subscription> => {
-      const supabase = await this.getSupabase();
-      return subscribeToOdds(supabase, args, handlers);
+      const contestId = normalizeUint(args.contestId, 'contestId');
+      if (contestId === undefined) {
+        throw new OspexValidationError('contestId is required.', { field: 'contestId' });
+      }
+      return subscribeToOddsStream<OddsForMarket<M>>({
+        api: this.api,
+        query: { contestId, market: args.market },
+        decode: (body) => decodeOddsEvent(args.market, body),
+        handlers,
+      });
     },
   };
-
-  private async getSupabase(): Promise<SupabaseClient> {
-    if (this.supabasePromise) return this.supabasePromise;
-    this.supabasePromise = this.resolveSupabase();
-    try {
-      return await this.supabasePromise;
-    } catch (err) {
-      // Reset on failure so a transient /v1/config/public outage
-      // doesn't permanently brick subsequent retries.
-      this.supabasePromise = undefined;
-      throw err;
-    }
-  }
-
-  private async resolveSupabase(): Promise<SupabaseClient> {
-    const config = await this.resolveConfig();
-    return createSupabaseClient(config.supabaseUrl, config.supabaseAnonKey, {
-      realtime: {
-        params: { eventsPerSecond: 10 },
-      },
-      auth: {
-        // We only ever use the publishable key for Realtime — there is
-        // no user session to persist or refresh.
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    });
-  }
-
-  private async resolveConfig(): Promise<{ supabaseUrl: string; supabaseAnonKey: string }> {
-    const { supabaseUrl, supabaseAnonKey } = this.options;
-    if (supabaseUrl !== undefined && supabaseAnonKey !== undefined) {
-      return { supabaseUrl, supabaseAnonKey };
-    }
-    let publicConfig: PublicConfig;
-    try {
-      publicConfig = await this.configApi.public();
-    } catch (err) {
-      throw new OspexConfigError(
-        'Failed to fetch /v1/config/public for Realtime credentials. ' +
-          'Provide `supabaseUrl` and `supabaseAnonKey` directly to bypass.',
-        { cause: err },
-      );
-    }
-    return {
-      supabaseUrl: supabaseUrl ?? publicConfig.supabaseUrl,
-      supabaseAnonKey: supabaseAnonKey ?? publicConfig.supabaseAnonKey,
-    };
-  }
 }

@@ -2,9 +2,9 @@
 
 The canonical pre-release validation for the SDK + CLI. Walk every section in order before tagging an M2 release; total runtime is 15-20 minutes. Each section names a prerequisite, a command, the expected output, and what to investigate if it fails.
 
-Why manual: the integration surface spans on-chain testnet state, JsonOdds writes, and Supabase Realtime — three external systems whose state we don't own. A scripted suite that "passes" while one is degraded is worse than no suite. This playbook is also exactly what a third-party SDK consumer would use to verify their own setup.
+Why manual: the integration surface spans on-chain testnet state, the upstream odds writer, and core-api streaming — three external systems whose state we don't own. A scripted suite that "passes" while one is degraded is worse than no suite. This playbook is also exactly what a third-party SDK consumer would use to verify their own setup.
 
-A vitest harness lives at `packages/sdk/tests/integration/` (gated behind `OSPEX_INTEGRATION=1`) for regression-checking after a chain client refactor. It mirrors the *automatable* subset (chain ops only — no Realtime, no JsonOdds dependence). It is **not** a substitute for this playbook.
+A vitest harness lives at `packages/sdk/tests/integration/` (gated behind `OSPEX_INTEGRATION=1`) for regression-checking after a chain client refactor. It mirrors the *automatable* subset (chain ops only — no streaming, no upstream-odds dependence). It is **not** a substitute for this playbook.
 
 ## Prereqs (one-time)
 
@@ -92,16 +92,16 @@ Verifies the Foundry-native, agent-friendly signing surface (`auth use-foundry`,
 
 ---
 
-## Section 3 — M1 Realtime odds
+## Section 3 — M1 odds streaming
 
 | # | Step | Expected | Validates |
 |---|---|---|---|
-| 3.1 | Pick a contest from `ospex contests list` whose `jsonoddsId` is non-null and start time is in the next 24h. | A contest id you can pass to `odds watch`. | — |
-| 3.2 | `ospex odds watch <contestId>` | Within ~30s, see at least one `current_odds` event print. | `/v1/config/public` bootstrap + lazy Supabase client + channel subscription + payload routing. |
-| 3.3 | Ctrl-C | Exits cleanly with no hanging promise. | Channel unsubscribe path. |
-| 3.4 | `ospex odds watch <invalid-id>` | Channel opens, no events arrive, no error. | Documents expected silence vs. failure. |
+| 3.1 | Pick an upcoming contest (start in the next 24h) that has reference odds — `ospex odds show <id>` shows non-null markets. | A contest id you can pass to `odds watch`. | — |
+| 3.2 | `ospex odds watch <contestId>` | Within ~30s, see a `SNAP` baseline per market (and `CHG` / `REF` lines as odds move). | SSE connect + per-market subscription + decode + handler routing. |
+| 3.3 | Ctrl-C | Exits cleanly with no hanging promise. | Stream unsubscribe path. |
+| 3.4 | `ospex odds watch <invalid-id>` | Fails fast with a not-found error (the command validates the contest before opening streams). | Documents the precheck path. |
 
-If 3.2 produces nothing in 60s, check JsonOdds health and Supabase Realtime status before assuming a regression.
+If 3.2 produces nothing in 60s, check the upstream odds feed health and core-api SSE status before assuming a regression.
 
 ---
 
@@ -291,7 +291,7 @@ Copy this into the release ticket:
 [ ] Section 1 — Reads
 [ ] Section 2 — Wallet lifecycle (legacy)
 [ ] Section 2.5 — Non-interactive Foundry signer
-[ ] Section 3 — Realtime odds
+[ ] Section 3 — odds streaming
 [ ] Section 4 — Single-wallet chain ops (Amoy)
 [ ] Section 5 — Two-wallet match (Amoy)
 [ ] Section 6 — Partial fill
