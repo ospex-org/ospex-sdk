@@ -1,6 +1,6 @@
 # @ospex/sdk
 
-TypeScript SDK for the [Ospex](https://ospex.org) protocol — zero-vig peer-to-peer sports prediction on Polygon. Reads (contests, speculations, commitments, positions, leaderboard, odds), EIP-712 signed-commitment submission/match/cancel, position settlement and claims, and contest creation. Realtime odds via Supabase channels.
+TypeScript SDK for the [Ospex](https://ospex.org) protocol — zero-vig peer-to-peer sports prediction on Polygon. Reads (contests, speculations, commitments, positions, leaderboard, odds), EIP-712 signed-commitment submission/match/cancel, position settlement and claims, and contest creation. Live odds streaming over core-api Server-Sent Events.
 
 ```ts
 import { OspexClient } from '@ospex/sdk';

@@ -56,8 +56,8 @@ export class OspexAPIError extends OspexError {
 
 /**
  * Required configuration is missing or invalid (e.g. requesting a
- * write operation without a signer, or trying to open a Realtime
- * channel before Supabase config is available).
+ * write operation without a signer, or a chain read without an
+ * `rpcUrl`).
  */
 export class OspexConfigError extends OspexError {
   constructor(message: string, options?: { cause?: unknown }) {

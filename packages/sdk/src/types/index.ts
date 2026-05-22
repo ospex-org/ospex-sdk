@@ -51,7 +51,6 @@ export type {
   ProtocolContracts,
   ProtocolFees,
   EIP712Domain,
-  PublicConfig,
   Network,
   ChainId,
 } from './protocol.js';
@@ -59,7 +58,7 @@ export type {
   ContestOddsSnapshot,
   MarketType,
   MoneylineOdds,
-  OddsSnapshot,
+  OddsForMarket,
   OddsSubscribeArgs,
   OddsSubscribeHandlers,
   OddsTimestamps,

@@ -9,7 +9,8 @@ import { ApiClient } from '../src/api/client.js';
 import { OspexClient } from '../src/client.js';
 import { OspexStreamError, OspexValidationError } from '../src/errors.js';
 import { normalizeUint } from '../src/realtime/filters.js';
-import { parseSseStream, subscribeToStream, type SseFrame } from '../src/realtime/stream.js';
+import { subscribeToStream } from '../src/realtime/stream.js';
+import { parseSseStream, type SseFrame } from '../src/realtime/sse.js';
 import type { Position } from '../src/types/position.js';
 import type { StreamStatus, StreamSubscribeHandlers } from '../src/types/stream.js';
 

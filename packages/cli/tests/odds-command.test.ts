@@ -4,12 +4,10 @@
  * (`show`) and streaming (`watch`) subcommands. Full action invocation
  * requires a configured client and live API.
  *
- * Particularly important: `watch` no longer pre-flight rejects on
- * `contest.speculations.length === 0` — speculations are lazy and the
- * Realtime channel filter only needs `jsonoddsId`. We don't run the
- * action here (that requires Supabase Realtime + Polygon RPC), but the
- * code path was reviewed and the `speculations.length` gate has been
- * removed in favor of the existing `jsonoddsId` check.
+ * `watch` subscribes per market via the core-api odds SSE stream
+ * (contest-id native — no upstream id needed) and only fails fast when
+ * the contest has no upstream linkage. We don't run the action here
+ * (that requires a live API), but the command tree composes.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeOddsCommand } from '../src/commands/odds/index.js';

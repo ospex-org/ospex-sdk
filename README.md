@@ -1,6 +1,6 @@
 # Ospex SDK + CLI
 
-TypeScript SDK and command-line interface for the [Ospex](https://ospex.org) protocol — a zero-vig peer-to-peer sports prediction protocol on Polygon. The SDK and CLI cover reads (contests, speculations, commitments, positions, leaderboard, odds, games), EIP-712 signed-commitment submission/match/cancel, on-chain cancel + bulk-cancel, contest creation and scoring, position settlement and claims, and Realtime odds via Supabase channels.
+TypeScript SDK and command-line interface for the [Ospex](https://ospex.org) protocol — a zero-vig peer-to-peer sports prediction protocol on Polygon. The SDK and CLI cover reads (contests, speculations, commitments, positions, leaderboard, odds, games), EIP-712 signed-commitment submission/match/cancel, on-chain cancel + bulk-cancel, contest creation and scoring, position settlement and claims, and live odds streaming over core-api Server-Sent Events.
 
 This repo is a Yarn 1 workspaces monorepo with two packages:
 
@@ -9,7 +9,7 @@ This repo is a Yarn 1 workspaces monorepo with two packages:
 
 > **Experimental software.** Ospex is experimental, ships without warranty, and involves financial risk. You control your own wallet and approvals; transactions are final. See [Disclaimers](#disclaimers) below before using on mainnet.
 
-> Building an agent / programmatic integration? See [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) for the stable JSON envelopes, error-code catalog, idempotency rules, and the Realtime contract.
+> Building an agent / programmatic integration? See [`docs/AGENT_CONTRACT.md`](./docs/AGENT_CONTRACT.md) for the stable JSON envelopes, error-code catalog, idempotency rules, and the odds streaming contract.
 
 ## Install
 
@@ -78,13 +78,15 @@ const status = await client.positions.status('0x…');
 const board = await client.leaderboard.active();
 const info = await client.protocol.info();
 
-// Realtime odds — opens a Supabase channel under the hood. The first call
-// lazily fetches /v1/config/public to obtain Realtime credentials.
+// Live odds — opens an SSE stream to core-api for one (contest, market).
+// Contest-id native; the handler payload is the market-specific shape.
 const sub = await client.odds.subscribe(
-  { jsonoddsId, market: 'spread' },
+  { contestId, market: 'spread' },
   {
+    onSnapshot: (odds) => console.log('baseline', odds),
     onChange: (odds) => console.log('price moved', odds),
     onRefresh: (odds) => console.log('writer re-polled', odds),
+    onStatus: (status) => console.log('stream', status),
   },
 );
 await sub.unsubscribe();
@@ -108,8 +110,6 @@ Defaults point at production. Override anything via the constructor:
 ```typescript
 new OspexClient({
   apiUrl: 'https://staging-api.example',  // defaults to the production core-api URL
-  supabaseUrl: '…',                       // optional override; otherwise lazy-fetched
-  supabaseAnonKey: '…',                   // optional override; otherwise lazy-fetched
   signer: myCustomSigner,                 // required for any chain write
   rpcUrl: 'https://polygon-mainnet.g.alchemy.com/v2/<key>', // required for chain ops
   chainId: 137,                           // 137 (mainnet) or 80002 (amoy); default 137
@@ -117,7 +117,7 @@ new OspexClient({
 });
 ```
 
-The CLI reads its config in this order: env var (`OSPEX_API_URL`, `OSPEX_SUPABASE_URL`, `OSPEX_SUPABASE_ANON_KEY`, `OSPEX_RPC_URL`, `OSPEX_CHAIN_ID`) > `~/.ospex/config.json` > SDK built-in defaults.
+The CLI reads its config in this order: env var (`OSPEX_API_URL`, `OSPEX_RPC_URL`, `OSPEX_CHAIN_ID`) > `~/.ospex/config.json` > SDK built-in defaults.
 
 The keystore location follows the same precedence: `OSPEX_KEYSTORE_PATH` env var > `keystorePath` field in `~/.ospex/config.json` (set once via `ospex init`) > default `~/.ospex/keystore.json`. The recommended setup is to put a Foundry-managed keystore path in the config file (so future shells don't need to re-export anything), and reserve the env var for per-shell overrides — useful for scripts and CI. Leading `~/` in either source is expanded.
 
@@ -174,7 +174,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex settle <speculationId>` | Permissionlessly settle a scored speculation. Top-level. |
 | `ospex leaderboard show` | Top entries on the active leaderboard. |
 | `ospex odds show <contestId> [--json] [--market moneyline\|spread\|total]` | One-shot snapshot of upstream reference odds (moneyline / spread / total) for a contest's underlying game. Both American and decimal odds; `--json` emits a single envelope. `--market` narrows the human render to one market (no effect on `--json` — the envelope stays stable for agents). Use this to decide a commitment price. |
-| `ospex odds watch <contestId> [--json --include-refreshes]` | Streams Realtime upstream odds change events. Line-delimited JSON in `--json` mode — agent-facing. Use `odds show` for a one-shot snapshot; `watch` is for reacting to changes over time. |
+| `ospex odds watch <contestId> [--json --include-refreshes]` | Streams live upstream odds over core-api SSE — a `SNAP` baseline on connect, then `CHG` / `REF` events per market plus connection status. Line-delimited JSON in `--json` mode — agent-facing. Use `odds show` for a one-shot snapshot; `watch` is for reacting to changes over time. |
 | `ospex auth use-foundry --account <name> --password-file <path> [--keystore-path <path>] [--foundry-keystores-dir <path>] [--no-pin-address]` | Pin a Foundry account + password file as the default signer for every subsequent `ospex` command. Decrypts once to validate, captures the resulting address, and writes `~/.ospex/config.json`. By default also pins the resolved address — a surprise key rotation throws `address_mismatch` before signing. Recommended for non-interactive / agent setups; see [QUICKSTART](./docs/QUICKSTART.md) for the three-step flow. |
 | `ospex auth clear-foundry [--all] [--account] [--keystore-path] [--password-file] [--expected-address] [--foundry-keystores-dir]` | Remove Foundry signer fields from `~/.ospex/config.json`. `--all` clears every Foundry-signer field but preserves the legacy `keystorePath` from `ospex init`. |
 | `ospex auth check [signer-flags...] [--strict] [--sign-challenge] [--json]` | Diagnose the resolved signer source without sending a transaction. Walks the same precedence ladder a real write would (flag > env > config > default), optionally unlocks + verifies, optionally signs a deterministic EIP-712 challenge. `--strict` promotes a group/other-readable password file (mode `& 0o077 != 0`) from a stderr warning to a hard exit — same gate added to `ospex doctor --strict`. |
@@ -201,8 +201,7 @@ For the full SDK-level trust-boundary description (how `KeystoreSigner` holds de
 
 ## Architecture notes
 
-- `@ospex/sdk` reads protocol state through the public Ospex core API (no direct Supabase queries). It only opens Supabase channels for Realtime odds.
-- The SDK fetches `GET /v1/config/public` on its first Realtime call to obtain the publishable Supabase URL + anon key. This means clients don't need to track a key that may rotate.
+- `@ospex/sdk` reads protocol state through the public Ospex core API (no direct database access). Live odds and protocol deltas arrive over core-api Server-Sent Events — there are no realtime credentials to configure or bootstrap.
 - All chain interactions go through `viem`. Keystore encrypt/decrypt uses `ethers` v6 — both libraries co-exist intentionally for this scope.
 - The SDK has no `network` parameter. The API decides which chain it speaks to; the SDK reads what it returns.
 
@@ -218,7 +217,7 @@ CI runs install / build / typecheck / test on every PR — see [`.github/workflo
 
 Out of the current public surface, deferred work:
 
-- **Realtime matches and positions.** Supabase channels for `MatchExecuted` and `POSITION_CLAIMED` / `SPECULATION_SETTLED` rows. Today, agents poll.
+- **Streaming match notifications.** A core-api SSE stream for `MatchExecuted` events. Today, agents poll (or watch the position / fill streams).
 - **Cross-process nonce coordination.** A pluggable `nonceProvider` for callers distributing submits across hosts. Today, callers serialize per `(maker, speculationKey)` themselves.
 - **Read-only nonce-floor endpoint.** A `GET /v1/makers/:address/nonce-floor` API path so callers without an RPC URL can read the floor without an `eth_call`.
 - **Bulk on-chain claim.** Multicall3-based bulk claim flow.

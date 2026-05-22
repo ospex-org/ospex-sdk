@@ -2,7 +2,7 @@
 
 Authoritative specification for the `AgentEnvelope<TPayload>` wrapper emitted by every Class A `--json` invocation in `@ospex/cli` and consumed by integrators of `@ospex/sdk`. Field-by-field rules, per-stage shape obligations, per-command population matrix, failure envelope contract, and the JSON cleanliness acceptance criteria.
 
-> **Audience.** Authors of programmatic Ospex consumers — market-maker bots, settlement watchdogs, monitoring stacks, downstream LLM tools — who need to read the envelope without learning each command's bespoke output shape. For the broader integration contract (signing, error catalog, idempotency, trust boundary, Realtime, versioning) see [`AGENT_CONTRACT.md`](./AGENT_CONTRACT.md).
+> **Audience.** Authors of programmatic Ospex consumers — market-maker bots, settlement watchdogs, monitoring stacks, downstream LLM tools — who need to read the envelope without learning each command's bespoke output shape. For the broader integration contract (signing, error catalog, idempotency, trust boundary, streaming, versioning) see [`AGENT_CONTRACT.md`](./AGENT_CONTRACT.md).
 
 The contract is **load-bearing**. Once an agent depends on a field documented here, breaking it is treated as an emergency. Anything not specified here is implementation detail and may change without notice.
 
@@ -356,7 +356,7 @@ Commands listed below adopt the wrapper. Anything not listed either does not hav
 
 ### 4.4 Not in scope (intentionally)
 
-- `odds watch` — NDJSON stream with its own per-line contract; the `OddsSnapshot + kind` shape is already locked. Wrapping every line in the v2 envelope would balloon the stream pointlessly.
+- `odds watch` — NDJSON stream with its own per-line contract (the `{ kind, market, odds }` / `{ kind: 'status', … }` shape; see [`AGENT_CONTRACT.md` §5](./AGENT_CONTRACT.md)). Wrapping every line in the v2 envelope would balloon the stream pointlessly.
 - `init`, `wallet import`, `wallet unlock`, `wallet lock` — one-shot human config commands with no `--json` mode.
 - `auth use-foundry`, `auth clear-foundry` — one-shot config commands; their `schemaVersion: 1` envelope is preserved (agents do not run them in a loop).
 

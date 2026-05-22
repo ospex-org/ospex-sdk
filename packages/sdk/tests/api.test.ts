@@ -413,18 +413,4 @@ describe('OspexClient API surface', () => {
     });
   });
 
-  it('config.public is reachable through the internal api client', async () => {
-    const { fetch } = makeFetch(() => ({
-      status: 200,
-      body: {
-        supabaseUrl: 'https://x.supabase.co',
-        supabaseAnonKey: 'sb_publishable_test',
-        network: 'polygon',
-        chainId: 137,
-      },
-    }));
-    const client = new OspexClient({ apiUrl, fetch });
-    const body = await client.api.request<{ supabaseUrl: string }>('/v1/config/public');
-    expect(body.supabaseUrl).toBe('https://x.supabase.co');
-  });
 });

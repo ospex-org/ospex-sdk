@@ -95,8 +95,6 @@ export async function getClient(options: GetClientOptions = {}): Promise<OspexCl
 
   const clientOptions: Record<string, unknown> = {};
   if (config.apiUrl !== undefined) clientOptions.apiUrl = config.apiUrl;
-  if (config.supabaseUrl !== undefined) clientOptions.supabaseUrl = config.supabaseUrl;
-  if (config.supabaseAnonKey !== undefined) clientOptions.supabaseAnonKey = config.supabaseAnonKey;
   if (config.rpcUrl !== undefined) clientOptions.rpcUrl = config.rpcUrl;
   if (config.chainId !== undefined) clientOptions.chainId = config.chainId;
 

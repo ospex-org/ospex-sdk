@@ -246,7 +246,7 @@ ospex odds show <contestId>
 
 Shows all three markets (moneyline / spread / total) in both American and decimal odds with a relative "last updated" stamp. Pass `--json` for a single envelope you can pipe.
 
-> **`show` vs `watch`**: `show` is the user-facing one-shot snapshot; `watch` opens a Realtime channel and prints line-delimited JSON, runs until SIGINT. Use `show` to decide a price; use `watch` to react to upstream odds moves over time.
+> **`show` vs `watch`**: `show` is the user-facing one-shot snapshot; `watch` opens a live SSE stream and prints line-delimited JSON, runs until SIGINT. Use `show` to decide a price; use `watch` to react to upstream odds moves over time.
 
 ### 3. Submit a commitment
 

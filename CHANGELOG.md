@@ -2,16 +2,24 @@
 
 All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semver](https://semver.org/) with the pre-1.0 caret-pinning rules described in [`docs/AGENT_CONTRACT.md` §13](./docs/AGENT_CONTRACT.md).
 
-## [Unreleased]
+## [0.3.0] — 2026-05-21
 
 ### SDK (`@ospex/sdk`)
 
+- **Live odds now stream over `ospex-core-api` SSE instead of Supabase Realtime.** `client.odds.subscribe({ contestId, market }, handlers)` opens the core-api odds stream for one `(contest, market)` and delivers that market's shape (`MoneylineOdds` / `SpreadOdds` / `TotalOdds`). The transport reconnects with full-jitter backoff and re-snapshots on recovery — odds is latest-state, so there is no cursor and no replay. New handlers `onSnapshot?(odds | null)` (the baseline on connect, and after a `degraded` recovery) and `onStatus?(connected | reconnecting | degraded)` join the existing `onChange` / `onRefresh`.
+- **Breaking (odds subscribe):** the args are now `{ contestId, market }` (was `{ jsonoddsId, market }`) — contest-id native, with the upstream game resolved server-side. The handler payload is the per-market shape (was the flat `OddsSnapshot`, now removed). `onError` receives an `OspexStreamError` (was a bare `Error`).
+- **Breaking: removed `jsonoddsId` from `ContestOddsSnapshot`** and the now-unused `OddsSnapshot` type. The odds surface is provider-neutral; read upstream linkage from `Contest.jsonoddsId` if you need it.
+- **Breaking: removed the `supabaseUrl` / `supabaseAnonKey` client options, the `PublicConfig` type, and the `@supabase/supabase-js` dependency.** The SDK no longer reads `/v1/config/public` or opens Supabase Realtime — all streaming is core-api SSE, so there are no realtime credentials to configure or bootstrap.
 - **Protocol stream subscriptions** — `client.{commitments,positions,speculations,contests,fills}.subscribe(filters, handlers)` open Server-Sent Events streams from `ospex-core-api` for live protocol deltas. A shared fetch-based transport (no new dependency; Node ≥20 global `fetch`) takes an initial REST snapshot, then streams live `onDelta` rows, reconnects with the stored opaque cursor on a drop, and re-snapshots on `resync`. Handlers: `onSnapshot?` / `onDelta` / `onStatus?(connected | reconnecting | degraded | resync)` / `onError?`. Apply last-received-wins per natural key (the cursor is an opaque resume token, never an ordering key).
 - **REST polling fallback** — if the SSE stream stays down across several reconnect attempts (and a resume cursor exists), the transport reports `onStatus('degraded')` and falls back to polling the `?since=` recovery endpoint so deltas keep flowing (higher latency, best-effort). It keeps retrying the stream and returns to `connected` when it recovers; the live cursor is preserved so the SSE catch-up reconciles anything polling missed.
 - **New `client.fills` namespace** — `subscribe()` over the append-only `position_fills` log. Apply every event; dedupe by `(txHash, logIndex)`.
 - **Snapshot scope** — `commitments` / `speculations` deliver an open-book snapshot before live deltas; `positions` snapshot only when scoped to an `address`, `contests` only when scoped to a `contestId`; `fills` and unscoped subscriptions stream from connect with no snapshot.
 - **New types**: `StreamStatus`, `StreamSubscribeHandlers`, `Fill`, `ContestUpdate` (the contest stream delivers a lifecycle slice, not the full `Contest`), and the per-resource subscribe filter types. `Position` gains optional `userAddress` / `claimedAt`, carried by stream deltas (part of a position's natural key) and absent on the address-scoped REST reads.
 - **New `OspexStreamError`** (`reason: connection_failed | capacity_exceeded | fatal`) — distinct from the Chainlink-Functions `OspexSubscriptionError`. Delivered to `onError`; `fatal` ends the subscription, the others are retried.
+
+### CLI (`@ospex/cli`)
+
+- **`ospex odds watch <contestId>`** now streams over core-api SSE. It prints the current baseline on connect (`SNAP`), then `change` (`CHG`) and `refresh` (`REF`, gated behind `--include-refreshes`) lines per market, carrying the market-specific odds shape. Connection status (`connected` / `reconnecting` / `degraded`) prints to stderr in human mode and as `{ kind: 'status' }` lines under `--json`. No upstream id is needed — the contest's game is resolved server-side.
 
 ## [0.2.2] — 2026-05-20
 
@@ -122,7 +130,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.3.0
 [0.2.2]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.2
 [0.2.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.0

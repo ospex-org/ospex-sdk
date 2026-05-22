@@ -448,47 +448,50 @@ These are pure compositional pieces with no implicit env/config layering — the
 
 ## 5. CLI: the streaming contract (`ospex odds watch`)
 
-`ospex odds watch <contestId> --json` is the agent-facing streaming primitive. Each event is emitted via `JSON.stringify({ kind, ...odds })` where `odds` is an `OddsSnapshot` from [`packages/sdk/src/types/odds.ts`](../packages/sdk/src/types/odds.ts). One object per line, NDJSON.
+`ospex odds watch <contestId> --json` is the agent-facing streaming primitive. It opens a core-api Server-Sent Events stream for each of the contest's three markets and emits one JSON object per line, NDJSON. The per-market `odds` shape is the same market-specific shape `ospex odds show` returns (authoritative source: [`packages/sdk/src/types/odds.ts`](../packages/sdk/src/types/odds.ts)) — provider-neutral, no upstream id.
 
 ### Wire shape per line
 
 ```ts
-interface WatchEvent {
-  kind: 'change' | 'refresh';
-  // ...the spread of OddsSnapshot:
-  jsonoddsId: string;
-  market: 'moneyline' | 'spread' | 'total';
-  network: 'polygon' | 'amoy';
-  line: number | null;                  // spread/total threshold; null for moneyline
-  awayOddsAmerican: number | null;
-  homeOddsAmerican: number | null;
-  upstreamLastUpdated: string;          // ISO-8601
-  pollCapturedAt: string;               // ISO-8601
-  changedAt: string;                    // ISO-8601
-}
+type WatchLine =
+  | {
+      kind: 'snapshot' | 'change' | 'refresh';
+      market: 'moneyline' | 'spread' | 'total';
+      // The market-specific odds shape, or null on a `snapshot` line when the
+      // writer has no odds for this market yet. `change` / `refresh` always carry odds.
+      //   moneyline → { market, awayOddsAmerican, homeOddsAmerican, ...timestamps }
+      //   spread    → { market, awayLine, homeLine, awayOddsAmerican, homeOddsAmerican, ...timestamps }
+      //   total     → { market, line, overOddsAmerican, underOddsAmerican, ...timestamps }
+      odds: MarketOdds | null;
+    }
+  | {
+      kind: 'status';
+      market: 'moneyline' | 'spread' | 'total';
+      status: 'connected' | 'reconnecting' | 'degraded';
+    };
 ```
 
-`line` and the two `*OddsAmerican` fields are **numbers**, not strings — `-3.5`, `150`, `-180`. `null` when not populated. Example line (formatted for legibility — actual output is single-line):
+All odds and line fields are **numbers**, not strings — `-3.5`, `150`, `-180`; `null` when not populated. Example lines (formatted for legibility — actual output is single-line):
 
 ```jsonl
-{"kind":"change","jsonoddsId":"abc-123","market":"spread","network":"polygon","line":-3.5,"awayOddsAmerican":150,"homeOddsAmerican":-180,"upstreamLastUpdated":"2026-05-09T19:55:00Z","pollCapturedAt":"2026-05-09T19:59:30Z","changedAt":"2026-05-09T20:00:00Z"}
+{"kind":"snapshot","market":"spread","odds":{"market":"spread","awayLine":1.5,"homeLine":-1.5,"awayOddsAmerican":-147,"homeOddsAmerican":127,"upstreamLastUpdated":"2026-05-21T01:02:38Z","pollCapturedAt":"2026-05-21T01:04:27Z","changedAt":"2026-05-21T00:59:26Z"}}
+{"kind":"change","market":"moneyline","odds":{"market":"moneyline","awayOddsAmerican":150,"homeOddsAmerican":-180,"upstreamLastUpdated":"2026-05-21T01:02:38Z","pollCapturedAt":"2026-05-21T01:04:27Z","changedAt":"2026-05-21T01:05:00Z"}}
+{"kind":"status","market":"moneyline","status":"degraded"}
 ```
-
-> **Note.** The `OddsSnapshot` shape is shared across all three markets and uses `awayOddsAmerican`/`homeOddsAmerican` even for `total` events. The `ospex odds show` command (below) uses richer market-specific shapes that name `over`/`under` explicitly.
 
 ### Promises
 
 - **Each line is independently parseable JSON.** No multi-line objects.
-- `kind` is `'change'` (default) or `'refresh'` (only emitted when `--include-refreshes` is set).
-- Lines stream until SIGINT (Ctrl+C) or SIGTERM. The handler unsubscribes channels and exits with code `0`.
-- The `--json` mode writes **only** payload lines to stdout. The "Watching contest …, Ctrl+C to stop" banner is on stderr.
-- A contest with no upstream linkage (`jsonoddsId === null`) exits `1` with a single stderr message — do not retry; this contest cannot be watched.
+- `kind` is one of: `snapshot` (the current baseline, emitted on connect and again after a `degraded` recovery), `change` (a real price move), `refresh` (a re-poll with no price move — only emitted with `--include-refreshes`), or `status` (a connection-lifecycle transition).
+- The per-market `odds` object matches `ospex odds show`'s market shape exactly. `odds` is `null` only on a `snapshot` line when the market has no odds yet.
+- Lines stream until SIGINT (Ctrl+C) or SIGTERM. The handler unsubscribes the streams and exits with code `0`.
+- `--json` writes **only** these lines to stdout. The "Watching contest …, Ctrl+C to stop" banner is on stderr.
+- A contest with no upstream linkage exits `1` with a single stderr message — do not retry; this contest cannot be watched.
 
 ### Non-promises
 
-- **No automatic reconnection logic** beyond what the underlying Supabase Realtime client provides. If you need durable subscriptions across long network gaps, wrap the command in your own supervisor that re-spawns on non-zero exit.
-- **No replay of missed events.** If the channel drops, events arriving during the gap are lost. Re-poll a snapshot via `ospex odds show <contestId>` if you need a known-good baseline.
-- **No ordering guarantee across markets.** A `spread` change for contest X may arrive before a `moneyline` change for contest X even if upstream ordered them the other way. Order is reliable per-channel, not across channels.
+- **No replay of missed events.** Odds is latest-state, not a durable log. The transport reconnects automatically (full-jitter backoff) and re-emits a fresh `snapshot` on recovery — treat each event as the current value and the post-reconnect `snapshot` as your known-good baseline. There is no cursor and no catch-up.
+- **No ordering guarantee across markets.** A `spread` change for contest X may arrive before a `moneyline` change for the same contest even if upstream ordered them the other way. Order is reliable per-market, not across markets.
 
 ### One-shot equivalent: `ospex odds show <contestId> --json`
 
@@ -545,6 +548,7 @@ import {
   OspexChainError,
   OspexScriptApprovalError,
   OspexSubscriptionError,
+  OspexStreamError,
   OspexSignerResolutionError,
 } from '@ospex/sdk';
 
@@ -565,13 +569,14 @@ try {
 | `code` | Class | Structured fields | Typical cause |
 |---|---|---|---|
 | `API_ERROR` | `OspexAPIError` | `status`, `apiCode`, `path` | Non-2xx from `ospex-core-api`, network failure, bad JSON. |
-| `CONFIG_ERROR` | `OspexConfigError` | — | Missing signer / `rpcUrl` for a write; Realtime config unobtainable. |
+| `CONFIG_ERROR` | `OspexConfigError` | — | Missing signer / `rpcUrl` for a write. |
 | `VALIDATION_ERROR` | `OspexValidationError` | `field` | Caller-supplied argument failed a shape / range / regex check. |
 | `SIGNING_ERROR` | `OspexSigningError` | — | Keystore decrypt failed (wrong passphrase), EIP-712 sign failed. |
 | `ALLOWANCE_INSUFFICIENT` | `OspexAllowanceError` | `required: bigint`, `current: bigint`, `spender`, `token` | Pre-flight allowance shortfall. SDK never auto-approves. |
 | `CHAIN_ERROR` | `OspexChainError` | `reason?`, `revertReason?`, `txHash?` | RPC error, revert, receipt status reverted. |
 | `SCRIPT_APPROVAL_INVALID` | `OspexScriptApprovalError` | `reason: 'hash_mismatch' \| 'expired' \| 'not_configured'`, `expectedHash?`, `actualHash?` | Chainlink Functions ScriptApproval is unusable. |
 | `SUBSCRIPTION_ERROR` | `OspexSubscriptionError` | `reason: 'link_balance_insufficient' \| 'consumer_not_registered' \| 'subscription_id_missing'`, `subscriptionId?` | Chainlink Functions subscription unusable. |
+| `STREAM_ERROR` | `OspexStreamError` | `reason: 'connection_failed' \| 'capacity_exceeded' \| 'fatal'`, `status?` | An Ospex SSE stream failed (odds or a protocol `subscribe`). `connection_failed` / `capacity_exceeded` are retried; `fatal` ends the subscription. Delivered to `onError`. |
 | `SIGNER_RESOLUTION_ERROR` | `OspexSignerResolutionError` | `reason`, `path?`, `expectedAddress?`, `actualAddress?`, `mode?` | Non-interactive Foundry-keystore signer resolution failed (missing path / file, wrong passphrase, address mismatch, conflicting flags, or — under `--strict` — loose password-file perms). See §4. |
 
 ### `OspexChainError.reason` enum
@@ -630,7 +635,7 @@ The SDK's threat model is "the host machine is honest, the user's wallet is sove
 | `KeystoreSigner.fromFoundryAccount` / `fromKeystoreFile` | Non-interactive helpers used by both the CLI and direct SDK consumers. They read the keystore file, read the passphrase from `passwordFile` / `fromStdin` / `passphrase` (literal) / `OSPEX_PASSWORD_FILE` env, decrypt in process memory, optionally verify `expectedAddress`, and return a `KeystoreSigner`. They never re-encrypt or copy the key; the decrypted material lives only inside the returned instance. The decryption never touches the session cache (`~/.ospex/session`). See §4 for the full surface. |
 | **CLI session cache (`ospex wallet unlock`)** | Writes the **decrypted private key** to `~/.ospex/session` as plain JSON, mode `0600`, 15-minute TTL (parent dir mode `0700`). Mode `0600` makes the file unreadable by *other* users on the host but does NOT protect against any process running as the same user — those can read it for the duration of the unlock. The Foundry-keystore path with non-interactive credentials (flag / env / `auth use-foundry`-pinned `passwordFile`) avoids this trade-off entirely; the legacy session-cache path is kept for backwards compatibility but is not the recommended posture. New `wallet unlock` users should consider `ospex auth use-foundry --account <name> --password-file <path>` instead — same passphrase storage on disk (the `.pass` file), no decrypted key on disk. |
 | RPC URL | **Caller-supplied.** No public-RPC default; `ospex init` prompts for one. The SDK uses the URL only as a viem `PublicClient` transport. |
-| Supabase URL + anon key | Lazy-fetched from `GET /v1/config/public` on the first Realtime call, OR caller-supplied via `OspexClient` constructor. The anon key is the **publishable** key — never the service-role key. |
+| Live odds + protocol streams | Core-api Server-Sent Events over the configured API base URL — no separate credentials, no database access. The SDK opens the SSE endpoints directly and never holds a database key. |
 | Chainlink Functions encrypted secrets | Fetched from a public alias (`secrets.ospex.org`) and passed verbatim into `OracleModule.createContestFromOracle`. The SDK never sees the plaintext. |
 | API base URL | Defaults to `https://api.ospex.org`. Override at construction. |
 
@@ -677,27 +682,29 @@ After the on-chain call returns, the SDK calls `nonceCounter.observe(maker, spec
 
 ---
 
-## 11. SDK: Realtime contract (`client.odds.subscribe`)
+## 11. SDK: odds streaming contract (`client.odds.subscribe`)
 
-Lazy bootstrap. The first `client.odds.subscribe(...)` call:
+`client.odds.subscribe({ contestId, market }, handlers)` opens a core-api Server-Sent Events stream for one `(contest, market)` and resolves to a `Subscription` (a single `unsubscribe(): Promise<void>`). Contest-id native — the upstream game is resolved server-side, so no upstream id is needed. The handler payload is the market-specific shape (`MoneylineOdds` / `SpreadOdds` / `TotalOdds`, keyed off `market`) — the same shape `client.odds.snapshot` returns. No realtime credentials to configure or bootstrap.
 
-1. Fetches `GET /v1/config/public` to obtain the publishable Supabase URL + anon key (skipped if you passed `supabaseUrl` + `supabaseAnonKey` to the constructor).
-2. Constructs a Supabase client with `eventsPerSecond: 10`, `persistSession: false`, `autoRefreshToken: false`.
-3. Opens a Postgres-changes channel filtered to `(jsonodds_id, market)`.
+Handlers:
+
+- `onSnapshot?(odds | null)` — the current baseline, delivered once the stream is live and again after every `degraded` recovery. `null` means live but the writer has no odds for this market yet.
+- `onChange(odds)` — a real price move (a line / per-side American-odds column changed, or the upstream's own change timestamp advanced). The signal most consumers want.
+- `onRefresh?(odds)` — a re-poll with no price change (liveness only); gated behind `--include-refreshes` in the CLI.
+- `onStatus?(status)` — connection lifecycle: `connected` (live, baseline delivered), `reconnecting` (dropped, retrying with backoff), `degraded` (upstream source behind — updates paused until the next snapshot). Never `resync` (that's the protocol streams).
+- `onError?(err)` — an `OspexStreamError`. `reason` discriminates retry (`connection_failed` / `capacity_exceeded` — the transport keeps reconnecting) from stop (`fatal`).
 
 Promises:
 
-- `onChange` fires for every UPDATE that meaningfully altered an odds field. Refresh-only no-ops are routed to `onRefresh` and gated behind `--include-refreshes` in the CLI.
-- `onError` is invoked with an `Error` for transport-level Realtime failures; the channel is not torn down on transport errors — Supabase manages reconnect.
-- `subscribe` resolves to a `Subscription` object with a single `unsubscribe(): Promise<void>` method. Calling it removes the channel cleanly.
+- The transport reconnects on a drop with full-jitter backoff and re-emits a fresh `snapshot` on recovery. A stalled stream (no event or heartbeat within ~60s) is treated as a drop.
+- Once you `unsubscribe()` — including from inside a handler — no further handler fires.
 
 Non-promises:
 
-- **No replay.** Events that arrived while the channel was disconnected are lost. If you need historical odds, query `client.odds.snapshot(contestId)` separately.
-- **No ordering across markets.** Per-channel ordering is reliable; cross-channel is not (see §5).
-- **No automatic re-bootstrap on `/v1/config/public` failure.** The SDK resets the supabase-client promise so the *next* subscribe call retries — but the failed call's caller still receives an `OspexConfigError`.
+- **No replay / no cursor.** Odds is latest-state. Events that arrived while disconnected are not replayed; treat each event as the current value and the post-reconnect `snapshot` as your baseline. For a point-in-time read use `client.odds.snapshot(contestId)`.
+- **No ordering across markets.** Per-market ordering is reliable; cross-market is not (see §5).
 
-The CLI's `ospex odds watch` opens three channels (one per market) and is the canonical agent shape. For SDK-level use, batch your own subscribes if you want all three.
+The CLI's `ospex odds watch` opens one stream per market (all three) and is the canonical agent shape. For SDK use, subscribe per market.
 
 ---
 
@@ -712,7 +719,7 @@ Explicit non-guarantees, listed so you don't accidentally depend on them:
 - **Field order in JSON envelopes.** Treat the envelope as an unordered object (which it is, per JSON spec).
 - **Network behavior.** Block timing, RPC latency, gas prices, and Chainlink callback latency are external. The SDK does not promise any specific timing — bake your own SLOs around the calls.
 - **Indexer projection latency.** A successful on-chain write does not mean the corresponding API row is visible *yet*. Poll the API row's status (or wait ~30s for a typical projection) before downstream actions that depend on the row.
-- **Order-book completeness in Realtime.** Realtime exists for *odds*, not for the orderbook. Commitments do not stream — re-list as needed.
+- **Order-book completeness in streams.** A stream delivers *deltas* (odds, or protocol rows via the `subscribe` methods), not a guaranteed-complete point-in-time book. For a full orderbook snapshot, re-list via `commitments.list` / `speculations.get`.
 
 ---
 

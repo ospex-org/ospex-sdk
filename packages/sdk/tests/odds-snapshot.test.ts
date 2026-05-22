@@ -2,7 +2,7 @@
  * Tests for `client.odds.snapshot(contestId)` — the one-shot snapshot
  * read backed by `GET /v1/contests/:contestId/odds`. Uses a mocked
  * fetch (same pattern as api.test.ts) so the test never opens a real
- * socket or talks to Supabase.
+ * socket or hits a live endpoint.
  *
  * The endpoint exposes per-market shapes (moneyline / spread / total)
  * rather than a generic `line + away/home` envelope; tests below assert
@@ -77,7 +77,6 @@ describe('client.odds.snapshot', () => {
     const client = new OspexClient({ apiUrl, fetch });
     const result = await client.odds.snapshot('42');
     expect(result.contestId).toBe('42');
-    expect(result.jsonoddsId).toBe('jo-abc-123');
 
     // moneyline: per-side odds, no line field.
     expect(result.odds.moneyline?.market).toBe('moneyline');
@@ -129,7 +128,7 @@ describe('client.odds.snapshot', () => {
     expect(result.odds.total).toBeNull();
   });
 
-  it('handles all-null markets when contest has no jsonoddsId linkage', async () => {
+  it('handles all-null markets when contest has no upstream linkage', async () => {
     const { fetch } = makeFetch(() => ({
       status: 200,
       body: {
@@ -140,7 +139,6 @@ describe('client.odds.snapshot', () => {
     }));
     const client = new OspexClient({ apiUrl, fetch });
     const result = await client.odds.snapshot('99');
-    expect(result.jsonoddsId).toBeNull();
     expect(result.odds.moneyline).toBeNull();
     expect(result.odds.spread).toBeNull();
     expect(result.odds.total).toBeNull();
