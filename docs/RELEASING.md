@@ -81,6 +81,9 @@ git push origin v<ver>
 
 - Verify the tarball download links resolve from a logged-out browser.
 - **Bump the [ospex.org](https://ospex.org) downloads page.** In [`ospex-frontend`](https://github.com/ospex-org/ospex-frontend), bump the pinned `VERSION` in `src/pages/Downloads.tsx` to the new version (and refresh any now-stale copy on the page), then open a PR. That one constant drives the tarball filenames, the `releases/download` URLs, the version badge, and the install snippet. Merging the PR does **not** deploy the site — the live downloads page updates only after a separate manual deploy, so deploy it after merging.
+- **Realign [`ospex-market-maker`](https://github.com/ospex-org/ospex-market-maker).** It pins `@ospex/sdk` by exact GitHub-release-tarball URL (not a semver range), so it never auto-updates:
+  - **Every release:** bump the tarball URL in `package.json` (`@ospex/sdk` → `.../releases/download/v<ver>/ospex-sdk-<ver>.tgz`), `yarn install` to relock, then `yarn smoke`. Open a PR.
+  - **Breaking releases** (a `!` / `BREAKING` CHANGELOG entry): also migrate `src/ospex/index.ts` — the MM's *sole* `@ospex/sdk` import boundary — per the CHANGELOG's breaking-change list, then `yarn typecheck && yarn test`. The blast radius is contained to that adapter and its direct consumers (the runner, the CLI commands), so the typechecker surfaces most of the work.
 - Update any other external pointers to the new version or the `/releases/latest` URL.
 - Announce as appropriate.
 
