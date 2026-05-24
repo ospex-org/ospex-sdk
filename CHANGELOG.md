@@ -151,7 +151,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.0
 [0.3.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.3.1
 [0.3.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.3.0
 [0.2.2]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.2

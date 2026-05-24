@@ -9,15 +9,17 @@ ospex contests list --hours 24
 ospex commitments match 0xe900c6dd
 ```
 
-## Distribution
+## Install
 
-This package ships via [GitHub Releases](https://github.com/ospex-org/ospex-sdk/releases), not npm. Download both `ospex-sdk-<ver>.tgz` and `ospex-cli-<ver>.tgz` from the latest release and install in the same `yarn add` call:
+This package ships as a **single self-contained bundle** via [GitHub Releases](https://github.com/ospex-org/ospex-sdk/releases), not npm. Everything (including `@ospex/sdk`) is bundled in, so you install one tarball globally and run bare `ospex` — nothing else to resolve:
 
 ```sh
-yarn add ./ospex-sdk-<ver>.tgz ./ospex-cli-<ver>.tgz
+npm install -g https://github.com/ospex-org/ospex-sdk/releases/download/v<ver>/ospex-cli-<ver>.tgz
+# or: yarn global add https://github.com/ospex-org/ospex-sdk/releases/download/v<ver>/ospex-cli-<ver>.tgz
+ospex --version
 ```
 
-The CLI uses the SDK at runtime but does not declare it as a regular dependency — yarn 1's `file:` resolver would treat the SDK reference as an npm registry lookup and fail. Always install both tarballs together.
+The separate `ospex-sdk-<ver>.tgz` library tarball is only for programmatic consumers importing `@ospex/sdk`; CLI users don't need it.
 
 ## Documentation
 

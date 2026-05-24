@@ -13,16 +13,23 @@ This repo is a Yarn 1 workspaces monorepo with two packages:
 
 ## Install
 
-Distribution is via [GitHub Releases](https://github.com/ospex-org/ospex-sdk/releases) — **not** npm. Each release attaches two tarballs (`ospex-sdk-<ver>.tgz`, `ospex-cli-<ver>.tgz`); install **both in the same `yarn add` call** in your working directory:
+Distribution is via [GitHub Releases](https://github.com/ospex-org/ospex-sdk/releases) — **not** npm. The CLI ships as a **single self-contained bundle** (one file, every dependency inlined), so you install one tarball **globally** and run bare `ospex` — nothing else to resolve.
+
+**npm:**
 
 ```bash
-mkdir my-ospex && cd my-ospex
-yarn init -y
-yarn add ./ospex-sdk-<ver>.tgz ./ospex-cli-<ver>.tgz
-npx ospex --version
+npm install -g https://github.com/ospex-org/ospex-sdk/releases/download/v<ver>/ospex-cli-<ver>.tgz
+ospex --version
 ```
 
-The CLI uses the SDK at runtime but does not declare it as a regular dependency — without both tarballs in the same install call, yarn 1 would try to resolve `@ospex/sdk` from the npm registry and fail. Always install both together. Pass tarball paths directly (don't use the `file:` prefix); yarn 1 detects the `.tgz` extension. `npm install` works equivalently.
+**yarn:**
+
+```bash
+yarn global add https://github.com/ospex-org/ospex-sdk/releases/download/v<ver>/ospex-cli-<ver>.tgz
+ospex --version
+```
+
+Prefer downloading first? Grab `ospex-cli-<ver>.tgz` from the release page and install the local path: `npm install -g ./ospex-cli-<ver>.tgz` (or `yarn global add ./ospex-cli-<ver>.tgz`). The separate `ospex-sdk-<ver>.tgz` tarball is the unbundled library for programmatic consumers (a bot importing `@ospex/sdk`) — CLI users don't need it.
 
 **Why GitHub releases (not npm)?** npm is a developer-productivity ecosystem; a sports-prediction CLI is consumer-entertainment with financial risk and doesn't share a natural audience there. GitHub releases keep the install path explicit (read the release notes, pin the tarball hash in your lockfile) and keep package-index search results uncluttered with software the user community won't generally be looking for. This is the **target distribution model**, not a pre-1.0 placeholder — if npm publishing is added later it would be a secondary channel, with GitHub releases remaining primary.
 

@@ -16,7 +16,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "yarn workspace @ospex/sdk build && node scripts/bundle.mjs",
+    "build": "yarn workspace @ospex/sdk build && rimraf dist && node scripts/bundle.mjs",
     "clean": "rimraf dist",
     "dev": "tsx src/index.ts",
     "test": "yarn workspace @ospex/sdk build && vitest run",
