@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.3.1] — 2026-05-24
+
 ### SDK (`@ospex/sdk`)
 
 - **Fix: `Commitment.isLive` now derives from the raw on-chain lifecycle (`storedStatus`), not the effective `status`.** A *book-hidden* commitment — pulled from the orderbook off-chain (so its effective `status` reads `'cancelled'`) but whose signed payload is still matchable on chain — was incorrectly reported `isLive: false`. `matchCommitment` does not check book-visibility, so such a row is still live; `isLive` now reflects on-chain matchability (still gated on `!nonceInvalidated`, `remainingRiskAmount > 0`, and a future expiry, with the `storedStatus → status` fallback for core-api builds that omit `storedStatus`). On-chain matchability and orderbook visibility are distinct questions — to filter to commitments still on the public book, use the orderbook listing, not `isLive`.
@@ -137,7 +141,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.3.1
 [0.3.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.3.0
 [0.2.2]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.2
 [0.2.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.2.1
