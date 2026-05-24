@@ -75,6 +75,18 @@ describe('Commitment.isLive predicate', () => {
     { name: 'filled', overrides: { status: 'filled', remainingRiskAmount: '0', filledRiskAmount: '1000000' }, expectIsLive: false },
     { name: 'cancelled', overrides: { status: 'cancelled' }, expectIsLive: false },
     { name: 'expired', overrides: { status: 'expired' }, expectIsLive: false },
+    // ── book-visibility split: isLive keys off the RAW on-chain lifecycle (`storedStatus`),
+    //    NOT the effective `status`. A book-hidden row (pulled from the orderbook off-chain →
+    //    effective `status: 'cancelled'`) whose storedStatus is still open / partially_filled is
+    //    STILL matchable on chain (matchCommitment ignores book-visibility) → isLive=true.
+    //    The cases above set no storedStatus, exercising the storedStatus→status back-compat
+    //    fallback (older core-api); these set it explicitly (current core-api).
+    { name: 'book-hidden: effective cancelled + storedStatus open → live (on-chain matchable)', overrides: { status: 'cancelled', storedStatus: 'open', nonceInvalidated: false }, expectIsLive: true },
+    { name: 'book-hidden: effective cancelled + storedStatus partially_filled + remaining → live', overrides: { status: 'cancelled', storedStatus: 'partially_filled', filledRiskAmount: '300000', remainingRiskAmount: '700000' }, expectIsLive: true },
+    { name: 'truly on-chain cancelled: storedStatus cancelled → not live', overrides: { status: 'cancelled', storedStatus: 'cancelled' }, expectIsLive: false },
+    { name: 'book-hidden but nonce-invalidated → not live (nonceInvalidated wins over a live storedStatus)', overrides: { status: 'cancelled', storedStatus: 'open', nonceInvalidated: true }, expectIsLive: false },
+    { name: 'book-hidden but past expiry → not live (expiry wins)', overrides: { status: 'cancelled', storedStatus: 'open', expiry: '2000-01-01T00:00:00.000Z' }, expectIsLive: false },
+    { name: 'book-hidden but zero remaining → not live (remaining wins)', overrides: { status: 'cancelled', storedStatus: 'open', remainingRiskAmount: '0' }, expectIsLive: false },
   ];
 
   for (const c of cases) {

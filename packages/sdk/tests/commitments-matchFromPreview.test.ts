@@ -310,6 +310,46 @@ describe('matchFromPreview — staleness checks', () => {
   });
 });
 
+describe('matchFromPreview — book-visibility (raw storedStatus, not effective status)', () => {
+  // The status/liveness re-check keys off the RAW on-chain lifecycle (storedStatus): a
+  // book-hidden commitment (the maker pulled it from the orderbook off-chain) reads effective
+  // `status: 'cancelled'` but its signed payload is still matchable on chain, so the match must
+  // proceed. matchCommitment ignores book-visibility; the nonce/expiry/remaining checks still apply.
+  it('book-hidden: effective status cancelled + storedStatus open → matches (re-check does not throw, tx sent)', async () => {
+    const preview = buildPreview();
+    const { ctx } = buildCtx({
+      freshCommitment: makeCommitment({ status: 'cancelled', storedStatus: 'open' }),
+    });
+    const result = await matchFromPreview(ctx, preview);
+    expect(result.txHash).toMatch(/^0x[0-9a-f]+$/i); // got past the status/liveness re-check + sent
+  });
+
+  it('book-hidden: effective status cancelled + storedStatus partially_filled → matches', async () => {
+    const preview = buildPreview();
+    const { ctx } = buildCtx({
+      freshCommitment: makeCommitment({ status: 'cancelled', storedStatus: 'partially_filled' }),
+    });
+    const result = await matchFromPreview(ctx, preview);
+    expect(result.txHash).toMatch(/^0x[0-9a-f]+$/i);
+  });
+
+  it('truly on-chain cancelled: storedStatus cancelled → still throws (not a book-hide)', async () => {
+    const preview = buildPreview();
+    const { ctx } = buildCtx({
+      freshCommitment: makeCommitment({ status: 'cancelled', storedStatus: 'cancelled' }),
+    });
+    await expect(matchFromPreview(ctx, preview)).rejects.toThrow(/no longer matchable.*cancelled/);
+  });
+
+  it('filled: storedStatus filled → still throws', async () => {
+    const preview = buildPreview();
+    const { ctx } = buildCtx({
+      freshCommitment: makeCommitment({ status: 'filled', storedStatus: 'filled' }),
+    });
+    await expect(matchFromPreview(ctx, preview)).rejects.toThrow(/no longer matchable.*filled/);
+  });
+});
+
 describe('matchFromPreview — speculation transitions', () => {
   it('lazy preview → existing now: throws (preview was overly cautious; let user re-confirm)', async () => {
     const preview = buildPreview({

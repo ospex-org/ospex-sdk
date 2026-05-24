@@ -53,10 +53,12 @@ function makeFetch(rows: CommitmentBody[]): typeof globalThis.fetch {
 }
 
 describe('effective status passthrough + storedStatus', () => {
-  it('surfaces effective status "expired" with raw storedStatus "open"', async () => {
+  it('surfaces effective status "expired" with raw storedStatus "open"; isLive=false via the past expiry (not the effective status)', async () => {
     const client = new OspexClient({
       apiUrl,
-      fetch: makeFetch([makeBody({ status: 'expired', storedStatus: 'open' })]),
+      // A real effective-expired row has a PAST expiry — that (with storedStatus) is what drives
+      // isLive=false now; isLive keys off storedStatus + the actual expiry, not the `status` token.
+      fetch: makeFetch([makeBody({ status: 'expired', storedStatus: 'open', expiry: '2000-01-01T00:00:00.000Z' })]),
     });
     const [c] = await client.commitments.list();
     expect(c?.status).toBe('expired');
@@ -64,14 +66,15 @@ describe('effective status passthrough + storedStatus', () => {
     expect(c?.isLive).toBe(false);
   });
 
-  it('surfaces effective status "cancelled" with raw storedStatus "partially_filled"', async () => {
+  it('book-hidden: effective status "cancelled" + raw storedStatus "partially_filled" → still isLive (book-hiding is not an on-chain cancel; the signed payload stays matchable)', async () => {
     const client = new OspexClient({
       apiUrl,
-      fetch: makeFetch([makeBody({ status: 'cancelled', storedStatus: 'partially_filled' })]),
+      fetch: makeFetch([makeBody({ status: 'cancelled', storedStatus: 'partially_filled', filledRiskAmount: '300000', remainingRiskAmount: '700000' })]),
     });
     const [c] = await client.commitments.list();
-    expect(c?.status).toBe('cancelled');
-    expect(c?.storedStatus).toBe('partially_filled');
+    expect(c?.status).toBe('cancelled'); // effective — pulled from the public book
+    expect(c?.storedStatus).toBe('partially_filled'); // raw on-chain lifecycle
+    expect(c?.isLive).toBe(true); // matchCommitment ignores book-visibility → still live
   });
 
   it('back-compat: defaults storedStatus to status when the API omits it', async () => {

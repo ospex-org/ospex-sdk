@@ -2,6 +2,13 @@
 
 All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semver](https://semver.org/) with the pre-1.0 caret-pinning rules described in [`docs/AGENT_CONTRACT.md` §13](./docs/AGENT_CONTRACT.md).
 
+## [Unreleased]
+
+### SDK (`@ospex/sdk`)
+
+- **Fix: `Commitment.isLive` now derives from the raw on-chain lifecycle (`storedStatus`), not the effective `status`.** A *book-hidden* commitment — pulled from the orderbook off-chain (so its effective `status` reads `'cancelled'`) but whose signed payload is still matchable on chain — was incorrectly reported `isLive: false`. `matchCommitment` does not check book-visibility, so such a row is still live; `isLive` now reflects on-chain matchability (still gated on `!nonceInvalidated`, `remainingRiskAmount > 0`, and a future expiry, with the `storedStatus → status` fallback for core-api builds that omit `storedStatus`). On-chain matchability and orderbook visibility are distinct questions — to filter to commitments still on the public book, use the orderbook listing, not `isLive`.
+- **Fix: `commitments.match()` / `matchFromPreview()` no longer reject a book-hidden commitment.** The pre-send re-validation gated its lifecycle check on the effective `status` and threw `is no longer matchable (status now 'cancelled')` for a book-hidden-but-on-chain-live row. It now keys that check off `storedStatus`; the separate nonce / expiry / remaining-capacity re-checks are unchanged, so genuinely terminal rows (on-chain `cancelled` / `filled`), nonce-floor raises, passed expiry, and shrunk capacity still abort the send before gas is spent.
+
 ## [0.3.0] — 2026-05-21
 
 ### SDK (`@ospex/sdk`)

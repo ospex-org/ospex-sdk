@@ -74,9 +74,18 @@ export async function matchFromPreview(
   assertSignedFieldsUnchanged(preview.commitment, fresh);
 
   // ── 4. Status / liveness re-check. ────────────────────────────────
-  if (fresh.status !== 'open' && fresh.status !== 'partially_filled') {
+  // Key off the RAW on-chain lifecycle (`storedStatus`), NOT the effective `status`. The
+  // core API folds book-visibility into effective status: a *book-hidden* commitment (the
+  // maker pulled it from the orderbook off-chain) reads effective `status: 'cancelled'`, but
+  // its signed payload is still matchable on chain — `matchCommitment` ignores book-visibility
+  // — so a stored `open` / `partially_filled` row must NOT be rejected here. The nonce / expiry
+  // / remaining-capacity checks below independently cover the conditions effective status
+  // otherwise folds in. (`?? fresh.status` mirrors `toCommitment`'s fallback for a core-api
+  // predating effective status, where the raw value rides on `status`.)
+  const freshLifecycle = fresh.storedStatus ?? fresh.status;
+  if (freshLifecycle !== 'open' && freshLifecycle !== 'partially_filled') {
     throw new OspexValidationError(
-      `Commitment ${hash} is no longer matchable (status now '${fresh.status}'). State changed since preview; re-run prepareMatch.`,
+      `Commitment ${hash} is no longer matchable (on-chain status now '${freshLifecycle}'). State changed since preview; re-run prepareMatch.`,
       { field: 'status' },
     );
   }

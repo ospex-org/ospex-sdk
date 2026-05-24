@@ -82,9 +82,15 @@ export function toCommitment(body: CommitmentBody): Commitment {
 
 /**
  * Mirrors the contract's matchCommitment preconditions:
- *   1. status is 'open' or 'partially_filled' (both have remaining
- *      maker risk and weren't cancelled). The core API treats these
- *      identically as takeable liquidity.
+ *   1. The RAW on-chain lifecycle (`storedStatus`) is 'open' or 'partially_filled'
+ *      (both have remaining maker risk and weren't cancelled on chain) — NOT the
+ *      effective `status`. The core API folds book-visibility into effective status:
+ *      a *book-hidden* commitment (pulled from the orderbook off-chain, but whose
+ *      signed payload is still matchable on chain) reads effective `status:
+ *      'cancelled'`. `matchCommitment` does NOT check book-visibility, so that row is
+ *      still live — keying off `storedStatus` keeps `isLive` true for it. Falls back to
+ *      `status` when `storedStatus` is absent: a core-api predating effective status
+ *      returns the raw value as `status` and had no book-visibility split.
  *   2. nonce ≥ s_minNonces[maker][specKey] (i.e. not flagged
  *      `nonceInvalidated` by the indexer's MIN_NONCE_UPDATED projection).
  *   3. remainingRiskAmount > 0. A 'partially_filled' row with zero
@@ -95,7 +101,10 @@ export function toCommitment(body: CommitmentBody): Commitment {
  *      appears on legacy / indexer-only rows that aren't matchable.
  */
 function computeIsLive(body: CommitmentBody): boolean {
-  if (body.status !== 'open' && body.status !== 'partially_filled') return false;
+  // Raw on-chain lifecycle, NOT the effective `status` (which folds in book-visibility —
+  // a book-hidden but on-chain-matchable row reads effective 'cancelled'). See precondition 1.
+  const lifecycle = body.storedStatus ?? body.status;
+  if (lifecycle !== 'open' && lifecycle !== 'partially_filled') return false;
   if (body.nonceInvalidated) return false;
   if (BigInt(body.remainingRiskAmount) <= 0n) return false;
   if (body.expiry === null) return false;
