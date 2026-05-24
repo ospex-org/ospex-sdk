@@ -15,6 +15,7 @@ import {
   type TransactionReceipt,
 } from 'viem';
 import { cancelOnchain } from '../src/commitments/cancelOnchain.js';
+import { buildDomain, hashCommitment, type OspexCommitmentMessage } from '../src/chain/eip712.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import { OspexAPIError, OspexChainError, OspexValidationError } from '../src/errors.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
@@ -22,7 +23,26 @@ import type { CommitmentBody } from '../src/api/types.js';
 import type { Signer } from '../src/types/signer.js';
 
 const SIGNER_ADDR = '0xabcdefabcdef0123456789abcdef0123456789ab';
-const HASH = '0x' + 'ab'.repeat(32);
+const MATCHING_MODULE = ('0x' + '11'.repeat(20)) as `0x${string}`;
+const CHAIN_ID = 137 as const;
+
+// The EIP-712 struct the default fixture body reconstructs to. HASH is its hash under
+// the test domain (CHAIN_ID + MATCHING_MODULE), so the default body round-trips exactly
+// like a real API row would — cancelOnchain's reconstruction assertion passes. Tests that
+// need a mismatch mutate a struct field (see the reconstruction-mismatch test). Keep these
+// values in sync with the string fields in `fullCommitmentBody` below.
+const BODY_STRUCT: OspexCommitmentMessage = {
+  maker: SIGNER_ADDR as `0x${string}`,
+  contestId: 42n,
+  scorer: ('0xdd' + 'aa'.repeat(19)) as `0x${string}`,
+  lineTicks: -35,
+  positionType: 0,
+  oddsTick: 191,
+  riskAmount: 1_000_000n,
+  nonce: 1_700_000_000n,
+  expiry: BigInt(Math.floor(new Date('2099-01-01T00:00:00.000Z').getTime() / 1000)),
+};
+const HASH = hashCommitment(buildDomain(CHAIN_ID, MATCHING_MODULE), BODY_STRUCT);
 
 const NOT_MAKER_SELECTOR = keccak256(toBytes('MatchingModule__NotCommitmentMaker()')).slice(0, 10);
 
@@ -93,10 +113,10 @@ function fakeContext(opts: FakeOpts = {}): { ctx: CommitmentsContext } {
       },
     } as unknown as CommitmentsContext['api'],
     requireSigner: () => signer,
-    getChainId: () => 137,
+    getChainId: () => CHAIN_ID,
     getAddresses: () =>
       ({
-        matchingModule: ('0x' + '11'.repeat(20)) as `0x${string}`,
+        matchingModule: MATCHING_MODULE,
       }) as unknown as ReturnType<CommitmentsContext['getAddresses']>,
     requireChainClient: () => publicClient,
     nonceCounter: new NonceCounter(),
@@ -142,6 +162,26 @@ describe('commitments.cancelOnchain', () => {
         return 0n;
       };
     await expect(cancelOnchain(ctx, HASH as `0x${string}`)).rejects.toBeInstanceOf(OspexAPIError);
+    expect(estimateGasCalled).toBe(false);
+  });
+
+  it('throws before gas estimation when the reconstructed struct does not hash to the requested hash', async () => {
+    // The API row drifted from the signed payload (mutated riskAmount → different hash).
+    // cancelOnchain must refuse before signing / broadcasting rather than set
+    // s_cancelledCommitments on a different commitment than the one requested.
+    let estimateGasCalled = false;
+    const { ctx } = fakeContext({
+      apiResponder: () =>
+        fullCommitmentBody({ riskAmount: '999999', remainingRiskAmount: '999999' }),
+    });
+    (ctx.requireChainClient() as unknown as { estimateGas: () => Promise<bigint> }).estimateGas =
+      async () => {
+        estimateGasCalled = true;
+        return 0n;
+      };
+    await expect(cancelOnchain(ctx, HASH as `0x${string}`)).rejects.toBeInstanceOf(
+      OspexValidationError,
+    );
     expect(estimateGasCalled).toBe(false);
   });
 

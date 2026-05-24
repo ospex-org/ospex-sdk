@@ -32,6 +32,7 @@ import {
 } from 'viem';
 import { matchingModuleAbi } from '../contracts/abi/index.js';
 import { OspexValidationError } from '../errors.js';
+import { buildDomain, hashCommitment, type OspexCommitmentMessage } from '../chain/eip712.js';
 import { buildSignAndSend } from './sendTx.js';
 import { sendWithMatchingErrorClassification } from './matchingErrors.js';
 import type { CommitmentsContext } from './context.js';
@@ -92,24 +93,39 @@ export async function cancelOnchain(
   const { matchingModule } = ctx.getAddresses();
   const chainId = ctx.getChainId();
 
+  // Reconstruct the 9-field EIP-712 struct from the API row, then assert it hashes to
+  // the hash we were asked to cancel BEFORE signing or broadcasting. The contract
+  // recomputes the hash from the struct and sets `s_cancelledCommitments[recomputed]`
+  // blindly (MatchingModule.sol). If the stored row ever drifts from the signed payload
+  // (e.g. an `expiry` that doesn't round-trip to the exact unix second), an unguarded
+  // cancel would mark a DIFFERENT hash cancelled while the real commitment stays
+  // matchable — and a maker bot would release its headroom on a phantom cancel. Fail
+  // closed instead. Both hashes are public; the message carries no secrets.
+  const commitment: OspexCommitmentMessage = {
+    maker: body.maker as Hex,
+    contestId: BigInt(body.contestId as string),
+    scorer: body.scorer as Hex,
+    lineTicks: body.lineTicks as number,
+    positionType: body.positionType as 0 | 1,
+    oddsTick: body.oddsTick as number,
+    riskAmount: BigInt(body.riskAmount),
+    nonce: BigInt(body.nonce),
+    expiry: BigInt(Math.floor(new Date(body.expiry as string).getTime() / 1000)),
+  };
+  const reconstructedHash = hashCommitment(buildDomain(chainId, matchingModule), commitment);
+  if (reconstructedHash.toLowerCase() !== lowercaseHash) {
+    throw new OspexValidationError(
+      `cancelOnchain: the commitment reconstructed from the API row hashes to ${reconstructedHash}, ` +
+        `which does not match the requested hash ${lowercaseHash}. The stored row does not round-trip ` +
+        `to the signed payload; refusing to cancel a different commitment.`,
+      { field: 'hash' },
+    );
+  }
+
   const data = encodeFunctionData({
     abi: matchingModuleAbi,
     functionName: 'cancelCommitment',
-    args: [
-      {
-        maker: body.maker as Hex,
-        contestId: BigInt(body.contestId as string),
-        scorer: body.scorer as Hex,
-        lineTicks: body.lineTicks as number,
-        positionType: body.positionType as number,
-        oddsTick: body.oddsTick as number,
-        riskAmount: BigInt(body.riskAmount),
-        nonce: BigInt(body.nonce),
-        expiry: BigInt(
-          Math.floor(new Date(body.expiry as string).getTime() / 1000),
-        ),
-      },
-    ],
+    args: [commitment],
   });
 
   const { txHash, receipt } = await sendWithMatchingErrorClassification(
