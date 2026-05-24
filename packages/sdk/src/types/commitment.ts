@@ -59,15 +59,20 @@ export interface Commitment {
   network: string;
   nonceInvalidated: boolean;
   /**
-   * Derived: status is `'open'` or `'partially_filled'`, the row isn't
-   * `nonceInvalidated`, `remainingRiskAmount > 0`, and the expiry is in
-   * the future. The canonical "is this commitment still matchable?"
-   * predicate — mirrors every precondition `matchCommitment` enforces on
-   * chain. Strictly stronger than `status !== 'expired'/'cancelled'`: it also
-   * rejects the zero-remaining edge (a `partially_filled` row whose remaining
-   * is 0), which effective `status` does NOT fold in. Computed at API decode
-   * time, so the expiry comparison is a snapshot — a commitment held in memory
-   * across its expiry won't silently flip to `false` without re-fetching.
+   * Derived: the raw on-chain lifecycle ({@link Commitment.storedStatus}) is `'open'`
+   * or `'partially_filled'`, the row isn't `nonceInvalidated`, `remainingRiskAmount > 0`,
+   * and the expiry is in the future. The canonical "is this commitment still matchable
+   * on chain?" predicate — mirrors every precondition `matchCommitment` enforces.
+   *
+   * Keys off `storedStatus`, NOT the effective `status`: a *book-hidden* commitment
+   * (pulled from the orderbook off-chain, but whose signed payload is still matchable on
+   * chain) reads effective `status: 'cancelled'` yet is still `isLive` — `matchCommitment`
+   * doesn't check book-visibility. On-chain matchability and orderbook visibility are
+   * distinct questions; to filter to commitments still on the public book, use the
+   * orderbook listing (which excludes hidden rows), not `isLive`.
+   *
+   * Computed at API decode time, so the expiry comparison is a snapshot — a commitment
+   * held in memory across its expiry won't silently flip to `false` without re-fetching.
    */
   isLive: boolean;
   /** ISO-8601 string. */
