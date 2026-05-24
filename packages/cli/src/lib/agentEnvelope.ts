@@ -20,7 +20,6 @@
  * the integration contract is `docs/AGENT_CONTRACT.md`.
  */
 
-import { createRequire } from 'node:module';
 import { formatUnits } from 'viem';
 import {
   OspexError,
@@ -47,25 +46,16 @@ import {
   type SpeculationMode,
   type WalletRole,
 } from '@ospex/sdk';
+import { CLI_VERSION, SDK_VERSION } from './version.js';
 
 /* ------------------------------------------------------------------------- */
 /* Version constants                                                         */
 /* ------------------------------------------------------------------------- */
 
-interface PkgShape {
-  version: string;
-}
-
-// `createRequire` lets us read package.json at runtime without pulling
-// it through TypeScript's rootDir check (which `import ... with { type:
-// 'json' }` would trip because the CLI's tsconfig has `rootDir:
-// "./src"` and package.json lives one level up).
-const require = createRequire(import.meta.url);
-const cliPkg = require('../../package.json') as PkgShape;
-const sdkPkg = require('@ospex/sdk/package.json') as PkgShape;
-
-export const CLI_VERSION: string = cliPkg.version;
-export const SDK_VERSION: string = sdkPkg.version;
+// Resolved once (bundle-time inject with a runtime fallback) in `./version.ts`, then
+// re-exported here so existing `import { CLI_VERSION } from './agentEnvelope.js'` call
+// sites (e.g. `index.ts`) and the envelope builders below keep working unchanged.
+export { CLI_VERSION, SDK_VERSION };
 
 /* ------------------------------------------------------------------------- */
 /* Constants                                                                 */

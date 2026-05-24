@@ -16,10 +16,8 @@
  * are human and may move.
  */
 
-import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { formatUnits } from 'viem';
+import { CLI_VERSION, SDK_VERSION } from './version.js';
 import type { ApprovalsSnapshot, BalancesSnapshot } from '@ospex/sdk';
 import type {
   ApiUrlSource,
@@ -1081,58 +1079,16 @@ function pickWorst(statuses: CheckStatus[]): 'ok' | 'warn' | 'fail' {
 // ── meta block ────────────────────────────────────────────────────────
 
 /**
- * Build the `meta` block. Reads CLI + SDK versions from package.json
- * synchronously at call time. Defaults to `'unknown'` if either read
- * fails — the doctor must never crash on a missing/malformed
- * package.json, so this is intentionally lenient.
- *
- * The SDK path uses `createRequire` + the SDK's `./package.json`
- * exports entry (added in PR 1 alongside this helper). If the SDK ever
- * drops that exports entry, the SDK version reads as `'unknown'`
- * rather than the doctor failing.
+ * Build the `meta` block from the shared `CLI_VERSION` / `SDK_VERSION` (resolved once in
+ * `lib/version.ts` — a bundle-time inject with a runtime package.json fallback, `'unknown'`
+ * if a read fails). Best-effort: the doctor never crashes over a version string.
  */
 export function buildMeta(): MetaBlock {
   return {
     generatedAt: new Date().toISOString(),
-    cliVersion: readCliVersion(),
-    sdkVersion: readSdkVersion(),
+    cliVersion: CLI_VERSION,
+    sdkVersion: SDK_VERSION,
   };
-}
-
-function readCliVersion(): string {
-  // Walk up two levels: `src/lib/doctorChecks.ts` → `src/` → `packages/cli/`.
-  // After compile: `dist/lib/doctorChecks.js` → `dist/` → `packages/cli/`.
-  // Both resolve to the same on-disk file.
-  const url = new URL('../../package.json', import.meta.url);
-  return safeReadVersion(url);
-}
-
-function readSdkVersion(): string {
-  try {
-    const r = createRequire(import.meta.url);
-    const resolved = r.resolve('@ospex/sdk/package.json');
-    return safeReadVersion(pathToFileURL(resolved));
-  } catch {
-    return 'unknown';
-  }
-}
-
-function safeReadVersion(url: URL): string {
-  try {
-    const text = readFileSync(fileURLToPath(url), 'utf8');
-    const parsed: unknown = JSON.parse(text);
-    if (
-      parsed !== null &&
-      typeof parsed === 'object' &&
-      'version' in parsed &&
-      typeof (parsed as { version: unknown }).version === 'string'
-    ) {
-      return (parsed as { version: string }).version;
-    }
-  } catch {
-    // ignore — version reads are best-effort, never load-bearing
-  }
-  return 'unknown';
 }
 
 // ── helpers ───────────────────────────────────────────────────────────
