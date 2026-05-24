@@ -15,14 +15,13 @@ Releases are cut on demand, not on a schedule. Trigger conditions:
 1. **All PRs for the release are merged into `main`.**
 2. **`main` is clean:** `git status` shows no uncommitted changes; `git diff --check` is clean.
 3. **CI is green** on the latest `main` commit.
-4. **Walk the manual integration playbook** at [`docs/MANUAL_INTEGRATION_TESTING.md`](./MANUAL_INTEGRATION_TESTING.md) appropriate to the release scope and available environment. Record any deferred manual sections in the release ticket.
-5. **Update [`CHANGELOG.md`](../CHANGELOG.md)**: move the `Unreleased` items into a new dated section with the upcoming version; reset `Unreleased` to `—`.
-6. **Bump versions in lockstep:**
+4. **Update [`CHANGELOG.md`](../CHANGELOG.md)**: move the `Unreleased` items into a new dated section with the upcoming version; reset `Unreleased` to `—`.
+5. **Bump versions in lockstep:**
    - `package.json` (workspace root)
    - `packages/sdk/package.json`
    - `packages/cli/package.json`
    - The CLI tarball install snippet in `docs/QUICKSTART.md` if it pins by version.
-7. Open a release PR with the version bump + CHANGELOG, get it reviewed, merge.
+6. Open a release PR with the version bump + CHANGELOG, get it reviewed, merge.
 
 ## Build the release tarballs
 
