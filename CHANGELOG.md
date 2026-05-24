@@ -6,6 +6,16 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 —
 
+## [0.4.0] — 2026-05-24
+
+### CLI (`@ospex/cli`)
+
+- **The CLI now ships as a single self-contained bundle.** `@ospex/cli` is built with esbuild into one file with all dependencies (including `@ospex/sdk`) inlined, and declares no runtime dependencies. A global install (`npm install -g` / `yarn global add` the release tarball) resolves nothing else, so bare `ospex` runs anywhere — install one tarball, type `ospex`. Distribution is unchanged: off-registry GitHub-release tarballs. The `@ospex/sdk` tarball remains a normal unbundled library for programmatic consumers.
+
+### SDK (`@ospex/sdk`)
+
+- **`commitments.cancelOnchain` now verifies the reconstructed commitment hashes to the requested hash before broadcasting**, throwing `OspexValidationError` if not — closing a latent fail-open seam where a drifted API row could have cancelled a different commitment than requested. No happy-path change (the round-trip is exact).
+
 ## [0.3.1] — 2026-05-24
 
 ### SDK (`@ospex/sdk`)

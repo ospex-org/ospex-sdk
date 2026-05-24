@@ -42,33 +42,27 @@ The rest of this guide uses the Ospex terms.
 
 ## Install the CLI
 
-Distribution is via [GitHub releases](https://github.com/ospex-org/ospex-sdk/releases). Once a release is tagged, download `ospex-sdk-<ver>.tgz` and `ospex-cli-<ver>.tgz` from the release page, then skip to the **Install** step below — substitute the downloaded paths in the `yarn add` command.
+The CLI ships as a **single self-contained bundle** — one file with every dependency inlined — distributed via [GitHub releases](https://github.com/ospex-org/ospex-sdk/releases) (not npm). Install it globally and the `ospex` command is on your PATH; there's nothing else to resolve.
 
-Until the first release is tagged, build the tarballs locally from a clone of the monorepo:
-
-```bash
-# In the ospex-sdk monorepo:
-yarn install
-yarn workspace @ospex/sdk build
-yarn workspace @ospex/cli build
-yarn workspace @ospex/sdk pack --filename ospex-sdk.tgz
-yarn workspace @ospex/cli pack --filename ospex-cli.tgz
-```
-
-**Install** — in a working directory where you want to use the CLI:
+**npm:**
 
 ```bash
-cd /path/to/your/working-dir
-yarn init -y                                          # creates a minimal package.json
-yarn add ./ospex-sdk-<ver>.tgz ./ospex-cli-<ver>.tgz  # pass the tarball paths directly
-npx ospex --version
+npm install -g https://github.com/ospex-org/ospex-sdk/releases/download/v<ver>/ospex-cli-<ver>.tgz
+ospex --version
 ```
 
-Pass the tarball paths directly (don't use the `file:` prefix); yarn 1 detects the `.tgz` extension and installs them as local packages. `npm install ./ospex-sdk-<ver>.tgz ./ospex-cli-<ver>.tgz` works equivalently if you'd rather use npm.
+**yarn:**
 
-You install **both** tarballs in the same `yarn add` command. The CLI uses the SDK at runtime but doesn't list it as a regular dependency — yarn 1 would otherwise turn the transitive `@ospex/sdk` reference into a registry lookup and fail. We distribute through GitHub releases by design.
+```bash
+yarn global add https://github.com/ospex-org/ospex-sdk/releases/download/v<ver>/ospex-cli-<ver>.tgz
+ospex --version
+```
 
-The rest of the guide writes `ospex` for the binary; substitute `npx ospex` until it's on your PATH.
+Prefer downloading first? Grab `ospex-cli-<ver>.tgz` from the [releases page](https://github.com/ospex-org/ospex-sdk/releases) and install the local path instead: `npm install -g ./ospex-cli-<ver>.tgz` (or `yarn global add ./ospex-cli-<ver>.tgz`).
+
+The rest of this guide writes `ospex` for the command.
+
+> **Building from source** (contributors): from a clone of the monorepo, `yarn install && yarn workspace @ospex/cli build` produces the bundle at `packages/cli/dist/index.js`, and `yarn workspace @ospex/cli pack` makes the tarball. The `@ospex/sdk` tarball (`yarn workspace @ospex/sdk pack`) is a separate, unbundled library for programmatic consumers — CLI users don't need it.
 
 ## Create or import a wallet via Foundry
 

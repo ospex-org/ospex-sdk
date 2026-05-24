@@ -44,20 +44,18 @@ The two tarballs land at:
 - `packages/sdk/ospex-sdk-<ver>.tgz`
 - `packages/cli/ospex-cli-<ver>.tgz`
 
-Smoke-test from a fresh working directory. Copy the two tarballs out
-of the repo first so the install command stays short and avoids any
-absolute-path quoting quirks (notably with yarn 1 on Windows / Git
-Bash, where `file:` URLs misparse):
+`yarn workspace @ospex/cli build` bundles the CLI (via `scripts/bundle.mjs`) into a single self-contained `dist/index.js` with every dependency inlined and `dependencies: {}` — so the CLI tarball installs with zero deps. The `@ospex/sdk` tarball stays an unbundled library (its deps resolve normally) for programmatic consumers; it is **not** needed to run the CLI.
+
+Smoke-test the **bundled CLI** with a global install (the published UX). Because the bundle resolves nothing at runtime, bare `ospex` works regardless of the host's global package store:
 
 ```sh
-mkdir /tmp/ospex-release-smoke && cd /tmp/ospex-release-smoke
-cp /path/to/ospex-sdk/packages/sdk/ospex-sdk-<ver>.tgz .
-cp /path/to/ospex-sdk/packages/cli/ospex-cli-<ver>.tgz .
-yarn init -y
-yarn add ./ospex-sdk-<ver>.tgz ./ospex-cli-<ver>.tgz
-npx ospex --version
-npx ospex health
+npm install -g ./packages/cli/ospex-cli-<ver>.tgz   # or: yarn global add ./packages/cli/ospex-cli-<ver>.tgz
+ospex --version
+ospex health
+npm uninstall -g @ospex/cli                          # clean up the smoke install (or `yarn global remove @ospex/cli`)
 ```
+
+Verify the URL-install form too (what the download page ships) once the release is published: `npm install -g <releases-url>/ospex-cli-<ver>.tgz` and `yarn global add <releases-url>/ospex-cli-<ver>.tgz`. The `@ospex/sdk` library tarball is exercised by the market-maker realign in **Post-release** below.
 
 ## Tag and push
 
