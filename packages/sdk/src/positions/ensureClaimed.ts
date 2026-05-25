@@ -17,20 +17,26 @@
  *      to 2.)
  *   2. Send the strict claim → `claimed` (carries txHash/receipt + the
  *      authoritative `POSITION_CLAIMED` payout).
- *   3. Send reverted → re-read on-chain state. If the revert decoded to
- *      `AlreadyClaimed` OR the re-read shows `claimed === true`, a benign
- *      already-claimed won the race → `recovered`. A pre-send
- *      (`estimateGas`) revert broadcasts nothing; an inclusion-time revert
- *      DID broadcast a tx that reverted (gas spent) — its hash is preserved
- *      on `revertedTxHash` (+ best-effort `revertedReceipt`, so its gas can
- *      be accounted). Otherwise the revert is a genuine failure
- *      (`NotSettled`, `NoPayout`, RPC error, …) and propagates unchanged.
+ *   3. Send reverted → recover ONLY for a benign already-claimed, by one of
+ *      two signals:
+ *        (a) the pre-send (`estimateGas`) revert decoded to `AlreadyClaimed`
+ *            (no tx broadcast), or
+ *        (b) this wallet broadcast a claim that PROVABLY reverted on
+ *            inclusion (the error carries a `'reverted'` receipt) AND a
+ *            re-read shows `claimed === true`.
+ *      An inclusion-time recovery preserves `revertedTxHash` + `revertedReceipt`
+ *      (gas was spent — account it). Otherwise the revert is a genuine
+ *      failure (`NotSettled`, `NoPayout`, RPC error, …) and propagates
+ *      unchanged.
  *
- * The recover/abort decision in step 3 is driven by the authoritative
- * on-chain re-read, not by parsing the revert string — so it covers both
- * the pre-send (`estimateGas`) revert and an inclusion-time revert (whose
- * receipt carries no decoded selector). The decoded `AlreadyClaimed`
- * selector is a second, independent signal layered on top.
+ * Why the proven-revert gate in (b) is load-bearing: the strict `claim()`
+ * throws `OspexChainError({ txHash })` in TWO situations — a real on-chain
+ * revert (its receipt status is `'reverted'`, carried on the error), and a
+ * tx that SUCCEEDED but whose receipt had no parseable `POSITION_CLAIMED`
+ * event. The latter is a genuine claim (payout transferred) we just can't
+ * read back — it MUST stay loud, never be relabeled a recovered/no-payout
+ * claim. So recovery keys off the structured reverted receipt, never a bare
+ * tx hash and never a bare post-read of `claimed`.
  *
  * IMPORTANT — no derived payout. `recovered` / `alreadyClaimed` carry NO
  * payout. The contract zeroes `riskAmount` / `profitAmount` once `claimed`
@@ -87,17 +93,17 @@ export interface EnsureClaimedResult {
   /** Present only on `outcome === 'claimed'`. */
   receipt?: TransactionReceipt;
   /** Present only on `outcome === 'recovered'` AND only when this wallet
-   * actually broadcast a claim tx that then reverted (an inclusion-time
-   * race loss — gas was spent). Absent when recovery came via a pre-flight
-   * read or a pre-send (`estimateGas`) revert, where no tx was sent. The
-   * audit trail must not lose this hash. */
+   * broadcast a claim that PROVABLY reverted on inclusion (lost the race —
+   * gas was spent). Absent when recovery came via a pre-send (`estimateGas`)
+   * `AlreadyClaimed` revert, where no tx was broadcast. The audit trail must
+   * not lose this hash. Always travels together with `revertedReceipt`. */
   revertedTxHash?: Hash;
-  /** The receipt of the reverted claim tx (`revertedTxHash`), re-fetched
-   * so consumers can account the gas it spent — a recovered inclusion-time
-   * race still cost POL, and gas budgets must include it. Present whenever
-   * `revertedTxHash` is set AND the receipt fetch succeeded; absent if the
-   * fetch failed (the caller still has `revertedTxHash` to look up / flag
-   * an accounting gap). Carries the usual `gasUsed` / `effectiveGasPrice`. */
+  /** The receipt of the reverted claim tx (`revertedTxHash`) — the
+   * authoritative one `broadcastSignedTx` saw (status `'reverted'`), so
+   * consumers can account the POL gas it spent (carries `gasUsed` /
+   * `effectiveGasPrice`). Present iff `revertedTxHash` is — the two are set
+   * together (the receipt is what PROVES the revert, so a recovery never
+   * happens without it). */
   revertedReceipt?: TransactionReceipt;
 }
 
@@ -142,46 +148,63 @@ export async function ensurePositionClaimed(
       receipt: r.receipt,
     };
   } catch (err) {
-    // 3. Race recovery. Re-read authoritative state; recover ONLY if the
-    //    position is claimed now, by either signal. `NotSettled` /
-    //    `NoPayout` / RPC errors leave `claimed === false` and don't decode
-    //    to AlreadyClaimed, so they propagate as genuine failures.
-    const post = await tryReadPositionState(publicClient, positionModule, speculationId, user, positionType);
-    if (isAlreadyClaimedRevert(err) || post?.claimed === true) {
-      const recovered: EnsureClaimedResult = {
-        speculationId,
-        positionType,
-        outcome: 'recovered',
-      };
-      // If this wallet actually broadcast a claim tx that reverted on
-      // inclusion (lost the race), keep its hash AND re-fetch its receipt —
-      // that tx spent POL, and consumers (e.g. the market-maker's daily gas
-      // budget) must account for it even though it reverted. Pre-send /
-      // pre-flight recoveries broadcast nothing, so there's no hash. The
-      // receipt fetch is best-effort: on failure we still return the hash so
-      // the caller can look it up or flag an accounting gap.
-      const revertedTxHash = revertTxHashOf(err);
-      if (revertedTxHash !== undefined) {
-        recovered.revertedTxHash = revertedTxHash;
-        try {
-          recovered.revertedReceipt = await publicClient.getTransactionReceipt({ hash: revertedTxHash });
-        } catch {
-          // leave revertedReceipt undefined — revertedTxHash still surfaced
-        }
-      }
-      return recovered;
+    // 3. Recovery is deliberately narrow — a benign already-claimed is the
+    //    ONLY thing we convert to success. Two recognizers:
+    //
+    //    (a) The pre-send (estimateGas) revert decoded to AlreadyClaimed —
+    //        the contract told us directly, and no tx was broadcast.
+    //
+    //    (b) This wallet broadcast a claim that REVERTED on inclusion (lost a
+    //        race to a concurrent claim) AND a re-read confirms the position
+    //        is now claimed. The "actually reverted" proof is load-bearing:
+    //        strict claim() ALSO throws `OspexChainError({ txHash })` when a
+    //        SUCCESSFUL tx had no parseable POSITION_CLAIMED event — that is
+    //        NOT a revert, the payout really happened, and it MUST stay loud
+    //        rather than be silently relabeled a recovered claim with the
+    //        payout dropped. So we key off the structured reverted receipt
+    //        `broadcastSignedTx` attaches (present only on a genuine on-chain
+    //        revert) — never a bare tx hash, and never a bare post-read.
+    //
+    //    Everything else — NotSettled, NoPayout, RPC errors, a confirmed-but-
+    //    unparseable claim, or a reverted tx where the position still isn't
+    //    claimed — propagates unchanged.
+    if (isAlreadyClaimedRevert(err)) {
+      return { speculationId, positionType, outcome: 'recovered' };
     }
-    // Genuine failure (not claimed, or couldn't confirm) — surface it.
+
+    const revertedReceipt = revertedReceiptOf(err);
+    if (revertedReceipt !== undefined) {
+      const post = await tryReadPositionState(publicClient, positionModule, speculationId, user, positionType);
+      if (post?.claimed === true) {
+        // Inclusion-time race lost, but the position ended up claimed. Keep
+        // the reverted tx's hash AND receipt so the POL gas it spent is
+        // accounted (e.g. the market-maker's daily gas budget must include
+        // reverted txs).
+        return {
+          speculationId,
+          positionType,
+          outcome: 'recovered',
+          revertedTxHash: revertedReceipt.transactionHash,
+          revertedReceipt,
+        };
+      }
+    }
+    // Genuine failure (not claimed, couldn't confirm, or a non-revert error)
+    // — surface it.
     throw err;
   }
 }
 
-/** Pull a receipt-level revert tx hash off a caught error.
- * `broadcastSignedTx` throws `OspexChainError({ txHash })` for a reverted
- * receipt; pre-send (`estimateGas`) reverts carry no `txHash`. */
-function revertTxHashOf(err: unknown): Hash | undefined {
-  return err instanceof OspexChainError && err.txHash !== undefined
-    ? (err.txHash as Hash)
+/** Pull the reverted receipt off a caught error. `broadcastSignedTx`
+ * attaches it (alongside the tx hash) ONLY when a broadcast tx's receipt came
+ * back with a non-success status — so a present, `'reverted'`-status receipt
+ * is the authoritative proof the tx reverted on-chain. A post-broadcast parse
+ * failure on a SUCCESSFUL tx (e.g. `claim()`'s missing-`POSITION_CLAIMED`-event
+ * throw) carries a `txHash` but no receipt, and is intentionally NOT
+ * recoverable here — it stays loud. */
+function revertedReceiptOf(err: unknown): TransactionReceipt | undefined {
+  return err instanceof OspexChainError && err.receipt?.status === 'reverted'
+    ? err.receipt
     : undefined;
 }
 

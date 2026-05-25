@@ -878,4 +878,47 @@ describe('positions.claimAll', () => {
     expect(result.totals.totalPayoutWei6).toBe('50000000');
     expect(result.totals.totalPayoutUSDC).toBeCloseTo(50, 6);
   });
+
+  // #98 review blocker (end-to-end): a claim tx that SUCCEEDS but whose
+  // receipt has no parseable POSITION_CLAIMED event must FAIL the entry —
+  // never be silently relabeled an already-claimed skip/recover with the
+  // payout dropped. (The success receipt carries no reverted receipt, so the
+  // SDK's recovery gate correctly declines to recover.)
+  it('fails the entry on a confirmed-but-unparseable claim (no silent recovery)', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `1_${SIGNER_ADDR}_0`,
+            speculationId: '1',
+            description: 'Won but event unparseable',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 191,
+            estimatedPayoutWei6: '191000000',
+            txParams: [
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '1', positionType: 0 } },
+            ],
+          },
+        ],
+      },
+      specStates: { '1': [{ claimed: false }] }, // pre-flight unclaimed
+      // Tx confirms (success) but carries NO POSITION_CLAIMED log → claim()
+      // throws "no matching POSITION_CLAIMED event".
+      plannedTxs: [{ status: 'success', logs: [] }],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.success).toBe(false);
+    const entry = result.entries[0]!;
+    expect(entry.success).toBe(false);
+    expect(entry.error?.message).toMatch(/POSITION_CLAIMED/i);
+    expect(entry.steps.map((s) => [s.name, s.outcome])).toEqual([['claimPosition', 'failed']]);
+    // Not counted as a fresh/already/recovered claim, and no payout.
+    expect(result.totals.claimedFresh).toBe(0);
+    expect(result.totals.alreadyClaimed).toBe(0);
+    expect(result.totals.recoveredAlreadyClaimed).toBe(0);
+    expect(result.totals.totalPayoutWei6).toBe('0');
+  });
 });

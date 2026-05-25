@@ -9,14 +9,20 @@
  *      still unclaimed                                  → rethrows (loud)
  *   4b. same for NoPayout                               → rethrows (loud)
  *   5. pre-flight read fails → falls through, claim ok  → 'claimed'
- *   6. unclaimed, inclusion-time revert (no selector),
+ *   6. unclaimed, claim PROVABLY reverts on inclusion,
  *      re-read claimed                                  → 'recovered'
- *   6b. inclusion-time recovery, receipt re-fetch fails → revertedTxHash kept
+ *   7. unclaimed, claim tx SUCCEEDS but POSITION_CLAIMED
+ *      event missing/unparseable                        → stays loud (NOT recovered)
+ *   8. unclaimed, claim reverts but re-read still
+ *      unclaimed                                        → stays loud
  *
- * Plus the two non-negotiable claim-side guarantees:
+ * Plus the non-negotiable claim-side guarantees:
  *   - `alreadyClaimed` / `recovered` carry NO payout (the contract zeroes
  *     economic fields post-claim; the SDK never fabricates one).
  *   - `NotSettled` / `NoPayout` stay loud (only `AlreadyClaimed` is benign).
+ *   - state-based recovery requires a PROVEN on-chain revert — a confirmed
+ *     tx with an unparseable event is a loud failure, never a recovery (the
+ *     #98 review blocker).
  *
  * The chain client is faked: `readContract` is driven by a queue of
  * getPosition responses, and the claim pipeline (estimateGas → sign →
@@ -102,26 +108,19 @@ function fakeCtx(opts: {
   estimateGas?: () => Promise<bigint>;
   receiptStatus?: 'success' | 'reverted';
   claimedLog?: { address: `0x${string}`; topics: Hash[]; data: `0x${string}` };
-  /** When true, the post-revert `getTransactionReceipt` re-fetch throws —
-   * exercises the graceful-degrade path (revertedTxHash kept, no receipt). */
-  getReceiptFails?: boolean;
 }): { ctx: PositionsContext; sendRaw: ReturnType<typeof vi.fn> } {
   let readIdx = 0;
   const sendRaw = vi.fn(async () => ('0x' + 'aa'.repeat(32)) as Hash);
+  // The receipt `broadcastSignedTx` sees. On a non-success status it attaches
+  // this to the thrown OspexChainError — so it carries gas fields, letting a
+  // recovered inclusion-time race be billed without a separate re-fetch.
   const receipt = {
     status: opts.receiptStatus ?? 'success',
     transactionHash: ('0x' + 'aa'.repeat(32)) as Hash,
     blockNumber: 12345n,
-    logs: opts.claimedLog ? [opts.claimedLog] : [],
-  } as unknown as TransactionReceipt;
-  // The reverted claim's receipt, returned by the `getTransactionReceipt`
-  // re-fetch in the recovery path. Carries gas fields so consumers can bill it.
-  const revertedReceipt = {
-    status: 'reverted',
-    transactionHash: ('0x' + 'aa'.repeat(32)) as Hash,
-    blockNumber: 12345n,
     gasUsed: 50_000n,
     effectiveGasPrice: 30_000_000_000n,
+    logs: opts.claimedLog ? [opts.claimedLog] : [],
   } as unknown as TransactionReceipt;
 
   const publicClient = {
@@ -133,10 +132,6 @@ function fakeCtx(opts: {
     },
     sendRawTransaction: sendRaw,
     waitForTransactionReceipt: async () => receipt,
-    getTransactionReceipt: async () => {
-      if (opts.getReceiptFails) throw new Error('receipt fetch failed');
-      return revertedReceipt;
-    },
     getTransactionCount: async () => 7,
     estimateFeesPerGas: async () => ({ maxFeePerGas: 50n, maxPriorityFeePerGas: 1n }),
     estimateGas: opts.estimateGas ?? (async () => 80_000n),
@@ -270,7 +265,7 @@ describe('positions.ensurePositionClaimed', () => {
     expect(sendRaw).toHaveBeenCalledTimes(1);
   });
 
-  it('6. recovers from an inclusion-time revert (no decoded selector) via re-read, preserving the reverted tx hash + receipt', async () => {
+  it('6. recovers from a PROVEN inclusion-time revert via re-read, preserving the reverted tx hash + receipt', async () => {
     const { ctx, sendRaw } = fakeCtx({
       reads: [
         { claimed: false }, // pre-flight: unclaimed
@@ -283,27 +278,52 @@ describe('positions.ensurePositionClaimed', () => {
     expect(r.payoutWei6).toBeUndefined(); // not event-sourced
     expect(r.txHash).toBeUndefined(); // not a confirmed claim
     // This wallet DID broadcast a claim that reverted — the audit trail must
-    // keep its hash AND its receipt so the gas it spent can be accounted.
+    // keep its hash AND the authoritative (broadcast-time) receipt so the gas
+    // it spent can be accounted.
     expect(sendRaw).toHaveBeenCalledTimes(1);
     expect(r.revertedTxHash).toBe(('0x' + 'aa'.repeat(32)) as `0x${string}`);
     expect(r.revertedReceipt).toBeDefined();
+    expect(r.revertedReceipt?.status).toBe('reverted');
     expect(r.revertedReceipt?.gasUsed).toBe(50_000n);
     expect(r.revertedReceipt?.effectiveGasPrice).toBe(30_000_000_000n);
   });
 
-  it('6b. inclusion-time recovery where the receipt re-fetch fails → keeps revertedTxHash, omits revertedReceipt', async () => {
+  // #98 review blocker: strict claim() throws OspexChainError({ txHash }) when
+  // a SUCCESSFUL tx had no parseable POSITION_CLAIMED event. The payout really
+  // happened (so a post-read says claimed) — but that error carries NO
+  // reverted receipt, so recovery MUST NOT fire. Mislabeling it 'recovered'
+  // would drop a real payout and tag a confirmed tx as reverted.
+  it('7. stays LOUD when the claim tx SUCCEEDS but POSITION_CLAIMED is unparseable (never recovers)', async () => {
+    const { ctx, sendRaw } = fakeCtx({
+      reads: [
+        { claimed: false }, // pre-flight: unclaimed
+        { claimed: true }, // a post-read WOULD say claimed — must not rescue
+      ],
+      receiptStatus: 'success', // tx confirms...
+      // ...but no claimedLog → claim() can't parse POSITION_CLAIMED → throws.
+    });
+    await expect(
+      ensurePositionClaimed(ctx, { speculationId: 42n, positionType: 0 }),
+    ).rejects.toMatchObject({
+      name: 'OspexChainError',
+      message: expect.stringMatching(/POSITION_CLAIMED/i),
+    });
+    expect(sendRaw).toHaveBeenCalledTimes(1); // the tx was broadcast (and succeeded)
+  });
+
+  it('8. stays LOUD when the claim reverts but a re-read shows the position is still unclaimed', async () => {
+    // A genuine claim revert (not a benign already-claimed race): the tx
+    // reverted AND the position is still unclaimed → must propagate.
     const { ctx } = fakeCtx({
       reads: [
-        { claimed: false },
-        { claimed: true },
+        { claimed: false }, // pre-flight: unclaimed
+        { claimed: false }, // re-read: STILL unclaimed
       ],
       receiptStatus: 'reverted',
-      getReceiptFails: true,
     });
-    const r = await ensurePositionClaimed(ctx, { speculationId: 42n, positionType: 0 });
-    expect(r.outcome).toBe('recovered');
-    expect(r.revertedTxHash).toBe(('0x' + 'aa'.repeat(32)) as `0x${string}`);
-    expect(r.revertedReceipt).toBeUndefined(); // fetch failed — gap, not a crash
+    await expect(
+      ensurePositionClaimed(ctx, { speculationId: 42n, positionType: 0 }),
+    ).rejects.toBeInstanceOf(OspexChainError);
   });
 
   it('rejects a non-positive speculationId before any chain work', async () => {

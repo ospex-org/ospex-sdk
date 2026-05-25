@@ -4,6 +4,8 @@
  * on `err.code` without instanceof.
  */
 
+import type { TransactionReceipt } from 'viem';
+
 export type OspexErrorCode =
   | 'API_ERROR'
   | 'CONFIG_ERROR'
@@ -151,6 +153,22 @@ export class OspexChainError extends OspexError {
   readonly reason: OspexChainErrorReason | undefined;
   readonly revertReason: string | undefined;
   readonly txHash: string | undefined;
+  /**
+   * The receipt of an INCLUSION-TIME REVERT — set only when a broadcast
+   * transaction's receipt came back with a non-success status (i.e. by
+   * `broadcastSignedTx`). Its presence is the authoritative signal that the
+   * tx actually reverted on-chain, and it carries `gasUsed` /
+   * `effectiveGasPrice` so consumers can account the POL the reverted tx
+   * spent.
+   *
+   * Crucially, this is ABSENT on a post-broadcast parse failure of a
+   * SUCCESSFUL tx — e.g. `claim()` throwing "tx confirmed but no
+   * POSITION_CLAIMED event" carries `txHash` but no `receipt`, because the
+   * tx did NOT revert. Idempotent recovery (`ensurePositionClaimed`) keys
+   * off this distinction: it treats a missing-event-on-success as a loud
+   * failure, never as a benign already-claimed.
+   */
+  readonly receipt: TransactionReceipt | undefined;
 
   constructor(
     message: string,
@@ -158,6 +176,7 @@ export class OspexChainError extends OspexError {
       reason?: OspexChainErrorReason;
       revertReason?: string;
       txHash?: string;
+      receipt?: TransactionReceipt;
       cause?: unknown;
     },
   ) {
@@ -170,6 +189,7 @@ export class OspexChainError extends OspexError {
     this.reason = init?.reason;
     this.revertReason = init?.revertReason;
     this.txHash = init?.txHash;
+    this.receipt = init?.receipt;
   }
 }
 
