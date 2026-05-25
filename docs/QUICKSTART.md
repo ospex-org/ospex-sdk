@@ -428,7 +428,7 @@ Submits an `OracleModule.scoreContestFromOracle` tx. Burns LINK + Chainlink Func
 ospex settle <speculationId>
 ```
 
-After `score` lands, each speculation's outcome is resolved. `settle` writes that outcome to chain so positions can be claimed.
+After `score` lands, each speculation's outcome is resolved. `settle` writes that outcome to chain so positions can be claimed. It's idempotent — if the speculation is already settled (e.g. someone else settled it first), `settle` reports that as success (no transaction, no error).
 
 ### 3. Claim winning positions
 

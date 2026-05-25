@@ -233,12 +233,12 @@ Exercises the path where core-API still reports `pendingSettle` (with a `settleS
 
 If the indexer already moved the row to `claimable`, you'll see the equivalent single-tx claimable flow instead (no settle step in the plan) — re-create the window to exercise the skip explicitly, or accept the claimable path as equivalent.
 
-**Standalone settle command** (separate from claim-all):
+**Standalone settle command** (separate from claim-all; idempotent — routes through `ensureSpeculationSettled`):
 
 | # | Command | Expected | Validates |
 |---|---|---|---|
-| 9C.1 | `ospex settle <speculationId>` | Prints `txHash` + resolved `winSide` (`away \| home \| over \| under \| push \| void`) | `client.positions.settleSpeculation` end-to-end including event-log decode. |
-| 9C.2 | Re-run 9C.1 with the same speculationId | `OspexChainError` with revert reason `AlreadySettled` | Idempotency / reversion handling. |
+| 9C.1 | `ospex settle <speculationId>` (on a scored, not-yet-settled speculation) | Prints `outcome=settled`, a `txHash`, and the resolved `winSide` (`away \| home \| over \| under \| push \| void`) | `ensureSpeculationSettled` settled path end-to-end including event-log decode. |
+| 9C.2 | Re-run 9C.1 with the same speculationId | Prints `outcome=alreadySettled` + the same `winSide`, **no txHash, no error** (NOT an `AlreadySettled` revert) | Idempotent re-settle — a pre-flight read short-circuits the duplicate tx. Under `--json`: `ok:true`, a `settle-skipped-already-settled` info warning, empty `effects[]`. |
 
 **Standalone single claim** (when you don't want claim-all to sweep everything):
 

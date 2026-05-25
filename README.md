@@ -178,7 +178,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex positions history <address>` | Full claim/settlement history. |
 | `ospex claim <speculationId> --type upper\|lower` | Claim one specific winning position. Top-level for ergonomics — not under `positions`. |
 | `ospex claim-all [--address <addr>] [--dry-run]` | Sweep every claimable position for a wallet (settles where needed; skips a speculation already settled by someone else). Top-level. |
-| `ospex settle <speculationId>` | Permissionlessly settle a scored speculation. Top-level. |
+| `ospex settle <speculationId>` | Permissionlessly settle a scored speculation. Idempotent — an already-settled speculation is a no-op success, not an error. Top-level. |
 | `ospex leaderboard show` | Top entries on the active leaderboard. |
 | `ospex odds show <contestId> [--json] [--market moneyline\|spread\|total]` | One-shot snapshot of upstream reference odds (moneyline / spread / total) for a contest's underlying game. Both American and decimal odds; `--json` emits a single envelope. `--market` narrows the human render to one market (no effect on `--json` — the envelope stays stable for agents). Use this to decide a commitment price. |
 | `ospex odds watch <contestId> [--json --include-refreshes]` | Streams live upstream odds over core-api SSE — a `SNAP` baseline on connect, then `CHG` / `REF` events per market plus connection status. Line-delimited JSON in `--json` mode — agent-facing. Use `odds show` for a one-shot snapshot; `watch` is for reacting to changes over time. |

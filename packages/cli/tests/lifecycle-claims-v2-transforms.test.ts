@@ -16,37 +16,65 @@ const POLYGON = 137 as const;
 const SIGNER: Hex = '0xaabbccddeeff00112233445566778899aabbccdd';
 
 describe('toSettleAgentEnvelope', () => {
-  it('action settle, stage execute, single settle-speculation effect', () => {
+  it('settled: one confirmed settle-speculation effect, ok true', () => {
     const env = toSettleAgentEnvelope(
-      {
-        txHash: '0xtx',
-        blockNumber: 1000n,
-        winSide: 'away',
-        receipt: { status: 'success', blockNumber: 1000n } as never,
-      },
+      { speculationId: 101n, outcome: 'settled', winSide: 'away', txHash: '0xtx', blockNumber: 1000n },
       { chainId: POLYGON, signerAddress: SIGNER, speculationId: 101n },
     );
     expect(env.action).toBe('settle');
     expect(env.stage).toBe('execute');
+    expect(env.ok).toBe(true);
     expect(env.effects).toHaveLength(1);
     expect(env.effects[0]?.purpose).toBe('settle-speculation');
     expect(env.effects[0]?.status).toBe('confirmed');
+    expect(env.warnings).toEqual([]);
+    expect(env.payload.outcome).toBe('settled');
+    expect(env.payload.txHash).toBe('0xtx');
     expect(env.payload.winSide).toBe('away');
     expect(env.payload.speculationId).toBe('101');
   });
 
-  it('envelope.ok reflects reverted receipt', () => {
+  it('alreadySettled: no effect, info warning, ok true, no txHash in payload', () => {
     const env = toSettleAgentEnvelope(
-      {
-        txHash: '0xtx',
-        blockNumber: 1000n,
-        winSide: 'tbd',
-        receipt: { status: 'reverted', blockNumber: 1000n } as never,
-      },
+      { speculationId: 101n, outcome: 'alreadySettled', winSide: 'home' },
       { chainId: POLYGON, signerAddress: SIGNER, speculationId: 101n },
     );
-    expect(env.ok).toBe(false);
+    expect(env.ok).toBe(true);
+    expect(env.effects).toEqual([]);
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0]?.code).toBe('settle-skipped-already-settled');
+    expect(env.warnings[0]?.severity).toBe('info');
+    expect(env.payload.outcome).toBe('alreadySettled');
+    expect(env.payload.txHash).toBeNull();
+    expect(env.payload.winSide).toBe('home');
+  });
+
+  it('recovered via pre-send (no broadcast): info warning, no effect', () => {
+    const env = toSettleAgentEnvelope(
+      { speculationId: 101n, outcome: 'recovered', winSide: 'over' },
+      { chainId: POLYGON, signerAddress: SIGNER, speculationId: 101n },
+    );
+    expect(env.ok).toBe(true);
+    expect(env.effects).toEqual([]);
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0]?.code).toBe('projection-lag-recovered');
+    expect(env.payload.outcome).toBe('recovered');
+    expect(env.payload.revertedTxHash).toBeNull();
+  });
+
+  it('recovered with a reverted broadcast: reverted settle effect + info warning, ok true', () => {
+    const env = toSettleAgentEnvelope(
+      { speculationId: 101n, outcome: 'recovered', winSide: 'under', revertedTxHash: '0xreverted' },
+      { chainId: POLYGON, signerAddress: SIGNER, speculationId: 101n },
+    );
+    expect(env.ok).toBe(true); // entry recovered → settled → ok
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.purpose).toBe('settle-speculation');
+    expect(env.effects[0]?.ok).toBe(false);
     expect(env.effects[0]?.status).toBe('reverted');
+    expect(env.effects[0]?.txHash).toBe('0xreverted');
+    expect(env.warnings[0]?.code).toBe('projection-lag-recovered');
+    expect(env.payload.revertedTxHash).toBe('0xreverted');
   });
 });
 

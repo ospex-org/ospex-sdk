@@ -191,8 +191,8 @@ Initial stable `warning.code` catalog (additive — consumers log + ignore unkno
 | `'nonce-floor-stale'` | `warning` | `nonce-floor` read when chain > supabase |
 | `'verify-script-expiring-soon'` | `warning` | `contests scripts` (T-30d) |
 | `'password-file-permissions-loose'` | `warning` (`blocking` under `--strict`) | `auth check` |
-| `'settle-skipped-already-settled'` | `info` | `claim-all` — a pre-flight read found the speculation already settled, so the duplicate settle tx was skipped. `details: { speculationId, positionId, winSide }`. |
-| `'projection-lag-recovered'` | `info` | `claim-all` — a concurrent settle reverted this wallet's settle, an on-chain re-read confirmed it, and the sweep proceeded to claim. `details: { speculationId, positionId, winSide }`. |
+| `'settle-skipped-already-settled'` | `info` | `claim-all` / `settle` — a pre-flight read found the speculation already settled, so the duplicate settle tx was skipped. `details: { speculationId, winSide, … }`. |
+| `'projection-lag-recovered'` | `info` | `claim-all` / `settle` — a concurrent settle won a race mid-flight, an on-chain re-read confirmed it, and the command proceeded (claim-all → claim; settle → done). `details: { speculationId, winSide, … }`. |
 
 `errors[]` uses the existing `OspexError.code` taxonomy (`'API_ERROR'`, `'ALLOWANCE_INSUFFICIENT'`, `'CHAIN_ERROR'`, etc. — see [`AGENT_CONTRACT.md` §7](./AGENT_CONTRACT.md)). New codes are additive.
 
@@ -392,7 +392,7 @@ Legend: `✓` populated · `∅` `null` / `[]` (does not apply) · `+` populated
 | `claim <id> --type <…>` | execute | signer | false | false | ∅ | ∅ | ✓ | ✓ | ✓ | ∅ | ✓ | ✓ | ✓ (transaction) | ✓ |
 | `claim-all --dry-run` | dry-run | subject | true | true | ∅ | ∅ | ✓ (planned total) | ∅ | ∅ | ∅ | ∅ | ✓ | ∅ | ✓ (execute form, `safeToAutoRun: false`) |
 | `claim-all` (live) | execute | signer | false | false | ∅ | ∅ | ✓ (summed) | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ (one transaction per row, ordered) | ✓ (verify via `positions status`) |
-| `settle <id>` | execute | signer | false | false | ∅ | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ (next: `claim`) |
+| `settle <id>` | execute | signer | false | false | ∅ | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ (info: already-settled / projection-lag-recovered) | ✓ (settle tx; ∅ when already-settled / pre-send recovery) | ✓ (next: `claim`) |
 | `contests create --game-id <…>` | execute | signer | false | false | ✓ (LINK + USDC; consumed when ok=true) | ∅ | ∅ | ✓ (created) | ∅ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ (next: `wait-verified`) |
 | `contests score <id>` | execute | signer | false | false | ✓ (LINK; consumed) | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ |
 
