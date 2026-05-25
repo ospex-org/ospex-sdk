@@ -81,6 +81,9 @@ function fakeCtx(opts: {
   estimateGas?: () => Promise<bigint>;
   receiptStatus?: 'success' | 'reverted';
   settleLog?: { address: `0x${string}`; topics: Hash[]; data: `0x${string}` };
+  /** When true, the post-revert `getTransactionReceipt` re-fetch throws —
+   * exercises the graceful-degrade path (revertedTxHash kept, no receipt). */
+  getReceiptFails?: boolean;
 }): { ctx: PositionsContext; sendRaw: ReturnType<typeof vi.fn> } {
   let readIdx = 0;
   const sendRaw = vi.fn(async () => ('0x' + 'aa'.repeat(32)) as Hash);
@@ -89,6 +92,15 @@ function fakeCtx(opts: {
     transactionHash: ('0x' + 'aa'.repeat(32)) as Hash,
     blockNumber: 12345n,
     logs: opts.settleLog ? [opts.settleLog] : [],
+  } as unknown as TransactionReceipt;
+  // The reverted settle's receipt, returned by the `getTransactionReceipt`
+  // re-fetch in the recovery path. Carries gas fields so consumers can bill it.
+  const revertedReceipt = {
+    status: 'reverted',
+    transactionHash: ('0x' + 'aa'.repeat(32)) as Hash,
+    blockNumber: 12345n,
+    gasUsed: 50_000n,
+    effectiveGasPrice: 30_000_000_000n,
   } as unknown as TransactionReceipt;
 
   const publicClient = {
@@ -100,6 +112,10 @@ function fakeCtx(opts: {
     },
     sendRawTransaction: sendRaw,
     waitForTransactionReceipt: async () => receipt,
+    getTransactionReceipt: async () => {
+      if (opts.getReceiptFails) throw new Error('receipt fetch failed');
+      return revertedReceipt;
+    },
     getTransactionCount: async () => 7,
     estimateFeesPerGas: async () => ({ maxFeePerGas: 50n, maxPriorityFeePerGas: 1n }),
     estimateGas: opts.estimateGas ?? (async () => 80_000n),
@@ -226,10 +242,28 @@ describe('positions.ensureSpeculationSettled', () => {
     expect(r.outcome).toBe('recovered');
     expect(r.winSide).toBe('under');
     expect(r.txHash).toBeUndefined(); // not a confirmed settle
-    // This wallet DID broadcast a settle that reverted — the audit trail
-    // must keep its hash.
+    // This wallet DID broadcast a settle that reverted — the audit trail must
+    // keep its hash AND its receipt so the gas it spent can be accounted.
     expect(sendRaw).toHaveBeenCalledTimes(1);
     expect(r.revertedTxHash).toBe(('0x' + 'aa'.repeat(32)) as `0x${string}`);
+    expect(r.revertedReceipt).toBeDefined();
+    expect(r.revertedReceipt?.gasUsed).toBe(50_000n);
+    expect(r.revertedReceipt?.effectiveGasPrice).toBe(30_000_000_000n);
+  });
+
+  it('6b. inclusion-time recovery where the receipt re-fetch fails → keeps revertedTxHash, omits revertedReceipt (caller flags the accounting gap)', async () => {
+    const { ctx } = fakeCtx({
+      reads: [
+        { speculationStatus: 0, winSide: 0 }, // pre-flight: Open
+        { speculationStatus: 1, winSide: 2 }, // re-read: Closed
+      ],
+      receiptStatus: 'reverted',
+      getReceiptFails: true,
+    });
+    const r = await ensureSpeculationSettled(ctx, { speculationId: 42n });
+    expect(r.outcome).toBe('recovered');
+    expect(r.revertedTxHash).toBe(('0x' + 'aa'.repeat(32)) as `0x${string}`);
+    expect(r.revertedReceipt).toBeUndefined(); // fetch failed — gap, not a crash
   });
 
   it('rejects a non-positive speculationId before any chain work', async () => {
