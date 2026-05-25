@@ -49,8 +49,9 @@ export type EnsureSettledOutcome =
   | 'alreadySettled'
   /** A concurrent settle won the race — the settle attempt reverted but a
    * re-read confirmed the speculation is settled. Carries `revertedTxHash`
-   * iff this wallet broadcast a tx that reverted (inclusion-time loss);
-   * pre-send / pre-flight recovery broadcasts nothing. */
+   * (+ `revertedReceipt`, so its gas can be accounted) iff this wallet
+   * broadcast a tx that reverted (inclusion-time loss); pre-send /
+   * pre-flight recovery broadcasts nothing. */
   | 'recovered';
 
 export interface EnsureSettledResult {
@@ -71,6 +72,13 @@ export interface EnsureSettledResult {
    * read or a pre-send (`estimateGas`) revert, where no tx was sent. The
    * audit trail must not lose this hash. */
   revertedTxHash?: Hash;
+  /** The receipt of the reverted settle tx (`revertedTxHash`), re-fetched
+   * so consumers can account the gas it spent — a recovered inclusion-time
+   * race still cost POL, and gas budgets must include it. Present whenever
+   * `revertedTxHash` is set AND the receipt fetch succeeded; absent if the
+   * fetch failed (the caller still has `revertedTxHash` to look up / flag an
+   * accounting gap). Carries the usual `gasUsed` / `effectiveGasPrice`. */
+  revertedReceipt?: TransactionReceipt;
 }
 
 export async function ensureSpeculationSettled(
@@ -116,11 +124,21 @@ export async function ensureSpeculationSettled(
         winSide: post?.winSide ?? 'tbd',
       };
       // If this wallet actually broadcast a settle tx that reverted on
-      // inclusion (lost the race), keep its hash for the audit trail.
-      // Pre-send / pre-flight recoveries broadcast nothing, so there's
-      // no hash to carry.
+      // inclusion (lost the race), keep its hash AND re-fetch its receipt —
+      // that tx spent POL, and consumers (e.g. the market-maker's daily gas
+      // budget) must account for it even though it reverted. Pre-send /
+      // pre-flight recoveries broadcast nothing, so there's no hash. The
+      // receipt fetch is best-effort: on failure we still return the hash so
+      // the caller can look it up or flag an accounting gap.
       const revertedTxHash = revertTxHashOf(err);
-      if (revertedTxHash !== undefined) recovered.revertedTxHash = revertedTxHash;
+      if (revertedTxHash !== undefined) {
+        recovered.revertedTxHash = revertedTxHash;
+        try {
+          recovered.revertedReceipt = await publicClient.getTransactionReceipt({ hash: revertedTxHash });
+        } catch {
+          // leave revertedReceipt undefined — revertedTxHash still surfaced
+        }
+      }
       return recovered;
     }
     // Genuine failure (not settled, or couldn't confirm) — surface it.

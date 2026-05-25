@@ -4,7 +4,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### SDK (`@ospex/sdk`)
+
+- **`positions.ensureSpeculationSettled` now returns `revertedReceipt` on a recovered inclusion-time race.** When this wallet broadcast a settle that reverted on inclusion (it lost the race but the speculation ended up settled → `outcome: 'recovered'`), the result already carried `revertedTxHash`; it now also carries `revertedReceipt` — the reverted tx's receipt, re-fetched best-effort so consumers can account the POL gas that tx spent. Gas budgets (e.g. the market-maker's daily counter) must include reverted txs; without the receipt they silently undercounted. Absent only if the re-fetch fails (the caller still has `revertedTxHash` to flag an accounting gap) or when no tx was broadcast (pre-flight / pre-send recovery). Additive; no change to `settled` / `alreadySettled`.
 
 ## [0.4.1] — 2026-05-25
 
