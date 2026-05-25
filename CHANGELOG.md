@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.4.3] — 2026-05-25
+
 ### SDK (`@ospex/sdk`)
 
 - **New `positions.ensurePositionClaimed({ speculationId, positionType })` — idempotent "make this claimed".** The claim-side mirror of `ensureSpeculationSettled`. Resolves to success whenever the position is claimed, returning `{ outcome: 'claimed' | 'alreadyClaimed' | 'recovered', payoutWei6?, … }`. It pre-flight-reads on-chain `getPosition.claimed` and skips the tx when already claimed, and recovers from a benign already-claimed that reverts mid-flight — a concurrent caller, a rerun, or core-API `claimable`-projection lag. Recovery is narrow by design: it fires on a decoded pre-send `AlreadyClaimed`, or on a claim that **provably reverted on inclusion** (the error carries a `'reverted'` receipt) **and** an on-chain re-read confirms `claimed` — never on a bare tx hash or a bare post-read. In particular, a tx that **succeeds** but whose `POSITION_CLAIMED` event can't be parsed stays a loud failure (the payout really happened; it must not be relabeled a no-payout recovery). **Only `AlreadyClaimed` is benign — `NotSettled`, `NoPayout`, and RPC/unknown errors stay loud.** Payout is event-sourced and present **only** on `outcome: 'claimed'`: the contract zeroes `riskAmount`/`profitAmount` once claimed, so `alreadyClaimed`/`recovered` carry no payout and the SDK never derives one. A `recovered` inclusion-time race carries `revertedTxHash` + `revertedReceipt` so the POL gas it spent can be accounted. The strict `positions.claim` primitive is unchanged — it still sends a tx and throws `AlreadyClaimed`.
