@@ -7,10 +7,18 @@
  *      Each entry carries an ordered `txParams[]` array — claimable
  *      rows have a single `claimPosition` step; pendingSettle rows
  *      have `settleSpeculation` then `claimPosition`.
- *   2. For each entry, walk the steps in order. settle reverts halt
- *      THIS entry only; the loop moves on so one bad position can't
- *      block the rest.
- *   3. Aggregate per-entry success/failure into the result array.
+ *   2. For each entry, walk the steps in order. The settle step runs
+ *      through `ensureSpeculationSettled` (idempotent): if the
+ *      speculation is already settled on chain — common when another
+ *      wallet just settled and core-api's `pendingSettle` projection
+ *      hasn't caught up — the settle tx is skipped (or recovered after
+ *      a race) and the sweep proceeds straight to the claim. A genuine
+ *      settle/claim failure halts THIS entry only; the loop moves on so
+ *      one bad position can't block the rest.
+ *   3. Aggregate per-entry success/failure into the result array. Each
+ *      entry carries an explicit `steps[]` record of what actually
+ *      happened (sent / skipped / recovered / failed) so consumers
+ *      never re-derive step semantics from bucket+index.
  *
  * `opts.dryRun` skips all on-chain work and returns the action plan.
  *
@@ -31,9 +39,15 @@
  * M3.5+ if there's demand).
  */
 
-import { OspexChainError, OspexConfigError, OspexError, OspexValidationError } from '../errors.js';
+import {
+  OspexChainError,
+  OspexConfigError,
+  OspexError,
+  OspexValidationError,
+} from '../errors.js';
 import { claim, type ClaimResult } from './claim.js';
-import { settleSpeculation, type SettleResult } from './settle.js';
+import { ensureSpeculationSettled, type EnsureSettledResult } from './ensureSettled.js';
+import type { SettleResult } from './settle.js';
 import type { PositionsContext } from './context.js';
 import type { ClaimParamEntry } from '../types/position.js';
 
@@ -54,22 +68,62 @@ export interface ClaimAllOptions {
   dryRun?: boolean;
 }
 
+export type ClaimAllStepName = 'settleSpeculation' | 'claimPosition';
+
+export type ClaimAllStepOutcome =
+  /** A tx was broadcast and confirmed. */
+  | 'sent'
+  /** Settle only: a pre-flight read found the speculation already
+   * settled, so no settle tx was sent. */
+  | 'skippedAlreadySettled'
+  /** Settle only: the settle send reverted because a concurrent caller
+   * settled first; an on-chain re-read confirmed it. No tx by us. */
+  | 'recoveredAlreadySettled'
+  /** The step threw. The entry as a whole is marked failed. */
+  | 'failed';
+
+/**
+ * One executed step of an entry's plan. The agent-envelope mapper maps
+ * each of these to exactly one effect or warning — there is no
+ * re-derivation of "was this a settle or a claim?" from bucket+index.
+ */
+export interface ClaimAllStep {
+  name: ClaimAllStepName;
+  outcome: ClaimAllStepOutcome;
+  /** Present on `sent`, and on a `failed` step that reverted on-chain
+   * with a known tx hash. */
+  txHash?: string;
+  /** Settle steps only — resolved on-chain winning side. */
+  winSide?: SettleResult['winSide'];
+  /** Claim steps only. */
+  payoutWei6?: string;
+  payoutUSDC?: number;
+  /** `failed` steps only — the `OspexError.code` of the failure. */
+  errorCode?: string;
+}
+
 export interface ClaimAllEntryResult {
   positionId: string;
   speculationId: string;
   bucket: 'claimable' | 'pendingSettle';
   description: string;
   /** Whether the full pipeline (settle if needed, then claim)
-   * succeeded for this entry. */
+   * succeeded for this entry. A skipped/recovered settle still counts
+   * as success — the goal (settled, then claimed) was achieved. */
   success: boolean;
-  /** All tx hashes in execution order. Empty when `dryRun` was set
-   * or when the very first step failed before any tx was sent. */
+  /** All confirmed tx hashes in execution order. Empty when `dryRun`
+   * was set, when the settle step was skipped/recovered (no tx), or
+   * when the very first step failed before any tx was sent. */
   txHashes: string[];
+  /** Ordered record of the steps actually executed (empty on dry-run).
+   * Canonical source for what happened — `txHashes`, `winSide`, and
+   * `payout*` below are conveniences derived from it. */
+  steps: ClaimAllStep[];
   /** Populated when the claim step landed; absent on dry-run or
    * failure. */
   payoutWei6?: string;
   payoutUSDC?: number;
-  /** Populated when the settle step ran. */
+  /** Populated when the settle step ran, skipped, or recovered. */
   winSide?: SettleResult['winSide'];
   /** Present when at least one step failed. The serialized error is
    * left to the consumer — the typed error is preserved here so a CLI
@@ -164,13 +218,15 @@ export async function claimAll(
       description: entry.description,
       success: false,
       txHashes: [],
+      steps: [],
     };
 
     if (dryRun) {
       // Pretend each step succeeds and surface the predicted payout
       // so the caller can render the plan. Aggregate into the total
       // too — otherwise the dry-run summary reports $0.00 while every
-      // entry shows a non-zero predicted payout.
+      // entry shows a non-zero predicted payout. No on-chain work is
+      // done in dry-run, so `steps` stays empty (like `txHashes`).
       entryResult.success = true;
       entryResult.payoutWei6 = entry.estimatedPayoutWei6;
       entryResult.payoutUSDC = entry.estimatedPayoutUSDC;
@@ -186,7 +242,9 @@ export async function claimAll(
         totalPayoutWei6 += BigInt(entryResult.payoutWei6);
       }
     } catch (err) {
-      // Per spec: per-position errors don't abort the loop.
+      // Per spec: per-position errors don't abort the loop. The failed
+      // step itself was already recorded into `entryResult.steps` by
+      // `runEntry` before it rethrew.
       entryResult.success = false;
       if (err instanceof OspexError) {
         entryResult.error = err;
@@ -222,27 +280,80 @@ async function runEntry(
 ): Promise<void> {
   for (const step of entry.txParams) {
     if (step.method === 'settleSpeculation') {
-      const r = await settleSpeculation(ctx, {
-        speculationId: BigInt(step.args.speculationId),
-      });
-      result.txHashes.push(r.txHash);
+      let r: EnsureSettledResult;
+      try {
+        r = await ensureSpeculationSettled(ctx, {
+          speculationId: BigInt(step.args.speculationId),
+        });
+      } catch (err) {
+        result.steps.push({ name: 'settleSpeculation', outcome: 'failed', errorCode: errorCodeOf(err) });
+        throw err;
+      }
       result.winSide = r.winSide;
+      if (r.outcome === 'settled') {
+        // `txHash` is always present on the 'settled' outcome.
+        result.txHashes.push(r.txHash as string);
+        result.steps.push({
+          name: 'settleSpeculation',
+          outcome: 'sent',
+          txHash: r.txHash as string,
+          winSide: r.winSide,
+        });
+      } else if (r.outcome === 'alreadySettled') {
+        result.steps.push({
+          name: 'settleSpeculation',
+          outcome: 'skippedAlreadySettled',
+          winSide: r.winSide,
+        });
+      } else {
+        result.steps.push({
+          name: 'settleSpeculation',
+          outcome: 'recoveredAlreadySettled',
+          winSide: r.winSide,
+        });
+      }
     } else if (step.method === 'claimPosition') {
-      const r = await claim(ctx, {
-        speculationId: BigInt(step.args.speculationId),
-        positionType: step.args.positionType,
-      });
+      let r: ClaimResult;
+      try {
+        r = await claim(ctx, {
+          speculationId: BigInt(step.args.speculationId),
+          positionType: step.args.positionType,
+        });
+      } catch (err) {
+        const failedStep: ClaimAllStep = {
+          name: 'claimPosition',
+          outcome: 'failed',
+          errorCode: errorCodeOf(err),
+        };
+        const revertTxHash = (err as { txHash?: unknown }).txHash;
+        if (typeof revertTxHash === 'string') failedStep.txHash = revertTxHash;
+        result.steps.push(failedStep);
+        throw err;
+      }
       result.txHashes.push(r.txHash);
       result.payoutWei6 = r.payoutWei6.toString();
       result.payoutUSDC = r.payoutUSDC;
+      result.steps.push({
+        name: 'claimPosition',
+        outcome: 'sent',
+        txHash: r.txHash,
+        payoutWei6: r.payoutWei6.toString(),
+        payoutUSDC: r.payoutUSDC,
+      });
     } else {
       // Unknown method — surface clearly. Keeps the SDK forward-
       // compatible: if core-api adds new step types in the future,
-      // existing SDK versions fail loudly rather than silently.
+      // existing SDK versions fail loudly rather than silently. No
+      // typed step is recorded (the method isn't one we model); the
+      // envelope mapper's no-step-failure fallback covers it.
       const stepRef = step as { method?: unknown };
       throw new OspexChainError(
         `claimAll: unrecognized txParams.method "${String(stepRef.method)}". SDK upgrade required.`,
       );
     }
   }
+}
+
+function errorCodeOf(err: unknown): string {
+  return err instanceof OspexError ? err.code : 'CHAIN_ERROR';
 }

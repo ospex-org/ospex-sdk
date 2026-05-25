@@ -83,6 +83,12 @@ describe('toClaimAllAgentEnvelope', () => {
       description: 'Lakers @ Nuggets / moneyline / Lakers',
       success: true,
       txHashes: ['0xclaim1'],
+      // Explicit step record — the mapper drives effects/warnings off
+      // this, never off bucket+index. Tests overriding txHashes must
+      // override steps to match.
+      steps: [
+        { name: 'claimPosition', outcome: 'sent', txHash: '0xclaim1', payoutWei6: '5000000', payoutUSDC: 5 },
+      ],
       payoutUSDC: 5,
       payoutWei6: '5000000',
       winSide: 'away',
@@ -155,8 +161,16 @@ describe('toClaimAllAgentEnvelope', () => {
           makeEntry({
             bucket: 'pendingSettle',
             txHashes: ['0xsettle', '0xclaim'],
+            steps: [
+              { name: 'settleSpeculation', outcome: 'sent', txHash: '0xsettle', winSide: 'away' },
+              { name: 'claimPosition', outcome: 'sent', txHash: '0xclaim', payoutWei6: '5000000', payoutUSDC: 5 },
+            ],
           }),
-          makeEntry({ bucket: 'claimable', txHashes: ['0xc2'] }),
+          makeEntry({
+            bucket: 'claimable',
+            txHashes: ['0xc2'],
+            steps: [{ name: 'claimPosition', outcome: 'sent', txHash: '0xc2' }],
+          }),
         ] as never,
       } as never,
       { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
@@ -194,6 +208,15 @@ describe('toClaimAllAgentEnvelope', () => {
             bucket: 'pendingSettle',
             success: false,
             txHashes: ['0xsettle'],
+            steps: [
+              { name: 'settleSpeculation', outcome: 'sent', txHash: '0xsettle', winSide: 'away' },
+              {
+                name: 'claimPosition',
+                outcome: 'failed',
+                errorCode: 'CHAIN_ERROR',
+                txHash: '0xrevertedclaim',
+              },
+            ],
             payoutUSDC: undefined,
             payoutWei6: undefined,
             error: {
@@ -240,6 +263,7 @@ describe('toClaimAllAgentEnvelope', () => {
             bucket: 'claimable',
             success: false,
             txHashes: [],
+            steps: [{ name: 'claimPosition', outcome: 'failed', errorCode: 'API_ERROR' }],
             payoutUSDC: undefined,
             payoutWei6: undefined,
             error: { code: 'API_ERROR', message: 'precheck failed' },
@@ -253,6 +277,99 @@ describe('toClaimAllAgentEnvelope', () => {
     expect(env.effects[0]?.ok).toBe(false);
     expect(env.effects[0]?.txHash).toBeUndefined();
     expect(env.effects[0]?.errorCode).toBe('API_ERROR');
+  });
+
+  // Fallback: an entry failed but recorded no typed step (e.g. an
+  // unrecognized future txParams.method threw before any step). The
+  // mapper emits one generic claim-position failure effect from the
+  // entry-level error so the failure isn't silently dropped.
+  it('failed entry with empty steps emits one generic failure effect from entry.error', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: false,
+        totals: { claimed: 0, failed: 1, totalPayoutWei6: '0', totalPayoutUSDC: 0 } as never,
+        entries: [
+          makeEntry({
+            success: false,
+            txHashes: [],
+            steps: [],
+            payoutUSDC: undefined,
+            payoutWei6: undefined,
+            error: { code: 'CHAIN_ERROR', message: 'unrecognized txParams.method "futureStep"' },
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.purpose).toBe('claim-position');
+    expect(env.effects[0]?.ok).toBe(false);
+    expect(env.effects[0]?.txHash).toBeUndefined();
+    expect(env.effects[0]?.errorCode).toBe('CHAIN_ERROR');
+  });
+
+  // Headline + regression: a skipped settle (already settled on a
+  // pre-flight read) sends NO settle tx. The lone claim tx must be
+  // labeled claim-position — the old bucket+index mapper mislabeled
+  // it settle-speculation. The skip surfaces as an info warning.
+  it('skipped settle: info warning + the lone tx is labeled claim, not settle', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: true,
+        totals: { claimed: 1, failed: 0, totalPayoutWei6: '5000000', totalPayoutUSDC: 5 } as never,
+        entries: [
+          makeEntry({
+            bucket: 'pendingSettle',
+            txHashes: ['0xclaimonly'],
+            winSide: 'home',
+            steps: [
+              { name: 'settleSpeculation', outcome: 'skippedAlreadySettled', winSide: 'home' },
+              { name: 'claimPosition', outcome: 'sent', txHash: '0xclaimonly', payoutWei6: '5000000', payoutUSDC: 5 },
+            ],
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.ok).toBe(true);
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.purpose).toBe('claim-position'); // NOT settle-speculation
+    expect(env.effects[0]?.txHash).toBe('0xclaimonly');
+    expect(env.effects[0]?.status).toBe('confirmed');
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0]?.code).toBe('settle-skipped-already-settled');
+    expect(env.warnings[0]?.severity).toBe('info');
+    expect((env.warnings[0]?.details as { winSide?: string })?.winSide).toBe('home');
+  });
+
+  it('recovered settle (concurrent race): projection-lag-recovered info warning, claim effect only', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: true,
+        totals: { claimed: 1, failed: 0, totalPayoutWei6: '5000000', totalPayoutUSDC: 5 } as never,
+        entries: [
+          makeEntry({
+            bucket: 'pendingSettle',
+            txHashes: ['0xclaimonly'],
+            winSide: 'under',
+            steps: [
+              { name: 'settleSpeculation', outcome: 'recoveredAlreadySettled', winSide: 'under' },
+              { name: 'claimPosition', outcome: 'sent', txHash: '0xclaimonly', payoutWei6: '5000000', payoutUSDC: 5 },
+            ],
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.ok).toBe(true);
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.purpose).toBe('claim-position');
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0]?.code).toBe('projection-lag-recovered');
+    expect(env.warnings[0]?.severity).toBe('info');
   });
 
   // Hermes PR-70 blocker 3: payout shoulder must preserve exact
@@ -295,7 +412,12 @@ describe('toClaimAllAgentEnvelope', () => {
         } as never,
         entries: [
           makeEntry({ success: true }),
-          makeEntry({ success: false, error: { code: 'CHAIN_ERROR', message: 'boom' } }),
+          makeEntry({
+            success: false,
+            txHashes: [],
+            steps: [{ name: 'claimPosition', outcome: 'failed', errorCode: 'CHAIN_ERROR' }],
+            error: { code: 'CHAIN_ERROR', message: 'boom' },
+          }),
         ] as never,
       } as never,
       { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },

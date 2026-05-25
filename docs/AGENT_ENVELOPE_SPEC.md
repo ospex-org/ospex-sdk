@@ -191,6 +191,8 @@ Initial stable `warning.code` catalog (additive — consumers log + ignore unkno
 | `'nonce-floor-stale'` | `warning` | `nonce-floor` read when chain > supabase |
 | `'verify-script-expiring-soon'` | `warning` | `contests scripts` (T-30d) |
 | `'password-file-permissions-loose'` | `warning` (`blocking` under `--strict`) | `auth check` |
+| `'settle-skipped-already-settled'` | `info` | `claim-all` — a pre-flight read found the speculation already settled, so the duplicate settle tx was skipped. `details: { speculationId, positionId, winSide }`. |
+| `'projection-lag-recovered'` | `info` | `claim-all` — a concurrent settle reverted this wallet's settle, an on-chain re-read confirmed it, and the sweep proceeded to claim. `details: { speculationId, positionId, winSide }`. |
 
 `errors[]` uses the existing `OspexError.code` taxonomy (`'API_ERROR'`, `'ALLOWANCE_INSUFFICIENT'`, `'CHAIN_ERROR'`, etc. — see [`AGENT_CONTRACT.md` §7](./AGENT_CONTRACT.md)). New codes are additive.
 

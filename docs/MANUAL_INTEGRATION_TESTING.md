@@ -222,6 +222,17 @@ For partial verification right now:
 2. Run 9A.2 then 9A.3.
 3. If the speculation is already settled, the entry will appear in the `claimable` bucket instead of `pendingSettle` — same flow, single tx per entry.
 
+**Projection-aware skip / recover** (the multi-wallet postgame race — claim-all must stay boring):
+
+Exercises the path where core-API still reports `pendingSettle` (with a `settleSpeculation` step) but the speculation is already settled on chain. Settle it out from under the stale plan, then sweep **within the projection-lag window** before the indexer reclassifies the row to `claimable`.
+
+| # | Command | Expected | Validates |
+|---|---|---|---|
+| 9R.1 | With a `pendingSettle` row for `<walletA>`, settle it from another path: `ospex settle <speculationId>` (any wallet). Then immediately `ospex claim-all --address <walletA>` | Row prints `✓ ... [settle skipped — already settled]`; exactly one claim tx (no settle tx); summary reports 0 failed | Pre-flight skip — no scary pre-send duplicate-settle error. |
+| 9R.2 | Re-run 9R.1 with `--json` in the same window | `warnings[]` carries `{ code: 'settle-skipped-already-settled', severity: 'info', details: { winSide, … } }`; `effects[]` has a single `claim-position` transaction | Structured evidence + correct effect labeling. |
+
+If the indexer already moved the row to `claimable`, you'll see the equivalent single-tx claimable flow instead (no settle step in the plan) — re-create the window to exercise the skip explicitly, or accept the claimable path as equivalent.
+
 **Standalone settle command** (separate from claim-all):
 
 | # | Command | Expected | Validates |

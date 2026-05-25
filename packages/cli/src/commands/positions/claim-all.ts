@@ -17,6 +17,7 @@ import type {
   AgentEffect,
   AgentEnvelope,
   AgentPayout,
+  AgentWarning,
   ChainId,
   Hex,
   OspexClient,
@@ -105,7 +106,9 @@ export const positionsClaimAllCommand = addSignerOptions(
         const payout = e.payoutUSDC !== undefined ? `$${e.payoutUSDC.toFixed(2)}` : 'unknown';
         const txList = e.txHashes.join(', ');
         const winSide = e.winSide ? `, winSide=${e.winSide}` : '';
-        process.stdout.write(`${tag} ✓ ${e.description} → payout ${payout} (txs: ${txList}${winSide})\n`);
+        process.stdout.write(
+          `${tag} ✓ ${e.description} → payout ${payout} (txs: ${txList}${winSide})${settleNote(e.steps)}\n`,
+        );
       } else {
         const reason = e.error?.message ?? 'unknown error';
         const txList = e.txHashes.length > 0 ? ` (partial txs: ${e.txHashes.join(', ')})` : '';
@@ -159,6 +162,7 @@ export interface ClaimAllPayload {
     description: string;
     success: boolean;
     txHashes: string[];
+    steps: ClaimAllResult['entries'][number]['steps'];
     payoutUSDC: number | undefined;
     payoutWei6: string | undefined;
     winSide: string | undefined;
@@ -199,6 +203,7 @@ export function toClaimAllAgentEnvelope(
   const effects: AgentEffect[] = args.dryRun
     ? []
     : buildClaimAllEffects(result);
+  const warnings: AgentWarning[] = args.dryRun ? [] : buildClaimAllWarnings(result);
   const payout = buildClaimAllPayout(result);
 
   // Hermes PR-70 blocker 1: envelope-level ok is "command produced a
@@ -227,6 +232,7 @@ export function toClaimAllAgentEnvelope(
     requiresSignature: args.dryRun,
     requiresTransaction: args.dryRun,
     payout,
+    warnings,
     effects,
     nextCommands,
     payload: {
@@ -241,6 +247,7 @@ export function toClaimAllAgentEnvelope(
         description: e.description,
         success: e.success,
         txHashes: e.txHashes,
+        steps: e.steps,
         payoutUSDC: e.payoutUSDC,
         payoutWei6: e.payoutWei6,
         winSide: e.winSide,
@@ -252,62 +259,113 @@ export function toClaimAllAgentEnvelope(
 
 /**
  * Flatten claim-all entries into a chronological list of transaction
- * effects. Hermes PR-70 blocker 2: every recorded txHash is a
- * confirmed-successful tx because the SDK's chain client throws on
- * a reverted receipt before pushing — so collapsing per-tx status
- * to `entry.success` would mislabel a successful earlier tx as
- * reverted when a later step fails.
+ * effects, driven by each entry's explicit `steps[]` record — one
+ * effect per tx the SDK actually sent. There is no re-derivation of
+ * "was this a settle or a claim?" from bucket+index: a skipped or
+ * recovered settle sends no tx (it surfaces as an info warning, not an
+ * effect), so the index of a `pendingSettle` entry's lone claim tx is
+ * no longer load-bearing. This is what previously mislabeled a
+ * skipped-settle entry's claim as a settle.
  *
- * Each tx in entry.txHashes → confirmed effect.
- * Entry failed (`!entry.success`) + step incomplete → emit an
- * additional failure effect for the step that didn't land. The
- * effect carries `errorCode` from the OspexError code; if the
- * underlying OspexChainError attached a `txHash` (a reverted send),
- * include it with `status: 'reverted'`.
+ *   step 'sent'   → confirmed transaction effect (settle / claim).
+ *   step 'failed' → failed effect; if it reverted on-chain with a known
+ *                   hash, `status: 'reverted'` + the hash.
+ *   step skipped/recovered → no effect (info warning instead).
+ *
+ * Fallback: if an entry failed but recorded no typed failure step
+ * (e.g. an unrecognized future `txParams.method` threw before any
+ * step), emit one generic failure effect so the failure isn't dropped.
  */
 function buildClaimAllEffects(result: ClaimAllResult): AgentEffect[] {
   const out: AgentEffect[] = [];
   for (const entry of result.entries) {
-    // 1. Recorded txs are confirmed-successful.
-    for (let i = 0; i < entry.txHashes.length; i++) {
-      const txHash = entry.txHashes[i] as string;
-      const isSettle = entry.bucket === 'pendingSettle' && i === 0;
-      out.push({
-        type: 'transaction',
-        purpose: isSettle ? 'settle-speculation' : 'claim-position',
-        ok: true,
-        txHash: txHash as Hex,
-        status: 'confirmed',
-      });
-    }
-    // 2. If the entry failed, the failure is the step AFTER the last
-    //    recorded txHash. Emit one failure effect for it.
-    if (!entry.success) {
-      const completedSteps = entry.txHashes.length;
-      const totalSteps = entry.bucket === 'pendingSettle' ? 2 : 1;
-      if (completedSteps < totalSteps) {
-        const failedStepIsSettle =
-          entry.bucket === 'pendingSettle' && completedSteps === 0;
-        const errAsChain = entry.error as
-          | { code?: string; txHash?: string }
-          | undefined;
-        const failureEffect: AgentEffect = {
+    let sawFailureEffect = false;
+    for (const step of entry.steps) {
+      const purpose = step.name === 'settleSpeculation' ? 'settle-speculation' : 'claim-position';
+      if (step.outcome === 'sent') {
+        out.push({
           type: 'transaction',
-          purpose: failedStepIsSettle ? 'settle-speculation' : 'claim-position',
-          ok: false,
-        };
-        if (errAsChain?.txHash !== undefined) {
-          failureEffect.txHash = errAsChain.txHash as Hex;
-          failureEffect.status = 'reverted';
+          purpose,
+          ok: true,
+          txHash: step.txHash as Hex,
+          status: 'confirmed',
+        });
+      } else if (step.outcome === 'failed') {
+        sawFailureEffect = true;
+        const eff: AgentEffect = { type: 'transaction', purpose, ok: false };
+        if (step.txHash !== undefined) {
+          eff.txHash = step.txHash as Hex;
+          eff.status = 'reverted';
         }
-        if (errAsChain?.code !== undefined) {
-          failureEffect.errorCode = errAsChain.code;
-        }
-        out.push(failureEffect);
+        if (step.errorCode !== undefined) eff.errorCode = step.errorCode;
+        out.push(eff);
+      }
+      // skippedAlreadySettled / recoveredAlreadySettled → no tx effect.
+    }
+    if (!entry.success && !sawFailureEffect) {
+      const errAsChain = entry.error as { code?: string; txHash?: string } | undefined;
+      const eff: AgentEffect = { type: 'transaction', purpose: 'claim-position', ok: false };
+      if (errAsChain?.txHash !== undefined) {
+        eff.txHash = errAsChain.txHash as Hex;
+        eff.status = 'reverted';
+      }
+      if (errAsChain?.code !== undefined) eff.errorCode = errAsChain.code;
+      out.push(eff);
+    }
+  }
+  return out;
+}
+
+/**
+ * Derive info-severity warnings for the projection-aware recoveries —
+ * the structured evidence that a settle was short-circuited. These are
+ * NOT failures: the entry succeeded; the warning just records that the
+ * settle tx was skipped (it was already settled on a pre-flight read)
+ * or recovered (a concurrent settle won the race). Agents switch on
+ * `code`; `details` carries the resolved `winSide` and identifiers.
+ */
+function buildClaimAllWarnings(result: ClaimAllResult): AgentWarning[] {
+  const out: AgentWarning[] = [];
+  for (const entry of result.entries) {
+    for (const step of entry.steps) {
+      if (step.name !== 'settleSpeculation') continue;
+      if (step.outcome === 'skippedAlreadySettled') {
+        out.push({
+          code: 'settle-skipped-already-settled',
+          message: `Speculation ${entry.speculationId} was already settled on-chain — skipped the duplicate settle and proceeded to claim.`,
+          severity: 'info',
+          details: {
+            speculationId: entry.speculationId,
+            positionId: entry.positionId,
+            winSide: step.winSide,
+          },
+        });
+      } else if (step.outcome === 'recoveredAlreadySettled') {
+        out.push({
+          code: 'projection-lag-recovered',
+          message: `Speculation ${entry.speculationId} was settled by a concurrent transaction — recovered from the duplicate-settle revert and proceeded to claim.`,
+          severity: 'info',
+          details: {
+            speculationId: entry.speculationId,
+            positionId: entry.positionId,
+            winSide: step.winSide,
+          },
+        });
       }
     }
   }
   return out;
+}
+
+/** Human-readable annotation for a settle that was short-circuited
+ * (idempotent recovery). Empty for a normal settle / claimable entry. */
+function settleNote(steps: ClaimAllResult['entries'][number]['steps']): string {
+  const settle = steps.find((s) => s.name === 'settleSpeculation');
+  if (settle?.outcome === 'skippedAlreadySettled') return ' [settle skipped — already settled]';
+  if (settle?.outcome === 'recoveredAlreadySettled') {
+    return ' [settle recovered — already settled by a concurrent tx]';
+  }
+  return '';
 }
 
 /**
