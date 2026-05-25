@@ -33,6 +33,18 @@ export type {
   OspexStreamReason,
 } from './errors.js';
 
+// Typed PositionModule revert classifiers — decode a caught claim error
+// against the contract's custom-error selectors without parsing message
+// strings. `isAlreadyClaimedRevert` is the benign/idempotent signal
+// `ensurePositionClaimed` recovers on; `isNotSettledRevert` /
+// `isNoPayoutRevert` are genuine failures (the CLI uses the former to
+// point users at `ospex settle`).
+export {
+  isAlreadyClaimedRevert,
+  isNotSettledRevert,
+  isNoPayoutRevert,
+} from './positions/positionErrors.js';
+
 export type {
   // signer
   Hex,

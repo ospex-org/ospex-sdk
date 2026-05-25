@@ -37,6 +37,11 @@ import {
   type EnsureSettledArgs,
   type EnsureSettledResult,
 } from './ensureSettled.js';
+import {
+  ensurePositionClaimed,
+  type EnsureClaimedArgs,
+  type EnsureClaimedResult,
+} from './ensureClaimed.js';
 
 const TX_HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 
@@ -173,8 +178,26 @@ export class Positions {
     return ensureSpeculationSettled(this.ctx, args);
   }
 
+  /** Strict claim primitive: always sends a `claimPosition` tx and throws
+   * `PositionModule__AlreadyClaimed` if the position was already claimed.
+   * Use this when you need the receipt + event-sourced payout of a claim
+   * YOU sent. For the idempotent "make this claimed (success if it already
+   * is)" semantics most agents and postgame sweeps want, use
+   * `ensurePositionClaimed`. */
   claim(args: ClaimArgs): Promise<ClaimResult> {
     return claim(this.ctx, args);
+  }
+
+  /** Idempotent claim: resolves to success whenever the position is
+   * claimed — whether this call claimed it (`claimed`, with the
+   * event-sourced payout), it was already claimed (`alreadyClaimed`), or a
+   * benign already-claimed won the race (`recovered`). Tolerates core-API
+   * `claimable` projection lag, manual overlap, and reruns. Only `claimed`
+   * carries a payout — the contract zeroes economic fields post-claim, so
+   * the SDK never derives one for the benign outcomes. Keeps `NotSettled` /
+   * `NoPayout` / RPC failures loud. */
+  ensurePositionClaimed(args: EnsureClaimedArgs): Promise<EnsureClaimedResult> {
+    return ensurePositionClaimed(this.ctx, args);
   }
 
   claimAll(args: ClaimAllArgs = {}): Promise<ClaimAllResult> {
@@ -189,6 +212,11 @@ export type {
   EnsureSettledResult,
   EnsureSettledOutcome,
 } from './ensureSettled.js';
+export type {
+  EnsureClaimedArgs,
+  EnsureClaimedResult,
+  EnsureClaimedOutcome,
+} from './ensureClaimed.js';
 export type {
   ClaimAllArgs,
   ClaimAllOptions,

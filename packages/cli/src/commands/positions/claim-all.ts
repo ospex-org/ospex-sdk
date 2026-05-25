@@ -107,7 +107,7 @@ export const positionsClaimAllCommand = addSignerOptions(
         const txList = e.txHashes.join(', ');
         const winSide = e.winSide ? `, winSide=${e.winSide}` : '';
         process.stdout.write(
-          `${tag} ✓ ${e.description} → payout ${payout} (txs: ${txList}${winSide})${settleNote(e.steps)}\n`,
+          `${tag} ✓ ${e.description} → payout ${payout} (txs: ${txList}${winSide})${stepNotes(e.steps)}\n`,
         );
       } else {
         const reason = e.error?.message ?? 'unknown error';
@@ -299,16 +299,19 @@ function buildClaimAllEffects(result: ClaimAllResult): AgentEffect[] {
         }
         if (step.errorCode !== undefined) eff.errorCode = step.errorCode;
         out.push(eff);
-      } else if (step.outcome === 'recoveredAlreadySettled' && step.txHash !== undefined) {
+      } else if (
+        (step.outcome === 'recoveredAlreadySettled' || step.outcome === 'recoveredAlreadyClaimed') &&
+        step.txHash !== undefined
+      ) {
         // The entry recovered, but this wallet had already broadcast a
-        // settle tx that reverted on inclusion (lost the race) — gas was
-        // spent. Surface it as a reverted effect so the audit trail
+        // settle/claim tx that reverted on inclusion (lost the race) — gas
+        // was spent. Surface it as a reverted effect so the audit trail
         // isn't silent about it. (Pre-flight skip / pre-send recovery
         // carry no txHash and emit no effect — only the info warning.)
         out.push({ type: 'transaction', purpose, ok: false, txHash: step.txHash as Hex, status: 'reverted' });
       }
-      // skippedAlreadySettled, and recovered with no tx → no effect
-      // (surfaced as an info warning instead).
+      // skippedAlreadySettled / skippedAlreadyClaimed, and recovered with no
+      // tx → no effect (surfaced as an info warning instead).
     }
     if (!entry.success && !sawFailureEffect) {
       const errAsChain = entry.error as { code?: string; txHash?: string } | undefined;
@@ -325,55 +328,72 @@ function buildClaimAllEffects(result: ClaimAllResult): AgentEffect[] {
 }
 
 /**
- * Derive info-severity warnings for the projection-aware recoveries —
- * the structured evidence that a settle was short-circuited. These are
- * NOT failures: the entry succeeded; the warning just records that the
- * settle tx was skipped (it was already settled on a pre-flight read)
- * or recovered (a concurrent settle won the race). Agents switch on
- * `code`; `details` carries the resolved `winSide` and identifiers.
+ * Derive info-severity warnings for the projection-aware short-circuits on
+ * BOTH legs — the structured evidence that a settle or a claim was skipped
+ * or recovered. These are NOT failures: the entry succeeded; the warning
+ * just records that the tx was skipped (already settled/claimed on a
+ * pre-flight read) or recovered (a concurrent tx / prior run won the race).
+ * Agents switch on `code`; `details` carries identifiers (+ `winSide` for
+ * settle). The claim short-circuits get distinct claim-specific codes (an
+ * already-claimed can be projection lag, a manual overlap, or a rerun — not
+ * necessarily the same provenance as a settle race).
  */
 function buildClaimAllWarnings(result: ClaimAllResult): AgentWarning[] {
   const out: AgentWarning[] = [];
   for (const entry of result.entries) {
     for (const step of entry.steps) {
-      if (step.name !== 'settleSpeculation') continue;
-      if (step.outcome === 'skippedAlreadySettled') {
-        out.push({
-          code: 'settle-skipped-already-settled',
-          message: `Speculation ${entry.speculationId} was already settled on-chain — skipped the duplicate settle and proceeded to claim.`,
-          severity: 'info',
-          details: {
-            speculationId: entry.speculationId,
-            positionId: entry.positionId,
-            winSide: step.winSide,
-          },
-        });
-      } else if (step.outcome === 'recoveredAlreadySettled') {
-        out.push({
-          code: 'projection-lag-recovered',
-          message: `Speculation ${entry.speculationId} was settled by a concurrent transaction — recovered from the duplicate-settle revert and proceeded to claim.`,
-          severity: 'info',
-          details: {
-            speculationId: entry.speculationId,
-            positionId: entry.positionId,
-            winSide: step.winSide,
-          },
-        });
+      const ids = { speculationId: entry.speculationId, positionId: entry.positionId };
+      if (step.name === 'settleSpeculation') {
+        if (step.outcome === 'skippedAlreadySettled') {
+          out.push({
+            code: 'settle-skipped-already-settled',
+            message: `Speculation ${entry.speculationId} was already settled on-chain — skipped the duplicate settle and proceeded to claim.`,
+            severity: 'info',
+            details: { ...ids, winSide: step.winSide },
+          });
+        } else if (step.outcome === 'recoveredAlreadySettled') {
+          out.push({
+            code: 'projection-lag-recovered',
+            message: `Speculation ${entry.speculationId} was settled by a concurrent transaction — recovered from the duplicate-settle revert and proceeded to claim.`,
+            severity: 'info',
+            details: { ...ids, winSide: step.winSide },
+          });
+        }
+      } else if (step.name === 'claimPosition') {
+        if (step.outcome === 'skippedAlreadyClaimed') {
+          out.push({
+            code: 'claim-skipped-already-claimed',
+            message: `Position ${entry.positionId} (speculation ${entry.speculationId}) was already claimed on-chain — no claim tx sent. No payout in this run.`,
+            severity: 'info',
+            details: ids,
+          });
+        } else if (step.outcome === 'recoveredAlreadyClaimed') {
+          out.push({
+            code: 'claim-recovered-already-claimed',
+            message: `Position ${entry.positionId} (speculation ${entry.speculationId}) was already claimed by a concurrent transaction — recovered from the duplicate-claim revert. No payout in this run.`,
+            severity: 'info',
+            details: ids,
+          });
+        }
       }
     }
   }
   return out;
 }
 
-/** Human-readable annotation for a settle that was short-circuited
- * (idempotent recovery). Empty for a normal settle / claimable entry. */
-function settleNote(steps: ClaimAllResult['entries'][number]['steps']): string {
+/** Human-readable annotations for any short-circuited leg (idempotent
+ * skip/recovery), settle and/or claim. Empty for a normal full sweep.
+ * Without the claim annotation an already-claimed entry's line would read
+ * "payout unknown (txs: )" with no explanation. */
+function stepNotes(steps: ClaimAllResult['entries'][number]['steps']): string {
+  let note = '';
   const settle = steps.find((s) => s.name === 'settleSpeculation');
-  if (settle?.outcome === 'skippedAlreadySettled') return ' [settle skipped — already settled]';
-  if (settle?.outcome === 'recoveredAlreadySettled') {
-    return ' [settle recovered — already settled by a concurrent tx]';
-  }
-  return '';
+  if (settle?.outcome === 'skippedAlreadySettled') note += ' [settle skipped — already settled]';
+  else if (settle?.outcome === 'recoveredAlreadySettled') note += ' [settle recovered — already settled by a concurrent tx]';
+  const claim = steps.find((s) => s.name === 'claimPosition');
+  if (claim?.outcome === 'skippedAlreadyClaimed') note += ' [claim skipped — already claimed]';
+  else if (claim?.outcome === 'recoveredAlreadyClaimed') note += ' [claim recovered — already claimed by a concurrent tx]';
+  return note;
 }
 
 /**

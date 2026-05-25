@@ -230,6 +230,8 @@ Exercises the path where core-API still reports `pendingSettle` (with a `settleS
 |---|---|---|---|
 | 9R.1 | With a `pendingSettle` row for `<walletA>`, settle it from another path: `ospex settle <speculationId>` (any wallet). Then immediately `ospex claim-all --address <walletA>` | Row prints `✓ ... [settle skipped — already settled]`; exactly one claim tx (no settle tx); summary reports 0 failed | Pre-flight skip — no scary pre-send duplicate-settle error. |
 | 9R.2 | Re-run 9R.1 with `--json` in the same window | `warnings[]` carries `{ code: 'settle-skipped-already-settled', severity: 'info', details: { winSide, … } }`; `effects[]` has a single `claim-position` transaction | Structured evidence + correct effect labeling. |
+| 9R.3 | After a position has been claimed (e.g. 9D.1 or a prior `claim-all`), re-run `ospex claim-all --address <walletA>` while core-API still lists it `claimable` | The already-claimed row prints `✓ ... [claim skipped — already claimed]` with **no claim tx and no payout** in the summary total; 0 failed | Claim-leg idempotency — a stale `claimable` projection / rerun is a skip, not an `AlreadyClaimed` failure. |
+| 9R.4 | Re-run 9R.3 with `--json` | `warnings[]` carries `{ code: 'claim-skipped-already-claimed', severity: 'info' }`; the already-claimed entry contributes **nothing** to `totals.totalPayoutWei6` (fresh claims only) and increments `totals.alreadyClaimed` | Honest accounting — no fabricated payout, no fake claim effect. |
 
 If the indexer already moved the row to `claimable`, you'll see the equivalent single-tx claimable flow instead (no settle step in the plan) — re-create the window to exercise the skip explicitly, or accept the claimable path as equivalent.
 
@@ -240,13 +242,13 @@ If the indexer already moved the row to `claimable`, you'll see the equivalent s
 | 9C.1 | `ospex settle <speculationId>` (on a scored, not-yet-settled speculation) | Prints `outcome=settled`, a `txHash`, and the resolved `winSide` (`away \| home \| over \| under \| push \| void`) | `ensureSpeculationSettled` settled path end-to-end including event-log decode. |
 | 9C.2 | Re-run 9C.1 with the same speculationId | Prints `outcome=alreadySettled` + the same `winSide`, **no txHash, no error** (NOT an `AlreadySettled` revert) | Idempotent re-settle — a pre-flight read short-circuits the duplicate tx. Under `--json`: `ok:true`, a `settle-skipped-already-settled` info warning, empty `effects[]`. |
 
-**Standalone single claim** (when you don't want claim-all to sweep everything):
+**Standalone single claim** (when you don't want claim-all to sweep everything; idempotent — routes through `ensurePositionClaimed`):
 
 | # | Command | Expected | Validates |
 |---|---|---|---|
-| 9D.1 | `ospex claim <speculationId> --type upper` (against a settled position you actually own and won) | Prints `txHash` + `payoutUSDC` | `client.positions.claim` end-to-end. |
-| 9D.2 | Re-run 9D.1 | `OspexChainError` mentioning `AlreadyClaimed` | Already-claimed guard. |
-| 9D.3 | `ospex claim <speculationIdNotYetSettled> --type upper` | CLI prints "This position requires settlement first. Run `ospex settle ...`" then surfaces `OspexChainError` (`NotSettled`) | Clear error path, no auto-settle. |
+| 9D.1 | `ospex claim <speculationId> --type upper` (against a settled position you actually own and won) | Prints `outcome=claimed`, `txHash` + `payoutUSDC` | `ensurePositionClaimed` claimed path end-to-end including `POSITION_CLAIMED` payout decode. |
+| 9D.2 | Re-run 9D.1 | Prints `outcome=alreadyClaimed`, **no txHash, no payout, no error** (NOT an `AlreadyClaimed` revert) | Idempotent re-claim — a pre-flight `getPosition.claimed` read short-circuits the duplicate tx. Under `--json`: `ok:true`, a `claim-skipped-already-claimed` info warning, empty `effects[]`, `payout:null`. |
+| 9D.3 | `ospex claim <speculationIdNotYetSettled> --type upper` | CLI prints "This position requires settlement first. Run `ospex settle ...`" then surfaces `OspexChainError` (`NotSettled`) | `NotSettled` stays loud (only `AlreadyClaimed` is benign); no auto-settle. The hint now uses typed `isNotSettledRevert`, not message-string matching. |
 
 **Pass criterion**: at least one real settle + claim was executed end-to-end on Amoy via `ospex claim-all` (Case A or B), and the resulting `claimed=true` row is visible in Supabase via `ospex positions list <walletA>` plus on-chain via `cast call`. If no settled position exists at release time, this section is allowed to be marked "manual verification required at first real settlement" in the release ticket — the dry-run path (9A.2) can be exercised independently.
 
