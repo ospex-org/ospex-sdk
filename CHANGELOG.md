@@ -12,6 +12,7 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 ### CLI (`@ospex/cli`)
 
 - **`ospex claim-all` absorbs projection lag quietly.** A skipped or recovered settle is reported as a normal success with a short `[settle skipped — already settled]` note, and under `--json` as an `info`-severity warning (`settle-skipped-already-settled` / `projection-lag-recovered`) — not a scary failure. The `--json` envelope's per-tx effects are now driven by the SDK's explicit `steps[]`, fixing a latent mislabel where a skipped-settle entry's lone claim tx could be tagged as a settle. A settle tx that actually reverts on chain — whether a genuine failure or a lost race that recovered — keeps its hash in `effects[]` with `status: 'reverted'`, so gas-spending failures stay auditable.
+- **`ospex settle <id>` is now idempotent.** It routes through `ensureSpeculationSettled`, so re-settling an already-settled speculation reports success (`outcome: alreadySettled` — no tx, no `AlreadySettled` revert) instead of erroring. Output now carries the `outcome`; under `--json`, `alreadySettled` / `recovered` emit an `info` warning with empty `effects[]`, and a recovered race that broadcast a reverted settle surfaces it as a `status:'reverted'` effect. The strict `client.positions.settleSpeculation` (always sends a tx; throws `AlreadySettled`) stays available for programmatic callers.
 
 ## [0.4.0] — 2026-05-24
 
