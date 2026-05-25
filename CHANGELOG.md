@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.4.1] — 2026-05-25
+
 ### SDK (`@ospex/sdk`)
 
 - **New `positions.ensureSpeculationSettled(speculationId)` — idempotent "make this settled".** Resolves to success whenever the speculation is settled, returning `{ outcome: 'settled' | 'alreadySettled' | 'recovered', winSide, … }`. It pre-flight-reads on-chain state and skips the tx when already closed, and recovers from a concurrent settle that reverts mid-flight (the recover/abort decision is an authoritative on-chain re-read, so it tolerates core-API `pendingSettle` projection lag). The strict `settleSpeculation` primitive is unchanged — it still sends a tx and throws `AlreadySettled`.
@@ -160,6 +164,7 @@ Initial public release.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
 [Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.4.0...HEAD
+[0.4.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.0
 [0.3.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.3.1
 [0.3.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.3.0
