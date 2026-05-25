@@ -39,7 +39,7 @@ export interface SettleResult {
   receipt: TransactionReceipt;
 }
 
-const WIN_SIDE_ENUM = [
+export const WIN_SIDE_ENUM = [
   'tbd',
   'away',
   'home',
@@ -48,6 +48,15 @@ const WIN_SIDE_ENUM = [
   'push',
   'void',
 ] as const;
+
+/**
+ * Map the on-chain `WinSide` enum index (0–6) to its string form.
+ * Out-of-range indices fall back to `'tbd'`. Shared by receipt parsing
+ * (here) and the `getSpeculation` read path (`readSpeculation.ts`).
+ */
+export function mapWinSide(raw: number): SettleResult['winSide'] {
+  return WIN_SIDE_ENUM[raw] ?? 'tbd';
+}
 
 // keccak256("SPECULATION_SETTLED") — matches the constant in
 // SpeculationModule.sol; recomputed at module load so an upstream
@@ -144,7 +153,7 @@ function parseWinSideFromReceipt(
     );
     const [decodedSpecId, winSideRaw] = decoded as readonly [bigint, number, `0x${string}`];
     if (decodedSpecId !== speculationId) continue;
-    return WIN_SIDE_ENUM[winSideRaw] ?? 'tbd';
+    return mapWinSide(winSideRaw);
   }
   return null;
 }

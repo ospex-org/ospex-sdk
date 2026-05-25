@@ -4,7 +4,14 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### SDK (`@ospex/sdk`)
+
+- **New `positions.ensureSpeculationSettled(speculationId)` — idempotent "make this settled".** Resolves to success whenever the speculation is settled, returning `{ outcome: 'settled' | 'alreadySettled' | 'recovered', winSide, … }`. It pre-flight-reads on-chain state and skips the tx when already closed, and recovers from a concurrent settle that reverts mid-flight (the recover/abort decision is an authoritative on-chain re-read, so it tolerates core-API `pendingSettle` projection lag). The strict `settleSpeculation` primitive is unchanged — it still sends a tx and throws `AlreadySettled`.
+- **`positions.claimAll` is now projection-aware.** Each `pendingSettle` row's settle leg runs through `ensureSpeculationSettled`, so a stale `pendingSettle` plan whose speculation was already settled (e.g. by another wallet seconds earlier) no longer fails with a pre-send duplicate-settle error — the settle is skipped or recovered and the sweep proceeds to claim. When multiple wallets sweep close together, at most one settle tx lands. Each entry now carries an explicit `steps[]` record (`sent` / `skippedAlreadySettled` / `recoveredAlreadySettled` / `failed`); `txHashes` / `winSide` / `payout*` are conveniences derived from it. A genuine settle failure (not already-settled) still fails that entry clearly, and dry-run remains read-only (no chain reads).
+
+### CLI (`@ospex/cli`)
+
+- **`ospex claim-all` absorbs projection lag quietly.** A skipped or recovered settle is reported as a normal success with a short `[settle skipped — already settled]` note, and under `--json` as an `info`-severity warning (`settle-skipped-already-settled` / `projection-lag-recovered`) — not a scary failure. The `--json` envelope's per-tx effects are now driven by the SDK's explicit `steps[]`, fixing a latent mislabel where a skipped-settle entry's lone claim tx could be tagged as a settle. A settle tx that actually reverts on chain — whether a genuine failure or a lost race that recovered — keeps its hash in `effects[]` with `status: 'reverted'`, so gas-spending failures stay auditable.
 
 ## [0.4.0] — 2026-05-24
 

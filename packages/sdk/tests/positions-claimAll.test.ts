@@ -100,15 +100,41 @@ interface PlannedTx {
   logs: Array<{ address: `0x${string}`; topics: Hash[]; data: `0x${string}` }>;
 }
 
+/** A sequence of getSpeculation reads for one speculationId. The last
+ * element repeats once the sequence is exhausted. `{status, winSide}`
+ * are the on-chain enum indices (status: 0 Open, 1 Closed). */
+type SpecReadSeq = Array<{ speculationStatus: number; winSide: number }>;
+
 function fakeContext({
   claimParams,
   plannedTxs,
+  specStates = {},
+  onReadContract,
 }: {
   claimParams: ClaimParams;
   plannedTxs: PlannedTx[];
+  /** Per-speculationId getSpeculation read sequences (pre-flight, then
+   * re-read on a settle revert). Only consulted for pendingSettle
+   * entries. */
+  specStates?: Record<string, SpecReadSeq>;
+  /** Invoked at the start of every getSpeculation read — used to assert
+   * read-only modes (dry-run) never touch the chain. */
+  onReadContract?: () => void;
 }): PositionsContext {
   let txIndex = 0;
+  const specReadIdx: Record<string, number> = {};
   const publicClient = {
+    readContract: async ({ args }: { args: readonly unknown[] }) => {
+      onReadContract?.();
+      const id = String(args[0]);
+      const seq = specStates[id];
+      if (!seq || seq.length === 0) {
+        throw new Error(`no spec state configured for speculation ${id}`);
+      }
+      const i = specReadIdx[id] ?? 0;
+      specReadIdx[id] = i + 1;
+      return seq[Math.min(i, seq.length - 1)];
+    },
     sendRawTransaction: async () => {
       const idx = txIndex;
       const txHash = (`0x${String(idx + 1).padStart(64, '0')}`) as Hash;
@@ -240,6 +266,8 @@ describe('positions.claimAll', () => {
           },
         ],
       },
+      // Pre-flight read: speculation 2 is still Open → settle proceeds.
+      specStates: { '2': [{ speculationStatus: 0, winSide: 0 }] },
       plannedTxs: [
         { status: 'success', logs: [makeSettledLog(2n, 1)] },
         {
@@ -254,6 +282,184 @@ describe('positions.claimAll', () => {
     expect(result.entries[0]!.txHashes).toHaveLength(2);
     expect(result.entries[0]!.winSide).toBe('away');
     expect(result.entries[0]!.payoutWei6).toBe('200000000');
+    // Explicit step record: settle sent, then claim sent.
+    expect(result.entries[0]!.steps.map((s) => [s.name, s.outcome])).toEqual([
+      ['settleSpeculation', 'sent'],
+      ['claimPosition', 'sent'],
+    ]);
+  });
+
+  it('skips an already-settled speculation and proceeds straight to claim', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `3_${SIGNER_ADDR}_0`,
+            speculationId: '3',
+            description: 'Away moneyline — Won (stale pendingSettle)',
+            bucket: 'pendingSettle',
+            result: 'won',
+            estimatedPayoutUSDC: 150,
+            estimatedPayoutWei6: '150000000',
+            txParams: [
+              {
+                method: 'settleSpeculation',
+                target: 'SpeculationModule',
+                args: { speculationId: '3' },
+              },
+              {
+                method: 'claimPosition',
+                target: 'PositionModule',
+                args: { speculationId: '3', positionType: 0 },
+              },
+            ],
+          },
+        ],
+      },
+      // Pre-flight read: speculation 3 is already Closed (home won) →
+      // settle is skipped; only the claim tx is sent.
+      specStates: { '3': [{ speculationStatus: 1, winSide: 2 }] },
+      plannedTxs: [
+        {
+          status: 'success',
+          logs: [makeClaimedLog(3n, SIGNER_ADDR as `0x${string}`, 0, 150_000_000n)],
+        },
+      ],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.success).toBe(true);
+    const entry = result.entries[0]!;
+    expect(entry.success).toBe(true);
+    // Only the claim tx landed — settle was skipped, no settle tx.
+    expect(entry.txHashes).toHaveLength(1);
+    expect(entry.winSide).toBe('home');
+    expect(entry.payoutWei6).toBe('150000000');
+    expect(entry.steps.map((s) => [s.name, s.outcome])).toEqual([
+      ['settleSpeculation', 'skippedAlreadySettled'],
+      ['claimPosition', 'sent'],
+    ]);
+  });
+
+  it('recovers from a concurrent settle (revert + re-read closed) then claims', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `4_${SIGNER_ADDR}_1`,
+            speculationId: '4',
+            description: 'Under total — Won (raced settle)',
+            bucket: 'pendingSettle',
+            result: 'won',
+            estimatedPayoutUSDC: 120,
+            estimatedPayoutWei6: '120000000',
+            txParams: [
+              {
+                method: 'settleSpeculation',
+                target: 'SpeculationModule',
+                args: { speculationId: '4' },
+              },
+              {
+                method: 'claimPosition',
+                target: 'PositionModule',
+                args: { speculationId: '4', positionType: 1 },
+              },
+            ],
+          },
+        ],
+      },
+      // Pre-flight: Open. After the settle reverts on inclusion, the
+      // re-read shows Closed (under won) → recovered.
+      specStates: {
+        '4': [
+          { speculationStatus: 0, winSide: 0 },
+          { speculationStatus: 1, winSide: 4 },
+        ],
+      },
+      plannedTxs: [
+        { status: 'reverted', logs: [] }, // our settle lost the race
+        {
+          status: 'success',
+          logs: [makeClaimedLog(4n, SIGNER_ADDR as `0x${string}`, 1, 120_000_000n)],
+        },
+      ],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.success).toBe(true);
+    const entry = result.entries[0]!;
+    expect(entry.success).toBe(true);
+    expect(entry.txHashes).toHaveLength(1); // only the claim
+    expect(entry.winSide).toBe('under');
+    expect(entry.steps.map((s) => [s.name, s.outcome])).toEqual([
+      ['settleSpeculation', 'recoveredAlreadySettled'],
+      ['claimPosition', 'sent'],
+    ]);
+    // This wallet broadcast a settle that reverted on inclusion — keep
+    // its hash on the recovered step, but NOT in the confirmed txHashes.
+    const settleStep = entry.steps[0]!;
+    const claimStep = entry.steps[1]!;
+    expect(settleStep.txHash).toBeDefined();
+    expect(entry.txHashes).toEqual([claimStep.txHash]);
+    expect(entry.txHashes).not.toContain(settleStep.txHash);
+  });
+
+  it('still fails clearly on a genuine settle failure (re-read not settled)', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `5_${SIGNER_ADDR}_0`,
+            speculationId: '5',
+            description: 'Home moneyline — needs settle',
+            bucket: 'pendingSettle',
+            result: 'won',
+            estimatedPayoutUSDC: 90,
+            estimatedPayoutWei6: '90000000',
+            txParams: [
+              {
+                method: 'settleSpeculation',
+                target: 'SpeculationModule',
+                args: { speculationId: '5' },
+              },
+              {
+                method: 'claimPosition',
+                target: 'PositionModule',
+                args: { speculationId: '5', positionType: 0 },
+              },
+            ],
+          },
+        ],
+      },
+      // Pre-flight Open; settle reverts; re-read STILL Open → genuine
+      // failure, must surface (not recovered).
+      specStates: {
+        '5': [
+          { speculationStatus: 0, winSide: 0 },
+          { speculationStatus: 0, winSide: 0 },
+        ],
+      },
+      plannedTxs: [
+        { status: 'reverted', logs: [] }, // settle genuinely reverts
+      ],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.success).toBe(false);
+    const entry = result.entries[0]!;
+    expect(entry.success).toBe(false);
+    expect(entry.error).toBeDefined();
+    expect(entry.txHashes).toHaveLength(0); // claim never attempted
+    // The failed step is the settle — not mislabeled as a claim.
+    expect(entry.steps.map((s) => [s.name, s.outcome])).toEqual([
+      ['settleSpeculation', 'failed'],
+    ]);
+    // The settle reverted on inclusion — its tx hash must survive on the
+    // failed step (the gas-spending failure has to stay auditable).
+    expect(entry.steps[0]!.txHash).toBeDefined();
   });
 
   it('isolates per-entry failures — one bad entry does not abort the rest', async () => {
@@ -354,6 +560,50 @@ describe('positions.claimAll', () => {
     // non-zero predicted payout.
     expect(result.totals.totalPayoutWei6).toBe('50000000');
     expect(result.totals.totalPayoutUSDC).toBeCloseTo(50, 6);
+  });
+
+  it('dry-run stays read-only — no chain read even for a pendingSettle entry', async () => {
+    let reads = 0;
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `6_${SIGNER_ADDR}_0`,
+            speculationId: '6',
+            description: 'Away moneyline — Won (needs settle)',
+            bucket: 'pendingSettle',
+            result: 'won',
+            estimatedPayoutUSDC: 175,
+            estimatedPayoutWei6: '175000000',
+            txParams: [
+              {
+                method: 'settleSpeculation',
+                target: 'SpeculationModule',
+                args: { speculationId: '6' },
+              },
+              {
+                method: 'claimPosition',
+                target: 'PositionModule',
+                args: { speculationId: '6', positionType: 0 },
+              },
+            ],
+          },
+        ],
+      },
+      // Configured, but must never be consulted in dry-run.
+      specStates: { '6': [{ speculationStatus: 0, winSide: 0 }] },
+      plannedTxs: [],
+      onReadContract: () => {
+        reads += 1;
+      },
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR, opts: { dryRun: true } });
+    expect(reads).toBe(0); // no getSpeculation read happened
+    expect(result.entries[0]!.txHashes).toEqual([]);
+    expect(result.entries[0]!.steps).toEqual([]); // no steps executed in dry-run
+    expect(result.entries[0]!.payoutWei6).toBe('175000000');
   });
 
   it('rejects live-mode --address that does not match the configured signer', async () => {

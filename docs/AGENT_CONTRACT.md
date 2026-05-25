@@ -652,10 +652,14 @@ The SDK has no module-level state. Multiple `OspexClient` instances are fully is
 | `commitments.cancelOnchain(hash)` | Yes | The contract has **no `AlreadyCancelled` revert path** — the second `cancelCommitment` succeeds. Don't infer "first cancel" from tx success; check off-chain status if you need that signal. |
 | `commitments.raiseMinNonce` / `cancelAllOnSpeculation` with `newMinNonce` ≤ current floor | No | Reverts `NonceMustIncrease`. Use the default-path floor computation (`max(onChainFloor, lastInProcess, supabaseMaxStored) + 1`) for safe retries. |
 | `positions.claim(speculationId, type)` re-claim | No | Reverts `AlreadyClaimed`. Surface as `OspexChainError`. |
-| `positions.settleSpeculation(speculationId)` re-settle | No | Reverts `AlreadySettled`. Surface as `OspexChainError`. |
+| `positions.settleSpeculation(speculationId)` re-settle | No | Strict primitive — reverts `AlreadySettled`. Surface as `OspexChainError`. Use `ensureSpeculationSettled` when you want idempotent "make this settled" semantics instead. |
+| `positions.ensureSpeculationSettled(speculationId)` | Yes | Resolves to success whenever the speculation IS settled — `{ outcome: 'settled' \| 'alreadySettled' \| 'recovered' }`. Skips the tx on a pre-flight read showing it already closed; recovers from a concurrent settle that reverts mid-flight. The recovery decision is an authoritative on-chain re-read, so it's safe under core-API projection lag. `alreadySettled` sends no tx. `recovered` sends no tx **only** when recovery came via the pre-flight read or a pre-send (`estimateGas`) revert; if this wallet had already broadcast a settle that then reverted on inclusion (lost the race, spent gas), the result carries `revertedTxHash` and `claim-all` emits a `status:'reverted'` settle effect. The confirmed-settle `txHash` is present only on `settled`. |
+| `positions.claimAll(...)` (live) | Yes (settle leg) | Routes each `pendingSettle` row's settle leg through `ensureSpeculationSettled`. When multiple wallets sweep close together, at most one settle tx lands; the rest skip/recover and proceed to claim. Each entry carries an explicit `steps[]`; skips/recoveries surface as `settle-skipped-already-settled` / `projection-lag-recovered` info warnings (not failures). The claim leg is not idempotent — a re-claim still reverts `AlreadyClaimed` and fails that entry clearly. |
 | `commitments.approve` re-approval | Yes | Standard ERC-20 — repeated approve calls just overwrite. |
 
 For long-running agents, the safe retry pattern after a transient failure is: re-fetch state via the API, then re-issue. Don't replay the original arguments blindly — block timing, allowance state, and nonce floor may have moved.
+
+For postgame sweeps specifically, `claimAll` is the boring path: run it (or `--dry-run` first) and let it absorb projection lag. Multiple agents can claim concurrently without coordinating settle.
 
 ---
 

@@ -32,6 +32,11 @@ import { claim, type ClaimArgs, type ClaimResult } from './claim.js';
 import { claimAll, type ClaimAllArgs, type ClaimAllResult } from './claimAll.js';
 import { claimParams as claimParamsImpl } from './claimParams.js';
 import { settleSpeculation, type SettleArgs, type SettleResult } from './settle.js';
+import {
+  ensureSpeculationSettled,
+  type EnsureSettledArgs,
+  type EnsureSettledResult,
+} from './ensureSettled.js';
 
 const TX_HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 
@@ -151,8 +156,21 @@ export class Positions {
 
   // ── Writes (M3) ───────────────────────────────────────────────────
 
+  /** Strict settle primitive: always sends a `settleSpeculation` tx and
+   * throws if the speculation is already settled. Use this when you need
+   * the receipt of a settle YOU sent. For the idempotent "make this
+   * settled (success if it already is)" semantics most agents and
+   * postgame sweeps want, use `ensureSpeculationSettled`. */
   settleSpeculation(args: SettleArgs): Promise<SettleResult> {
     return settleSpeculation(this.ctx, args);
+  }
+
+  /** Idempotent settle: resolves to success whenever the speculation is
+   * settled — whether this call settled it (`settled`), it was already
+   * settled (`alreadySettled`), or a concurrent caller settled it
+   * mid-flight (`recovered`). Tolerates core-API projection lag. */
+  ensureSpeculationSettled(args: EnsureSettledArgs): Promise<EnsureSettledResult> {
+    return ensureSpeculationSettled(this.ctx, args);
   }
 
   claim(args: ClaimArgs): Promise<ClaimResult> {
@@ -166,4 +184,17 @@ export class Positions {
 
 export type { ClaimArgs, ClaimResult } from './claim.js';
 export type { SettleArgs, SettleResult } from './settle.js';
-export type { ClaimAllArgs, ClaimAllOptions, ClaimAllResult, ClaimAllEntryResult } from './claimAll.js';
+export type {
+  EnsureSettledArgs,
+  EnsureSettledResult,
+  EnsureSettledOutcome,
+} from './ensureSettled.js';
+export type {
+  ClaimAllArgs,
+  ClaimAllOptions,
+  ClaimAllResult,
+  ClaimAllEntryResult,
+  ClaimAllStep,
+  ClaimAllStepName,
+  ClaimAllStepOutcome,
+} from './claimAll.js';
