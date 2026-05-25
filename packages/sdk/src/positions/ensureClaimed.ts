@@ -30,13 +30,14 @@
  *      unchanged.
  *
  * Why the proven-revert gate in (b) is load-bearing: the strict `claim()`
- * throws `OspexChainError({ txHash })` in TWO situations — a real on-chain
- * revert (its receipt status is `'reverted'`, carried on the error), and a
- * tx that SUCCEEDED but whose receipt had no parseable `POSITION_CLAIMED`
- * event. The latter is a genuine claim (payout transferred) we just can't
- * read back — it MUST stay loud, never be relabeled a recovered/no-payout
- * claim. So recovery keys off the structured reverted receipt, never a bare
- * tx hash and never a bare post-read of `claimed`.
+ * throws a tx-hash-bearing `OspexChainError` in TWO situations, distinguished
+ * by `err.receipt.status` — a real on-chain revert (`status: 'reverted'`),
+ * and a tx that SUCCEEDED but whose receipt had no parseable `POSITION_CLAIMED`
+ * event (`status: 'success'`). The latter is a genuine claim (payout
+ * transferred) we just can't read back — it MUST stay loud, never be relabeled
+ * a recovered/no-payout claim. So recovery keys off `receipt.status ===
+ * 'reverted'`, never receipt presence, a bare tx hash, or a bare post-read of
+ * `claimed`.
  *
  * IMPORTANT — no derived payout. `recovered` / `alreadyClaimed` carry NO
  * payout. The contract zeroes `riskAmount` / `profitAmount` once `claimed`
@@ -195,13 +196,13 @@ export async function ensurePositionClaimed(
   }
 }
 
-/** Pull the reverted receipt off a caught error. `broadcastSignedTx`
- * attaches it (alongside the tx hash) ONLY when a broadcast tx's receipt came
- * back with a non-success status — so a present, `'reverted'`-status receipt
- * is the authoritative proof the tx reverted on-chain. A post-broadcast parse
- * failure on a SUCCESSFUL tx (e.g. `claim()`'s missing-`POSITION_CLAIMED`-event
- * throw) carries a `txHash` but no receipt, and is intentionally NOT
- * recoverable here — it stays loud. */
+/** Pull a *reverted* receipt off a caught error. Keys specifically on
+ * `receipt.status === 'reverted'` — NOT on receipt presence: a confirmed-but-
+ * unparseable claim (`claim()`'s missing-`POSITION_CLAIMED`-event throw) also
+ * carries a receipt, but with `status: 'success'`, and must stay loud rather
+ * than be treated as a recoverable revert. Only a `'reverted'`-status receipt
+ * is authoritative proof the tx reverted on-chain. See `OspexChainError.receipt`
+ * for the full status contract. */
 function revertedReceiptOf(err: unknown): TransactionReceipt | undefined {
   return err instanceof OspexChainError && err.receipt?.status === 'reverted'
     ? err.receipt

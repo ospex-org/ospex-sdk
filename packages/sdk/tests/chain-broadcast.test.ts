@@ -72,10 +72,10 @@ describe('broadcastSignedTx', () => {
     expect(chainErr.txHash).toBe(txHash);
     expect(chainErr.code).toBe('CHAIN_ERROR');
     expect(chainErr.message).toMatch(/reverted/i);
-    // The reverted receipt is carried too — its presence is the authoritative
-    // "this tx reverted on-chain" signal idempotent-recovery paths key off
-    // (distinct from a post-broadcast parse failure on a SUCCESSFUL tx, which
-    // carries a txHash but no receipt).
+    // The receipt is carried too, with `status: 'reverted'` — the
+    // authoritative "this tx reverted on-chain" signal idempotent-recovery
+    // paths key off. (They branch on `receipt.status`, not presence: a
+    // confirmed-but-unparseable failure also carries a receipt, but `success`.)
     expect(chainErr.receipt).toBeDefined();
     expect(chainErr.receipt?.status).toBe('reverted');
   });
