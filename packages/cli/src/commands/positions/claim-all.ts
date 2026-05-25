@@ -268,8 +268,12 @@ export function toClaimAllAgentEnvelope(
  * skipped-settle entry's claim as a settle.
  *
  *   step 'sent'   → confirmed transaction effect (settle / claim).
- *   step 'failed' → failed effect; if it reverted on-chain with a known
- *                   hash, `status: 'reverted'` + the hash.
+ *   step 'failed' → failed effect; carries the broadcast tx hash + its TRUE
+ *                   on-chain status (`step.txStatus`): `'reverted'`, or
+ *                   `'confirmed'` for a tx that landed but whose result was
+ *                   unparseable (e.g. a claim with no `POSITION_CLAIMED`
+ *                   event) — NEVER assumed reverted from a bare hash. Status
+ *                   omitted when genuinely unknown.
  *   step skipped/recovered → no effect (info warning instead).
  *
  * Fallback: if an entry failed but recorded no typed failure step
@@ -295,7 +299,11 @@ function buildClaimAllEffects(result: ClaimAllResult): AgentEffect[] {
         const eff: AgentEffect = { type: 'transaction', purpose, ok: false };
         if (step.txHash !== undefined) {
           eff.txHash = step.txHash as Hex;
-          eff.status = 'reverted';
+          // Report the tx's ACTUAL on-chain status — never assume a failed
+          // step reverted. A confirmed-but-unparseable claim landed
+          // successfully (`txStatus: 'confirmed'`) and must NOT be tagged
+          // reverted; status is omitted when genuinely unknown.
+          if (step.txStatus !== undefined) eff.status = step.txStatus;
         }
         if (step.errorCode !== undefined) eff.errorCode = step.errorCode;
         out.push(eff);
@@ -314,11 +322,16 @@ function buildClaimAllEffects(result: ClaimAllResult): AgentEffect[] {
       // tx → no effect (surfaced as an info warning instead).
     }
     if (!entry.success && !sawFailureEffect) {
-      const errAsChain = entry.error as { code?: string; txHash?: string } | undefined;
+      const errAsChain = entry.error as
+        | { code?: string; txHash?: string; receipt?: { status?: 'success' | 'reverted' } }
+        | undefined;
       const eff: AgentEffect = { type: 'transaction', purpose: 'claim-position', ok: false };
       if (errAsChain?.txHash !== undefined) {
         eff.txHash = errAsChain.txHash as Hex;
-        eff.status = 'reverted';
+        // Same honest mapping as the failed-step path: derive status from the
+        // error's receipt, never assume reverted from a bare hash.
+        if (errAsChain.receipt?.status === 'reverted') eff.status = 'reverted';
+        else if (errAsChain.receipt?.status === 'success') eff.status = 'confirmed';
       }
       if (errAsChain?.code !== undefined) eff.errorCode = errAsChain.code;
       out.push(eff);

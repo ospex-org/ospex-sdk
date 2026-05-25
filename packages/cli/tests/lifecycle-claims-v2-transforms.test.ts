@@ -294,6 +294,7 @@ describe('toClaimAllAgentEnvelope', () => {
                 outcome: 'failed',
                 errorCode: 'CHAIN_ERROR',
                 txHash: '0xrevertedclaim',
+                txStatus: 'reverted',
               },
             ],
             payoutUSDC: undefined,
@@ -324,6 +325,76 @@ describe('toClaimAllAgentEnvelope', () => {
     expect(env.effects[1]?.status).toBe('reverted');
     expect(env.effects[1]?.errorCode).toBe('CHAIN_ERROR');
     expect(env.ok).toBe(false);
+  });
+
+  // PR #98 review round 2: a failed claim step whose tx CONFIRMED on-chain
+  // (a claim that landed but whose POSITION_CLAIMED event was unparseable)
+  // must surface as status:'confirmed', NEVER 'reverted'. The tx did not
+  // revert; mislabeling it would tell agents the wrong on-chain outcome.
+  it('failed step with a CONFIRMED tx (txStatus confirmed) maps to status confirmed, not reverted', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: false,
+        totals: { claimed: 0, failed: 1, totalPayoutWei6: '0', totalPayoutUSDC: 0 } as never,
+        entries: [
+          makeEntry({
+            bucket: 'claimable',
+            success: false,
+            txHashes: [],
+            payoutUSDC: undefined,
+            payoutWei6: undefined,
+            steps: [
+              {
+                name: 'claimPosition',
+                outcome: 'failed',
+                errorCode: 'CHAIN_ERROR',
+                txHash: '0xconfirmedbutunparseable',
+                txStatus: 'confirmed',
+              },
+            ],
+            error: { code: 'CHAIN_ERROR', message: 'no matching POSITION_CLAIMED event' },
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.purpose).toBe('claim-position');
+    expect(env.effects[0]?.ok).toBe(false);
+    expect(env.effects[0]?.txHash).toBe('0xconfirmedbutunparseable');
+    expect(env.effects[0]?.status).toBe('confirmed'); // NOT 'reverted'
+    expect(env.effects[0]?.errorCode).toBe('CHAIN_ERROR');
+    expect(env.ok).toBe(false);
+  });
+
+  it('failed step with a tx hash but UNKNOWN status omits status (never guesses reverted)', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: false,
+        totals: { claimed: 0, failed: 1, totalPayoutWei6: '0', totalPayoutUSDC: 0 } as never,
+        entries: [
+          makeEntry({
+            bucket: 'claimable',
+            success: false,
+            txHashes: [],
+            payoutUSDC: undefined,
+            payoutWei6: undefined,
+            // txHash present, but no txStatus → on-chain outcome unknown.
+            steps: [
+              { name: 'claimPosition', outcome: 'failed', errorCode: 'CHAIN_ERROR', txHash: '0xunknown' },
+            ],
+            error: { code: 'CHAIN_ERROR', message: 'boom' },
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.txHash).toBe('0xunknown');
+    expect(env.effects[0]?.status).toBeUndefined(); // honest: no guess
+    expect(env.effects[0]?.ok).toBe(false);
   });
 
   it('failed claimable entry with no recorded tx emits one failure claim-position effect (no txHash)', () => {
@@ -514,6 +585,7 @@ describe('toClaimAllAgentEnvelope', () => {
                 outcome: 'failed',
                 errorCode: 'CHAIN_ERROR',
                 txHash: '0xrevertedsettle',
+                txStatus: 'reverted',
               },
             ],
             error: { code: 'CHAIN_ERROR', message: 'Transaction reverted on-chain.', txHash: '0xrevertedsettle' },

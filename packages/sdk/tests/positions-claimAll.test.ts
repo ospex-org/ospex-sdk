@@ -915,10 +915,51 @@ describe('positions.claimAll', () => {
     expect(entry.success).toBe(false);
     expect(entry.error?.message).toMatch(/POSITION_CLAIMED/i);
     expect(entry.steps.map((s) => [s.name, s.outcome])).toEqual([['claimPosition', 'failed']]);
+    // The failed step keeps the (confirmed) tx hash for audit, and records its
+    // TRUE on-chain status — `confirmed`, NOT reverted. The tx landed; the
+    // SDK just couldn't parse the payout event. This is what lets the CLI
+    // envelope avoid mislabeling it a reverted tx (PR #98 review round 2).
+    const step = entry.steps[0]!;
+    expect(step.txHash).toBeDefined();
+    expect(step.txStatus).toBe('confirmed');
     // Not counted as a fresh/already/recovered claim, and no payout.
     expect(result.totals.claimedFresh).toBe(0);
     expect(result.totals.alreadyClaimed).toBe(0);
     expect(result.totals.recoveredAlreadyClaimed).toBe(0);
     expect(result.totals.totalPayoutWei6).toBe('0');
+  });
+
+  // Symmetric check: a genuine on-chain revert records txStatus 'reverted'.
+  it('a genuinely reverted claim records txStatus reverted on the failed step', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `1_${SIGNER_ADDR}_0`,
+            speculationId: '1',
+            description: 'Reverts on inclusion (and stays reverted)',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 10,
+            estimatedPayoutWei6: '10000000',
+            txParams: [
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '1', positionType: 0 } },
+            ],
+          },
+        ],
+      },
+      // Pre-flight unclaimed; claim reverts on inclusion; re-read STILL
+      // unclaimed → genuine failure (not a benign already-claimed race).
+      specStates: { '1': [{ claimed: false }, { claimed: false }] },
+      plannedTxs: [{ status: 'reverted', logs: [] }],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.entries[0]!.success).toBe(false);
+    const step = result.entries[0]!.steps[0]!;
+    expect(step.outcome).toBe('failed');
+    expect(step.txHash).toBeDefined();
+    expect(step.txStatus).toBe('reverted');
   });
 });

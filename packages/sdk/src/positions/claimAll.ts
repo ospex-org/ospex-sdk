@@ -109,12 +109,20 @@ export type ClaimAllStepOutcome =
 export interface ClaimAllStep {
   name: ClaimAllStepName;
   outcome: ClaimAllStepOutcome;
-  /** For `sent`, the confirmed tx hash. For `failed`,
-   * `recoveredAlreadySettled`, or `recoveredAlreadyClaimed`, the hash of a
-   * tx that reverted on-chain (present only when one was actually
-   * broadcast). A reverted hash never appears in the entry's `txHashes`
-   * (confirmed-only). */
+  /** For `sent`, the confirmed tx hash (this one DOES appear in the entry's
+   * `txHashes`). For `recoveredAlreadySettled` / `recoveredAlreadyClaimed`,
+   * the hash of a tx that PROVABLY reverted on-chain. For `failed`, the hash
+   * of a tx this wallet broadcast — its actual on-chain status is in
+   * `txStatus` (it may have reverted OR confirmed). A non-`sent` hash never
+   * appears in the entry's `txHashes` (confirmed-successful only). */
   txHash?: string;
+  /** For a `failed` step carrying a `txHash`, that tx's ACTUAL on-chain
+   * status — `'reverted'` (the common failure) or `'confirmed'` (a tx that
+   * landed successfully but whose result the SDK couldn't parse, e.g. a claim
+   * with no decodable `POSITION_CLAIMED` event). Absent when no tx was
+   * broadcast or its status is unknown. Lets the envelope report the true
+   * on-chain outcome instead of assuming every failed-step tx reverted. */
+  txStatus?: 'confirmed' | 'reverted';
   /** Settle steps only — resolved on-chain winning side. */
   winSide?: SettleResult['winSide'];
   /** Claim steps only, and only on a fresh `sent` claim — the
@@ -444,16 +452,24 @@ function errorCodeOf(err: unknown): string {
 /**
  * Construct a `failed` step from a thrown error. Single source of truth
  * for failed-step shape across BOTH the settle and claim legs — when the
- * error is a receipt-level revert, `broadcastSignedTx` attached its
- * `txHash`, and that hash MUST survive into the step (and thus the agent
- * envelope) so a gas-spending failure is auditable. Routing both legs
- * through here keeps that invariant from being applied to one site and
- * forgotten at the other.
+ * error carries a `txHash`, `broadcastSignedTx` (and `claim()`) attached it,
+ * and that hash MUST survive into the step (and thus the agent envelope) so
+ * a gas-spending failure is auditable. Routing both legs through here keeps
+ * that invariant from being applied to one site and forgotten at the other.
+ *
+ * Crucially, it ALSO records the tx's real on-chain status (`txStatus`) from
+ * the error's receipt — never assuming a failed-step tx reverted. A
+ * receipt-level revert → `'reverted'`; a tx that confirmed but whose result
+ * couldn't be parsed (e.g. a claim with no `POSITION_CLAIMED` event, which
+ * carries a SUCCESS receipt) → `'confirmed'`. The envelope mapper keys off
+ * this so it can't mislabel a confirmed-but-unparseable claim as reverted.
  */
 function failedStep(name: ClaimAllStepName, err: unknown): ClaimAllStep {
   const step: ClaimAllStep = { name, outcome: 'failed', errorCode: errorCodeOf(err) };
   if (err instanceof OspexChainError && err.txHash !== undefined) {
     step.txHash = err.txHash;
+    if (err.receipt?.status === 'reverted') step.txStatus = 'reverted';
+    else if (err.receipt?.status === 'success') step.txStatus = 'confirmed';
   }
   return step;
 }

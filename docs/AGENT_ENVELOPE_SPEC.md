@@ -237,7 +237,9 @@ Per-effect `ok` lets multi-phase commands surface partial success cleanly. Examp
 }
 ```
 
-Top-level `ok` is true only when every requested phase succeeded. Exit code follows.
+Top-level `ok` tracks the requested **domain outcome** — true when the command achieved what was asked. Exit code follows.
+
+`ok` is NOT a simple "every effect succeeded" roll-up. An idempotent "ensure" command (`settle`, `claim`, `claim-all`) can legitimately report `ok: true` alongside a **failed/reverted effect** when the goal was reached anyway: e.g. a duplicate settle/claim this wallet broadcast lost a race and reverted on-chain (gas spent → surfaced as an `ok:false, status:'reverted'` effect), but a concurrent tx already achieved the target state. Such a recovery carries an `info`-severity warning (`projection-lag-recovered` / `claim-recovered-already-claimed`) explaining it. Conversely, an effect's `status:'confirmed'` does not force `ok:true` at the effect level — a claim tx that confirmed on-chain but whose result the SDK couldn't parse is a `ok:false, status:'confirmed'` effect (the tx landed; the operation didn't complete). Agents should read per-effect `ok`/`status` for on-chain truth and top-level `ok` for "did the command achieve its goal."
 
 ### 2.6 `AgentNextCommand`
 

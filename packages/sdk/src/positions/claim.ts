@@ -91,9 +91,13 @@ export async function claim(
   const user = (await signer.getAddress()).toLowerCase();
   const payoutWei6 = parsePayoutFromReceipt(receipt, ospexCore, args.speculationId, args.positionType, user);
   if (payoutWei6 == null) {
+    // The tx CONFIRMED (broadcastSignedTx would have thrown on a revert) — we
+    // just couldn't parse the payout event. Carry the success receipt so
+    // downstream reporting can tell this apart from an on-chain revert and
+    // never mislabel a confirmed claim as reverted.
     throw new OspexChainError(
       'claimPosition tx confirmed but no matching POSITION_CLAIMED event found in the receipt.',
-      { txHash },
+      { txHash, receipt },
     );
   }
 
