@@ -11,7 +11,7 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ### CLI (`@ospex/cli`)
 
-- **`ospex claim-all` absorbs projection lag quietly.** A skipped or recovered settle is reported as a normal success with a short `[settle skipped — already settled]` note, and under `--json` as an `info`-severity warning (`settle-skipped-already-settled` / `projection-lag-recovered`) — not a scary failure. The `--json` envelope's per-tx effects are now driven by the SDK's explicit `steps[]`, fixing a latent mislabel where a skipped-settle entry's lone claim tx could be tagged as a settle.
+- **`ospex claim-all` absorbs projection lag quietly.** A skipped or recovered settle is reported as a normal success with a short `[settle skipped — already settled]` note, and under `--json` as an `info`-severity warning (`settle-skipped-already-settled` / `projection-lag-recovered`) — not a scary failure. The `--json` envelope's per-tx effects are now driven by the SDK's explicit `steps[]`, fixing a latent mislabel where a skipped-settle entry's lone claim tx could be tagged as a settle. A settle tx that actually reverts on chain — whether a genuine failure or a lost race that recovered — keeps its hash in `effects[]` with `status: 'reverted'`, so gas-spending failures stay auditable.
 
 ## [0.4.0] — 2026-05-24
 

@@ -344,7 +344,7 @@ describe('toClaimAllAgentEnvelope', () => {
     expect((env.warnings[0]?.details as { winSide?: string })?.winSide).toBe('home');
   });
 
-  it('recovered settle (concurrent race): projection-lag-recovered info warning, claim effect only', () => {
+  it('recovered settle via pre-send revert (no tx broadcast): warning, claim effect only', () => {
     const env = toClaimAllAgentEnvelope(
       {
         address: SIGNER,
@@ -356,6 +356,7 @@ describe('toClaimAllAgentEnvelope', () => {
             txHashes: ['0xclaimonly'],
             winSide: 'under',
             steps: [
+              // No txHash — recovery came via pre-flight read or pre-send revert.
               { name: 'settleSpeculation', outcome: 'recoveredAlreadySettled', winSide: 'under' },
               { name: 'claimPosition', outcome: 'sent', txHash: '0xclaimonly', payoutWei6: '5000000', payoutUSDC: 5 },
             ],
@@ -370,6 +371,85 @@ describe('toClaimAllAgentEnvelope', () => {
     expect(env.warnings).toHaveLength(1);
     expect(env.warnings[0]?.code).toBe('projection-lag-recovered');
     expect(env.warnings[0]?.severity).toBe('info');
+  });
+
+  // Hermes #93 blocker (related): a recovered inclusion-time race where
+  // this wallet DID broadcast a settle that reverted must surface the
+  // reverted tx — the entry recovered, but gas was spent.
+  it('recovered settle that broadcast a reverted tx: reverted settle effect + claim effect + warning', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: true,
+        totals: { claimed: 1, failed: 0, totalPayoutWei6: '5000000', totalPayoutUSDC: 5 } as never,
+        entries: [
+          makeEntry({
+            bucket: 'pendingSettle',
+            txHashes: ['0xclaimonly'],
+            winSide: 'under',
+            steps: [
+              {
+                name: 'settleSpeculation',
+                outcome: 'recoveredAlreadySettled',
+                winSide: 'under',
+                txHash: '0xrevertedsettle',
+              },
+              { name: 'claimPosition', outcome: 'sent', txHash: '0xclaimonly', payoutWei6: '5000000', payoutUSDC: 5 },
+            ],
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.ok).toBe(true); // entry recovered → envelope ok
+    expect(env.effects).toHaveLength(2);
+    // The reverted settle tx is surfaced, not hidden.
+    expect(env.effects[0]?.purpose).toBe('settle-speculation');
+    expect(env.effects[0]?.ok).toBe(false);
+    expect(env.effects[0]?.txHash).toBe('0xrevertedsettle');
+    expect(env.effects[0]?.status).toBe('reverted');
+    expect(env.effects[1]?.purpose).toBe('claim-position');
+    expect(env.effects[1]?.status).toBe('confirmed');
+    expect(env.warnings[0]?.code).toBe('projection-lag-recovered');
+  });
+
+  // Hermes #93 blocker (primary): a genuine settle receipt revert must
+  // emit the settle tx hash with status:'reverted' — previously dropped
+  // because the failed settle step didn't carry err.txHash.
+  it('failed settle step with a revert tx hash emits a reverted settle-speculation effect', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: false,
+        totals: { claimed: 0, failed: 1, totalPayoutWei6: '0', totalPayoutUSDC: 0 } as never,
+        entries: [
+          makeEntry({
+            bucket: 'pendingSettle',
+            success: false,
+            txHashes: [],
+            payoutUSDC: undefined,
+            payoutWei6: undefined,
+            steps: [
+              {
+                name: 'settleSpeculation',
+                outcome: 'failed',
+                errorCode: 'CHAIN_ERROR',
+                txHash: '0xrevertedsettle',
+              },
+            ],
+            error: { code: 'CHAIN_ERROR', message: 'Transaction reverted on-chain.', txHash: '0xrevertedsettle' },
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.purpose).toBe('settle-speculation');
+    expect(env.effects[0]?.ok).toBe(false);
+    expect(env.effects[0]?.txHash).toBe('0xrevertedsettle');
+    expect(env.effects[0]?.status).toBe('reverted');
+    expect(env.effects[0]?.errorCode).toBe('CHAIN_ERROR');
+    expect(env.ok).toBe(false);
   });
 
   // Hermes PR-70 blocker 3: payout shoulder must preserve exact

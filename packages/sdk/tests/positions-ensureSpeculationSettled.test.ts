@@ -169,8 +169,8 @@ describe('positions.ensureSpeculationSettled', () => {
     expect(sendRaw).not.toHaveBeenCalled();
   });
 
-  it('3. recovers when a concurrent settle pre-send-reverts AlreadySettled', async () => {
-    const { ctx } = fakeCtx({
+  it('3. recovers when a concurrent settle pre-send-reverts AlreadySettled (no tx broadcast)', async () => {
+    const { ctx, sendRaw } = fakeCtx({
       reads: [
         { speculationStatus: 0, winSide: 0 }, // pre-flight: Open
         { speculationStatus: 1, winSide: 2 }, // re-read: Closed, home
@@ -183,6 +183,9 @@ describe('positions.ensureSpeculationSettled', () => {
     expect(r.outcome).toBe('recovered');
     expect(r.winSide).toBe('home');
     expect(r.txHash).toBeUndefined();
+    // Pre-send revert — nothing was broadcast, so no reverted tx hash.
+    expect(r.revertedTxHash).toBeUndefined();
+    expect(sendRaw).not.toHaveBeenCalled();
   });
 
   it('4. rethrows a genuine settle failure (not already-settled, re-read still open)', async () => {
@@ -211,8 +214,8 @@ describe('positions.ensureSpeculationSettled', () => {
     expect(sendRaw).toHaveBeenCalledTimes(1);
   });
 
-  it('6. recovers from an inclusion-time revert (no decoded selector) via re-read', async () => {
-    const { ctx } = fakeCtx({
+  it('6. recovers from an inclusion-time revert (no decoded selector) via re-read, preserving the reverted tx hash', async () => {
+    const { ctx, sendRaw } = fakeCtx({
       reads: [
         { speculationStatus: 0, winSide: 0 }, // pre-flight: Open
         { speculationStatus: 1, winSide: 4 }, // re-read: Closed, under
@@ -222,7 +225,11 @@ describe('positions.ensureSpeculationSettled', () => {
     const r = await ensureSpeculationSettled(ctx, { speculationId: 42n });
     expect(r.outcome).toBe('recovered');
     expect(r.winSide).toBe('under');
-    expect(r.txHash).toBeUndefined();
+    expect(r.txHash).toBeUndefined(); // not a confirmed settle
+    // This wallet DID broadcast a settle that reverted — the audit trail
+    // must keep its hash.
+    expect(sendRaw).toHaveBeenCalledTimes(1);
+    expect(r.revertedTxHash).toBe(('0x' + 'aa'.repeat(32)) as `0x${string}`);
   });
 
   it('rejects a non-positive speculationId before any chain work', async () => {

@@ -53,12 +53,18 @@ export interface EnsureSettledResult {
   /** Resolved winning side. From the settle event on `settled`; from the
    * on-chain read on `alreadySettled` / `recovered`. */
   winSide: SettleResult['winSide'];
-  /** Present only on `outcome === 'settled'`. */
+  /** The confirmed settle tx. Present only on `outcome === 'settled'`. */
   txHash?: Hash;
   /** Present only on `outcome === 'settled'`. */
   blockNumber?: bigint;
   /** Present only on `outcome === 'settled'`. */
   receipt?: TransactionReceipt;
+  /** Present only on `outcome === 'recovered'` AND only when this wallet
+   * actually broadcast a settle tx that then reverted (an inclusion-time
+   * race loss — gas was spent). Absent when recovery came via a pre-flight
+   * read or a pre-send (`estimateGas`) revert, where no tx was sent. The
+   * audit trail must not lose this hash. */
+  revertedTxHash?: Hash;
 }
 
 export async function ensureSpeculationSettled(
@@ -98,11 +104,31 @@ export async function ensureSpeculationSettled(
     //    speculation is settled now, by either signal.
     const post = await tryReadSpeculationState(publicClient, speculationModule, speculationId);
     if (isAlreadySettledRevert(err) || post?.status === 'closed') {
-      return { speculationId, outcome: 'recovered', winSide: post?.winSide ?? 'tbd' };
+      const recovered: EnsureSettledResult = {
+        speculationId,
+        outcome: 'recovered',
+        winSide: post?.winSide ?? 'tbd',
+      };
+      // If this wallet actually broadcast a settle tx that reverted on
+      // inclusion (lost the race), keep its hash for the audit trail.
+      // Pre-send / pre-flight recoveries broadcast nothing, so there's
+      // no hash to carry.
+      const revertedTxHash = revertTxHashOf(err);
+      if (revertedTxHash !== undefined) recovered.revertedTxHash = revertedTxHash;
+      return recovered;
     }
     // Genuine failure (not settled, or couldn't confirm) — surface it.
     throw err;
   }
+}
+
+/** Pull a receipt-level revert tx hash off a caught error.
+ * `broadcastSignedTx` throws `OspexChainError({ txHash })` for a reverted
+ * receipt; pre-send (`estimateGas`) reverts carry no `txHash`. */
+function revertTxHashOf(err: unknown): Hash | undefined {
+  return err instanceof OspexChainError && err.txHash !== undefined
+    ? (err.txHash as Hash)
+    : undefined;
 }
 
 /** Read on-chain speculation state, returning `null` on any read error

@@ -286,7 +286,7 @@ async function runEntry(
           speculationId: BigInt(step.args.speculationId),
         });
       } catch (err) {
-        result.steps.push({ name: 'settleSpeculation', outcome: 'failed', errorCode: errorCodeOf(err) });
+        result.steps.push(failedStep('settleSpeculation', err));
         throw err;
       }
       result.winSide = r.winSide;
@@ -306,11 +306,16 @@ async function runEntry(
           winSide: r.winSide,
         });
       } else {
-        result.steps.push({
+        const recoveredStep: ClaimAllStep = {
           name: 'settleSpeculation',
           outcome: 'recoveredAlreadySettled',
           winSide: r.winSide,
-        });
+        };
+        // If this wallet broadcast a settle that reverted on inclusion
+        // (lost the race), preserve its hash — gas was spent, so the
+        // audit trail must show it even though the entry recovered.
+        if (r.revertedTxHash !== undefined) recoveredStep.txHash = r.revertedTxHash;
+        result.steps.push(recoveredStep);
       }
     } else if (step.method === 'claimPosition') {
       let r: ClaimResult;
@@ -320,14 +325,7 @@ async function runEntry(
           positionType: step.args.positionType,
         });
       } catch (err) {
-        const failedStep: ClaimAllStep = {
-          name: 'claimPosition',
-          outcome: 'failed',
-          errorCode: errorCodeOf(err),
-        };
-        const revertTxHash = (err as { txHash?: unknown }).txHash;
-        if (typeof revertTxHash === 'string') failedStep.txHash = revertTxHash;
-        result.steps.push(failedStep);
+        result.steps.push(failedStep('claimPosition', err));
         throw err;
       }
       result.txHashes.push(r.txHash);
@@ -356,4 +354,21 @@ async function runEntry(
 
 function errorCodeOf(err: unknown): string {
   return err instanceof OspexError ? err.code : 'CHAIN_ERROR';
+}
+
+/**
+ * Construct a `failed` step from a thrown error. Single source of truth
+ * for failed-step shape across BOTH the settle and claim legs — when the
+ * error is a receipt-level revert, `broadcastSignedTx` attached its
+ * `txHash`, and that hash MUST survive into the step (and thus the agent
+ * envelope) so a gas-spending failure is auditable. Routing both legs
+ * through here keeps that invariant from being applied to one site and
+ * forgotten at the other.
+ */
+function failedStep(name: ClaimAllStepName, err: unknown): ClaimAllStep {
+  const step: ClaimAllStep = { name, outcome: 'failed', errorCode: errorCodeOf(err) };
+  if (err instanceof OspexChainError && err.txHash !== undefined) {
+    step.txHash = err.txHash;
+  }
+  return step;
 }

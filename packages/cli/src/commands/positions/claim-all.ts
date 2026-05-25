@@ -299,8 +299,16 @@ function buildClaimAllEffects(result: ClaimAllResult): AgentEffect[] {
         }
         if (step.errorCode !== undefined) eff.errorCode = step.errorCode;
         out.push(eff);
+      } else if (step.outcome === 'recoveredAlreadySettled' && step.txHash !== undefined) {
+        // The entry recovered, but this wallet had already broadcast a
+        // settle tx that reverted on inclusion (lost the race) — gas was
+        // spent. Surface it as a reverted effect so the audit trail
+        // isn't silent about it. (Pre-flight skip / pre-send recovery
+        // carry no txHash and emit no effect — only the info warning.)
+        out.push({ type: 'transaction', purpose, ok: false, txHash: step.txHash as Hex, status: 'reverted' });
       }
-      // skippedAlreadySettled / recoveredAlreadySettled → no tx effect.
+      // skippedAlreadySettled, and recovered with no tx → no effect
+      // (surfaced as an info warning instead).
     }
     if (!entry.success && !sawFailureEffect) {
       const errAsChain = entry.error as { code?: string; txHash?: string } | undefined;

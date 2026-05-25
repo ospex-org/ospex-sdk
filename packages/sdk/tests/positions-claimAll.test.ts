@@ -397,6 +397,13 @@ describe('positions.claimAll', () => {
       ['settleSpeculation', 'recoveredAlreadySettled'],
       ['claimPosition', 'sent'],
     ]);
+    // This wallet broadcast a settle that reverted on inclusion — keep
+    // its hash on the recovered step, but NOT in the confirmed txHashes.
+    const settleStep = entry.steps[0]!;
+    const claimStep = entry.steps[1]!;
+    expect(settleStep.txHash).toBeDefined();
+    expect(entry.txHashes).toEqual([claimStep.txHash]);
+    expect(entry.txHashes).not.toContain(settleStep.txHash);
   });
 
   it('still fails clearly on a genuine settle failure (re-read not settled)', async () => {
@@ -450,6 +457,9 @@ describe('positions.claimAll', () => {
     expect(entry.steps.map((s) => [s.name, s.outcome])).toEqual([
       ['settleSpeculation', 'failed'],
     ]);
+    // The settle reverted on inclusion — its tx hash must survive on the
+    // failed step (the gas-spending failure has to stay auditable).
+    expect(entry.steps[0]!.txHash).toBeDefined();
   });
 
   it('isolates per-entry failures — one bad entry does not abort the rest', async () => {
