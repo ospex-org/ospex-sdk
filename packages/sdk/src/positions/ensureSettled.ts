@@ -16,9 +16,12 @@
  *   2. Send the strict settle → `settled` (carries txHash/receipt/winSide).
  *   3. Send reverted → re-read on-chain state. If the revert decoded to
  *      `AlreadySettled` OR the re-read shows the speculation is now closed,
- *      a concurrent settle won the race → `recovered`, no tx. Otherwise the
- *      revert is a genuine failure (`ContestNotFinalized`, `InvalidStartTime`,
- *      RPC error, …) and propagates unchanged.
+ *      a concurrent settle won the race → `recovered`. A pre-send
+ *      (`estimateGas`) revert broadcasts nothing; an inclusion-time revert
+ *      DID broadcast a tx that reverted (gas spent) — its hash is preserved
+ *      on `revertedTxHash`. Otherwise the revert is a genuine failure
+ *      (`ContestNotFinalized`, `InvalidStartTime`, RPC error, …) and
+ *      propagates unchanged.
  *
  * The recover/abort decision in step 3 is driven by the authoritative
  * on-chain re-read, not by parsing the revert string — so it covers both
@@ -44,7 +47,10 @@ export type EnsureSettledOutcome =
   | 'settled'
   /** A pre-flight read found it already settled; no tx was sent. */
   | 'alreadySettled'
-  /** A concurrent settle won the race; recovered after a reverted send. */
+  /** A concurrent settle won the race — the settle attempt reverted but a
+   * re-read confirmed the speculation is settled. Carries `revertedTxHash`
+   * iff this wallet broadcast a tx that reverted (inclusion-time loss);
+   * pre-send / pre-flight recovery broadcasts nothing. */
   | 'recovered';
 
 export interface EnsureSettledResult {

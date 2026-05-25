@@ -76,8 +76,10 @@ export type ClaimAllStepOutcome =
   /** Settle only: a pre-flight read found the speculation already
    * settled, so no settle tx was sent. */
   | 'skippedAlreadySettled'
-  /** Settle only: the settle send reverted because a concurrent caller
-   * settled first; an on-chain re-read confirmed it. No tx by us. */
+  /** Settle only: the settle attempt reverted because a concurrent caller
+   * settled first, and an on-chain re-read confirmed it. If this wallet
+   * broadcast a settle that reverted on inclusion, its (reverted) hash is
+   * on `txHash`; a pre-send revert broadcasts nothing. */
   | 'recoveredAlreadySettled'
   /** The step threw. The entry as a whole is marked failed. */
   | 'failed';
@@ -90,8 +92,10 @@ export type ClaimAllStepOutcome =
 export interface ClaimAllStep {
   name: ClaimAllStepName;
   outcome: ClaimAllStepOutcome;
-  /** Present on `sent`, and on a `failed` step that reverted on-chain
-   * with a known tx hash. */
+  /** For `sent`, the confirmed tx hash. For `failed` or
+   * `recoveredAlreadySettled`, the hash of a tx that reverted on-chain
+   * (present only when one was actually broadcast). A reverted hash never
+   * appears in the entry's `txHashes` (confirmed-only). */
   txHash?: string;
   /** Settle steps only — resolved on-chain winning side. */
   winSide?: SettleResult['winSide'];
@@ -111,9 +115,11 @@ export interface ClaimAllEntryResult {
    * succeeded for this entry. A skipped/recovered settle still counts
    * as success — the goal (settled, then claimed) was achieved. */
   success: boolean;
-  /** All confirmed tx hashes in execution order. Empty when `dryRun`
-   * was set, when the settle step was skipped/recovered (no tx), or
-   * when the very first step failed before any tx was sent. */
+  /** Confirmed tx hashes only, in execution order. A skipped settle and a
+   * pre-send recovery broadcast nothing; a recovered settle that reverted
+   * on inclusion DID broadcast, but that reverted hash lives on
+   * `steps[].txHash`, never here. Empty on dry-run, or when the first step
+   * failed before any tx confirmed. */
   txHashes: string[];
   /** Ordered record of the steps actually executed (empty on dry-run).
    * Canonical source for what happened — `txHashes`, `winSide`, and
