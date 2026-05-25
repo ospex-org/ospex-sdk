@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.4.2] — 2026-05-25
+
 ### SDK (`@ospex/sdk`)
 
 - **`positions.ensureSpeculationSettled` now returns `revertedReceipt` on a recovered inclusion-time race.** When this wallet broadcast a settle that reverted on inclusion (it lost the race but the speculation ended up settled → `outcome: 'recovered'`), the result already carried `revertedTxHash`; it now also carries `revertedReceipt` — the reverted tx's receipt, re-fetched best-effort so consumers can account the POL gas that tx spent. Gas budgets (e.g. the market-maker's daily counter) must include reverted txs; without the receipt they silently undercounted. Absent only if the re-fetch fails (the caller still has `revertedTxHash` to flag an accounting gap) or when no tx was broadcast (pre-flight / pre-send recovery). Additive; no change to `settled` / `alreadySettled`.
@@ -166,6 +170,7 @@ Initial public release.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
 [Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.4.0...HEAD
+[0.4.2]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.2
 [0.4.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.0
 [0.3.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.3.1
