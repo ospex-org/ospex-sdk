@@ -193,6 +193,8 @@ Initial stable `warning.code` catalog (additive — consumers log + ignore unkno
 | `'password-file-permissions-loose'` | `warning` (`blocking` under `--strict`) | `auth check` |
 | `'settle-skipped-already-settled'` | `info` | `claim-all` / `settle` — a pre-flight read found the speculation already settled, so the duplicate settle tx was skipped. `details: { speculationId, winSide, … }`. |
 | `'projection-lag-recovered'` | `info` | `claim-all` / `settle` — a concurrent settle won a race mid-flight, an on-chain re-read confirmed it, and the command proceeded (claim-all → claim; settle → done). `details: { speculationId, winSide, … }`. |
+| `'claim-skipped-already-claimed'` | `info` | `claim-all` / `claim` — a pre-flight `getPosition.claimed` read found the position already claimed, so the duplicate claim tx was skipped. **No payout** (the contract zeroes economic fields post-claim; never fabricated). `details: { speculationId, positionType / positionId, … }`. |
+| `'claim-recovered-already-claimed'` | `info` | `claim-all` / `claim` — a benign already-claimed (concurrent caller, rerun, `claimable`-projection lag) won a race mid-flight; an on-chain re-read confirmed it and the command proceeded. **No payout.** A reverted-on-inclusion claim this wallet broadcast also emits a `status:'reverted'` `claim-position` effect (gas spent). `details: { speculationId, positionType / positionId, … }`. |
 
 `errors[]` uses the existing `OspexError.code` taxonomy (`'API_ERROR'`, `'ALLOWANCE_INSUFFICIENT'`, `'CHAIN_ERROR'`, etc. — see [`AGENT_CONTRACT.md` §7](./AGENT_CONTRACT.md)). New codes are additive.
 
@@ -235,7 +237,9 @@ Per-effect `ok` lets multi-phase commands surface partial success cleanly. Examp
 }
 ```
 
-Top-level `ok` is true only when every requested phase succeeded. Exit code follows.
+Top-level `ok` tracks the requested **domain outcome** — true when the command achieved what was asked. Exit code follows.
+
+`ok` is NOT a simple "every effect succeeded" roll-up. An idempotent "ensure" command (`settle`, `claim`, `claim-all`) can legitimately report `ok: true` alongside a **failed/reverted effect** when the goal was reached anyway: e.g. a duplicate settle/claim this wallet broadcast lost a race and reverted on-chain (gas spent → surfaced as an `ok:false, status:'reverted'` effect), but a concurrent tx already achieved the target state. Such a recovery carries an `info`-severity warning (`projection-lag-recovered` / `claim-recovered-already-claimed`) explaining it. Conversely, an effect's `status:'confirmed'` does not force `ok:true` at the effect level — a claim tx that confirmed on-chain but whose result the SDK couldn't parse is a `ok:false, status:'confirmed'` effect (the tx landed; the operation didn't complete). Agents should read per-effect `ok`/`status` for on-chain truth and top-level `ok` for "did the command achieve its goal."
 
 ### 2.6 `AgentNextCommand`
 
@@ -389,9 +393,9 @@ Legend: `✓` populated · `∅` `null` / `[]` (does not apply) · `+` populated
 | `commitments cancel <hash> --also-onchain` | execute | signer | false | false | ∅ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (both phases) | ✓ |
 | `commitments cancel-onchain <hash>` | execute | signer | false | false | ∅ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (transaction) | ✓ |
 | `commitments cancel-all` | execute | signer | false | false | ∅ | ∅ | ∅ | ✓ (parent contest) | ✓ | ∅ (multi) | ∅ | ✓ | ✓ (transaction) | ✓ |
-| `claim <id> --type <…>` | execute | signer | false | false | ∅ | ∅ | ✓ | ✓ | ✓ | ∅ | ✓ | ✓ | ✓ (transaction) | ✓ |
+| `claim <id> --type <…>` | execute | signer | false | false | ∅ | ∅ | ✓ (claimed only; ∅ when already-claimed / recovered) | ✓ | ✓ | ∅ | ✓ | ✓ (info: already-claimed / recovered) | ✓ (claim tx; ∅ when already-claimed / pre-send recovery; reverted effect on inclusion-race recovery) | ✓ (verify via `positions status`) |
 | `claim-all --dry-run` | dry-run | subject | true | true | ∅ | ∅ | ✓ (planned total) | ∅ | ∅ | ∅ | ∅ | ✓ | ∅ | ✓ (execute form, `safeToAutoRun: false`) |
-| `claim-all` (live) | execute | signer | false | false | ∅ | ∅ | ✓ (summed) | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ (one transaction per row, ordered) | ✓ (verify via `positions status`) |
+| `claim-all` (live) | execute | signer | false | false | ∅ | ∅ | ✓ (summed; **fresh successful claims only**) | ∅ | ∅ | ∅ | ∅ | ✓ (info: settle + claim skips/recoveries) | ✓ (one transaction per landed leg, ordered; skipped/recovered legs emit no effect, a reverted-on-inclusion leg emits a `status:'reverted'` effect) | ✓ (verify via `positions status`) |
 | `settle <id>` | execute | signer | false | false | ∅ | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ (info: already-settled / projection-lag-recovered) | ✓ (settle tx; ∅ when already-settled / pre-send recovery) | ✓ (next: `claim`) |
 | `contests create --game-id <…>` | execute | signer | false | false | ✓ (LINK + USDC; consumed when ok=true) | ∅ | ∅ | ✓ (created) | ∅ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ (next: `wait-verified`) |
 | `contests score <id>` | execute | signer | false | false | ✓ (LINK; consumed) | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ |

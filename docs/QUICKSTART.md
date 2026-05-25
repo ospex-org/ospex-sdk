@@ -437,7 +437,7 @@ ospex claim-all                                    # sweep every claimable posit
 ospex claim <speculationId> --type upper|lower    # one specific position
 ```
 
-`ospex positions status <yourAddress>` shows what's `active`, `claimable`, or `pendingSettle` (a winner waiting on `settle`) at any time. `claim-all` is the day-to-day shortcut; the typed form is for one-off claims when you want to be explicit. `claim-all` is safe to run even if a `pendingSettle` speculation was already settled by someone else — it skips the redundant settle and just collects.
+`ospex positions status <yourAddress>` shows what's `active`, `claimable`, or `pendingSettle` (a winner waiting on `settle`) at any time. `claim-all` is the day-to-day shortcut; the typed form is for one-off claims when you want to be explicit. Both are **idempotent**: `claim-all` is safe to run even if a `pendingSettle` speculation was already settled by someone else (it skips the redundant settle), and re-running either after a position is already claimed reports success (`outcome: alreadyClaimed`, no transaction) instead of an `AlreadyClaimed` error — so a rerun or a wallet someone else already swept never errors out. (Only `AlreadyClaimed` is treated this way; claiming before the speculation is settled still errors with a pointer to `ospex settle`.)
 
 ---
 

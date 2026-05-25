@@ -68,7 +68,13 @@ export async function broadcastSignedTx(
   const txHash = await publicClient.sendRawTransaction({ serializedTransaction });
   const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
   if (receipt.status !== 'success') {
-    throw new OspexChainError('Transaction reverted on-chain.', { txHash });
+    // Carry the receipt, not just the hash. Here `receipt.status` is
+    // `'reverted'` — the authoritative "this tx reverted on-chain" signal —
+    // and it holds gasUsed / effectiveGasPrice for accounting. Downstream
+    // idempotent-recovery paths branch on `receipt.status` (NOT presence): a
+    // post-broadcast parse failure on a SUCCESSFUL tx also carries a receipt,
+    // but with `status: 'success'`, so it isn't mistaken for a revert.
+    throw new OspexChainError('Transaction reverted on-chain.', { txHash, receipt });
   }
   return { txHash, receipt };
 }

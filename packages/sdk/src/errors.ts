@@ -4,6 +4,8 @@
  * on `err.code` without instanceof.
  */
 
+import type { TransactionReceipt } from 'viem';
+
 export type OspexErrorCode =
   | 'API_ERROR'
   | 'CONFIG_ERROR'
@@ -145,12 +147,37 @@ export type OspexChainErrorReason =
  * `reason` is set when the SDK could decode a known custom error
  * (e.g. `MatchingModule__NotCommitmentMaker`). `revertReason` is
  * a free-form string for legacy / unknown reverts. `txHash` is set
- * on receipt-level reverts so the caller can inspect on Polygonscan.
+ * whenever a tx was broadcast (so the caller can inspect on Polygonscan) —
+ * which includes both a reverted tx AND a confirmed tx that failed a
+ * post-send step; use `receipt.status` (below) to tell them apart.
  */
 export class OspexChainError extends OspexError {
   readonly reason: OspexChainErrorReason | undefined;
   readonly revertReason: string | undefined;
   readonly txHash: string | undefined;
+  /**
+   * The transaction receipt, attached when the error occurred after the tx
+   * was mined and a receipt was available. **Branch on `receipt.status`, not
+   * on presence** — presence alone does NOT mean the tx reverted:
+   *
+   *   - `receipt.status === 'reverted'` — the authoritative revert signal:
+   *     the broadcast tx reverted on-chain (attached by `broadcastSignedTx`).
+   *     Carries `gasUsed` / `effectiveGasPrice` so consumers can account the
+   *     POL the reverted tx spent.
+   *   - `receipt.status === 'success'` — the tx CONFIRMED on-chain, but a
+   *     post-send step failed (e.g. `claim()` throwing "tx confirmed but no
+   *     POSITION_CLAIMED event" — the claim landed; its payout event just
+   *     couldn't be parsed). The on-chain effect happened; the operation
+   *     didn't complete. Do NOT treat this as a revert.
+   *   - `receipt === undefined` — the failure happened before/without a mined
+   *     receipt (pre-send revert, RPC/signing error). On-chain status is
+   *     UNKNOWN — do NOT assume reverted.
+   *
+   * Idempotent recovery (`ensurePositionClaimed`) keys specifically off
+   * `receipt?.status === 'reverted'`: a confirmed-but-unparseable claim
+   * (`status: 'success'`) stays a loud failure, never a benign recovery.
+   */
+  readonly receipt: TransactionReceipt | undefined;
 
   constructor(
     message: string,
@@ -158,6 +185,7 @@ export class OspexChainError extends OspexError {
       reason?: OspexChainErrorReason;
       revertReason?: string;
       txHash?: string;
+      receipt?: TransactionReceipt;
       cause?: unknown;
     },
   ) {
@@ -170,6 +198,7 @@ export class OspexChainError extends OspexError {
     this.reason = init?.reason;
     this.revertReason = init?.revertReason;
     this.txHash = init?.txHash;
+    this.receipt = init?.receipt;
   }
 }
 

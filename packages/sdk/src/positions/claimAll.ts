@@ -7,14 +7,20 @@
  *      Each entry carries an ordered `txParams[]` array — claimable
  *      rows have a single `claimPosition` step; pendingSettle rows
  *      have `settleSpeculation` then `claimPosition`.
- *   2. For each entry, walk the steps in order. The settle step runs
- *      through `ensureSpeculationSettled` (idempotent): if the
- *      speculation is already settled on chain — common when another
- *      wallet just settled and core-api's `pendingSettle` projection
- *      hasn't caught up — the settle tx is skipped (or recovered after
- *      a race) and the sweep proceeds straight to the claim. A genuine
- *      settle/claim failure halts THIS entry only; the loop moves on so
- *      one bad position can't block the rest.
+ *   2. For each entry, walk the steps in order. BOTH legs are idempotent:
+ *      the settle step runs through `ensureSpeculationSettled` and the
+ *      claim step through `ensurePositionClaimed`. If the speculation is
+ *      already settled on chain — common when another wallet just settled
+ *      and core-api's `pendingSettle` projection hasn't caught up — the
+ *      settle tx is skipped (or recovered after a race) and the sweep
+ *      proceeds straight to the claim. Likewise, if the position was
+ *      already claimed (a prior run, a manual claim, a concurrent caller,
+ *      or `claimable`-projection lag), the claim tx is skipped/recovered
+ *      and the entry still counts as success — with NO payout (the
+ *      contract zeroes economic fields post-claim, so there's nothing to
+ *      read back, and the SDK never fabricates one). A genuine settle/claim
+ *      failure (`NotSettled`, `NoPayout`, RPC error, …) halts THIS entry
+ *      only; the loop moves on so one bad position can't block the rest.
  *   3. Aggregate per-entry success/failure into the result array. Each
  *      entry carries an explicit `steps[]` record of what actually
  *      happened (sent / skipped / recovered / failed) so consumers
@@ -45,8 +51,8 @@ import {
   OspexError,
   OspexValidationError,
 } from '../errors.js';
-import { claim, type ClaimResult } from './claim.js';
 import { ensureSpeculationSettled, type EnsureSettledResult } from './ensureSettled.js';
+import { ensurePositionClaimed, type EnsureClaimedResult } from './ensureClaimed.js';
 import type { SettleResult } from './settle.js';
 import type { PositionsContext } from './context.js';
 import type { ClaimParamEntry } from '../types/position.js';
@@ -81,6 +87,17 @@ export type ClaimAllStepOutcome =
    * broadcast a settle that reverted on inclusion, its (reverted) hash is
    * on `txHash`; a pre-send revert broadcasts nothing. */
   | 'recoveredAlreadySettled'
+  /** Claim only: a pre-flight read found the position already claimed, so
+   * no claim tx was sent. No payout (the contract zeroes economic fields
+   * post-claim — the SDK never derives one). */
+  | 'skippedAlreadyClaimed'
+  /** Claim only: the claim attempt reverted because the position was
+   * already claimed (a benign overlap / rerun / projection lag), and an
+   * on-chain re-read (or the decoded `AlreadyClaimed` selector) confirmed
+   * it. If this wallet broadcast a claim that reverted on inclusion, its
+   * (reverted) hash is on `txHash`; a pre-send revert broadcasts nothing.
+   * No payout. */
+  | 'recoveredAlreadyClaimed'
   /** The step threw. The entry as a whole is marked failed. */
   | 'failed';
 
@@ -92,14 +109,26 @@ export type ClaimAllStepOutcome =
 export interface ClaimAllStep {
   name: ClaimAllStepName;
   outcome: ClaimAllStepOutcome;
-  /** For `sent`, the confirmed tx hash. For `failed` or
-   * `recoveredAlreadySettled`, the hash of a tx that reverted on-chain
-   * (present only when one was actually broadcast). A reverted hash never
-   * appears in the entry's `txHashes` (confirmed-only). */
+  /** For `sent`, the confirmed tx hash (this one DOES appear in the entry's
+   * `txHashes`). For `recoveredAlreadySettled` / `recoveredAlreadyClaimed`,
+   * the hash of a tx that PROVABLY reverted on-chain. For `failed`, the hash
+   * of a tx this wallet broadcast — its actual on-chain status is in
+   * `txStatus` (it may have reverted OR confirmed). A non-`sent` hash never
+   * appears in the entry's `txHashes` (confirmed-successful only). */
   txHash?: string;
+  /** For a `failed` step carrying a `txHash`, that tx's ACTUAL on-chain
+   * status — `'reverted'` (the common failure) or `'confirmed'` (a tx that
+   * landed successfully but whose result the SDK couldn't parse, e.g. a claim
+   * with no decodable `POSITION_CLAIMED` event). Absent when no tx was
+   * broadcast or its status is unknown. Lets the envelope report the true
+   * on-chain outcome instead of assuming every failed-step tx reverted. */
+  txStatus?: 'confirmed' | 'reverted';
   /** Settle steps only — resolved on-chain winning side. */
   winSide?: SettleResult['winSide'];
-  /** Claim steps only. */
+  /** Claim steps only, and only on a fresh `sent` claim — the
+   * event-sourced payout. Absent on `skippedAlreadyClaimed` /
+   * `recoveredAlreadyClaimed` (no on-chain payout to read post-claim; the
+   * SDK never fabricates one). */
   payoutWei6?: string;
   payoutUSDC?: number;
   /** `failed` steps only — the `OspexError.code` of the failure. */
@@ -112,8 +141,10 @@ export interface ClaimAllEntryResult {
   bucket: 'claimable' | 'pendingSettle';
   description: string;
   /** Whether the full pipeline (settle if needed, then claim)
-   * succeeded for this entry. A skipped/recovered settle still counts
-   * as success — the goal (settled, then claimed) was achieved. */
+   * succeeded for this entry. A skipped/recovered settle OR a
+   * skipped/recovered (already-claimed) claim still counts as success —
+   * the goal (settled, then claimed) was achieved. Only a genuine
+   * failure (`NotSettled`, `NoPayout`, RPC error, …) flips this false. */
   success: boolean;
   /** Confirmed tx hashes only, in execution order. A skipped settle and a
    * pre-send recovery broadcast nothing; a recovered settle that reverted
@@ -125,8 +156,8 @@ export interface ClaimAllEntryResult {
    * Canonical source for what happened — `txHashes`, `winSide`, and
    * `payout*` below are conveniences derived from it. */
   steps: ClaimAllStep[];
-  /** Populated when the claim step landed; absent on dry-run or
-   * failure. */
+  /** Populated when the claim step sent a fresh claim tx; absent on
+   * dry-run, failure, or an already-claimed skip/recover (no payout). */
   payoutWei6?: string;
   payoutUSDC?: number;
   /** Populated when the settle step ran, skipped, or recovered. */
@@ -144,8 +175,22 @@ export interface ClaimAllResult {
   success: boolean;
   entries: ClaimAllEntryResult[];
   totals: {
+    /** Successful ENTRIES (every step sent/skipped/recovered, none
+     * failed). Not the same as `claimedFresh` — an already-claimed entry
+     * is a successful entry that sent no claim tx. */
     claimed: number;
     failed: number;
+    /** Claim-leg outcome breakdown (additive — sums to the number of
+     * claim steps across all entries). Lets a consumer distinguish "swept
+     * a fresh payout" from "was already claimed" without walking
+     * `entries[].steps`. */
+    claimedFresh: number;
+    alreadyClaimed: number;
+    recoveredAlreadyClaimed: number;
+    /** Fresh successful claim payouts in THIS run only — never includes
+     * already-claimed/recovered positions (the contract zeroes their
+     * economic fields, and the SDK never fabricates a payout). On dry-run,
+     * the predicted total. */
     totalPayoutWei6: string;
     totalPayoutUSDC: number;
   };
@@ -266,6 +311,22 @@ export async function claimAll(
 
   const claimed = entries.filter((e) => e.success).length;
   const failed = entries.length - claimed;
+
+  // Claim-leg outcome breakdown, derived from the canonical `steps[]` so
+  // it can't drift from what actually executed. Empty (all zero) on
+  // dry-run, where no steps run.
+  let claimedFresh = 0;
+  let alreadyClaimed = 0;
+  let recoveredAlreadyClaimed = 0;
+  for (const e of entries) {
+    for (const s of e.steps) {
+      if (s.name !== 'claimPosition') continue;
+      if (s.outcome === 'sent') claimedFresh += 1;
+      else if (s.outcome === 'skippedAlreadyClaimed') alreadyClaimed += 1;
+      else if (s.outcome === 'recoveredAlreadyClaimed') recoveredAlreadyClaimed += 1;
+    }
+  }
+
   return {
     address,
     success: dryRun ? false : failed === 0 && entries.length > 0,
@@ -273,6 +334,9 @@ export async function claimAll(
     totals: {
       claimed,
       failed,
+      claimedFresh,
+      alreadyClaimed,
+      recoveredAlreadyClaimed,
       totalPayoutWei6: totalPayoutWei6.toString(),
       totalPayoutUSDC: Number(totalPayoutWei6) / 1e6,
     },
@@ -324,9 +388,9 @@ async function runEntry(
         result.steps.push(recoveredStep);
       }
     } else if (step.method === 'claimPosition') {
-      let r: ClaimResult;
+      let r: EnsureClaimedResult;
       try {
-        r = await claim(ctx, {
+        r = await ensurePositionClaimed(ctx, {
           speculationId: BigInt(step.args.speculationId),
           positionType: step.args.positionType,
         });
@@ -334,16 +398,39 @@ async function runEntry(
         result.steps.push(failedStep('claimPosition', err));
         throw err;
       }
-      result.txHashes.push(r.txHash);
-      result.payoutWei6 = r.payoutWei6.toString();
-      result.payoutUSDC = r.payoutUSDC;
-      result.steps.push({
-        name: 'claimPosition',
-        outcome: 'sent',
-        txHash: r.txHash,
-        payoutWei6: r.payoutWei6.toString(),
-        payoutUSDC: r.payoutUSDC,
-      });
+      if (r.outcome === 'claimed') {
+        // Fresh claim — event-sourced payout. `txHash`/`payout*` are always
+        // present on 'claimed'. ONLY fresh payouts feed the run's realized
+        // total (see the caller's `totalPayoutWei6` accumulation).
+        result.txHashes.push(r.txHash as string);
+        result.payoutWei6 = (r.payoutWei6 as bigint).toString();
+        result.payoutUSDC = r.payoutUSDC as number;
+        result.steps.push({
+          name: 'claimPosition',
+          outcome: 'sent',
+          txHash: r.txHash as string,
+          payoutWei6: (r.payoutWei6 as bigint).toString(),
+          payoutUSDC: r.payoutUSDC as number,
+        });
+      } else if (r.outcome === 'alreadyClaimed') {
+        // Benign — the payout was collected earlier (a prior run, a
+        // concurrent caller, a manual claim). No tx, no payout; the entry
+        // still succeeds. NOT added to `txHashes` or any payout total.
+        result.steps.push({ name: 'claimPosition', outcome: 'skippedAlreadyClaimed' });
+      } else {
+        // recovered — a benign already-claimed won a race. No payout.
+        const recoveredStep: ClaimAllStep = {
+          name: 'claimPosition',
+          outcome: 'recoveredAlreadyClaimed',
+        };
+        // If this wallet broadcast a claim that reverted on inclusion (lost
+        // the race), preserve its hash — gas was spent, so the audit trail
+        // must show it even though the entry recovered. (Pre-flight skip /
+        // pre-send recovery carry no hash.) A reverted hash never enters
+        // `txHashes` (confirmed-only).
+        if (r.revertedTxHash !== undefined) recoveredStep.txHash = r.revertedTxHash;
+        result.steps.push(recoveredStep);
+      }
     } else {
       // Unknown method — surface clearly. Keeps the SDK forward-
       // compatible: if core-api adds new step types in the future,
@@ -365,16 +452,24 @@ function errorCodeOf(err: unknown): string {
 /**
  * Construct a `failed` step from a thrown error. Single source of truth
  * for failed-step shape across BOTH the settle and claim legs — when the
- * error is a receipt-level revert, `broadcastSignedTx` attached its
- * `txHash`, and that hash MUST survive into the step (and thus the agent
- * envelope) so a gas-spending failure is auditable. Routing both legs
- * through here keeps that invariant from being applied to one site and
- * forgotten at the other.
+ * error carries a `txHash`, `broadcastSignedTx` (and `claim()`) attached it,
+ * and that hash MUST survive into the step (and thus the agent envelope) so
+ * a gas-spending failure is auditable. Routing both legs through here keeps
+ * that invariant from being applied to one site and forgotten at the other.
+ *
+ * Crucially, it ALSO records the tx's real on-chain status (`txStatus`) from
+ * the error's receipt — never assuming a failed-step tx reverted. A
+ * receipt-level revert → `'reverted'`; a tx that confirmed but whose result
+ * couldn't be parsed (e.g. a claim with no `POSITION_CLAIMED` event, which
+ * carries a SUCCESS receipt) → `'confirmed'`. The envelope mapper keys off
+ * this so it can't mislabel a confirmed-but-unparseable claim as reverted.
  */
 function failedStep(name: ClaimAllStepName, err: unknown): ClaimAllStep {
   const step: ClaimAllStep = { name, outcome: 'failed', errorCode: errorCodeOf(err) };
   if (err instanceof OspexChainError && err.txHash !== undefined) {
     step.txHash = err.txHash;
+    if (err.receipt?.status === 'reverted') step.txStatus = 'reverted';
+    else if (err.receipt?.status === 'success') step.txStatus = 'confirmed';
   }
   return step;
 }

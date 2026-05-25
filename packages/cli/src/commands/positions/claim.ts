@@ -1,24 +1,41 @@
 /**
- * `ospex claim <speculationId> --type <upper|lower>` — claim a single
- * settled position. Uses the configured signer + RPC.
+ * `ospex claim <speculationId> --type <upper|lower>` — idempotently claim
+ * a single settled position. Uses the configured signer + RPC.
  *
- * If the API surfaces this position as `pendingSettle` (its parent
- * speculation hasn't been settled yet), `claim` does NOT auto-settle —
- * the user explicitly chose `claim`. We surface a clear error pointing
- * at `ospex settle` or `ospex claim-all` instead.
+ * Routes through `client.positions.ensurePositionClaimed` ("make this
+ * claimed"), NOT the strict `claim` primitive. If the position was already
+ * claimed — a prior run, a manual claim, a concurrent caller, or core-API
+ * `claimable`-projection lag — this reports success instead of a scary
+ * `AlreadyClaimed` revert. Three outcomes:
+ *   - `claimed`        — this call sent the claim tx (event-sourced payout).
+ *   - `alreadyClaimed` — a pre-flight read found it claimed; no tx, no payout.
+ *   - `recovered`      — a benign already-claimed won a race mid-flight (may
+ *                        carry `revertedTxHash` if this wallet's claim
+ *                        actually broadcast and reverted).
+ *
+ * Only `AlreadyClaimed` is benign. If the parent speculation isn't settled
+ * yet, the claim reverts `NotSettled` and `claim` does NOT auto-settle — we
+ * surface a clear error pointing at `ospex settle` / `ospex claim-all`.
+ * `NoPayout` and other reverts stay loud too.
+ *
+ * The strict `client.positions.claim` primitive (always sends a tx; throws
+ * `AlreadyClaimed`) stays available for programmatic callers that need the
+ * receipt + event-sourced payout of a claim they specifically sent.
  */
 
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import type {
+  AgentEffect,
   AgentEnvelope,
   AgentPayout,
+  AgentWarning,
   ChainId,
   Hex,
   OspexClient,
   PerspectiveAmount,
 } from '@ospex/sdk';
-import { OspexChainError, wei6ToDecimalUSDC } from '@ospex/sdk';
+import { isNotSettledRevert, wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
@@ -47,7 +64,7 @@ function parsePosition(raw: string): 0 | 1 {
 
 export const positionsClaimCommand = addSignerOptions(
   new Command('claim')
-    .description('Claim a single settled position. Reverts if the parent speculation is not yet settled.')
+    .description('Claim a single settled position (idempotent). Reports success if it was already claimed; reverts if the parent speculation is not yet settled.')
     .argument('<speculationId>', 'speculation id (uint256)')
     .requiredOption('--type <upper|lower>', 'position side (upper = away/over, lower = home/under)')
     .option('--json', 'output as JSON'),
@@ -64,43 +81,64 @@ export const positionsClaimCommand = addSignerOptions(
     let signerAddress: Hex | null = null;
 
     try {
-    let result;
-    try {
-      result = await client.positions.claim({ speculationId, positionType });
+      const result = await client.positions.ensurePositionClaimed({ speculationId, positionType });
+
+      if (wantJson) {
+        signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+        writeAgentEnvelope(
+          toClaimAgentEnvelope(result, {
+            chainId,
+            signerAddress,
+            speculationId,
+            positionType,
+          }),
+        );
+        return;
+      }
+
+      // Human output, per outcome. `formatOutput` renders a single object
+      // as aligned key/value lines (and skips empty fields).
+      if (result.outcome === 'claimed') {
+        formatOutput(
+          {
+            outcome: result.outcome,
+            txHash: result.txHash,
+            blockNumber: result.blockNumber?.toString(),
+            payoutUSDC: result.payoutUSDC,
+            payoutWei6: result.payoutWei6?.toString(),
+          },
+          { json: false },
+        );
+      } else if (result.outcome === 'alreadyClaimed') {
+        formatOutput(
+          {
+            outcome: result.outcome,
+            note: 'Already claimed on-chain — no transaction sent.',
+          },
+          { json: false },
+        );
+      } else {
+        formatOutput(
+          {
+            outcome: result.outcome,
+            note: 'Already claimed by a concurrent/prior transaction — recovered, no claim needed.',
+            ...(result.revertedTxHash !== undefined ? { revertedTx: result.revertedTxHash } : {}),
+          },
+          { json: false },
+        );
+      }
     } catch (err) {
-      if (err instanceof OspexChainError && /NotSettled/i.test(err.message)) {
+      // Only AlreadyClaimed is benign (handled above as a success outcome).
+      // A NotSettled revert means the parent speculation hasn't been settled
+      // yet — `claim` does NOT auto-settle, so point the user at the settle
+      // path. Typed selector decoding, not message-string matching.
+      if (isNotSettledRevert(err)) {
         process.stderr.write(
           'This position requires settlement first. Run `ospex settle ' +
             `${speculationIdArg}` +
             '` (or `ospex claim-all` to handle both steps automatically).\n',
         );
-        throw err;
       }
-      throw err;
-    }
-
-    if (wantJson) {
-      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
-      writeAgentEnvelope(
-        toClaimAgentEnvelope(result, {
-          chainId,
-          signerAddress,
-          speculationId,
-          positionType,
-        }),
-      );
-      return;
-    }
-    formatOutput(
-      {
-        txHash: result.txHash,
-        blockNumber: result.blockNumber.toString(),
-        payoutUSDC: result.payoutUSDC,
-        payoutWei6: result.payoutWei6.toString(),
-      },
-      { json: false },
-    );
-    } catch (err) {
       if (wantJson) {
         emitJsonFailure({
           action: 'claim',
@@ -120,13 +158,23 @@ export const positionsClaimCommand = addSignerOptions(
 
 // ── v1 → v2 envelope transform ──────────────────────────────────────
 
-export type ClaimResult = Awaited<ReturnType<OspexClient['positions']['claim']>>;
+export type EnsureClaimedResult = Awaited<
+  ReturnType<OspexClient['positions']['ensurePositionClaimed']>
+>;
 
 export interface ClaimPayload {
-  txHash: string;
-  blockNumber: string;
-  payoutWei6: string;
-  payoutUSDC: number;
+  outcome: EnsureClaimedResult['outcome'];
+  /** The confirmed claim tx — present only when `outcome === 'claimed'`. */
+  txHash: string | null;
+  blockNumber: string | null;
+  /** A claim tx this wallet broadcast that then reverted (inclusion-time
+   * race loss) — present only on `recovered` when one was broadcast. */
+  revertedTxHash: string | null;
+  /** Event-sourced payout — present only when `outcome === 'claimed'`.
+   * `alreadyClaimed` / `recovered` carry no payout (the contract zeroes
+   * economic fields post-claim; the CLI never fabricates one). */
+  payoutWei6: string | null;
+  payoutUSDC: number | null;
   speculationId: string;
   positionType: 0 | 1;
 }
@@ -138,24 +186,72 @@ export interface ToClaimEnvelopeArgs {
   positionType: 0 | 1;
 }
 
+/**
+ * Wrap an `ensurePositionClaimed` result in the v2 envelope. Only reached
+ * on a successful outcome (a genuine claim failure throws and is handled by
+ * the command's catch → failure envelope), so `ok` is always true here.
+ *
+ *   claimed        → payout shoulder + one confirmed claim-position effect.
+ *   alreadyClaimed → no effect, no payout; a `claim-skipped-already-claimed`
+ *                    info warning.
+ *   recovered      → a `claim-recovered-already-claimed` info warning, plus a
+ *                    reverted claim-position effect IFF this wallet had
+ *                    broadcast a claim that reverted (gas spent). No payout.
+ */
 export function toClaimAgentEnvelope(
-  result: ClaimResult,
+  result: EnsureClaimedResult,
   args: ToClaimEnvelopeArgs,
 ): AgentEnvelope<ClaimPayload> {
-  const status = result.receipt.status === 'success' ? 'confirmed' : 'reverted';
-  // Build a PerspectiveAmount-shaped payout: profit and totalReturn
-  // are the same on a settled claim (the payout IS the return — the
-  // risk was locked in long ago at submit/match time).
-  const payoutAmount: PerspectiveAmount = {
-    wei6: result.payoutWei6.toString(),
-    usdc: wei6ToDecimalUSDC(result.payoutWei6),
-  };
-  const payout: AgentPayout = {
-    profit: payoutAmount,
-    totalReturn: payoutAmount,
-  };
+  const effects: AgentEffect[] = [];
+  const warnings: AgentWarning[] = [];
+  let payout: AgentPayout | null = null;
+
+  if (result.outcome === 'claimed') {
+    // profit and totalReturn are the same on a settled claim (the payout IS
+    // the return — the risk was locked in long ago at submit/match time).
+    const payoutWei6 = result.payoutWei6 as bigint;
+    const payoutAmount: PerspectiveAmount = {
+      wei6: payoutWei6.toString(),
+      usdc: wei6ToDecimalUSDC(payoutWei6),
+    };
+    payout = { profit: payoutAmount, totalReturn: payoutAmount };
+    const claimedEffect: AgentEffect = {
+      type: 'transaction',
+      purpose: 'claim-position',
+      ok: true,
+      txHash: result.txHash as Hex,
+      status: 'confirmed',
+    };
+    // exactOptionalPropertyTypes: omit blockNumber rather than set undefined.
+    if (result.blockNumber !== undefined) claimedEffect.blockNumber = result.blockNumber.toString();
+    effects.push(claimedEffect);
+  } else if (result.outcome === 'alreadyClaimed') {
+    warnings.push({
+      code: 'claim-skipped-already-claimed',
+      message: `Position (speculation ${args.speculationId}, type ${args.positionType}) was already claimed on-chain — no transaction sent.`,
+      severity: 'info',
+      details: { speculationId: args.speculationId.toString(), positionType: args.positionType },
+    });
+  } else {
+    if (result.revertedTxHash !== undefined) {
+      effects.push({
+        type: 'transaction',
+        purpose: 'claim-position',
+        ok: false,
+        txHash: result.revertedTxHash as Hex,
+        status: 'reverted',
+      });
+    }
+    warnings.push({
+      code: 'claim-recovered-already-claimed',
+      message: `Position (speculation ${args.speculationId}, type ${args.positionType}) was already claimed by a concurrent transaction — recovered, no claim needed.`,
+      severity: 'info',
+      details: { speculationId: args.speculationId.toString(), positionType: args.positionType },
+    });
+  }
+
   return buildAgentEnvelope<ClaimPayload>({
-    ok: result.receipt.status === 'success',
+    ok: true,
     action: 'claim',
     stage: 'execute',
     network: networkForChainId(args.chainId),
@@ -164,22 +260,16 @@ export function toClaimAgentEnvelope(
     walletRole: 'signer',
     signer: args.signerAddress,
     payout,
-    effects: [
-      {
-        type: 'transaction',
-        purpose: 'claim-position',
-        ok: result.receipt.status === 'success',
-        txHash: result.txHash as Hex,
-        blockNumber: result.blockNumber.toString(),
-        status,
-      },
-    ],
+    warnings,
+    effects,
     nextCommands: [VERIFY_POSITION_STATUS.build({ address: args.signerAddress })],
     payload: {
-      txHash: result.txHash,
-      blockNumber: result.blockNumber.toString(),
-      payoutWei6: result.payoutWei6.toString(),
-      payoutUSDC: result.payoutUSDC,
+      outcome: result.outcome,
+      txHash: result.outcome === 'claimed' ? result.txHash ?? null : null,
+      blockNumber: result.outcome === 'claimed' ? result.blockNumber?.toString() ?? null : null,
+      revertedTxHash: result.revertedTxHash ?? null,
+      payoutWei6: result.outcome === 'claimed' ? (result.payoutWei6 as bigint).toString() : null,
+      payoutUSDC: result.outcome === 'claimed' ? result.payoutUSDC ?? null : null,
       speculationId: args.speculationId.toString(),
       positionType: args.positionType,
     },

@@ -100,10 +100,16 @@ interface PlannedTx {
   logs: Array<{ address: `0x${string}`; topics: Hash[]; data: `0x${string}` }>;
 }
 
-/** A sequence of getSpeculation reads for one speculationId. The last
- * element repeats once the sequence is exhausted. `{status, winSide}`
- * are the on-chain enum indices (status: 0 Open, 1 Closed). */
-type SpecReadSeq = Array<{ speculationStatus: number; winSide: number }>;
+/** A sequence of on-chain reads for one speculationId, consumed in order
+ * across the entry's legs: settle pre-flight + (re-read on revert) come
+ * from `getSpeculation` (`{speculationStatus, winSide}`); claim pre-flight
+ * + (re-read on revert) come from `getPosition` (`{claimed}`). The last
+ * element repeats once the sequence is exhausted. On-chain enum indices:
+ * status 0 = Open, 1 = Closed. */
+type SpecReadSeq = Array<
+  | { speculationStatus: number; winSide: number }
+  | { claimed: boolean }
+>;
 
 function fakeContext({
   claimParams,
@@ -731,5 +737,229 @@ describe('positions.claimAll', () => {
     expect(result.entries).toHaveLength(0);
     expect(result.success).toBe(false);
     expect(result.totals.claimed).toBe(0);
+  });
+
+  it('treats an already-claimed claimable entry as success — skipped, no tx, no payout', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `1_${SIGNER_ADDR}_0`,
+            speculationId: '1',
+            description: 'Lakers moneyline — Won (already claimed)',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 191,
+            estimatedPayoutWei6: '191000000',
+            txParams: [
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '1', positionType: 0 } },
+            ],
+          },
+        ],
+      },
+      // Claim-leg pre-flight read: position already claimed → skip the tx.
+      specStates: { '1': [{ claimed: true }] },
+      plannedTxs: [], // no claim tx sent
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.success).toBe(true);
+    const entry = result.entries[0]!;
+    expect(entry.success).toBe(true);
+    expect(entry.txHashes).toEqual([]);
+    expect(entry.payoutWei6).toBeUndefined(); // no derived payout
+    expect(entry.steps.map((s) => [s.name, s.outcome])).toEqual([
+      ['claimPosition', 'skippedAlreadyClaimed'],
+    ]);
+    // Successful ENTRY, but no FRESH claim — totals must separate them, and
+    // the already-claimed payout must NOT enter the run's realized total.
+    expect(result.totals.claimed).toBe(1);
+    expect(result.totals.claimedFresh).toBe(0);
+    expect(result.totals.alreadyClaimed).toBe(1);
+    expect(result.totals.recoveredAlreadyClaimed).toBe(0);
+    expect(result.totals.totalPayoutWei6).toBe('0');
+    expect(result.totals.totalPayoutUSDC).toBe(0);
+  });
+
+  it('recovers from an already-claimed claim revert — reverted hash kept off confirmed txHashes', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `1_${SIGNER_ADDR}_0`,
+            speculationId: '1',
+            description: 'Lakers moneyline — Won (raced claim)',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 191,
+            estimatedPayoutWei6: '191000000',
+            txParams: [
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '1', positionType: 0 } },
+            ],
+          },
+        ],
+      },
+      // Pre-flight unclaimed; our claim reverts on inclusion; re-read shows
+      // claimed → recovered (a concurrent caller / rerun beat us).
+      specStates: { '1': [{ claimed: false }, { claimed: true }] },
+      plannedTxs: [{ status: 'reverted', logs: [] }],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.success).toBe(true);
+    const entry = result.entries[0]!;
+    expect(entry.success).toBe(true);
+    expect(entry.payoutWei6).toBeUndefined();
+    expect(entry.steps.map((s) => [s.name, s.outcome])).toEqual([
+      ['claimPosition', 'recoveredAlreadyClaimed'],
+    ]);
+    // The reverted claim spent gas — its hash survives on the step but never
+    // enters the confirmed-only `txHashes`.
+    const claimStep = entry.steps[0]!;
+    expect(claimStep.txHash).toBeDefined();
+    expect(entry.txHashes).toEqual([]);
+    expect(entry.txHashes).not.toContain(claimStep.txHash);
+    expect(result.totals.recoveredAlreadyClaimed).toBe(1);
+    expect(result.totals.claimedFresh).toBe(0);
+    expect(result.totals.totalPayoutWei6).toBe('0');
+  });
+
+  it('excludes already-claimed entries from fresh payout totals (mixed sweep)', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `1_${SIGNER_ADDR}_0`,
+            speculationId: '1',
+            description: 'Fresh win',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 50,
+            estimatedPayoutWei6: '50000000',
+            txParams: [
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '1', positionType: 0 } },
+            ],
+          },
+          {
+            positionId: `2_${SIGNER_ADDR}_0`,
+            speculationId: '2',
+            description: 'Already claimed win',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 999,
+            estimatedPayoutWei6: '999000000',
+            txParams: [
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '2', positionType: 0 } },
+            ],
+          },
+        ],
+      },
+      specStates: {
+        '1': [{ claimed: false }], // fresh
+        '2': [{ claimed: true }], // already claimed
+      },
+      plannedTxs: [
+        // Only entry 1 sends a claim tx.
+        { status: 'success', logs: [makeClaimedLog(1n, SIGNER_ADDR as `0x${string}`, 0, 50_000_000n)] },
+      ],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.success).toBe(true);
+    expect(result.entries[0]!.payoutWei6).toBe('50000000');
+    expect(result.entries[1]!.payoutWei6).toBeUndefined();
+    expect(result.totals.claimed).toBe(2); // both entries succeeded
+    expect(result.totals.claimedFresh).toBe(1);
+    expect(result.totals.alreadyClaimed).toBe(1);
+    // The $999 already-claimed payout must NOT leak into the realized total.
+    expect(result.totals.totalPayoutWei6).toBe('50000000');
+    expect(result.totals.totalPayoutUSDC).toBeCloseTo(50, 6);
+  });
+
+  // #98 review blocker (end-to-end): a claim tx that SUCCEEDS but whose
+  // receipt has no parseable POSITION_CLAIMED event must FAIL the entry —
+  // never be silently relabeled an already-claimed skip/recover with the
+  // payout dropped. (The success receipt carries no reverted receipt, so the
+  // SDK's recovery gate correctly declines to recover.)
+  it('fails the entry on a confirmed-but-unparseable claim (no silent recovery)', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `1_${SIGNER_ADDR}_0`,
+            speculationId: '1',
+            description: 'Won but event unparseable',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 191,
+            estimatedPayoutWei6: '191000000',
+            txParams: [
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '1', positionType: 0 } },
+            ],
+          },
+        ],
+      },
+      specStates: { '1': [{ claimed: false }] }, // pre-flight unclaimed
+      // Tx confirms (success) but carries NO POSITION_CLAIMED log → claim()
+      // throws "no matching POSITION_CLAIMED event".
+      plannedTxs: [{ status: 'success', logs: [] }],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.success).toBe(false);
+    const entry = result.entries[0]!;
+    expect(entry.success).toBe(false);
+    expect(entry.error?.message).toMatch(/POSITION_CLAIMED/i);
+    expect(entry.steps.map((s) => [s.name, s.outcome])).toEqual([['claimPosition', 'failed']]);
+    // The failed step keeps the (confirmed) tx hash for audit, and records its
+    // TRUE on-chain status — `confirmed`, NOT reverted. The tx landed; the
+    // SDK just couldn't parse the payout event. This is what lets the CLI
+    // envelope avoid mislabeling it a reverted tx (PR #98 review round 2).
+    const step = entry.steps[0]!;
+    expect(step.txHash).toBeDefined();
+    expect(step.txStatus).toBe('confirmed');
+    // Not counted as a fresh/already/recovered claim, and no payout.
+    expect(result.totals.claimedFresh).toBe(0);
+    expect(result.totals.alreadyClaimed).toBe(0);
+    expect(result.totals.recoveredAlreadyClaimed).toBe(0);
+    expect(result.totals.totalPayoutWei6).toBe('0');
+  });
+
+  // Symmetric check: a genuine on-chain revert records txStatus 'reverted'.
+  it('a genuinely reverted claim records txStatus reverted on the failed step', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `1_${SIGNER_ADDR}_0`,
+            speculationId: '1',
+            description: 'Reverts on inclusion (and stays reverted)',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 10,
+            estimatedPayoutWei6: '10000000',
+            txParams: [
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '1', positionType: 0 } },
+            ],
+          },
+        ],
+      },
+      // Pre-flight unclaimed; claim reverts on inclusion; re-read STILL
+      // unclaimed → genuine failure (not a benign already-claimed race).
+      specStates: { '1': [{ claimed: false }, { claimed: false }] },
+      plannedTxs: [{ status: 'reverted', logs: [] }],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.entries[0]!.success).toBe(false);
+    const step = result.entries[0]!.steps[0]!;
+    expect(step.outcome).toBe('failed');
+    expect(step.txHash).toBeDefined();
+    expect(step.txStatus).toBe('reverted');
   });
 });

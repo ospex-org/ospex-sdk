@@ -72,6 +72,12 @@ describe('broadcastSignedTx', () => {
     expect(chainErr.txHash).toBe(txHash);
     expect(chainErr.code).toBe('CHAIN_ERROR');
     expect(chainErr.message).toMatch(/reverted/i);
+    // The receipt is carried too, with `status: 'reverted'` — the
+    // authoritative "this tx reverted on-chain" signal idempotent-recovery
+    // paths key off. (They branch on `receipt.status`, not presence: a
+    // confirmed-but-unparseable failure also carries a receipt, but `success`.)
+    expect(chainErr.receipt).toBeDefined();
+    expect(chainErr.receipt?.status).toBe('reverted');
   });
 
   it('still waits for the receipt before deciding (does not skip wait on send success)', async () => {
