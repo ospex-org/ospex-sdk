@@ -486,6 +486,7 @@ Rules:
 - `payload: null` when the command could not produce a payload.
 - Errors that prevent envelope construction at all (e.g. failure before SDK init) fall back to `error: <code>: <message>` on stderr with exit `1`. This is a narrow window: anything after `getClient()` succeeds emits a structured failure envelope.
 - Validation errors thrown before `getClient()` (`OspexValidationError` on argument parse) also fall back to stderr.
+- **Advisory-preflight refusals are a distinct `ok: false` shape, not an `errors[]` failure.** When `match`/`submit`'s fillability/fundability preflight refuses before the write (see [`AGENT_CONTRACT.md` §2 "Advisory preflights"](./AGENT_CONTRACT.md)), the envelope is `ok: false`, `stage: 'execute'`, `errors: []`, with the blocking reasons as `severity: 'blocking'` `warnings[]` (`blockingFor: ['match'|'submit']`) and the verdict + a `refused-before-send` / `refused-before-sign` marker in `payload` (`{ preflight, action }` / `{ fundability, action }`). Exit code is still nonzero; `--force` / `--skip-*-preflight` bypasses it.
 
 ---
 

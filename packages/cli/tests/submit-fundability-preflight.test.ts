@@ -1,0 +1,193 @@
+/**
+ * Unit tests for the `commitments submit` fundability-preflight helpers.
+ *
+ * The load-bearing logic is `selectBlockingSubmitReasons`: the submit approve-loop
+ * (or a manual `approve`) remediates the maker's ALLOWANCE shortfalls, so those
+ * must NOT block (blocking would regress the normal approve-on-submit flow); only
+ * the non-remediable USDC BALANCE shortfall blocks. `EXISTING_LAZY_FEE_UNDETERMINED`
+ * and `FUNDABILITY_UNKNOWN` are advisory.
+ */
+
+import { describe, expect, it } from 'vitest';
+import {
+  SUBMIT_REMEDIABLE_REASON_CODES,
+  buildSubmitRefusedEnvelope,
+  fundabilityWarnings,
+  renderSubmitFundabilityNotice,
+  renderSubmitPreflightRefusal,
+  selectBlockingSubmitReasons,
+  submitFundabilityReasonMessage,
+} from '../src/lib/submitFundabilityPreflight.js';
+import type {
+  CheckSubmitFundabilityResult,
+  SubmitFundabilityReason,
+  SubmitFundabilityReasonCode,
+  Hex,
+} from '@ospex/sdk';
+
+const USDC = '0x3333333333333333333333333333333333333333' as Hex;
+const POSITION = '0x2222222222222222222222222222222222222222' as Hex;
+const TREASURY = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as Hex;
+const MAKER = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as Hex;
+
+function reason(code: SubmitFundabilityReasonCode, extra: Partial<SubmitFundabilityReason> = {}): SubmitFundabilityReason {
+  return { code, ...extra };
+}
+
+function makeResult(reasons: SubmitFundabilityReason[]): CheckSubmitFundabilityResult {
+  const hasBlocking = reasons.some((r) => r.code === 'MAKER_USDC_BALANCE_INSUFFICIENT');
+  const hasUnknown = reasons.some(
+    (r) => r.code === 'FUNDABILITY_UNKNOWN' || r.code === 'EXISTING_LAZY_FEE_UNDETERMINED',
+  );
+  const outcome = hasBlocking || (reasons.length > 0 && !hasUnknown)
+    ? 'not-fundable'
+    : hasUnknown
+      ? 'unknown'
+      : 'fundable';
+  return {
+    maker: MAKER,
+    fundableNow: outcome === 'fundable',
+    outcome,
+    advisory: true,
+    checkedAtBlock: 73_491_234n,
+    reasons,
+  };
+}
+
+const codes = (rs: SubmitFundabilityReason[]): SubmitFundabilityReasonCode[] => rs.map((r) => r.code);
+
+describe('selectBlockingSubmitReasons', () => {
+  it('blocks ONLY on the non-remediable USDC balance shortfall', () => {
+    expect(codes(selectBlockingSubmitReasons([reason('MAKER_USDC_BALANCE_INSUFFICIENT')]))).toEqual([
+      'MAKER_USDC_BALANCE_INSUFFICIENT',
+    ]);
+  });
+
+  it('does NOT block on maker-allowance reasons (approve / the submit approve-loop remediates them)', () => {
+    for (const code of SUBMIT_REMEDIABLE_REASON_CODES) {
+      expect(selectBlockingSubmitReasons([reason(code)])).toHaveLength(0);
+    }
+    // Sanity: the remediable set is exactly the two maker-allowance codes.
+    expect([...SUBMIT_REMEDIABLE_REASON_CODES].sort()).toEqual([
+      'MAKER_POSITION_ALLOWANCE_INSUFFICIENT',
+      'MAKER_TREASURY_ALLOWANCE_INSUFFICIENT',
+    ]);
+  });
+
+  it('does NOT block on EXISTING_LAZY_FEE_UNDETERMINED or FUNDABILITY_UNKNOWN (advisory)', () => {
+    expect(selectBlockingSubmitReasons([reason('EXISTING_LAZY_FEE_UNDETERMINED')])).toHaveLength(0);
+    expect(selectBlockingSubmitReasons([reason('FUNDABILITY_UNKNOWN')])).toHaveLength(0);
+  });
+
+  it('keeps only the blocking reason from a mixed set', () => {
+    const mixed = [
+      reason('MAKER_USDC_BALANCE_INSUFFICIENT', { requiredWei6: 3_000_000n, actualWei6: 1_000_000n }),
+      reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT', { requiredWei6: 3_000_000n, actualWei6: 0n }),
+      reason('EXISTING_LAZY_FEE_UNDETERMINED', { requiredWei6: 500_000n }),
+    ];
+    expect(codes(selectBlockingSubmitReasons(mixed))).toEqual(['MAKER_USDC_BALANCE_INSUFFICIENT']);
+  });
+
+  it('returns empty for a fundable verdict', () => {
+    expect(selectBlockingSubmitReasons([])).toHaveLength(0);
+  });
+});
+
+describe('submitFundabilityReasonMessage', () => {
+  it('includes the required-vs-actual amounts for funding reasons', () => {
+    const msg = submitFundabilityReasonMessage(
+      reason('MAKER_USDC_BALANCE_INSUFFICIENT', { token: USDC, requiredWei6: 3_000_000n, actualWei6: 1_000_000n }),
+    );
+    expect(msg).toMatch(/needs 3\.000000 USDC, has 1\.000000/);
+  });
+
+  it('spells out that the balance shortfall is not fixable by approving', () => {
+    expect(submitFundabilityReasonMessage(reason('MAKER_USDC_BALANCE_INSUFFICIENT'))).toMatch(/approving won't help/i);
+  });
+
+  it('tells the maker to approve for an allowance shortfall', () => {
+    expect(submitFundabilityReasonMessage(reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT'))).toMatch(/approve/i);
+    expect(submitFundabilityReasonMessage(reason('MAKER_TREASURY_ALLOWANCE_INSUFFICIENT'))).toMatch(/approve/i);
+  });
+
+  it('explains the existing-lazy-fee uncertainty', () => {
+    const msg = submitFundabilityReasonMessage(reason('EXISTING_LAZY_FEE_UNDETERMINED', { requiredWei6: 500_000n }));
+    expect(msg).toMatch(/creation fee/i);
+    expect(msg).toMatch(/up to 0\.500000 USDC/);
+  });
+});
+
+describe('fundabilityWarnings', () => {
+  it('maps the balance shortfall to a blocking warning that blocks `submit`', () => {
+    const ws = fundabilityWarnings(makeResult([reason('MAKER_USDC_BALANCE_INSUFFICIENT')]));
+    expect(ws).toHaveLength(1);
+    expect(ws[0]).toMatchObject({
+      code: 'MAKER_USDC_BALANCE_INSUFFICIENT',
+      severity: 'blocking',
+      blockingFor: ['submit'],
+    });
+  });
+
+  it('maps remediable / advisory reasons to non-blocking warnings', () => {
+    const ws = fundabilityWarnings(
+      makeResult([reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT'), reason('EXISTING_LAZY_FEE_UNDETERMINED')]),
+    );
+    expect(ws.map((w) => w.severity)).toEqual(['warning', 'warning']);
+    expect(ws.every((w) => w.blockingFor === undefined)).toBe(true);
+  });
+});
+
+describe('buildSubmitRefusedEnvelope', () => {
+  const blocking = [
+    reason('MAKER_USDC_BALANCE_INSUFFICIENT', {
+      token: USDC,
+      requiredWei6: 3_000_000n,
+      actualWei6: 1_000_000n,
+    }),
+  ];
+  const env = buildSubmitRefusedEnvelope(makeResult(blocking), blocking, { chainId: 137, wallet: MAKER });
+
+  it('is a not-OK execute envelope for the submit action (off-chain → no tx)', () => {
+    expect(env.ok).toBe(false);
+    expect(env.action).toBe('commitments.submit');
+    expect(env.stage).toBe('execute');
+    expect(env.walletRole).toBe('signer');
+    expect(env.wallet).toBe(MAKER);
+    expect(env.requiresTransaction).toBe(false);
+  });
+
+  it('carries the full advisory verdict + the refused-before-sign marker in the payload', () => {
+    expect(env.payload.action).toBe('refused-before-sign');
+    expect(env.payload.fundability.outcome).toBe('not-fundable');
+    expect(env.payload.fundability.reasons).toEqual(blocking);
+  });
+
+  it('surfaces each blocking reason as a blocking warning that blocks `submit`', () => {
+    expect(env.warnings).toHaveLength(1);
+    const w = env.warnings[0]!;
+    expect(w.code).toBe('MAKER_USDC_BALANCE_INSUFFICIENT');
+    expect(w.severity).toBe('blocking');
+    expect(w.blockingFor).toEqual(['submit']);
+  });
+
+  it('records no effects (nothing was signed or posted)', () => {
+    expect(env.effects).toHaveLength(0);
+  });
+});
+
+describe('renderSubmitPreflightRefusal / renderSubmitFundabilityNotice', () => {
+  it('refusal block names the reason and points at the bypass flags', () => {
+    const text = renderSubmitPreflightRefusal([reason('MAKER_USDC_BALANCE_INSUFFICIENT')]);
+    expect(text).toMatch(/nothing signed/i);
+    expect(text).toMatch(/approving won't help/i);
+    expect(text).toMatch(/--skip-fundability-preflight/);
+    expect(text).toMatch(/--force/);
+  });
+
+  it('advisory notice is empty for a clean verdict and lists reasons otherwise', () => {
+    expect(renderSubmitFundabilityNotice(makeResult([]))).toBe('');
+    const notice = renderSubmitFundabilityNotice(makeResult([reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT')]));
+    expect(notice).toMatch(/advisory/i);
+    expect(notice).toMatch(/PositionModule/);
+  });
+});

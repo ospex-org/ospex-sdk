@@ -65,6 +65,7 @@ import {
   type ApprovalPurpose,
   type ApprovalRequirement,
   type ChainId,
+  type CheckSubmitFundabilityResult,
   type Commitment,
   type Hex,
   type HighLevelSubmitArgs,
@@ -80,6 +81,13 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import {
+  buildSubmitRefusedEnvelope,
+  fundabilityWarnings,
+  renderSubmitFundabilityNotice,
+  renderSubmitPreflightRefusal,
+  selectBlockingSubmitReasons,
+} from '../../lib/submitFundabilityPreflight.js';
 import {
   VERIFY_COMMITMENT,
   deriveRemediationNextCommands,
@@ -105,6 +113,8 @@ const optionsSchema = z.object({
   json: z.boolean().optional(),
   approveMax: z.boolean().optional(),
   raw: z.boolean().optional(),
+  skipFundabilityPreflight: z.boolean().optional(),
+  force: z.boolean().optional(),
 });
 
 export const commitmentsSubmitCommand = addSignerOptions(
@@ -137,6 +147,17 @@ export const commitmentsSubmitCommand = addSignerOptions(
       '--raw',
       'render the protocol-native side tags (positionType=Upper/Lower) inside the side: line. ' +
         'Useful for debugging EIP-712 hash mismatches; has no effect on --json output.',
+    )
+    .option(
+      '--skip-fundability-preflight',
+      'skip the advisory pre-sign maker-funding check. By default `submit` reads the maker\'s USDC ' +
+        'balance + PositionModule/TreasuryModule allowance and the open-commitment book, and REFUSES ' +
+        '(before signing) a submit the wallet can\'t back. This flag proceeds anyway.',
+    )
+    .option(
+      '--force',
+      'alias for --skip-fundability-preflight — proceed despite (or without) the funding check ' +
+        '(the commitment may be unfillable).',
     )
     .addOption(
       new Option(
@@ -195,11 +216,25 @@ export const commitmentsSubmitCommand = addSignerOptions(
     const preview = await client.commitments.prepareSubmit(prepArgs);
     wallet = preview.raw.maker.toLowerCase() as Hex;
 
+    // 1.5 Fundability preflight (advisory). Read the maker's USDC balance +
+    //     PositionModule/TreasuryModule allowance and their open-commitment
+    //     book, and check whether the WHOLE book (existing + this new commitment
+    //     + lazy fees) is backed — the submit approve-loop below only ever
+    //     covers THIS commitment's allowance and reads no balance, so this is
+    //     what catches whole-book over-commitment. The verdict is threaded into
+    //     the preview/execute envelopes ("JSON always includes it"); `null`
+    //     means it was skipped (--skip-fundability-preflight / --force).
+    let fundability: CheckSubmitFundabilityResult | null = null;
+    const skipFundability = opts.skipFundabilityPreflight === true || opts.force === true;
+    if (!skipFundability) {
+      fundability = await client.commitments.checkSubmitFundability({ preview });
+    }
+
     // 2. `--json` alone (no --yes) is the preview-only mode — emit
     //    the v2 agent envelope and exit without prompting or signing.
     if (previewOnly) {
       const chainId = client.chainId();
-      writeAgentEnvelope(toSubmitPreviewEnvelope(preview, { chainId }));
+      writeAgentEnvelope(toSubmitPreviewEnvelope(preview, { chainId, fundability }));
       return;
     }
 
@@ -212,9 +247,33 @@ export const commitmentsSubmitCommand = addSignerOptions(
       );
     }
 
+    // 3.5 Refuse-before-sign on a non-remediable funding shortfall (the maker's
+    //     USDC balance can't back their open book + this commitment). Allowance
+    //     shortfalls and the lazy-fee uncertainty are advisory — surfaced below,
+    //     never blocking (the approve-loop / a manual approve remediates
+    //     allowances). Skipped when the preflight was (--skip-fundability-preflight
+    //     / --force → fundability === null).
+    if (fundability !== null) {
+      const blocking = selectBlockingSubmitReasons(fundability.reasons);
+      if (blocking.length > 0) {
+        if (wantJson) {
+          writeAgentEnvelope(buildSubmitRefusedEnvelope(fundability, blocking, { chainId, wallet }));
+        } else {
+          process.stderr.write(renderSubmitPreflightRefusal(blocking));
+        }
+        process.exit(1);
+      }
+    }
+
     // 4. Render the preview to stderr so stdout JSON (under --yes
     //    --json) stays parseable.
     renderPreview(preview, process.stderr, { raw: opts.raw === true });
+    // 4.5 Advisory funding notice (non-blocking reasons) for the human path —
+    //     under --json the same signal rides the envelope's warnings[].
+    if (!wantJson && fundability !== null) {
+      const notice = renderSubmitFundabilityNotice(fundability);
+      if (notice) process.stderr.write(notice);
+    }
 
     // 5. Confirm (unless --yes). 'n' or empty exits with 130 (matches
     //    the Ctrl-C convention so scripts can distinguish "user
@@ -358,7 +417,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
         toSubmitExecuteEnvelope(
           preview,
           { hash: result.hash, commitment: result.commitment },
-          { chainId, approveEffects },
+          { chainId, approveEffects, fundability },
         ),
       );
       return;
@@ -405,10 +464,14 @@ export type SubmitPreviewPayload = SubmitPreview;
 export interface SubmitExecutePayload {
   preview: SubmitPreview;
   result: { hash: Hex; commitment: Commitment };
+  /** The advisory submit-fundability verdict (B1b). Absent when the preflight was skipped (--skip-fundability-preflight / --force). */
+  fundability?: CheckSubmitFundabilityResult;
 }
 
 export interface ToSubmitEnvelopeArgs {
   chainId: ChainId;
+  /** The fundability verdict to surface as warnings (preview) / `payload.fundability` (execute). `null`/absent = preflight skipped. */
+  fundability?: CheckSubmitFundabilityResult | null;
 }
 
 export interface ToSubmitExecuteEnvelopeArgs extends ToSubmitEnvelopeArgs {
@@ -459,7 +522,7 @@ export function toSubmitPreviewEnvelope(
     contest: preview.contest,
     speculation: preview.market.speculation,
     sideSummary: shoulder.sideSummary,
-    warnings: shoulder.warnings,
+    warnings: [...shoulder.warnings, ...(args.fundability ? fundabilityWarnings(args.fundability) : [])],
     payload: preview,
   });
 }
@@ -514,10 +577,10 @@ export function toSubmitExecuteEnvelope(
     speculation: preview.market.speculation,
     commitment: result.commitment,
     sideSummary: shoulder.sideSummary,
-    warnings: shoulder.warnings,
+    warnings: [...shoulder.warnings, ...(args.fundability ? fundabilityWarnings(args.fundability) : [])],
     effects: [...approveEffects, ...finalEffects],
     nextCommands: [VERIFY_COMMITMENT.build({ hash: result.hash })],
-    payload: { preview, result },
+    payload: { preview, result, ...(args.fundability ? { fundability: args.fundability } : {}) },
   });
 }
 
