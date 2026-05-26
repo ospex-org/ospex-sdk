@@ -46,6 +46,11 @@ import {
   type CheckCommitmentFillabilityArgs,
   type CheckCommitmentFillabilityResult,
 } from './checkFillability.js';
+import {
+  checkSubmitFundability,
+  type CheckSubmitFundabilityArgs,
+  type CheckSubmitFundabilityResult,
+} from './checkSubmitFundability.js';
 import { prepareSubmit } from './prepareSubmit.js';
 import {
   resolveByPrefix,
@@ -218,6 +223,26 @@ export class Commitments {
   }
 
   /**
+   * Advisory, read-only preflight: "can the maker back what they're about to
+   * sign?" The maker-side mirror of `checkCommitmentFillability`. Given a
+   * `prepareSubmit` preview, sums the maker's API-visible open + partially-filled
+   * commitment risk and compares the WHOLE-book aggregate (existing + this new
+   * commitment + any lazy creation fee) against the maker's USDC balance and
+   * PositionModule / TreasuryModule allowances. Catches whole-book
+   * over-commitment the submit approve-loop misses (it only ever covers the new
+   * commitment in isolation, and reads no balance). Returns a structured
+   * `{ outcome, fundableNow, requirement, reasons[] }` verdict; signs nothing,
+   * allocates no nonce, and never throws on a not-fundable/unknown condition
+   * (those are outcomes). The intended flow is `prepareSubmit` → this →
+   * (if fundable / forced) `submitPrepared`, all on the one preview.
+   */
+  checkSubmitFundability(
+    args: CheckSubmitFundabilityArgs,
+  ): Promise<CheckSubmitFundabilityResult> {
+    return checkSubmitFundability(this.ctx, args);
+  }
+
+  /**
    * Resolve a full EIP-712 commitment hash OR a unique 0x-prefixed
    * hex prefix (≥ 8 hex chars after `0x`) to a single `Commitment`.
    * Used by the CLI to make the truncated hash in `commitments list`
@@ -289,6 +314,14 @@ export type {
   FillabilityReasonCode,
   FillabilityFill,
 } from './checkFillability.js';
+export type {
+  CheckSubmitFundabilityArgs,
+  CheckSubmitFundabilityResult,
+  SubmitFundabilityOutcome,
+  SubmitFundabilityReason,
+  SubmitFundabilityReasonCode,
+  SubmitFundabilityRequirement,
+} from './checkSubmitFundability.js';
 export type {
   ResolveByPrefixOptions,
   StatusFilter,
