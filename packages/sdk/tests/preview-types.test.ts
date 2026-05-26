@@ -1,10 +1,13 @@
 /**
- * Type-level guard tests for the SubmitJsonResult contract.
+ * Type-level guard tests for the LEGACY (pre-v2, `@deprecated`) SubmitJsonResult
+ * contract — frozen for back-compat. The CURRENT CLI `--json` emits a v2
+ * `AgentEnvelope` (see `docs/AGENT_CONTRACT.md`); these assertions just keep the
+ * retained legacy shape from drifting.
  *
- * We lock `schemaVersion: 1` on `SubmitJsonResult`, so the wire shape
+ * We lock `schemaVersion: 1` on `SubmitJsonResult`, so the legacy wire shape
  * must agree with the SDK's actual `SubmitResult` (which is
  * `{ hash: Hex; commitment: Commitment }`) — otherwise we'd ship a
- * public schema that disagrees with what `commitments.submit` returns.
+ * legacy schema that disagrees with what `commitments.submit` returns.
  *
  * These tests use compile-time type assertions to guarantee any
  * future drift is caught before merge — if `SubmitResult` grows a

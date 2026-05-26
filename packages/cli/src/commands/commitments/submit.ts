@@ -33,10 +33,12 @@
  *   --yes                    skip the [Y/n] prompt
  *   --json                   emit machine-readable JSON. Behavior pairs
  *                            with --yes:
- *                              --json alone     → SubmitPreviewEnvelope
- *                                                 (preview only, NO signing)
- *                              --yes --json     → SubmitJsonResult
- *                                                 (preview + submit result)
+ *                              --json alone     → v2 AgentEnvelope, stage
+ *                                                 'preview' (payload: SubmitPreview;
+ *                                                 NO signing)
+ *                              --yes --json     → v2 AgentEnvelope, stage
+ *                                                 'execute' (payload: { preview,
+ *                                                 result, fundability })
  *   --approve-max            non-interactive (`--yes`) shorthand for
  *                            "approve unlimited" when an approval is
  *                            needed. In interactive mode the user
@@ -161,8 +163,8 @@ export const commitmentsSubmitCommand = addSignerOptions(
     .addOption(
       new Option(
         '--json',
-        'machine-readable output. ALONE = preview only, no signing (SubmitPreviewEnvelope). ' +
-          'WITH --yes = signs/posts and emits SubmitJsonResult.',
+        'machine-readable output. ALONE = preview only, no signing (v2 AgentEnvelope, stage "preview", payload SubmitPreview). ' +
+          'WITH --yes = signs/posts and emits a v2 AgentEnvelope (stage "execute", payload { preview, result, fundability }).',
       ).hideHelp(false),
     ),
 )

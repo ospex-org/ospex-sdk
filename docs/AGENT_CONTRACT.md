@@ -52,8 +52,7 @@ Other write commands (`contests score`, `settle`, `claim`, `claim-all`, `commitm
 The per-command `payload` types are the SDK preview/result models — `AgentEnvelope` adds the shoulder block around them. The one exception: the `submit` / `match` **execute** payloads also carry the advisory preflight verdict (`fundability` / `fillability`) alongside `preview` / `result` (see "Advisory preflights" below).
 
 ```ts
-// commitments submit --json (no --yes)
-type SubmitPreviewEnvelope = AgentEnvelope<SubmitPreview>;
+// commitments submit --json (no --yes)  →  AgentEnvelope<SubmitPreview>
 // SubmitPreview: contest, market { speculation { creationFee, … } }, side, economics, expiry,
 //                raw, approvals[], outcomes[], submitAction, you?, counterparty?
 
@@ -71,8 +70,7 @@ type SubmitResultEnvelope = AgentEnvelope<{
 // payload.fundability is the advisory submit-preflight verdict (outcome + reasons[] + requirement);
 //   always present, null when the preflight was skipped (--skip-fundability-preflight / --force).
 
-// commitments match --json (no --yes)
-type MatchPreviewEnvelope = AgentEnvelope<MatchPreview>;
+// commitments match --json (no --yes)  →  AgentEnvelope<MatchPreview>
 // MatchPreview: commitment, taker, selfMatch, contest, market, odds, economics, expiry,
 //               speculation { mode, creationFee, lazyCreation? }, approvals[], warnings[],
 //               tradeAction, you?, counterparty?, outcomes?
@@ -92,6 +90,8 @@ type MatchResultEnvelope = AgentEnvelope<{
 ```
 
 The `{ preview, result, … }` shape on execute envelopes is deliberate: agents reading the result can verify the preview block in the same envelope against the preview block they accepted at signing time, without holding state across two invocations. `submit` / `match` add the preflight verdict (`fundability` / `fillability`) alongside. Reach for `payload.result.txHash` (not `payload.txHash`); `payload.preview` is identical-shape to the preview envelope and carries the same audit fields.
+
+`SubmitResultEnvelope` / `MatchResultEnvelope` above are **illustrative** — the SDK exports the generic `AgentEnvelope<T>`, not these exact aliases. The similarly-named `SubmitPreviewEnvelope` / `SubmitJsonResult` / `MatchPreviewEnvelope` / `MatchJsonResult` types the SDK *does* export are **`@deprecated` pre-v2 wire shapes** (`schemaVersion: 1`, no preflight verdict) — kept for back-compat, NOT what the current CLI emits.
 
 Authoritative payload sources: [`packages/sdk/src/types/preview.ts`](../packages/sdk/src/types/preview.ts) and [`packages/sdk/src/types/matchPreview.ts`](../packages/sdk/src/types/matchPreview.ts). Authoritative envelope source: [`packages/sdk/src/types/agentEnvelope.ts`](../packages/sdk/src/types/agentEnvelope.ts).
 

@@ -148,7 +148,6 @@ export interface JsonSetupResult {
 
 /**
  * Preview-only envelope (`--json` without `--yes`). No txs were sent.
- * Mirrors `MatchPreviewEnvelope` / `SubmitPreviewEnvelope` in the SDK.
  */
 export interface SetupPreviewEnvelope {
   schemaVersion: 1;
