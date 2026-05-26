@@ -108,6 +108,14 @@ describe('commitments match — command structure', () => {
     expect(help).toMatch(/--json/);
   });
 
+  it('exposes the fillability-preflight bypass flags (--skip-fillability-preflight / --force)', () => {
+    const help = commitmentsMatchCommand.helpInformation();
+    expect(help).toMatch(/--skip-fillability-preflight/);
+    expect(help).toMatch(/--force/);
+    // The default behavior (a pre-send fillability check) is documented.
+    expect(help.replace(/\s+/g, ' ').toLowerCase()).toMatch(/fillability/);
+  });
+
   it('drops --risk (raw wei6) — clean rename to --risk-usdc for parity with submit', () => {
     const help = commitmentsMatchCommand.helpInformation();
     // Look for the bare flag pattern; --risk-usdc is allowed.
