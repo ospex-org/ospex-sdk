@@ -41,6 +41,11 @@ import { getNonceFloor, type GetNonceFloorArgs } from './getNonceFloor.js';
 import { match, type MatchArgs, type MatchResult } from './match.js';
 import { matchFromPreview } from './matchFromPreview.js';
 import { prepareMatch, type PrepareMatchArgs } from './prepareMatch.js';
+import {
+  checkCommitmentFillability,
+  type CheckCommitmentFillabilityArgs,
+  type CheckCommitmentFillabilityResult,
+} from './checkFillability.js';
 import { prepareSubmit } from './prepareSubmit.js';
 import {
   resolveByPrefix,
@@ -197,6 +202,22 @@ export class Commitments {
   }
 
   /**
+   * Advisory, read-only preflight: "can a taker fill this commitment right
+   * now?" Checks liveness AND the funding the match flow doesn't — maker/taker
+   * USDC balances and the maker's PositionModule allowance — using an aggregate
+   * (account, token[, spender]) debit model so a self-match or lazy
+   * creation-fee combined debit is checked correctly. Returns a structured
+   * `{ outcome, fillableNow, reasons[] }` verdict; never sends a tx and never
+   * throws on a not-fillable/unknown condition (those are outcomes). Pass
+   * `taker` to keep it fully signer-free.
+   */
+  checkCommitmentFillability(
+    args: CheckCommitmentFillabilityArgs,
+  ): Promise<CheckCommitmentFillabilityResult> {
+    return checkCommitmentFillability(this.ctx, args);
+  }
+
+  /**
    * Resolve a full EIP-712 commitment hash OR a unique 0x-prefixed
    * hex prefix (≥ 8 hex chars after `0x`) to a single `Commitment`.
    * Used by the CLI to make the truncated hash in `commitments list`
@@ -260,6 +281,14 @@ export type { CancelOnchainResult } from './cancelOnchain.js';
 export type { GetNonceFloorArgs } from './getNonceFloor.js';
 export type { MatchArgs, MatchResult } from './match.js';
 export type { PrepareMatchArgs } from './prepareMatch.js';
+export type {
+  CheckCommitmentFillabilityArgs,
+  CheckCommitmentFillabilityResult,
+  FillabilityOutcome,
+  FillabilityReason,
+  FillabilityReasonCode,
+  FillabilityFill,
+} from './checkFillability.js';
 export type {
   ResolveByPrefixOptions,
   StatusFilter,

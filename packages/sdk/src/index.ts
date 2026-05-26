@@ -231,6 +231,12 @@ export type {
   PrepareMatchArgs,
   ResolveByPrefixOptions,
   StatusFilter,
+  CheckCommitmentFillabilityArgs,
+  CheckCommitmentFillabilityResult,
+  FillabilityOutcome,
+  FillabilityReason,
+  FillabilityReasonCode,
+  FillabilityFill,
 } from './commitments/index.js';
 
 // Match-flow preview model — parallels SubmitPreview but for the taker
