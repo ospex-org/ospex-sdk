@@ -469,10 +469,10 @@ export interface SubmitPreview {
 }
 
 /**
- * JSON envelope for `commitments submit --json` (preview only). Used
- * over the wire — the in-memory `prepareSubmit(args): Promise<SubmitPreview>`
- * returns the bare model. Add `schemaVersion: 1` only at the JSON
- * boundary so downstream agents have a stable contract.
+ * @deprecated Legacy pre-v2 wire type. The CLI's `commitments submit --json`
+ * now emits a v2 `AgentEnvelope` (`stage: 'preview'`, `payload: SubmitPreview`) —
+ * see `docs/AGENT_CONTRACT.md`. Retained (exported) for back-compat only; it is
+ * NOT the current `--json` shape.
  */
 export interface SubmitPreviewEnvelope {
   schemaVersion: 1;
@@ -480,12 +480,10 @@ export interface SubmitPreviewEnvelope {
 }
 
 /**
- * Wire shape for `commitments submit --yes --json` (post-submit).
- *
- * `result` is the SDK's existing `SubmitResult` — `{ hash, commitment }` —
- * not a re-invented `{ hash, status }` shape. Locking schemaVersion: 1
- * with a result type that disagrees with what `commitments.submit`
- * actually returns would be a self-inflicted contract break.
+ * @deprecated Legacy pre-v2 wire type. The CLI's `commitments submit --yes --json`
+ * now emits a v2 `AgentEnvelope` (`stage: 'execute'`, `payload: { preview, result,
+ * fundability }`) — see `docs/AGENT_CONTRACT.md`. Retained (exported) for back-compat
+ * only; it is NOT the current `--json` shape (it omits `fundability` and the v2 shoulder).
  */
 export interface SubmitJsonResult {
   schemaVersion: 1;

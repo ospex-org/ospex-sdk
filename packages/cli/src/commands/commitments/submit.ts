@@ -33,10 +33,12 @@
  *   --yes                    skip the [Y/n] prompt
  *   --json                   emit machine-readable JSON. Behavior pairs
  *                            with --yes:
- *                              --json alone     → SubmitPreviewEnvelope
- *                                                 (preview only, NO signing)
- *                              --yes --json     → SubmitJsonResult
- *                                                 (preview + submit result)
+ *                              --json alone     → v2 AgentEnvelope, stage
+ *                                                 'preview' (payload: SubmitPreview;
+ *                                                 NO signing)
+ *                              --yes --json     → v2 AgentEnvelope, stage
+ *                                                 'execute' (payload: { preview,
+ *                                                 result, fundability })
  *   --approve-max            non-interactive (`--yes`) shorthand for
  *                            "approve unlimited" when an approval is
  *                            needed. In interactive mode the user
@@ -65,6 +67,7 @@ import {
   type ApprovalPurpose,
   type ApprovalRequirement,
   type ChainId,
+  type CheckSubmitFundabilityResult,
   type Commitment,
   type Hex,
   type HighLevelSubmitArgs,
@@ -80,6 +83,12 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import {
+  buildSubmitRefusedEnvelope,
+  renderSubmitFundabilityNotice,
+  renderSubmitPreflightRefusal,
+  selectBlockingSubmitReasons,
+} from '../../lib/submitFundabilityPreflight.js';
 import {
   VERIFY_COMMITMENT,
   deriveRemediationNextCommands,
@@ -105,6 +114,8 @@ const optionsSchema = z.object({
   json: z.boolean().optional(),
   approveMax: z.boolean().optional(),
   raw: z.boolean().optional(),
+  skipFundabilityPreflight: z.boolean().optional(),
+  force: z.boolean().optional(),
 });
 
 export const commitmentsSubmitCommand = addSignerOptions(
@@ -138,11 +149,22 @@ export const commitmentsSubmitCommand = addSignerOptions(
       'render the protocol-native side tags (positionType=Upper/Lower) inside the side: line. ' +
         'Useful for debugging EIP-712 hash mismatches; has no effect on --json output.',
     )
+    .option(
+      '--skip-fundability-preflight',
+      'skip the advisory pre-sign maker-funding check. By default `submit` reads the maker\'s USDC ' +
+        'balance + PositionModule/TreasuryModule allowance and the open-commitment book, and REFUSES ' +
+        '(before signing) a submit the wallet can\'t back. This flag proceeds anyway.',
+    )
+    .option(
+      '--force',
+      'alias for --skip-fundability-preflight — proceed despite (or without) the funding check ' +
+        '(the commitment may be unfillable).',
+    )
     .addOption(
       new Option(
         '--json',
-        'machine-readable output. ALONE = preview only, no signing (SubmitPreviewEnvelope). ' +
-          'WITH --yes = signs/posts and emits SubmitJsonResult.',
+        'machine-readable output. ALONE = preview only, no signing (v2 AgentEnvelope, stage "preview", payload SubmitPreview). ' +
+          'WITH --yes = signs/posts and emits a v2 AgentEnvelope (stage "execute", payload { preview, result, fundability }).',
       ).hideHelp(false),
     ),
 )
@@ -197,6 +219,11 @@ export const commitmentsSubmitCommand = addSignerOptions(
 
     // 2. `--json` alone (no --yes) is the preview-only mode — emit
     //    the v2 agent envelope and exit without prompting or signing.
+    //    The fundability preflight is an EXECUTE-path guard (mirrors `match`),
+    //    so it does NOT run here — an inspect-only preview stays cheap and
+    //    signer-free; agents that want the verdict pre-sign call
+    //    `client.commitments.checkSubmitFundability` or read it from the
+    //    executed envelope's `payload.fundability`.
     if (previewOnly) {
       const chainId = client.chainId();
       writeAgentEnvelope(toSubmitPreviewEnvelope(preview, { chainId }));
@@ -212,9 +239,44 @@ export const commitmentsSubmitCommand = addSignerOptions(
       );
     }
 
+    // 3.5 Fundability preflight (execute path only — mirrors `match`). Read the
+    //     maker's USDC balance + PositionModule/TreasuryModule allowance and
+    //     their open-commitment book, and check whether the WHOLE book (existing
+    //     + this commitment + lazy fees) is backed — the approve-loop below only
+    //     ever covers THIS commitment's allowance and reads no balance, so this
+    //     is what catches whole-book over-commitment. REFUSE-before-sign on a
+    //     non-remediable USDC balance shortfall; allowance shortfalls + the
+    //     lazy-fee uncertainty are advisory (the approve-loop / a manual approve
+    //     remediates allowances) — surfaced below + in `payload.fundability`,
+    //     never blocking. Bypass with --skip-fundability-preflight / --force
+    //     (→ fundability stays null). Threaded into the execute envelope below
+    //     ("JSON always includes it"; null = skipped) — NOT into warnings[]
+    //     (read `payload.fundability.reasons`), matching `match`.
+    let fundability: CheckSubmitFundabilityResult | null = null;
+    const skipFundability = opts.skipFundabilityPreflight === true || opts.force === true;
+    if (!skipFundability) {
+      fundability = await client.commitments.checkSubmitFundability({ preview });
+      const blocking = selectBlockingSubmitReasons(fundability.reasons);
+      if (blocking.length > 0) {
+        if (wantJson) {
+          writeAgentEnvelope(buildSubmitRefusedEnvelope(fundability, blocking, { chainId, wallet }));
+        } else {
+          process.stderr.write(renderSubmitPreflightRefusal(blocking));
+        }
+        process.exit(1);
+      }
+    }
+
     // 4. Render the preview to stderr so stdout JSON (under --yes
     //    --json) stays parseable.
     renderPreview(preview, process.stderr, { raw: opts.raw === true });
+    // 4.5 Advisory funding notice (non-blocking reasons) for the human path —
+    //     under --json the same signal rides the execute envelope's
+    //     `payload.fundability` (the full verdict, incl `reasons[]`), not warnings[].
+    if (!wantJson && fundability !== null) {
+      const notice = renderSubmitFundabilityNotice(fundability);
+      if (notice) process.stderr.write(notice);
+    }
 
     // 5. Confirm (unless --yes). 'n' or empty exits with 130 (matches
     //    the Ctrl-C convention so scripts can distinguish "user
@@ -358,7 +420,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
         toSubmitExecuteEnvelope(
           preview,
           { hash: result.hash, commitment: result.commitment },
-          { chainId, approveEffects },
+          { chainId, approveEffects, fundability },
         ),
       );
       return;
@@ -405,6 +467,8 @@ export type SubmitPreviewPayload = SubmitPreview;
 export interface SubmitExecutePayload {
   preview: SubmitPreview;
   result: { hash: Hex; commitment: Commitment };
+  /** The advisory submit-fundability verdict (B1b) — `null` when the preflight was skipped (--skip-fundability-preflight / --force). Always present, mirroring `match`'s `payload.fillability`. */
+  fundability: CheckSubmitFundabilityResult | null;
 }
 
 export interface ToSubmitEnvelopeArgs {
@@ -422,6 +486,8 @@ export interface ToSubmitExecuteEnvelopeArgs extends ToSubmitEnvelopeArgs {
    * Empty (or omitted) when no approvals were needed.
    */
   approveEffects?: AgentEffect[];
+  /** The fundability verdict for `payload.fundability` — `null` when the preflight was skipped (mirrors `match`). */
+  fundability: CheckSubmitFundabilityResult | null;
 }
 
 /**
@@ -517,7 +583,7 @@ export function toSubmitExecuteEnvelope(
     warnings: shoulder.warnings,
     effects: [...approveEffects, ...finalEffects],
     nextCommands: [VERIFY_COMMITMENT.build({ hash: result.hash })],
-    payload: { preview, result },
+    payload: { preview, result, fundability: args.fundability ?? null },
   });
 }
 

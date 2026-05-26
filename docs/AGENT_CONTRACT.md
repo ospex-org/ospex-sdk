@@ -41,19 +41,18 @@ Three commands ship a **dual-mode** `--json`: preview-only without `--yes`, exec
 
 | Command | `--json` alone | `--yes --json` |
 |---|---|---|
-| `ospex commitments submit` | `stage: 'preview'`, `payload: SubmitPreview`. **No signing, no POST.** | `stage: 'execute'`, `payload: { preview: SubmitPreview; result: SubmitResult }`. Signs and posts. The `preview` mirrors the `--json`-alone envelope so agents can audit what they signed for; `result` carries the post-sign artifacts (`hash`, `commitment`). |
-| `ospex commitments match` | `stage: 'preview'`, `payload: MatchPreview`. **No tx.** The signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight) — only when a non-interactive credential is configured. See §4 (lazy-unlock contract). | `stage: 'execute'`, `payload: { preview: MatchPreview; result: MatchResult }`. Sends a tx. Same audit-friendly shape as submit — `preview` mirrors the preview envelope; `result` carries `txHash`, `status`, `blockNumber`, and the per-side risk wei6 figures. |
+| `ospex commitments submit` | `stage: 'preview'`, `payload: SubmitPreview`. **No signing, no POST.** | `stage: 'execute'`, `payload: { preview: SubmitPreview; result: SubmitResult; fundability: CheckSubmitFundabilityResult \| null }`. Signs and posts. The `preview` mirrors the `--json`-alone envelope so agents can audit what they signed for; `result` carries the post-sign artifacts (`hash`, `commitment`); `fundability` is the advisory submit-preflight verdict (always present, `null` when the preflight was skipped). |
+| `ospex commitments match` | `stage: 'preview'`, `payload: MatchPreview`. **No tx.** The signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight) — only when a non-interactive credential is configured. See §4 (lazy-unlock contract). | `stage: 'execute'`, `payload: { preview: MatchPreview; result: MatchResult; fillability: CheckCommitmentFillabilityResult \| null }`. Sends a tx. Same audit-friendly shape as submit — `preview` mirrors the preview envelope; `result` carries `txHash`, `status`, `blockNumber`, and the per-side risk wei6 figures; `fillability` is the advisory match-preflight verdict (always present, `null` when skipped). |
 | `ospex approvals setup` | `stage: 'preview'`, `payload: { plan: SetupPlan }`. No tx. | `stage: 'execute'`, `payload: { plan: SetupPlan; results: SetupResult[] }`. Executes the plan; one entry in `results` per approval tx. |
 
 Other write commands (`contests score`, `settle`, `claim`, `claim-all`, `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`) treat `--json` as **output format only** — they may still send a transaction. Use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
 
 ### Payload TypeScript shapes
 
-The per-command `payload` types are the existing SDK preview/result models — `AgentEnvelope` adds the shoulder block around them, not new fields.
+The per-command `payload` types are the SDK preview/result models — `AgentEnvelope` adds the shoulder block around them. The one exception: the `submit` / `match` **execute** payloads also carry the advisory preflight verdict (`fundability` / `fillability`) alongside `preview` / `result` (see "Advisory preflights" below).
 
 ```ts
-// commitments submit --json (no --yes)
-type SubmitPreviewEnvelope = AgentEnvelope<SubmitPreview>;
+// commitments submit --json (no --yes)  →  AgentEnvelope<SubmitPreview>
 // SubmitPreview: contest, market { speculation { creationFee, … } }, side, economics, expiry,
 //                raw, approvals[], outcomes[], submitAction, you?, counterparty?
 
@@ -64,12 +63,14 @@ type SubmitResultEnvelope = AgentEnvelope<{
     hash: string;
     commitment: Commitment;
   };
+  fundability: CheckSubmitFundabilityResult | null;
 }>;
 // payload.preview mirrors the --json-alone envelope verbatim.
 // payload.result.hash is the commitment hash; payload.result.commitment is the persisted row.
+// payload.fundability is the advisory submit-preflight verdict (outcome + reasons[] + requirement);
+//   always present, null when the preflight was skipped (--skip-fundability-preflight / --force).
 
-// commitments match --json (no --yes)
-type MatchPreviewEnvelope = AgentEnvelope<MatchPreview>;
+// commitments match --json (no --yes)  →  AgentEnvelope<MatchPreview>
 // MatchPreview: commitment, taker, selfMatch, contest, market, odds, economics, expiry,
 //               speculation { mode, creationFee, lazyCreation? }, approvals[], warnings[],
 //               tradeAction, you?, counterparty?, outcomes?
@@ -84,10 +85,13 @@ type MatchResultEnvelope = AgentEnvelope<{
     takerRiskWei6: string;
     fillMakerRiskWei6: string;
   };
+  fillability: CheckCommitmentFillabilityResult | null;  // advisory match-preflight verdict; null when skipped
 }>;
 ```
 
-The `{ preview, result }` shape on execute envelopes is deliberate: agents reading the result can verify the preview block in the same envelope against the preview block they accepted at signing time, without holding state across two invocations. Reach for `payload.result.txHash` (not `payload.txHash`); `payload.preview` is identical-shape to the preview envelope and carries the same audit fields.
+The `{ preview, result, … }` shape on execute envelopes is deliberate: agents reading the result can verify the preview block in the same envelope against the preview block they accepted at signing time, without holding state across two invocations. `submit` / `match` add the preflight verdict (`fundability` / `fillability`) alongside. Reach for `payload.result.txHash` (not `payload.txHash`); `payload.preview` is identical-shape to the preview envelope and carries the same audit fields.
+
+`SubmitResultEnvelope` / `MatchResultEnvelope` above are **illustrative** — the SDK exports the generic `AgentEnvelope<T>`, not these exact aliases. The similarly-named `SubmitPreviewEnvelope` / `SubmitJsonResult` / `MatchPreviewEnvelope` / `MatchJsonResult` types the SDK *does* export are **`@deprecated` pre-v2 wire shapes** (`schemaVersion: 1`, no preflight verdict) — kept for back-compat, NOT what the current CLI emits.
 
 Authoritative payload sources: [`packages/sdk/src/types/preview.ts`](../packages/sdk/src/types/preview.ts) and [`packages/sdk/src/types/matchPreview.ts`](../packages/sdk/src/types/matchPreview.ts). Authoritative envelope source: [`packages/sdk/src/types/agentEnvelope.ts`](../packages/sdk/src/types/agentEnvelope.ts).
 
@@ -145,6 +149,18 @@ The agent contract surfaces this in two always-present, mode-symmetric fields. R
 `tradeAction` and `submitAction` describe the preview-time expected execution path — **not a guarantee**. On a lazy match, another tx may create the speculation first; if it lands before yours, your tx executes as trade-only and no fee is charged. The contract field `creationFee.condition === 'if-first-match-at-execution'` makes this race explicit so agents reason about it correctly.
 
 The legacy `speculation.lazyCreation` block (lazy-mode only) is still emitted for back-compat and carries the `makerTreasuryAllowance*` diagnostic + the `'maker-treasury-allowance-insufficient'` warning. New code should prefer `creationFee` for fee semantics; `lazyCreation` is marked `@deprecated` in TypeScript.
+
+### Advisory preflights (fillability / fundability)
+
+A signed commitment can be perfectly valid yet still revert at fill time because a wallet moved USDC or dropped an allowance. `match` and `submit` each run a **read-only, advisory** preflight before the write to catch this, and the two SDK primitives — `client.commitments.checkCommitmentFillability(...)` (taker side) and `client.commitments.checkSubmitFundability({ preview })` (maker side) — expose the same verdict shape programmatically: a discriminated `outcome` (`fillable`/`not-fillable`/`unknown` · `fundable`/`not-fundable`/`unknown`), a structured `reasons[]`, and `advisory: true`. Both are **point-in-time, never a guarantee** — balances/allowances can change before the match/fill.
+
+- **`commitments match` → fillability** ("can *I* fill *this* commitment now?"). Reads maker + taker USDC balances and the maker→PositionModule allowance (the gap the on-chain match path doesn't prove). It **refuses before sending** on a non-remediable reason — `MAKER_USDC_BALANCE_INSUFFICIENT`, `MAKER_POSITION_ALLOWANCE_INSUFFICIENT`, `MAKER_TREASURY_ALLOWANCE_INSUFFICIENT`, `TAKER_USDC_BALANCE_INSUFFICIENT`, or a liveness/`SPECULATION_CLOSED` reason. The **taker's own** allowance shortfalls do NOT block (the command's approve-loop remediates them); `FILLABILITY_UNKNOWN` (a read failed) warns and proceeds. Also available standalone, read-only: `ospex commitments fillability <hash> [--taker …] [--risk-usdc …] [--json]`.
+- **`commitments submit` → fundability** ("can I back what I'm about to sign?"). Reads the maker's USDC balance + PositionModule/TreasuryModule allowance and the maker's open-commitment book, then checks the **whole book** (existing open risk + this commitment + lazy creation fees) — `submit`'s approve-loop only ever covers *this* commitment's allowance and reads no balance, so this is what catches whole-book over-commitment. It **refuses before signing** ONLY on `MAKER_USDC_BALANCE_INSUFFICIENT` (you can't approve USDC into existence). Maker **allowance** shortfalls (`MAKER_POSITION_ALLOWANCE_INSUFFICIENT` / `MAKER_TREASURY_ALLOWANCE_INSUFFICIENT`) are remediable (the approve-loop, or a manual `approve`) so they **warn, not block**; `EXISTING_LAZY_FEE_UNDETERMINED` (existing open commitments might owe creation fees that can't be confirmed without per-speculation lookups) and `FUNDABILITY_UNKNOWN` (a read failed) warn and proceed.
+
+Both preflights run on the **execute path** by default (not on a `--json`-only preview); bypass with **`--force`** (alias for **`--skip-fillability-preflight`** / **`--skip-fundability-preflight`**). JSON contract:
+
+- A **refusal** is an `ok: false`, `stage: 'execute'` envelope. The blocking reason(s) are surfaced as `severity: 'blocking'` `warnings[]` (`blockingFor: ['match']` / `['submit']`), the full verdict + a marker sit in the payload (`{ preflight, action: 'refused-before-send' }` for match / `{ fundability, action: 'refused-before-sign' }` for submit), and `effects` is empty (nothing was signed or sent).
+- A **proceeding** (executed) write carries the full verdict — including its `reasons[]` — under `payload.fillability` (match) / `payload.fundability` (submit), **always present** and **`null` when the preflight was skipped**. The verdict's non-blocking reasons are NOT duplicated into the proceed envelope's `warnings[]` — read them from `payload.<verdict>.reasons`; the human (non-`--json`) path prints them to stderr. A `--json`-only preview (no `--yes`) does not carry the verdict (the preflight is execute-path only).
 
 ### Numeric-field rule
 

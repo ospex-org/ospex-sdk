@@ -328,8 +328,8 @@ speculation:  not yet created — lazily created on first match
 - **`--risk-usdc`** — decimal USDC string. `1`, `0.001`, `25`. Must be a multiple of `$0.0001` per the contract's lot-size rule.
 - **`--line`** — selected-side displayed line for spread / total. `--side padres --line -3.5` means "Padres -3.5" regardless of whether Padres are home or away; the resolver inverts to the protocol's away-side ticks under the hood. **Omit for `--market moneyline`** — moneyline is line-less, and the SDK errors if `--line` is passed there.
 - **`--yes`** skips the confirmation prompt and signs/posts. **`--json`** is output-format only and pairs with `--yes`:
-  - `--json` alone → emits `SubmitPreviewEnvelope` (preview only, **no signing**). Use case: an agent inspects the resolved tuple before deciding whether to commit.
-  - `--yes --json` → signs/posts and emits `SubmitJsonResult` (preview + result).
+  - `--json` alone → emits a v2 `AgentEnvelope` (`stage: 'preview'`, `payload: SubmitPreview`, **no signing**). Use case: an agent inspects the resolved tuple before deciding whether to commit.
+  - `--yes --json` → signs/posts and emits a v2 `AgentEnvelope` (`stage: 'execute'`, `payload: { preview, result, fundability }`).
   - Any non-interactive run that would sign without `--yes` errors out rather than hanging on a prompt.
 - **`--expiry`** — when the signed commitment stops being matchable. Three accepted forms:
   - **duration** — `30m`, `4h`, `1d`, `1w`. Sets expiry to `now + duration`.
@@ -466,7 +466,7 @@ For `commitments match --json` specifically: no transaction is signed or sent. T
 
 If none of those resolve, the command errors out with `non_interactive_password_required` rather than hanging on a prompt. For new scripts the preferred preamble is one of `--expected-address` or `auth use-foundry`; `wallet unlock` should be treated as a legacy fallback only.
 
-`--yes --json` runs the full flow and emits `{ schemaVersion, preview, result }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
+`--yes --json` runs the full flow and emits `{ schemaVersion, …, payload: { preview, result, fundability } }` on stdout (`fundability` is the advisory submit-preflight verdict, `null` when skipped with `--force` / `--skip-fundability-preflight`; `match` carries `fillability` likewise). The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
 
 `--approve-max` is the non-interactive shortcut for unlimited USDC approval; without it, `--yes` approves the exact amount needed. (Mostly redundant if the agent runs `ospex approvals setup --risk-usdc <n> --yes` once during init.)
 

@@ -19,9 +19,9 @@
  *      (for `selfMatch` and the allowance preflight), so the keystore
  *      passphrase prompt may fire even on the `--json`-alone path
  *      when no session is cached. This mirrors `commitments submit`.
- *   3. `--json` alone (no `--yes`) → emit `MatchPreviewEnvelope`,
- *      exit. Agent flow: inspect tuple before deciding whether to
- *      execute.
+ *   3. `--json` alone (no `--yes`) → emit a v2 `AgentEnvelope`
+ *      (`stage: 'preview'`, `payload: MatchPreview`), exit. Agent flow:
+ *      inspect tuple before deciding whether to execute.
  *   4. Render the preview to stderr; prompt to confirm unless `--yes`.
  *      Decline → exit 130 (Ctrl-C convention).
  *   5. Run any required approvals (commitment-risk on PositionModule;
@@ -141,8 +141,8 @@ export const commitmentsMatchCommand = addSignerOptions(
     .addOption(
       new Option(
         '--json',
-        'machine-readable output. ALONE = preview only, no signing (MatchPreviewEnvelope). ' +
-          'WITH --yes = signs/sends and emits MatchJsonResult.',
+        'machine-readable output. ALONE = preview only, no signing (v2 AgentEnvelope, stage "preview", payload MatchPreview). ' +
+          'WITH --yes = signs/sends and emits a v2 AgentEnvelope (stage "execute", payload { preview, result, fillability }).',
       ).hideHelp(false),
     ),
 )

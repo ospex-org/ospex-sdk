@@ -142,7 +142,9 @@ export type {
 
 // Resolver-layer surface — preview model + high-level submit args + the
 // resolver primitives. CLI and external agents render text from
-// SubmitPreview; --json emits SubmitPreviewEnvelope / SubmitJsonResult.
+// SubmitPreview; the CLI's --json emits a v2 AgentEnvelope wrapping it (see
+// docs/AGENT_CONTRACT.md). SubmitPreviewEnvelope / SubmitJsonResult are
+// @deprecated legacy pre-v2 wire types (exported for back-compat only).
 export type {
   SubmitPreview,
   SubmitPreviewEnvelope,
@@ -246,8 +248,9 @@ export type {
 } from './commitments/index.js';
 
 // Match-flow preview model — parallels SubmitPreview but for the taker
-// side. CLI and agents render `MatchPreview`; `--json` emits the
-// envelope; `--yes --json` emits the result envelope.
+// side. CLI and agents render `MatchPreview`; the CLI's --json emits a v2
+// AgentEnvelope wrapping it (see docs/AGENT_CONTRACT.md). MatchPreviewEnvelope /
+// MatchJsonResult are @deprecated legacy pre-v2 wire types (back-compat only).
 export type {
   MatchPreview,
   MatchPreviewEnvelope,

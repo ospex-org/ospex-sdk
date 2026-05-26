@@ -277,7 +277,10 @@ export interface MatchPreview {
 }
 
 /**
- * JSON envelope for `commitments match --json` (preview only).
+ * @deprecated Legacy pre-v2 wire type. The CLI's `commitments match --json`
+ * now emits a v2 `AgentEnvelope` (`stage: 'preview'`, `payload: MatchPreview`) —
+ * see `docs/AGENT_CONTRACT.md`. Retained (exported) for back-compat only; it is
+ * NOT the current `--json` shape.
  */
 export interface MatchPreviewEnvelope {
   schemaVersion: 1;
@@ -285,10 +288,10 @@ export interface MatchPreviewEnvelope {
 }
 
 /**
- * JSON shape for `commitments match --yes --json` (post-submit).
- * `result` mirrors the existing `MatchResult` minus the heavy
- * `receipt` object — txHash + status + block number is enough for
- * agents and `jq`-friendly to boot.
+ * @deprecated Legacy pre-v2 wire type. The CLI's `commitments match --yes --json`
+ * now emits a v2 `AgentEnvelope` (`stage: 'execute'`, `payload: { preview, result,
+ * fillability }`) — see `docs/AGENT_CONTRACT.md`. Retained (exported) for back-compat
+ * only; it is NOT the current `--json` shape (it omits `fillability` and the v2 shoulder).
  */
 export interface MatchJsonResult {
   schemaVersion: 1;
