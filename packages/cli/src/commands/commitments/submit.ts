@@ -83,7 +83,6 @@ import {
 } from '../../lib/agentEnvelope.js';
 import {
   buildSubmitRefusedEnvelope,
-  fundabilityWarnings,
   renderSubmitFundabilityNotice,
   renderSubmitPreflightRefusal,
   selectBlockingSubmitReasons,
@@ -216,25 +215,16 @@ export const commitmentsSubmitCommand = addSignerOptions(
     const preview = await client.commitments.prepareSubmit(prepArgs);
     wallet = preview.raw.maker.toLowerCase() as Hex;
 
-    // 1.5 Fundability preflight (advisory). Read the maker's USDC balance +
-    //     PositionModule/TreasuryModule allowance and their open-commitment
-    //     book, and check whether the WHOLE book (existing + this new commitment
-    //     + lazy fees) is backed — the submit approve-loop below only ever
-    //     covers THIS commitment's allowance and reads no balance, so this is
-    //     what catches whole-book over-commitment. The verdict is threaded into
-    //     the preview/execute envelopes ("JSON always includes it"); `null`
-    //     means it was skipped (--skip-fundability-preflight / --force).
-    let fundability: CheckSubmitFundabilityResult | null = null;
-    const skipFundability = opts.skipFundabilityPreflight === true || opts.force === true;
-    if (!skipFundability) {
-      fundability = await client.commitments.checkSubmitFundability({ preview });
-    }
-
     // 2. `--json` alone (no --yes) is the preview-only mode — emit
     //    the v2 agent envelope and exit without prompting or signing.
+    //    The fundability preflight is an EXECUTE-path guard (mirrors `match`),
+    //    so it does NOT run here — an inspect-only preview stays cheap and
+    //    signer-free; agents that want the verdict pre-sign call
+    //    `client.commitments.checkSubmitFundability` or read it from the
+    //    executed envelope's `payload.fundability`.
     if (previewOnly) {
       const chainId = client.chainId();
-      writeAgentEnvelope(toSubmitPreviewEnvelope(preview, { chainId, fundability }));
+      writeAgentEnvelope(toSubmitPreviewEnvelope(preview, { chainId }));
       return;
     }
 
@@ -247,13 +237,23 @@ export const commitmentsSubmitCommand = addSignerOptions(
       );
     }
 
-    // 3.5 Refuse-before-sign on a non-remediable funding shortfall (the maker's
-    //     USDC balance can't back their open book + this commitment). Allowance
-    //     shortfalls and the lazy-fee uncertainty are advisory — surfaced below,
-    //     never blocking (the approve-loop / a manual approve remediates
-    //     allowances). Skipped when the preflight was (--skip-fundability-preflight
-    //     / --force → fundability === null).
-    if (fundability !== null) {
+    // 3.5 Fundability preflight (execute path only — mirrors `match`). Read the
+    //     maker's USDC balance + PositionModule/TreasuryModule allowance and
+    //     their open-commitment book, and check whether the WHOLE book (existing
+    //     + this commitment + lazy fees) is backed — the approve-loop below only
+    //     ever covers THIS commitment's allowance and reads no balance, so this
+    //     is what catches whole-book over-commitment. REFUSE-before-sign on a
+    //     non-remediable USDC balance shortfall; allowance shortfalls + the
+    //     lazy-fee uncertainty are advisory (the approve-loop / a manual approve
+    //     remediates allowances) — surfaced below + in `payload.fundability`,
+    //     never blocking. Bypass with --skip-fundability-preflight / --force
+    //     (→ fundability stays null). Threaded into the execute envelope below
+    //     ("JSON always includes it"; null = skipped) — NOT into warnings[]
+    //     (read `payload.fundability.reasons`), matching `match`.
+    let fundability: CheckSubmitFundabilityResult | null = null;
+    const skipFundability = opts.skipFundabilityPreflight === true || opts.force === true;
+    if (!skipFundability) {
+      fundability = await client.commitments.checkSubmitFundability({ preview });
       const blocking = selectBlockingSubmitReasons(fundability.reasons);
       if (blocking.length > 0) {
         if (wantJson) {
@@ -464,14 +464,12 @@ export type SubmitPreviewPayload = SubmitPreview;
 export interface SubmitExecutePayload {
   preview: SubmitPreview;
   result: { hash: Hex; commitment: Commitment };
-  /** The advisory submit-fundability verdict (B1b). Absent when the preflight was skipped (--skip-fundability-preflight / --force). */
-  fundability?: CheckSubmitFundabilityResult;
+  /** The advisory submit-fundability verdict (B1b) — `null` when the preflight was skipped (--skip-fundability-preflight / --force). Always present, mirroring `match`'s `payload.fillability`. */
+  fundability: CheckSubmitFundabilityResult | null;
 }
 
 export interface ToSubmitEnvelopeArgs {
   chainId: ChainId;
-  /** The fundability verdict to surface as warnings (preview) / `payload.fundability` (execute). `null`/absent = preflight skipped. */
-  fundability?: CheckSubmitFundabilityResult | null;
 }
 
 export interface ToSubmitExecuteEnvelopeArgs extends ToSubmitEnvelopeArgs {
@@ -485,6 +483,8 @@ export interface ToSubmitExecuteEnvelopeArgs extends ToSubmitEnvelopeArgs {
    * Empty (or omitted) when no approvals were needed.
    */
   approveEffects?: AgentEffect[];
+  /** The fundability verdict for `payload.fundability` — `null` when the preflight was skipped (mirrors `match`). */
+  fundability: CheckSubmitFundabilityResult | null;
 }
 
 /**
@@ -522,7 +522,7 @@ export function toSubmitPreviewEnvelope(
     contest: preview.contest,
     speculation: preview.market.speculation,
     sideSummary: shoulder.sideSummary,
-    warnings: [...shoulder.warnings, ...(args.fundability ? fundabilityWarnings(args.fundability) : [])],
+    warnings: shoulder.warnings,
     payload: preview,
   });
 }
@@ -577,10 +577,10 @@ export function toSubmitExecuteEnvelope(
     speculation: preview.market.speculation,
     commitment: result.commitment,
     sideSummary: shoulder.sideSummary,
-    warnings: [...shoulder.warnings, ...(args.fundability ? fundabilityWarnings(args.fundability) : [])],
+    warnings: shoulder.warnings,
     effects: [...approveEffects, ...finalEffects],
     nextCommands: [VERIFY_COMMITMENT.build({ hash: result.hash })],
-    payload: { preview, result, ...(args.fundability ? { fundability: args.fundability } : {}) },
+    payload: { preview, result, fundability: args.fundability ?? null },
   });
 }
 

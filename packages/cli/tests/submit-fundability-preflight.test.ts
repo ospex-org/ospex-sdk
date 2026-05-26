@@ -12,7 +12,6 @@ import { describe, expect, it } from 'vitest';
 import {
   SUBMIT_REMEDIABLE_REASON_CODES,
   buildSubmitRefusedEnvelope,
-  fundabilityWarnings,
   renderSubmitFundabilityNotice,
   renderSubmitPreflightRefusal,
   selectBlockingSubmitReasons,
@@ -114,26 +113,6 @@ describe('submitFundabilityReasonMessage', () => {
     const msg = submitFundabilityReasonMessage(reason('EXISTING_LAZY_FEE_UNDETERMINED', { requiredWei6: 500_000n }));
     expect(msg).toMatch(/creation fee/i);
     expect(msg).toMatch(/up to 0\.500000 USDC/);
-  });
-});
-
-describe('fundabilityWarnings', () => {
-  it('maps the balance shortfall to a blocking warning that blocks `submit`', () => {
-    const ws = fundabilityWarnings(makeResult([reason('MAKER_USDC_BALANCE_INSUFFICIENT')]));
-    expect(ws).toHaveLength(1);
-    expect(ws[0]).toMatchObject({
-      code: 'MAKER_USDC_BALANCE_INSUFFICIENT',
-      severity: 'blocking',
-      blockingFor: ['submit'],
-    });
-  });
-
-  it('maps remediable / advisory reasons to non-blocking warnings', () => {
-    const ws = fundabilityWarnings(
-      makeResult([reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT'), reason('EXISTING_LAZY_FEE_UNDETERMINED')]),
-    );
-    expect(ws.map((w) => w.severity)).toEqual(['warning', 'warning']);
-    expect(ws.every((w) => w.blockingFor === undefined)).toBe(true);
   });
 });
 

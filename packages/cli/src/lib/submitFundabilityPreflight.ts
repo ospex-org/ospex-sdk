@@ -75,7 +75,12 @@ export function submitFundabilityReasonMessage(r: SubmitFundabilityReason): stri
   }
 }
 
-/** A blocking reason → a `blocking` agent warning that blocks `submit`. */
+/**
+ * A blocking reason → a `blocking` agent warning that blocks `submit`. The
+ * fundability verdict otherwise rides `payload.fundability` (the full verdict +
+ * `reasons[]`), NOT the proceed envelope's `warnings[]` — mirroring `match`'s
+ * `payload.fillability`; only a refusal's blocking reasons become warnings here.
+ */
 function blockingReasonToWarning(r: SubmitFundabilityReason): AgentWarning {
   return {
     code: r.code,
@@ -83,22 +88,6 @@ function blockingReasonToWarning(r: SubmitFundabilityReason): AgentWarning {
     severity: 'blocking',
     blockingFor: ['submit'],
   };
-}
-
-/**
- * Map a fundability verdict's reasons to agent warnings — the one non-remediable
- * balance shortfall as `blocking` (blocks `submit`), everything else (remediable
- * allowance shortfalls, the lazy-fee uncertainty, a degraded read) as advisory
- * `warning`. Attached to the preview / execute envelopes so an agent sees the
- * funding signal in the standard warnings channel even when it didn't block.
- */
-export function fundabilityWarnings(verdict: CheckSubmitFundabilityResult): AgentWarning[] {
-  const blocking = new Set(selectBlockingSubmitReasons(verdict.reasons).map((r) => r.code));
-  return verdict.reasons.map((r) =>
-    blocking.has(r.code)
-      ? blockingReasonToWarning(r)
-      : { code: r.code, message: submitFundabilityReasonMessage(r), severity: 'warning' },
-  );
 }
 
 export interface SubmitRefusedPayload {
