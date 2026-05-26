@@ -41,15 +41,15 @@ Three commands ship a **dual-mode** `--json`: preview-only without `--yes`, exec
 
 | Command | `--json` alone | `--yes --json` |
 |---|---|---|
-| `ospex commitments submit` | `stage: 'preview'`, `payload: SubmitPreview`. **No signing, no POST.** | `stage: 'execute'`, `payload: { preview: SubmitPreview; result: SubmitResult }`. Signs and posts. The `preview` mirrors the `--json`-alone envelope so agents can audit what they signed for; `result` carries the post-sign artifacts (`hash`, `commitment`). |
-| `ospex commitments match` | `stage: 'preview'`, `payload: MatchPreview`. **No tx.** The signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight) — only when a non-interactive credential is configured. See §4 (lazy-unlock contract). | `stage: 'execute'`, `payload: { preview: MatchPreview; result: MatchResult }`. Sends a tx. Same audit-friendly shape as submit — `preview` mirrors the preview envelope; `result` carries `txHash`, `status`, `blockNumber`, and the per-side risk wei6 figures. |
+| `ospex commitments submit` | `stage: 'preview'`, `payload: SubmitPreview`. **No signing, no POST.** | `stage: 'execute'`, `payload: { preview: SubmitPreview; result: SubmitResult; fundability: CheckSubmitFundabilityResult \| null }`. Signs and posts. The `preview` mirrors the `--json`-alone envelope so agents can audit what they signed for; `result` carries the post-sign artifacts (`hash`, `commitment`); `fundability` is the advisory submit-preflight verdict (always present, `null` when the preflight was skipped). |
+| `ospex commitments match` | `stage: 'preview'`, `payload: MatchPreview`. **No tx.** The signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight) — only when a non-interactive credential is configured. See §4 (lazy-unlock contract). | `stage: 'execute'`, `payload: { preview: MatchPreview; result: MatchResult; fillability: CheckCommitmentFillabilityResult \| null }`. Sends a tx. Same audit-friendly shape as submit — `preview` mirrors the preview envelope; `result` carries `txHash`, `status`, `blockNumber`, and the per-side risk wei6 figures; `fillability` is the advisory match-preflight verdict (always present, `null` when skipped). |
 | `ospex approvals setup` | `stage: 'preview'`, `payload: { plan: SetupPlan }`. No tx. | `stage: 'execute'`, `payload: { plan: SetupPlan; results: SetupResult[] }`. Executes the plan; one entry in `results` per approval tx. |
 
 Other write commands (`contests score`, `settle`, `claim`, `claim-all`, `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`) treat `--json` as **output format only** — they may still send a transaction. Use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
 
 ### Payload TypeScript shapes
 
-The per-command `payload` types are the existing SDK preview/result models — `AgentEnvelope` adds the shoulder block around them, not new fields.
+The per-command `payload` types are the SDK preview/result models — `AgentEnvelope` adds the shoulder block around them. The one exception: the `submit` / `match` **execute** payloads also carry the advisory preflight verdict (`fundability` / `fillability`) alongside `preview` / `result` (see "Advisory preflights" below).
 
 ```ts
 // commitments submit --json (no --yes)
@@ -64,9 +64,12 @@ type SubmitResultEnvelope = AgentEnvelope<{
     hash: string;
     commitment: Commitment;
   };
+  fundability: CheckSubmitFundabilityResult | null;
 }>;
 // payload.preview mirrors the --json-alone envelope verbatim.
 // payload.result.hash is the commitment hash; payload.result.commitment is the persisted row.
+// payload.fundability is the advisory submit-preflight verdict (outcome + reasons[] + requirement);
+//   always present, null when the preflight was skipped (--skip-fundability-preflight / --force).
 
 // commitments match --json (no --yes)
 type MatchPreviewEnvelope = AgentEnvelope<MatchPreview>;
@@ -84,10 +87,11 @@ type MatchResultEnvelope = AgentEnvelope<{
     takerRiskWei6: string;
     fillMakerRiskWei6: string;
   };
+  fillability: CheckCommitmentFillabilityResult | null;  // advisory match-preflight verdict; null when skipped
 }>;
 ```
 
-The `{ preview, result }` shape on execute envelopes is deliberate: agents reading the result can verify the preview block in the same envelope against the preview block they accepted at signing time, without holding state across two invocations. Reach for `payload.result.txHash` (not `payload.txHash`); `payload.preview` is identical-shape to the preview envelope and carries the same audit fields.
+The `{ preview, result, … }` shape on execute envelopes is deliberate: agents reading the result can verify the preview block in the same envelope against the preview block they accepted at signing time, without holding state across two invocations. `submit` / `match` add the preflight verdict (`fundability` / `fillability`) alongside. Reach for `payload.result.txHash` (not `payload.txHash`); `payload.preview` is identical-shape to the preview envelope and carries the same audit fields.
 
 Authoritative payload sources: [`packages/sdk/src/types/preview.ts`](../packages/sdk/src/types/preview.ts) and [`packages/sdk/src/types/matchPreview.ts`](../packages/sdk/src/types/matchPreview.ts). Authoritative envelope source: [`packages/sdk/src/types/agentEnvelope.ts`](../packages/sdk/src/types/agentEnvelope.ts).
 

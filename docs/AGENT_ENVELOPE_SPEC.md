@@ -307,7 +307,7 @@ Examples:
 |---|---|---|---|---|---|
 | `read` | always `false` | always `false` | always `[]` | always `[]` | the read result |
 | `preview` | `true` if execution would sign | `true` if execution would dispatch a tx | populated from the preflight | always `[]` | the bespoke preview model (e.g. `SubmitPreview`) |
-| `execute` | `false` (already signed) | `false` (already sent) | `[]` (consumed during execution) | populated per effect | result-bearing payload; varies per command. Dual-mode preview-bearing commands (`commitments submit`, `commitments match`) emit `{ preview, result }` so agents can audit what got executed against the preview they accepted. `approvals setup --yes` emits `{ plan, results }`. Fire-and-forget writes (`claim`, `settle`, `cancel*`, `contests {create, score}`) emit bare command-specific result models. See per-command shapes in §5. |
+| `execute` | `false` (already signed) | `false` (already sent) | `[]` (consumed during execution) | populated per effect | result-bearing payload; varies per command. Dual-mode preview-bearing commands (`commitments submit`, `commitments match`) emit `{ preview, result, <preflight verdict> }` — submit adds `fundability`, match adds `fillability` (the advisory preflight verdict, always present, `null` when skipped) — so agents can audit what got executed against the preview they accepted. `approvals setup --yes` emits `{ plan, results }`. Fire-and-forget writes (`claim`, `settle`, `cancel*`, `contests {create, score}`) emit bare command-specific result models. See per-command shapes in §5. |
 | `dry-run` | `true` (would sign if executed) | `true` (would send) | populated | always `[]` | plan model (e.g. `ClaimAllPlan`) |
 
 ### 3.2 `wallet` / `walletRole` / `signer`

@@ -269,7 +269,8 @@ export const commitmentsSubmitCommand = addSignerOptions(
     //    --json) stays parseable.
     renderPreview(preview, process.stderr, { raw: opts.raw === true });
     // 4.5 Advisory funding notice (non-blocking reasons) for the human path —
-    //     under --json the same signal rides the envelope's warnings[].
+    //     under --json the same signal rides the execute envelope's
+    //     `payload.fundability` (the full verdict, incl `reasons[]`), not warnings[].
     if (!wantJson && fundability !== null) {
       const notice = renderSubmitFundabilityNotice(fundability);
       if (notice) process.stderr.write(notice);

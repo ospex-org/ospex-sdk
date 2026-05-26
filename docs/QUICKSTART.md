@@ -466,7 +466,7 @@ For `commitments match --json` specifically: no transaction is signed or sent. T
 
 If none of those resolve, the command errors out with `non_interactive_password_required` rather than hanging on a prompt. For new scripts the preferred preamble is one of `--expected-address` or `auth use-foundry`; `wallet unlock` should be treated as a legacy fallback only.
 
-`--yes --json` runs the full flow and emits `{ schemaVersion, preview, result }` on stdout. The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
+`--yes --json` runs the full flow and emits `{ schemaVersion, …, payload: { preview, result, fundability } }` on stdout (`fundability` is the advisory submit-preflight verdict, `null` when skipped with `--force` / `--skip-fundability-preflight`; `match` carries `fillability` likewise). The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
 
 `--approve-max` is the non-interactive shortcut for unlimited USDC approval; without it, `--yes` approves the exact amount needed. (Mostly redundant if the agent runs `ospex approvals setup --risk-usdc <n> --yes` once during init.)
 
