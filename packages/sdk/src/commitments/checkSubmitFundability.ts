@@ -17,29 +17,41 @@
  * their still-matchable commitments — each fill independently pulls its own
  * remaining maker risk from the same wallet via the same PositionModule
  * allowance. So the requirement is the SUM, not the new commitment alone:
- *   - balance requirement            = existing open risk + new risk + lazy fee
+ *   - balance requirement            = existing open risk + new risk + lazy fees
  *   - PositionModule allowance req    = existing open risk + new risk
- *   - TreasuryModule allowance req    = lazy creation fee (lazy submits only)
+ *   - TreasuryModule allowance req    = lazy creation fees
  * where `existing open risk` = Σ remaining maker risk over the maker's
  * API-visible open + partially-filled commitments. Comparing the new commitment
  * in isolation would UNDER-state what the wallet must hold — the one error a
  * funding guard must never make.
  *
- * Scope note — VISIBLE, not latent. "Existing open risk" is the maker's
- * API-visible open + partially-filled book. It does NOT include book-hidden
- * latent payloads (a commitment pulled off the relay via an off-chain cancel
- * whose signed payload is still matchable on chain): the API doesn't surface
- * those by maker, and a non-automated SDK/CLI maker doesn't generally create
- * that latent set. The market-maker's per-tick funding guard is the tool that
- * accounts for latent exposure from its own local state — see the
- * ospex-market-maker DESIGN §6. For a maker submitting via the SDK/CLI, visible
- * ≈ everything they're on the hook for.
+ * LAZY CREATION FEES. The first match of a not-yet-created `(contestId, scorer,
+ * lineTicks)` speculation key pulls the maker's half of the creation fee from
+ * the maker (→ TreasuryModule). The NEW commitment's fee is known exactly (the
+ * preview's `submitAction` / Treasury approval row). But the maker's EXISTING
+ * never-matched (`stored 'open'`) commitments MIGHT each owe one too — their
+ * speculation may or may not be created yet, and the list endpoint doesn't say
+ * which. Rather than do a per-speculation lookup per row (which wouldn't scale),
+ * this treats the maximum possible existing lazy fee — one maker share per
+ * distinct not-yet-disambiguated `open` speculation key — as an UPPER bound:
+ *   - funding covers the upper bound          → `fundable` (even worst-case fees fit)
+ *   - a definite shortfall vs the lower bound → `not-fundable`
+ *   - funding straddles the band              → `unknown` (`EXISTING_LAZY_FEE_UNDETERMINED`)
+ * — never a false `fundable`. (`partially_filled` rows are excluded: they've
+ * matched, so their speculation definitely exists and owes no creation fee. The
+ * new commitment's own key is excluded — its fee is already in the lower bound.)
+ *
+ * Scope note — VISIBLE, not locally-tracked latent. "Existing open risk" is the
+ * maker's open + partially-filled book as the API returns it. It does NOT model
+ * book-hidden latent payloads a market-maker tracks in local state (off-chain
+ * cancelled but still on-chain-matchable); the MM's per-tick funding guard owns
+ * that — see ospex-market-maker DESIGN §6. For a maker submitting via the
+ * SDK/CLI, the API book is everything they're on the hook for.
  *
  * It is ADVISORY: "fundable now, based on the latest reads" — never a guarantee.
- * Balances/allowances (and the maker's open book) can change between this read
- * and a fill. Mirrors the `ensure*` family: a discriminated `outcome`, fields
- * present only when meaningful, and never a fabricated value — `not-fundable`
- * and `unknown` are outcomes, NOT thrown errors.
+ * Mirrors the `ensure*` family: a discriminated `outcome`, fields present only
+ * when meaningful, and never a fabricated value — `not-fundable` and `unknown`
+ * are outcomes, NOT thrown errors.
  *
  * Read-only: pass a `preview` already built by `prepareSubmit`. This signs
  * nothing and allocates no nonce — the intended flow is `prepareSubmit` →
@@ -50,6 +62,7 @@
 import type { PublicClient } from 'viem';
 import { readAllowance } from './allowance.js';
 import { erc20Abi } from '../contracts/abi/erc20.js';
+import { SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6 } from '../contracts/constants.js';
 import { CommitmentsApi } from '../api/commitments.js';
 import type { CommitmentsContext } from './context.js';
 import type { SubmitPreview } from '../types/preview.js';
@@ -61,26 +74,30 @@ const EXISTING_RISK_PAGE = 1000;
 export interface CheckSubmitFundabilityArgs {
   /**
    * A submit preview from `commitments.prepareSubmit(args)`. The check reads it
-   * for the maker, the new commitment's risk, and the lazy-creation-fee debit —
-   * it signs nothing and allocates no nonce, so the same preview flows on to
-   * `submitPrepared` unchanged.
+   * for the maker, the new commitment's risk + speculation key, and the
+   * lazy-creation-fee debit — it signs nothing and allocates no nonce, so the
+   * same preview flows on to `submitPrepared` unchanged.
    */
   preview: SubmitPreview;
 }
 
 export type SubmitFundabilityOutcome =
-  /** Maker can back their whole open book plus this new commitment at `checkedAtBlock`. */
+  /** Maker can back their whole open book plus this new commitment — including the worst-case existing lazy fees — at `checkedAtBlock`. */
   | 'fundable'
   /** A definite funding shortfall was found from a successful read. */
   | 'not-fundable'
-  /** A required read (chain or the maker's open-book list) failed and nothing
-   * else was definitively short — the verdict can't be asserted either way. */
+  /** A required read failed, OR funding straddles the undeterminable existing-lazy-fee band — the verdict can't be asserted either way. */
   | 'unknown';
 
 export type SubmitFundabilityReasonCode =
   | 'MAKER_USDC_BALANCE_INSUFFICIENT'
   | 'MAKER_POSITION_ALLOWANCE_INSUFFICIENT'
   | 'MAKER_TREASURY_ALLOWANCE_INSUFFICIENT'
+  /** Funding covers the definite requirement but might not cover the maximum
+   * possible creation fees of the maker's existing never-matched commitments
+   * (whose speculations may or may not be created yet) — can't tell without a
+   * per-speculation lookup, so the verdict is `unknown` rather than a risky `fundable`. */
+  | 'EXISTING_LAZY_FEE_UNDETERMINED'
   /** A chain read or the open-book list failed — advisory, never a false not-fundable. */
   | 'FUNDABILITY_UNKNOWN';
 
@@ -90,9 +107,9 @@ export interface SubmitFundabilityReason {
   token?: Hex;
   /** The spender the allowance requirement targets (PositionModule / TreasuryModule). Allowance reasons only. */
   spender?: Hex;
-  /** Aggregate required amount (wei6) — the whole-book sum, not the new commitment alone. Funding reasons only. */
+  /** Aggregate required amount (wei6) — the whole-book sum, not the new commitment alone. (For `EXISTING_LAZY_FEE_UNDETERMINED`, the maximum undeterminable existing lazy fee.) */
   requiredWei6?: bigint;
-  /** Current on-chain amount (wei6) that was read. Funding reasons only. */
+  /** Current on-chain amount (wei6) that was read. Funding shortfall reasons only. */
   actualWei6?: bigint;
 }
 
@@ -103,15 +120,19 @@ export interface SubmitFundabilityRequirement {
   existingOpenRiskWei6: bigint;
   /** Count of those existing open / partially-filled commitments. */
   existingOpenCommitmentCount: number;
-  /** Maker's share of the lazy speculation-creation fee (→ TreasuryModule); `0n` when this submit isn't lazy. */
+  /** Maker's share of THIS submit's lazy creation fee (→ TreasuryModule); `0n` when this submit isn't lazy. */
   lazyCreationFeeWei6: bigint;
   /** True iff this submit would lazily create the speculation on first match. */
   lazyCreation: boolean;
-  /** Aggregate USDC the maker's wallet must hold: existing + new + lazy fee. */
+  /** Distinct not-yet-disambiguated `open` speculation keys among the maker's existing commitments — each MIGHT owe one creation-fee share at match. */
+  existingMaybeLazyKeyCount: number;
+  /** Maximum additional creation fee those existing keys could owe (`makerShare × existingMaybeLazyKeyCount`). The upper-bound slack between `fundable` and `unknown`. */
+  existingLazyFeeMaxWei6: bigint;
+  /** Aggregate USDC the maker's wallet must hold (lower bound): existing + new + this submit's lazy fee. The upper bound adds `existingLazyFeeMaxWei6`. */
   balanceRequiredWei6: bigint;
-  /** Aggregate maker→PositionModule allowance needed: existing + new. */
+  /** Aggregate maker→PositionModule allowance needed (exact — fees don't touch PositionModule): existing + new. */
   positionAllowanceRequiredWei6: bigint;
-  /** Aggregate maker→TreasuryModule allowance needed: the lazy fee (`0n` when not lazy). */
+  /** Aggregate maker→TreasuryModule allowance needed (lower bound): this submit's lazy fee. The upper bound adds `existingLazyFeeMaxWei6`. */
   treasuryAllowanceRequiredWei6: bigint;
 }
 
@@ -127,7 +148,7 @@ export interface CheckSubmitFundabilityResult {
   checkedAtBlock?: bigint;
   /**
    * The whole-book requirement the verdict was computed against. Present once
-   * the maker's existing open risk was fetched — absent when that fetch failed
+   * the maker's existing open book was fetched — absent when that fetch failed
    * (→ `unknown`), since the aggregate can't be computed without it.
    */
   requirement?: SubmitFundabilityRequirement;
@@ -148,62 +169,52 @@ export async function checkSubmitFundability(
 
   const { preview } = args;
   const maker = preview.raw.maker.toLowerCase() as Hex;
+  const newKey = preview.raw.speculationKey.toLowerCase();
 
-  // The new commitment's maker debits come straight off the preview's approval
-  // rows (built by `buildSubmitPreview`): the PositionModule 'commitment-risk'
-  // row is always present; the TreasuryModule 'lazy-creation-fee' row is present
-  // only when this submit would lazily create the speculation on first match.
+  // The new commitment's maker risk comes off the preview's PositionModule
+  // 'commitment-risk' approval row; its lazy creation fee (if any) is the
+  // per-chain maker share — `submitAction` flags whether this submit is lazy.
   const positionRow = preview.approvals.find((a) => a.purpose === 'commitment-risk');
-  const treasuryRow = preview.approvals.find((a) => a.purpose === 'lazy-creation-fee');
   const newCommitmentRiskWei6 = positionRow
     ? BigInt(positionRow.required)
     : BigInt(preview.economics.riskWei6);
+  const makerCreationFeeShareWei6 = SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6[ctx.getChainId()] ?? 0n;
   const lazyCreation = preview.submitAction === 'trade-and-create-speculation';
-  const lazyCreationFeeWei6 = treasuryRow !== undefined ? BigInt(treasuryRow.required) : 0n;
+  const newLazyFeeWei6 = lazyCreation ? makerCreationFeeShareWei6 : 0n;
 
-  // All reads in parallel: the maker's existing open risk (API), USDC balance,
-  // the maker→PositionModule allowance, the maker→TreasuryModule allowance (only
-  // when a lazy fee actually applies), and the block number. Every read degrades
-  // to null on failure so a flaky read never produces a false `fundable`.
+  // All reads in parallel. Treasury allowance is read whenever the chain has a
+  // creation fee — it bounds BOTH this submit's lazy fee AND the existing
+  // maybe-lazy fees (computed from the list below). Every read degrades to null
+  // on failure so a flaky read never produces a false `fundable`.
   const [existing, balance, positionAllowance, treasuryAllowance, block] = await Promise.all([
-    tryFetchExistingOpenRisk(ctx, maker),
+    tryFetchExistingOpenRisk(ctx, maker, newKey),
     tryReadUsdcBalance(publicClient, usdc, maker),
     tryReadAllowance(publicClient, usdc, maker, positionModule),
-    lazyCreationFeeWei6 > 0n
+    makerCreationFeeShareWei6 > 0n
       ? tryReadAllowance(publicClient, usdc, maker, treasuryModule)
       : Promise.resolve(0n),
     tryReadBlockNumber(publicClient),
   ]);
   const checkedAtBlock = block ?? undefined;
 
-  // The maker's existing open risk is load-bearing for the aggregate — without
-  // it we'd be under-counting the book, so a failed fetch is `unknown`, never a
-  // (possibly false) `fundable` or a misleading `not-fundable`.
-  if (existing === null) {
-    return result({
-      maker,
-      outcome: 'unknown',
-      reasons: [{ code: 'FUNDABILITY_UNKNOWN' }],
-      checkedAtBlock,
-    });
-  }
+  // When the existing-book fetch failed, `existingRiskWei6` is 0 — the
+  // requirements below become the new-commitment-only LOWER bound, so a
+  // shortfall against them is still a definite not-fundable. We just can't form
+  // the full aggregate, so we don't return a `requirement` or assert `fundable`.
+  const existingRiskWei6 = existing?.riskWei6 ?? 0n;
+  const existingMaybeLazyKeyCount = existing?.maybeLazyKeyCount ?? 0;
+  const existingLazyFeeMaxWei6 = makerCreationFeeShareWei6 * BigInt(existingMaybeLazyKeyCount);
 
-  const balanceRequiredWei6 = existing.riskWei6 + newCommitmentRiskWei6 + lazyCreationFeeWei6;
-  const positionAllowanceRequiredWei6 = existing.riskWei6 + newCommitmentRiskWei6;
-  const treasuryAllowanceRequiredWei6 = lazyCreationFeeWei6;
-  const requirement: SubmitFundabilityRequirement = {
-    newCommitmentRiskWei6,
-    existingOpenRiskWei6: existing.riskWei6,
-    existingOpenCommitmentCount: existing.count,
-    lazyCreationFeeWei6,
-    lazyCreation,
-    balanceRequiredWei6,
-    positionAllowanceRequiredWei6,
-    treasuryAllowanceRequiredWei6,
-  };
+  const balanceRequiredWei6 = existingRiskWei6 + newCommitmentRiskWei6 + newLazyFeeWei6;
+  const positionAllowanceRequiredWei6 = existingRiskWei6 + newCommitmentRiskWei6;
+  const treasuryAllowanceRequiredWei6 = newLazyFeeWei6;
 
   const reasons: SubmitFundabilityReason[] = [];
   let anyReadFailed = false;
+  // Funding clears the definite (lower-bound) requirement but might not clear
+  // the upper bound that includes the existing maybe-lazy fees — flips the
+  // verdict to `unknown` rather than a risky `fundable`.
+  let lazyFeeUncertain = false;
 
   if (balance === null) {
     anyReadFailed = true;
@@ -214,6 +225,8 @@ export async function checkSubmitFundability(
       requiredWei6: balanceRequiredWei6,
       actualWei6: balance,
     });
+  } else if (balance < balanceRequiredWei6 + existingLazyFeeMaxWei6) {
+    lazyFeeUncertain = true;
   }
 
   if (positionAllowance === null) {
@@ -228,8 +241,8 @@ export async function checkSubmitFundability(
     });
   }
 
-  // TreasuryModule allowance only matters when this submit carries a lazy fee.
-  if (treasuryAllowanceRequiredWei6 > 0n) {
+  // TreasuryModule allowance only matters on a fee chain.
+  if (makerCreationFeeShareWei6 > 0n) {
     if (treasuryAllowance === null) {
       anyReadFailed = true;
     } else if (treasuryAllowance < treasuryAllowanceRequiredWei6) {
@@ -240,19 +253,59 @@ export async function checkSubmitFundability(
         requiredWei6: treasuryAllowanceRequiredWei6,
         actualWei6: treasuryAllowance,
       });
+    } else if (treasuryAllowance < treasuryAllowanceRequiredWei6 + existingLazyFeeMaxWei6) {
+      lazyFeeUncertain = true;
     }
   }
 
+  // The requirement is a true aggregate only when the existing book was fetched;
+  // on a list failure it'd be a misleading lower bound, so omit it.
+  const requirement: SubmitFundabilityRequirement | undefined =
+    existing === null
+      ? undefined
+      : {
+          newCommitmentRiskWei6,
+          existingOpenRiskWei6: existingRiskWei6,
+          existingOpenCommitmentCount: existing.count,
+          lazyCreationFeeWei6: newLazyFeeWei6,
+          lazyCreation,
+          existingMaybeLazyKeyCount,
+          existingLazyFeeMaxWei6,
+          balanceRequiredWei6,
+          positionAllowanceRequiredWei6,
+          treasuryAllowanceRequiredWei6,
+        };
+
+  // A definite shortfall from a successful read is proof the book can't be
+  // backed — even on a list failure (the new-commitment lower bound) or when
+  // another read failed.
   if (reasons.length > 0) {
-    // A definite shortfall from a successful read proves the book can't be
-    // backed — even if some other read also failed.
     return result({ maker, outcome: 'not-fundable', reasons, requirement, checkedAtBlock });
+  }
+  // No definite shortfall. Without the existing book we can't form the aggregate
+  // (it could be arbitrarily large) → unknown.
+  if (existing === null) {
+    return result({
+      maker,
+      outcome: 'unknown',
+      reasons: [{ code: 'FUNDABILITY_UNKNOWN' }],
+      checkedAtBlock,
+    });
   }
   if (anyReadFailed) {
     return result({
       maker,
       outcome: 'unknown',
       reasons: [{ code: 'FUNDABILITY_UNKNOWN' }],
+      requirement,
+      checkedAtBlock,
+    });
+  }
+  if (lazyFeeUncertain) {
+    return result({
+      maker,
+      outcome: 'unknown',
+      reasons: [{ code: 'EXISTING_LAZY_FEE_UNDETERMINED', token: usdc, requiredWei6: existingLazyFeeMaxWei6 }],
       requirement,
       checkedAtBlock,
     });
@@ -266,7 +319,9 @@ function result(args: {
   maker: Hex;
   outcome: SubmitFundabilityOutcome;
   reasons: SubmitFundabilityReason[];
-  requirement?: SubmitFundabilityRequirement;
+  // `| undefined` (not just `?`) so callers can pass the maybe-undefined `requirement`
+  // directly under `exactOptionalPropertyTypes`; the body assigns it only when present.
+  requirement?: SubmitFundabilityRequirement | undefined;
   checkedAtBlock?: bigint | undefined;
 }): CheckSubmitFundabilityResult {
   const out: CheckSubmitFundabilityResult = {
@@ -283,19 +338,24 @@ function result(args: {
 
 /**
  * Σ remaining maker risk over the maker's API-visible open + partially-filled
- * commitments (the book they're already on the hook for), with their count.
- * Paginates the list endpoint so a maker with a full page of open commitments
- * isn't under-counted. Returns `null` on ANY list failure — the aggregate can't
- * be computed without it, so the caller degrades to `unknown` rather than risk a
- * false `fundable` from an under-counted book.
+ * commitments (the book they're already on the hook for), their count, and the
+ * number of distinct not-yet-disambiguated `open` speculation keys (each of
+ * which MIGHT owe a maker creation-fee share — see the file header). Excludes
+ * the new commitment's own key (`newKey`): its fee is already in the lower bound
+ * (lazy) or its speculation is created (existing mode), so existing commitments
+ * on it owe nothing extra. Paginates so a maker with a full page of open
+ * commitments isn't under-counted. Returns `null` on ANY list failure — the
+ * aggregate can't be computed without it, so the caller degrades to `unknown`.
  */
 async function tryFetchExistingOpenRisk(
   ctx: CommitmentsContext,
   maker: Hex,
-): Promise<{ riskWei6: bigint; count: number } | null> {
+  newKey: string,
+): Promise<{ riskWei6: bigint; count: number; maybeLazyKeyCount: number } | null> {
   const api = new CommitmentsApi(ctx.api);
   let riskWei6 = 0n;
   let count = 0;
+  const maybeLazyKeys = new Set<string>();
   let offset = 0;
   try {
     for (;;) {
@@ -311,11 +371,17 @@ async function tryFetchExistingOpenRisk(
           riskWei6 += remaining;
           count += 1;
         }
+        // Only a never-matched (`stored 'open'`) commitment can owe a creation
+        // fee — a `partially_filled` one has matched, so its speculation exists.
+        if (r.storedStatus === 'open' && r.speculationKey !== null) {
+          const key = r.speculationKey.toLowerCase();
+          if (key !== newKey) maybeLazyKeys.add(key);
+        }
       }
       if (rows.length < EXISTING_RISK_PAGE) break;
       offset += EXISTING_RISK_PAGE;
     }
-    return { riskWei6, count };
+    return { riskWei6, count, maybeLazyKeyCount: maybeLazyKeys.size };
   } catch {
     return null;
   }

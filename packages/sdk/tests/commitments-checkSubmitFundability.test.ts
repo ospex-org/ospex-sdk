@@ -2,28 +2,43 @@
  * Unit tests for `checkSubmitFundability` — the advisory maker-side submit
  * preflight. Mocks the maker's open-book list (via `ctx.api.request`) and the
  * chain client (USDC balanceOf + allowance + block number). The SubmitPreview is
- * a minimal fixture — the primitive only reads `raw.maker`, `economics.riskWei6`,
- * `approvals[]`, and `submitAction`.
+ * a minimal fixture — the primitive only reads `raw.maker`, `raw.speculationKey`,
+ * `economics.riskWei6`, `approvals[]`, and `submitAction`.
  *
  * Covers:
  *   - happy path → fundable, with requirement + checkedAtBlock populated
  *   - each maker funding shortfall (balance / PositionModule / TreasuryModule)
  *   - the WHOLE-BOOK aggregate: a new commitment that fits in isolation but tips
  *     the book past the wallet → not-fundable (the gap submit's approve loop misses)
- *   - partially-filled remaining is counted at risk − filled
- *   - lazy-creation-fee Treasury leg folds into balance + Treasury allowance
+ *   - partially-filled remaining is counted at risk − filled, and a partially-filled
+ *     row is NOT treated as maybe-lazy (its speculation is already created)
+ *   - this submit's lazy-creation-fee Treasury leg folds into balance + Treasury allowance
+ *   - EXISTING never-matched commitments' POSSIBLE lazy fees: covered → fundable,
+ *     straddling the funding line → unknown (EXISTING_LAZY_FEE_UNDETERMINED),
+ *     definite risk shortfall → not-fundable; deduped by speculation key; the new
+ *     commitment's own key is excluded
  *   - existing-open-risk pagination (a full page triggers a second list call)
- *   - degraded reads → unknown, never a false fundable; a definite shortfall still wins
- *   - a failed open-book list → unknown (can't compute the aggregate)
+ *   - degraded reads → unknown, never a false fundable; a definite shortfall still wins;
+ *     a failed open-book list → unknown, but a definite new-commitment-alone shortfall still wins
  */
 
 import { describe, expect, it, vi } from 'vitest';
 import { checkSubmitFundability } from '../src/commitments/checkSubmitFundability.js';
+import { SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6 } from '../src/contracts/constants.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
 import type { Hex } from '../src/types/signer.js';
+import type { StoredCommitmentStatus } from '../src/types/commitment.js';
 import type { SubmitPreview } from '../src/types/preview.js';
 
 const MAKER = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as Hex;
+const FEE = SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6[137]; // maker creation-fee share on chain 137
+
+// Speculation keys (32-byte hex). The new commitment's key is distinct from the
+// default existing-row key so existing rows aren't accidentally excluded.
+const NEW_KEY = '0x'.padEnd(66, 'e');
+const ROW_KEY = '0x'.padEnd(66, '7');
+const KEY_A = '0x'.padEnd(66, 'a');
+const KEY_B = '0x'.padEnd(66, 'b');
 
 const ADDRESSES = {
   matchingModule: '0x'.padEnd(42, '1') as Hex,
@@ -52,7 +67,7 @@ const allowKey = (owner: string, spender: string): string =>
   `${owner.toLowerCase()}|${spender.toLowerCase()}`;
 
 /** Minimal SubmitPreview — only the fields `checkSubmitFundability` reads. */
-function makePreview(opts: { riskWei6?: bigint; lazyFeeWei6?: bigint; maker?: Hex } = {}): SubmitPreview {
+function makePreview(opts: { riskWei6?: bigint; lazy?: boolean; maker?: Hex; speculationKey?: string } = {}): SubmitPreview {
   const risk = opts.riskWei6 ?? 1_000_000n;
   const approvals: Array<Record<string, unknown>> = [
     {
@@ -64,31 +79,36 @@ function makePreview(opts: { riskWei6?: bigint; lazyFeeWei6?: bigint; maker?: He
       purpose: 'commitment-risk',
     },
   ];
-  if (opts.lazyFeeWei6 !== undefined) {
+  if (opts.lazy === true) {
     approvals.push({
       token: 'USDC',
       spender: ADDRESSES.treasuryModule,
-      required: opts.lazyFeeWei6.toString(),
+      required: FEE.toString(),
       current: '0',
       needsApproval: false,
       purpose: 'lazy-creation-fee',
     });
   }
   return {
-    raw: { maker: opts.maker ?? MAKER },
+    raw: { maker: opts.maker ?? MAKER, speculationKey: opts.speculationKey ?? NEW_KEY },
     economics: { riskWei6: risk.toString() },
     approvals,
-    submitAction: opts.lazyFeeWei6 !== undefined ? 'trade-and-create-speculation' : 'trade-only',
+    submitAction: opts.lazy === true ? 'trade-and-create-speculation' : 'trade-only',
   } as unknown as SubmitPreview;
 }
 
-/** A maker open-book row carrying just the remaining risk the primitive sums. */
-function row(remainingWei6: bigint): Record<string, unknown> {
+/** A maker open-book row carrying just the fields the primitive reads. */
+function row(
+  remainingWei6: bigint,
+  opts: { storedStatus?: StoredCommitmentStatus; speculationKey?: string } = {},
+): Record<string, unknown> {
+  const stored = opts.storedStatus ?? 'open';
   return {
     commitmentHash: '0x'.padEnd(66, '7'),
     remainingRiskAmount: remainingWei6.toString(),
-    status: 'open',
-    storedStatus: 'open',
+    status: stored,
+    storedStatus: stored,
+    speculationKey: opts.speculationKey ?? ROW_KEY,
     nonceInvalidated: false,
     expiry: '2099-01-01T00:00:00Z',
   };
@@ -197,16 +217,23 @@ describe('checkSubmitFundability — fundable', () => {
     expect(r.requirement).toMatchObject({
       existingOpenRiskWei6: 0n,
       existingOpenCommitmentCount: 0,
+      existingMaybeLazyKeyCount: 0,
+      existingLazyFeeMaxWei6: 0n,
       balanceRequiredWei6: 1_000_000n,
     });
   });
 
-  it('counts a partially-filled row at remaining (risk − filled)', async () => {
-    // remaining 0.4 USDC. + new 1.0 = 1.4 required.
-    const { ctx } = buildContext({ existing: [row(400_000n)] });
+  it('counts a partially-filled row at remaining, and does NOT treat it as maybe-lazy', async () => {
+    // remaining 0.4 USDC, already matched → its speculation exists → owes no creation fee.
+    const { ctx } = buildContext({ existing: [row(400_000n, { storedStatus: 'partially_filled' })] });
     const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n }) });
-    expect(r.requirement?.existingOpenRiskWei6).toBe(400_000n);
-    expect(r.requirement?.balanceRequiredWei6).toBe(1_400_000n);
+    expect(r.outcome).toBe('fundable');
+    expect(r.requirement).toMatchObject({
+      existingOpenRiskWei6: 400_000n,
+      existingMaybeLazyKeyCount: 0, // partially-filled → speculation created → not maybe-lazy
+      existingLazyFeeMaxWei6: 0n,
+      balanceRequiredWei6: 1_400_000n,
+    });
   });
 });
 
@@ -221,8 +248,7 @@ describe('checkSubmitFundability — funding shortfalls', () => {
     });
     const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 10_000_000n }) });
     expect(r.outcome).toBe('not-fundable');
-    const reason = r.reasons.find((x) => x.code === 'MAKER_USDC_BALANCE_INSUFFICIENT');
-    expect(reason).toMatchObject({
+    expect(r.reasons.find((x) => x.code === 'MAKER_USDC_BALANCE_INSUFFICIENT')).toMatchObject({
       token: USDC,
       requiredWei6: 110_000_000n, // existing 100 + new 10
       actualWei6: 105_000_000n,
@@ -248,29 +274,94 @@ describe('checkSubmitFundability — funding shortfalls', () => {
       existing: [],
       pc: { allowances: { [allowKey(MAKER, TREASURY)]: 0n } },
     });
-    const r = await checkSubmitFundability(ctx, {
-      preview: makePreview({ riskWei6: 1_000_000n, lazyFeeWei6: 250_000n }),
-    });
+    const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n, lazy: true }) });
     expect(r.outcome).toBe('not-fundable');
     expect(r.requirement).toMatchObject({
       lazyCreation: true,
-      lazyCreationFeeWei6: 250_000n,
-      balanceRequiredWei6: 1_250_000n, // new 1.0 + fee 0.25
-      treasuryAllowanceRequiredWei6: 250_000n,
+      lazyCreationFeeWei6: FEE,
+      balanceRequiredWei6: 1_000_000n + FEE, // new 1.0 + fee
+      treasuryAllowanceRequiredWei6: FEE,
     });
     expect(r.reasons.find((x) => x.code === 'MAKER_TREASURY_ALLOWANCE_INSUFFICIENT')).toMatchObject({
       spender: TREASURY,
-      requiredWei6: 250_000n,
+      requiredWei6: FEE,
       actualWei6: 0n,
     });
   });
 
   it('lazy submit fully funded → fundable (Treasury leg satisfied)', async () => {
     const { ctx } = buildContext({ existing: [] });
-    const r = await checkSubmitFundability(ctx, {
-      preview: makePreview({ riskWei6: 1_000_000n, lazyFeeWei6: 250_000n }),
-    });
+    const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n, lazy: true }) });
     expect(r.outcome).toBe('fundable');
+  });
+});
+
+describe('checkSubmitFundability — existing maybe-lazy creation fees', () => {
+  // Two distinct existing OPEN keys → each MIGHT owe a maker creation fee at match.
+  const twoLazy = [row(1_000_000n, { speculationKey: KEY_A }), row(1_000_000n, { speculationKey: KEY_B })];
+
+  it('funding covers the definite risk but not the worst-case existing lazy fees → unknown (EXISTING_LAZY_FEE_UNDETERMINED)', async () => {
+    // existing risk 2.0, new 1.0 → definite balance req 3.0; max adds 2 × FEE.
+    // Wallet 3.2 ≥ 3.0 (no definite shortfall) but < 3.0 + 2×0.25 = 3.5 → unknown.
+    const { ctx } = buildContext({
+      existing: twoLazy,
+      pc: { balances: { [MAKER.toLowerCase()]: 3_200_000n } },
+    });
+    const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n }) });
+    expect(r.outcome).toBe('unknown');
+    expect(r.fundableNow).toBe(false);
+    expect(r.reasons.map((x) => x.code)).toEqual(['EXISTING_LAZY_FEE_UNDETERMINED']);
+    expect(r.reasons[0]?.requiredWei6).toBe(2n * FEE);
+    expect(r.requirement).toMatchObject({
+      existingMaybeLazyKeyCount: 2,
+      existingLazyFeeMaxWei6: 2n * FEE,
+      balanceRequiredWei6: 3_000_000n,
+    });
+  });
+
+  it('funding covers even the worst-case existing lazy fees → fundable', async () => {
+    const { ctx } = buildContext({
+      existing: twoLazy,
+      pc: { balances: { [MAKER.toLowerCase()]: 3_000_000n + 2n * FEE } }, // ≥ upper bound
+    });
+    const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n }) });
+    expect(r.outcome).toBe('fundable');
+  });
+
+  it('a definite risk shortfall wins over the lazy-fee uncertainty → not-fundable', async () => {
+    const { ctx } = buildContext({
+      existing: twoLazy,
+      pc: { balances: { [MAKER.toLowerCase()]: 2_500_000n } }, // < 3.0 definite
+    });
+    const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n }) });
+    expect(r.outcome).toBe('not-fundable');
+    expect(r.reasons.map((x) => x.code)).toEqual(['MAKER_USDC_BALANCE_INSUFFICIENT']);
+  });
+
+  it('dedupes existing maybe-lazy keys: many open commitments on ONE key → a single possible fee', async () => {
+    const { ctx } = buildContext({
+      existing: [
+        row(1_000_000n, { speculationKey: KEY_A }),
+        row(1_000_000n, { speculationKey: KEY_A }),
+        row(1_000_000n, { speculationKey: KEY_A }),
+      ],
+      pc: { balances: { [MAKER.toLowerCase()]: 4_100_000n } }, // ≥ 4.0 definite, < 4.0 + 1×0.25
+    });
+    const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n }) });
+    expect(r.outcome).toBe('unknown');
+    expect(r.requirement?.existingMaybeLazyKeyCount).toBe(1); // deduped
+    expect(r.requirement?.existingLazyFeeMaxWei6).toBe(FEE);
+  });
+
+  it('excludes the new commitment’s own key from the existing maybe-lazy set (no double-count)', async () => {
+    // The maker already has an open commitment on the SAME key they’re re-posting.
+    const { ctx } = buildContext({ existing: [row(1_000_000n, { speculationKey: NEW_KEY })] });
+    const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n }) });
+    expect(r.outcome).toBe('fundable');
+    expect(r.requirement).toMatchObject({
+      existingOpenRiskWei6: 1_000_000n, // still counted toward risk
+      existingMaybeLazyKeyCount: 0, // but not an extra possible fee
+    });
   });
 });
 
@@ -315,6 +406,16 @@ describe('checkSubmitFundability — degraded reads', () => {
     expect(r.outcome).toBe('unknown');
     expect(r.reasons.map((x) => x.code)).toEqual(['FUNDABILITY_UNKNOWN']);
     expect(r.requirement).toBeUndefined();
+  });
+
+  it('open-book list failed BUT the wallet can’t cover the new commitment alone → still not-fundable', async () => {
+    // Even without the existing book, balance < the new-commitment lower bound is a definite shortfall.
+    const { ctx } = buildContext({ failList: true, pc: { balances: { [MAKER.toLowerCase()]: 0n } } });
+    const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n }) });
+    expect(r.outcome).toBe('not-fundable');
+    expect(r.reasons.map((x) => x.code)).toEqual(['MAKER_USDC_BALANCE_INSUFFICIENT']);
+    expect(r.reasons[0]?.requiredWei6).toBe(1_000_000n); // new-commitment lower bound
+    expect(r.requirement).toBeUndefined(); // can't form the full aggregate
   });
 
   it('a failed block read alone just drops checkedAtBlock; the verdict still resolves', async () => {
