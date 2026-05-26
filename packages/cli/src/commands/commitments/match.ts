@@ -54,6 +54,7 @@ import {
   type ApprovalPurpose,
   type ApprovalRequirement,
   type ChainId,
+  type CheckCommitmentFillabilityResult,
   type Commitment,
   type Hex,
   type MatchPreview,
@@ -72,6 +73,11 @@ import {
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 import {
+  buildMatchRefusedEnvelope,
+  renderMatchPreflightRefusal,
+  selectBlockingMatchReasons,
+} from '../../lib/matchFillabilityPreflight.js';
+import {
   VERIFY_COMMITMENT,
   deriveRemediationNextCommands,
 } from '../../lib/nextCommandTemplates.js';
@@ -86,6 +92,8 @@ const optionsSchema = z.object({
   json: z.boolean().optional(),
   approveMax: z.boolean().optional(),
   raw: z.boolean().optional(),
+  skipFillabilityPreflight: z.boolean().optional(),
+  force: z.boolean().optional(),
 });
 
 export const commitmentsMatchCommand = addSignerOptions(
@@ -118,6 +126,17 @@ export const commitmentsMatchCommand = addSignerOptions(
         '(Note: only `commitments submit --raw` restores the `positionType=Upper/Lower` tag; ' +
         'the match render never emitted positionType in any layout.) ' +
         'Has no effect on --json output.',
+    )
+    .option(
+      '--skip-fillability-preflight',
+      'skip the advisory pre-send fillability check. By default `match` reads maker/taker ' +
+        'USDC balances + the maker PositionModule allowance and REFUSES (before sending) a match ' +
+        'that would revert for a non-remediable reason. This flag proceeds anyway.',
+    )
+    .option(
+      '--force',
+      'alias for --skip-fillability-preflight in the match flow — proceed despite a failed ' +
+        'fillability preflight (the match may revert and spend gas).',
     )
     .addOption(
       new Option(
@@ -210,6 +229,50 @@ export const commitmentsMatchCommand = addSignerOptions(
     if (previewOnly) {
       writeAgentEnvelope(toMatchPreviewEnvelope(preview, { chainId }));
       return;
+    }
+
+    // ── 4.5 Fillability preflight (execute path). ──────────────────
+    // Refuse an obviously-unfillable match BEFORE rendering, approving,
+    // or sending — so the operator never confirms (and never spends
+    // gas on) a match that would revert. The approval loop below
+    // already remediates the TAKER's allowance, so we block ONLY on the
+    // non-remediable reasons (maker balance/allowance, taker balance,
+    // liveness, closed-spec); `FILLABILITY_UNKNOWN` (a failed read) is
+    // advisory — warn, don't block. Bypass with
+    // --skip-fillability-preflight / --force. The verdict is threaded
+    // into the execute envelope below ("JSON always includes the
+    // preflight result"); `null` there means it was skipped.
+    let fillability: CheckCommitmentFillabilityResult | null = null;
+    const skipFillability = opts.skipFillabilityPreflight === true || opts.force === true;
+    if (!skipFillability) {
+      const fillArgs: Parameters<typeof client.commitments.checkCommitmentFillability>[0] = {
+        commitment,
+        taker: preview.taker,
+      };
+      if (opts.riskUsdc !== undefined) {
+        fillArgs.takerDesiredRiskWei6 = usdcDecimalToWei6(opts.riskUsdc);
+      }
+      fillability = await client.commitments.checkCommitmentFillability(fillArgs);
+      const blocking = selectBlockingMatchReasons(fillability.reasons);
+      if (blocking.length > 0) {
+        if (wantJson) {
+          writeAgentEnvelope(
+            buildMatchRefusedEnvelope(fillability, blocking, {
+              chainId,
+              wallet: preview.taker,
+            }),
+          );
+        } else {
+          process.stderr.write(renderMatchPreflightRefusal(blocking));
+        }
+        process.exit(1);
+      }
+      if (fillability.outcome === 'unknown') {
+        process.stderr.write(
+          'Fillability preflight: funding could not be confirmed (an on-chain read failed). ' +
+            'Proceeding — the match may revert. Re-run, or pass --skip-fillability-preflight to silence.\n',
+        );
+      }
     }
 
     // ── 5. Render preview + confirm (unless --yes). ────────────────
@@ -331,7 +394,7 @@ export const commitmentsMatchCommand = addSignerOptions(
             takerRiskWei6: result.takerRisk.toString(),
             fillMakerRiskWei6: result.fillMakerRisk.toString(),
           },
-          { chainId, approveEffects },
+          { chainId, approveEffects, fillability },
         ),
       );
       return;
@@ -391,6 +454,13 @@ export interface MatchExecuteResult {
 export interface MatchExecutePayload {
   preview: MatchPreviewPayload;
   result: MatchExecuteResult;
+  /**
+   * The advisory fillability verdict run before sending. `null` when the
+   * preflight was skipped (--skip-fillability-preflight / --force). "JSON
+   * always includes the preflight result" — present (or explicitly null) on
+   * every executed match envelope.
+   */
+  fillability: CheckCommitmentFillabilityResult | null;
 }
 
 export interface ToMatchEnvelopeArgs {
@@ -407,6 +477,11 @@ export interface ToMatchExecuteEnvelopeArgs extends ToMatchEnvelopeArgs {
    * Empty (or omitted) when no approvals were needed.
    */
   approveEffects?: AgentEffect[];
+  /**
+   * The pre-send fillability verdict, or `null` when the preflight was
+   * skipped. Threaded into `payload.fillability`.
+   */
+  fillability?: CheckCommitmentFillabilityResult | null;
 }
 
 /**
@@ -490,7 +565,7 @@ export function toMatchExecuteEnvelope(
     nextCommands: [
       VERIFY_COMMITMENT.build({ hash: preview.commitment.commitmentHash }),
     ],
-    payload: { preview: previewPayload, result },
+    payload: { preview: previewPayload, result, fillability: args.fillability ?? null },
   });
 }
 
