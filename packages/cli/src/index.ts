@@ -26,6 +26,7 @@ import { commitmentsApproveRawCommand } from './commands/commitments/approve-raw
 import { commitmentsSubmitCommand } from './commands/commitments/submit.js';
 import { commitmentsSubmitRawCommand } from './commands/commitments/submit-raw.js';
 import { commitmentsMatchCommand } from './commands/commitments/match.js';
+import { commitmentsFillabilityCommand } from './commands/commitments/fillability.js';
 import { commitmentsCancelCommand } from './commands/commitments/cancel.js';
 import { commitmentsCancelOnchainCommand } from './commands/commitments/cancel-onchain.js';
 import { commitmentsCancelAllCommand } from './commands/commitments/cancel-all.js';
@@ -78,6 +79,7 @@ export function makeProgram(): Command {
   commitments.addCommand(commitmentsSubmitCommand);
   commitments.addCommand(commitmentsSubmitRawCommand);
   commitments.addCommand(commitmentsMatchCommand);
+  commitments.addCommand(commitmentsFillabilityCommand);
   commitments.addCommand(commitmentsCancelCommand);
   commitments.addCommand(commitmentsCancelOnchainCommand);
   commitments.addCommand(commitmentsCancelAllCommand);
