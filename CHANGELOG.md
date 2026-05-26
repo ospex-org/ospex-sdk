@@ -6,6 +6,19 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 —
 
+## [0.4.4] — 2026-05-26
+
+Advisory commitment fillability — agents and the CLI can check whether visible liquidity is actually fillable *before* spending gas, and `commitments match` refuses an obviously-unfillable fill before sending. Additive; no breaking changes.
+
+### SDK (`@ospex/sdk`)
+
+- **New `commitments.checkCommitmentFillability({ hash | commitment, taker?, takerDesiredRiskWei6? })` — advisory, read-only "can a taker fill this commitment right now?".** A signed commitment can be visible, valid, and unexpired yet still revert at fill time because the maker (or taker) moved USDC or dropped allowance. This reads the maker/taker USDC balances and the **maker's PositionModule allowance** (which the match flow never proved) plus the taker's allowance and liveness, and returns a structured `{ outcome: 'fillable' | 'not-fillable' | 'unknown', fillableNow, reasons[], fill?, checkedAtBlock? }`. It never throws on a not-fillable/unknown condition — those are outcomes, mirroring the `ensure*` family — and a failed RPC read degrades to `unknown`, never a false `not-fillable`. Funding is checked with an **aggregate `(account, token[, spender])` debit model**, so a self-match (maker === taker) is validated against the COMBINED debit and the lazy speculation-creation fee folds into both the balance and allowance requirements. Read-only: pass `taker` to keep it signer-free. Reason codes: `MAKER_USDC_BALANCE_INSUFFICIENT`, `TAKER_USDC_BALANCE_INSUFFICIENT`, `MAKER_POSITION_ALLOWANCE_INSUFFICIENT`, `TAKER_POSITION_ALLOWANCE_INSUFFICIENT`, `MAKER_TREASURY_ALLOWANCE_INSUFFICIENT`, `TAKER_TREASURY_ALLOWANCE_INSUFFICIENT`, `NOT_LIVE`, `EXPIRED`, `NONCE_INVALIDATED`, `NO_REMAINING_CAPACITY`, `SPECULATION_CLOSED`, `FILLABILITY_UNKNOWN`.
+
+### CLI (`@ospex/cli`)
+
+- **New `ospex commitments fillability <hash-or-prefix> [--taker <addr>] [--risk-usdc <dec>] [--json]`.** Surfaces the advisory verdict without sending a tx. `--taker` names the prospective filler (default: configured wallet / `--expected-address`; no keystore unlock for a pure read), `--risk-usdc` sizes the prospective fill. Under `--json` it emits a schemaVersion-2 agent envelope with `ok: true` and the verdict in `payload` — a not-fillable verdict is data, not a command failure. Resolves over all statuses, so a terminal row reports `NOT_LIVE` / `EXPIRED` / `NO_REMAINING_CAPACITY` rather than failing to resolve.
+- **`ospex commitments match` now runs a fillability preflight and refuses an obviously-unfillable match before sending** — saving gas and a confusing on-chain revert. It blocks only on **non-remediable** reasons (maker balance/allowance, taker balance, liveness, closed-speculation); the existing approve-loop already remediates the taker's allowance, so a taker-allowance shortfall does not block, and `FILLABILITY_UNKNOWN` (a failed read) is advisory — it warns and proceeds. `--skip-fillability-preflight` (alias `--force`) bypasses the check. A refusal under `--json` is an `ok: false` envelope carrying the blocking reasons as `blocking` warnings plus `payload { preflight, action: 'refused-before-send' }`; an executed match's `--json` envelope now carries `payload.fillability` (the verdict, or `null` when skipped).
+
 ## [0.4.3] — 2026-05-25
 
 ### SDK (`@ospex/sdk`)
