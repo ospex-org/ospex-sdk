@@ -20,7 +20,7 @@ import type { GamesApi } from '../src/api/games.js';
 
 function buildApprovals(verifyValidUntil: number): ApprovedScripts {
   const stub: ApprovedScripts['verify'] = {
-    scriptHash: '0x01c48e15068b68b7d5986d5013edd83a243ac31a761567e9db0e57b513c26c01',
+    scriptHash: '0xec6a7e9cdffa09fdcaa611220e2c99ba0ec58cc082812a01b5d321ccc1e5ebcf',
     purpose: 0,
     leagueId: 0,
     version: 1,

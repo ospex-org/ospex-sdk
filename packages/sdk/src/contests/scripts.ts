@@ -4,7 +4,7 @@
  * core-api `GET /v1/contests/scripts/approved`.
  *
  * Cached per-instance for 5 minutes — re-signed approvals (notably the
- * verify approval, which expires 2026-10-26) propagate to running
+ * verify approval, which expires 2026-11-27) propagate to running
  * SDK consumers via core-api redeploy without an SDK release.
  *
  * 503 SCRIPT_APPROVALS_NOT_CONFIGURED bubbles up as
