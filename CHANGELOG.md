@@ -6,6 +6,23 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 —
 
+## [0.4.5] — 2026-05-26
+
+Advisory submit fundability — the maker side of the fillability preflight. Before a maker signs and POSTs a commitment, the SDK and CLI can check whether the wallet can back its *whole* open book plus the new commitment, so an over-committed maker doesn't post liquidity that reverts at fill time. Additive; no breaking changes.
+
+### SDK (`@ospex/sdk`)
+
+- **New `commitments.checkSubmitFundability({ preview })` — advisory, read-only "can the maker back what they're about to sign?".** The maker-side mirror of `checkCommitmentFillability`. `PositionModule.recordFill` pulls the maker's risk at MATCH time (not submit), and the submit approve-loop only ever covers the NEW commitment in isolation and never reads the maker's balance — so a maker with open commitments can quietly over-commit. This reads the maker's USDC balance and their PositionModule + TreasuryModule allowances against the **whole-book aggregate** — `Σ remaining risk over the maker's API-visible open + partially-filled commitments` + this new commitment's risk + lazy creation fees — and returns `{ outcome: 'fundable' | 'not-fundable' | 'unknown', fundableNow, requirement?, reasons[], checkedAtBlock? }`. It never throws on a not-fundable/unknown condition (those are outcomes, mirroring the `ensure*` family), and a failed RPC read or open-book list degrades to `unknown` — never a false `not-fundable`/`fundable`. The maker's existing never-matched commitments might each owe a lazy creation fee whose existence can't be cheaply determined, so that fee is bounded read-free: funding covering the upper bound → `fundable`, a definite shortfall → `not-fundable`, funding that straddles the band → `unknown` (`EXISTING_LAZY_FEE_UNDETERMINED`). Pass a `preview` from `prepareSubmit`; it signs nothing and allocates no nonce. Reason codes: `MAKER_USDC_BALANCE_INSUFFICIENT`, `MAKER_POSITION_ALLOWANCE_INSUFFICIENT`, `MAKER_TREASURY_ALLOWANCE_INSUFFICIENT`, `EXISTING_LAZY_FEE_UNDETERMINED`, `FUNDABILITY_UNKNOWN`. New type exports: `CheckSubmitFundabilityArgs`, `CheckSubmitFundabilityResult`, `SubmitFundabilityOutcome`, `SubmitFundabilityReason`, `SubmitFundabilityReasonCode`, `SubmitFundabilityRequirement`.
+- **Deprecated the legacy pre-v2 `--json` wire types** `SubmitJsonResult`, `MatchJsonResult`, `SubmitPreviewEnvelope`, `MatchPreviewEnvelope` (`schemaVersion: 1`). The CLI's `--json` has emitted a `schemaVersion: 2` `AgentEnvelope` since 0.2.0 (see `docs/AGENT_CONTRACT.md`); these types are unused at runtime and stay exported only for back-compat. No runtime change.
+
+### CLI (`@ospex/cli`)
+
+- **`ospex commitments submit` now runs a fundability preflight and refuses to sign a commitment the maker obviously can't back** — before any signature or POST. It blocks only on the **non-remediable** `MAKER_USDC_BALANCE_INSUFFICIENT` (you can't approve USDC into existence); the maker's own allowance shortfalls are remediable by the submit approve-loop (or `ospex commitments approve`), so they warn and proceed, and `EXISTING_LAZY_FEE_UNDETERMINED` / `FUNDABILITY_UNKNOWN` are advisory — warn and proceed. `--skip-fundability-preflight` (alias `--force`) bypasses the check. A refusal under `--json` is an `ok: false` envelope carrying the blocking reason as a `blocking` warning plus `payload { fundability, action: 'refused-before-sign' }`; an executed submit's `--json` envelope carries `payload.fundability` (the verdict, or `null` when skipped) — mirroring `match`'s `payload.fillability`.
+
+### Documentation
+
+- **Both advisory preflights are now documented in the agent contract.** A new "Advisory preflights (fillability/fundability)" section in `docs/AGENT_CONTRACT.md` and a preflight-refusal note in `docs/AGENT_ENVELOPE_SPEC.md` describe the uniform `match` / `submit` contract — the verdict on `payload.fillability` / `payload.fundability`, a refusal as an `ok: false` execute envelope. The execute-payload type definitions and `docs/QUICKSTART.md` were aligned to the `schemaVersion: 2` `AgentEnvelope` the CLI actually emits, and references to the now-`@deprecated` legacy v1 wire types were removed.
+
 ## [0.4.4] — 2026-05-26
 
 Advisory commitment fillability — agents and the CLI can check whether visible liquidity is actually fillable *before* spending gas, and `commitments match` refuses an obviously-unfillable fill before sending. Additive; no breaking changes.
@@ -196,7 +213,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.5
 [0.4.4]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.4
 [0.4.3]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.3
 [0.4.2]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.2
