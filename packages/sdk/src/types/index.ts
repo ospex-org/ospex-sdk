@@ -10,6 +10,8 @@ export type {
   CommitmentStatus,
   StoredCommitmentStatus,
   CommitmentsListOptions,
+  CommitmentFillability,
+  MakerFundingStatus,
 } from './commitment.js';
 export type {
   Position,

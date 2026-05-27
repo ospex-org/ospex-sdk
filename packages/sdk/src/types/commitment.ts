@@ -19,6 +19,50 @@ export type StoredCommitmentStatus =
 export type CommitmentStatus = StoredCommitmentStatus | 'expired';
 
 /**
+ * Advisory maker-funding headline for a commitment (Layer-D orderbook advisory):
+ * `fully_backed` / `overcommitted` from a fresh snapshot, `unknown` when the
+ * maker has no snapshot, `stale` when the snapshot aged past the API's freshness
+ * threshold. Advisory + point-in-time — never authoritative.
+ */
+export type MakerFundingStatus = 'fully_backed' | 'overcommitted' | 'unknown' | 'stale';
+
+/**
+ * Advisory maker-funding fillability for a commitment, surfaced by the core API
+ * when a list is fetched with {@link CommitmentsListOptions.includeFillability}.
+ * Derived from the indexer's ~30s `maker_funding` snapshot (the maker's USDC
+ * balance + PositionModule allowance vs. their visible committed book risk).
+ *
+ * It answers "is this visible liquidity actually backed right now?" without a
+ * per-fill on-chain read. It is **advisory + point-in-time** and is NEVER folded
+ * into {@link Commitment.status}. The `…BackedNow` booleans assert CURRENT
+ * backed-ness, so they are `null` when the verdict is `unknown` (no snapshot) or
+ * `stale` (too old to assert) — the numeric fields are last-known facts as-of
+ * `checkedAtBlock`. A maker can be `orderIndividuallyBackedNow` (covers THIS
+ * order) yet not `makerBookBackedNow` (can't cover their whole visible book) —
+ * `makerFundingStatus: 'overcommitted'` — which is the "fake liquidity" this flags.
+ * For a definitive single-fill check, use `commitments.checkCommitmentFillability`.
+ */
+export interface CommitmentFillability {
+  /** Always true — a point-in-time advisory, never a guarantee. */
+  advisory: true;
+  makerFundingStatus: MakerFundingStatus;
+  /** backing ≥ THIS order's remaining maker risk. `null` when unknown/stale. */
+  orderIndividuallyBackedNow: boolean | null;
+  /** backing ≥ the maker's whole VISIBLE committed book risk. `null` when unknown/stale. */
+  makerBookBackedNow: boolean | null;
+  /** min(USDC balance, USDC→PositionModule allowance), wei6 string. `null` when unknown. */
+  makerBackingWei6: string | null;
+  /** Σ remaining maker risk over the maker's visible matchable book, wei6 string. `null` when unknown. */
+  makerVisibleCommittedWei6: string | null;
+  /** backing / visibleCommitted, in basis points. `null` when unknown. */
+  makerCoverageRatioBps: number | null;
+  /** Chain block the balance/allowance were read at, as a string. `null` when unknown. */
+  checkedAtBlock: string | null;
+  /** Snapshot age exceeds the API's freshness threshold (or no snapshot). */
+  stale: boolean;
+}
+
+/**
  * Public commitment shape. All on-chain numeric values that may exceed
  * Number.MAX_SAFE_INTEGER are strings (`riskAmount`, `nonce`, etc.) and
  * remain stringified when handed to the caller — it's their choice
@@ -77,6 +121,13 @@ export interface Commitment {
   isLive: boolean;
   /** ISO-8601 string. */
   createdAt: string;
+  /**
+   * Advisory maker-funding fillability. Present ONLY when the list was fetched
+   * with {@link CommitmentsListOptions.includeFillability} (the CLI's
+   * `commitments list --with-fillability`). Advisory + point-in-time — see
+   * {@link CommitmentFillability}. Absent on single-row / non-opt-in reads.
+   */
+  fillability?: CommitmentFillability;
 }
 
 export interface CommitmentsListOptions {
@@ -100,6 +151,13 @@ export interface CommitmentsListOptions {
   status?: StoredCommitmentStatus | StoredCommitmentStatus[] | string;
   includeInvalidated?: boolean;
   includeExpired?: boolean;
+  /**
+   * Opt-in to advisory maker-funding fillability: each returned commitment gets
+   * a {@link Commitment.fillability} object derived from the indexer's ~30s
+   * `maker_funding` snapshot. Advisory + point-in-time, never a guarantee, never
+   * folded into `status`. Defaults to false (fillability omitted).
+   */
+  includeFillability?: boolean;
   limit?: number;
   offset?: number;
 }

@@ -5,7 +5,11 @@
  * when the API contract changes.
  */
 
-import type { CommitmentStatus, StoredCommitmentStatus } from '../types/commitment.js';
+import type {
+  CommitmentStatus,
+  StoredCommitmentStatus,
+  CommitmentFillability,
+} from '../types/commitment.js';
 import type { ChainId, Network } from '../types/protocol.js';
 
 export interface ApiErrorBody {
@@ -85,6 +89,10 @@ export interface CommitmentBody {
   network: string;
   nonceInvalidated: boolean;
   createdAt: string;
+  /** Advisory maker-funding fillability — present only when the list was
+   *  requested with `includeFillability=true`. Flows through `toCommitment`'s
+   *  spread to the public `Commitment.fillability`. */
+  fillability?: CommitmentFillability;
 }
 
 export interface SpeculationBody {

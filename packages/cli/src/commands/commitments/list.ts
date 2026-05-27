@@ -45,6 +45,7 @@ import {
   tickToDecimalOdds,
   wei6ToDecimalUSDC,
   type Commitment,
+  type CommitmentFillability,
   type Contest,
   type Hex,
   type TakerView,
@@ -75,6 +76,7 @@ const optionsSchema = z.object({
   raw: z.boolean().optional(),
   side: z.string().min(1).optional(),
   sort: z.enum(SORT_VALUES).optional(),
+  withFillability: z.boolean().optional(),
 });
 
 export const commitmentsListCommand = new Command('list')
@@ -107,6 +109,10 @@ export const commitmentsListCommand = new Command('list')
     '--sort <key>',
     'taker-view only: sort by size (default — largest maxBet first), odds (best taker odds first), or newest (most recent first)',
   )
+  .option(
+    '--with-fillability',
+    'include an advisory maker-funding column/field per row (is the visible liquidity actually backed?). Opt-in, point-in-time — never a guarantee.',
+  )
   .action(async (opts) => {
     const parsed = optionsSchema.parse(opts);
     const client = await getClient({ requiresSigner: false });
@@ -121,6 +127,9 @@ export const commitmentsListCommand = new Command('list')
     }
     if (parsed.includeExpired !== undefined) {
       listOpts.includeExpired = parsed.includeExpired;
+    }
+    if (parsed.withFillability !== undefined) {
+      listOpts.includeFillability = parsed.withFillability;
     }
     if (parsed.limit !== undefined) listOpts.limit = parsed.limit;
     if (parsed.offset !== undefined) listOpts.offset = parsed.offset;
@@ -151,7 +160,7 @@ export const commitmentsListCommand = new Command('list')
     // --raw: protocol view, no contest join. Same as the pre-redesign
     // human output.
     if (parsed.raw === true) {
-      renderRaw(commitments, parsed.fullHash === true);
+      renderRaw(commitments, parsed.fullHash === true, parsed.withFillability === true);
       return;
     }
 
@@ -183,6 +192,9 @@ export const commitmentsListCommand = new Command('list')
           : '-',
         'max bet': r.taker !== null ? `$${r.taker.maxBetUSDC}` : '-',
         'to win': r.taker !== null ? `$${r.taker.toWinUSDC}` : '-',
+        ...(parsed.withFillability === true
+          ? { funding: fundingLabel(r.commitment.fillability) }
+          : {}),
       })),
       { json: false },
     );
@@ -282,7 +294,7 @@ function sortRows(
   return copy;
 }
 
-function renderRaw(commitments: Commitment[], fullHash: boolean): void {
+function renderRaw(commitments: Commitment[], fullHash: boolean, showFillability: boolean): void {
   if (commitments.length === 0) {
     process.stdout.write('(no commitments)\n');
     return;
@@ -304,9 +316,32 @@ function renderRaw(commitments: Commitment[], fullHash: boolean): void {
       risk: formatUSDC(c.riskAmount),
       remaining: formatUSDC(c.remainingRiskAmount),
       status: c.status,
+      ...(showFillability ? { funding: fundingLabel(c.fillability) } : {}),
     })),
     { json: false },
   );
+}
+
+/**
+ * Compact human label for the advisory maker-funding verdict (taker/raw tables).
+ * `--with-fillability` only — the field is absent otherwise. JSON output carries
+ * the full `fillability` object instead.
+ */
+function fundingLabel(f: CommitmentFillability | undefined): string {
+  if (!f) return '-';
+  switch (f.makerFundingStatus) {
+    case 'fully_backed':
+      return 'backed';
+    case 'overcommitted': {
+      const pct =
+        f.makerCoverageRatioBps !== null ? ` ${(f.makerCoverageRatioBps / 100).toFixed(0)}%` : '';
+      return `overcommitted${pct}`;
+    }
+    case 'stale':
+      return 'stale';
+    case 'unknown':
+      return 'unknown';
+  }
 }
 
 function formatUSDC(wei6Str: string): string {

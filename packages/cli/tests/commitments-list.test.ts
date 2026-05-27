@@ -42,6 +42,11 @@ describe('ospex commitments list — surface', () => {
     expect(help).toMatch(/newest/);
   });
 
+  it('exposes --with-fillability for the advisory maker-funding column', () => {
+    const help = commitmentsListCommand.helpInformation();
+    expect(help).toMatch(/--with-fillability/);
+  });
+
   it('description documents the default taker-centric mode', () => {
     const desc = commitmentsListCommand.description();
     expect(desc).toMatch(/taker/i);
