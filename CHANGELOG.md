@@ -6,6 +6,22 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 —
 
+## [0.4.6] — 2026-05-27
+
+Advisory orderbook fillability, surfaced through the SDK + CLI — the read-side completion of the fillability initiative (the indexer maker-funding snapshot and the core-api `?includeFillability` support are already live). Additive; no breaking changes.
+
+### SDK (`@ospex/sdk`)
+
+- **`commitments.list({ includeFillability: true })` surfaces a per-row advisory `fillability` object.** Opt-in: each returned `Commitment` then carries `fillability` — `{ advisory: true, makerFundingStatus: 'fully_backed' | 'overcommitted' | 'unknown' | 'stale', orderIndividuallyBackedNow, makerBookBackedNow, makerBackingWei6, makerVisibleCommittedWei6, makerCoverageRatioBps, checkedAtBlock, stale }` — derived from the indexer's ~30s `maker_funding` snapshot (the maker's USDC balance + PositionModule allowance vs. their visible committed book risk). It answers "is this visible liquidity actually backed right now?" without a per-fill on-chain read, is **advisory + point-in-time**, and is **never folded into `status`**. The `…BackedNow` booleans are `null` when `unknown` (no snapshot) / `stale` (snapshot too old) — read `makerFundingStatus` as the discriminator. `orderIndividuallyBackedNow` (backing covers THIS order's remaining risk) vs `makerBookBackedNow` (backing covers the maker's *whole* visible book) surfaces the individually-backed-but-overcommitted "fake liquidity" case, so there is deliberately no single `fillableNow`. Omitted entirely without the flag — the default list is byte-identical. New type exports `CommitmentFillability` / `MakerFundingStatus`; new `CommitmentsListOptions.includeFillability` + optional `Commitment.fillability`. For a definitive single-fill go/no-go, use `commitments.checkCommitmentFillability` (0.4.4).
+
+### CLI (`@ospex/cli`)
+
+- **`ospex commitments list --with-fillability`** — opt-in advisory maker-funding column in the taker + `--raw` human views (`backed` / `overcommitted NN%` / `unknown` / `stale`), and the full `fillability` object on each row under `--json`. Off by default; existing output is unchanged.
+
+### Documentation
+
+- `docs/AGENT_CONTRACT.md` now documents the book-wide list advisory alongside the per-fill / per-submit preflights. `README.md` corrected the `commitments list --json` description — it emits a `schemaVersion: 2` `AgentEnvelope` (the commitment array under `payload`), not a "bare commitment array" — and documents `--with-fillability`.
+
 ## [0.4.5] — 2026-05-26
 
 Advisory submit fundability — the maker side of the fillability preflight. Before a maker signs and POSTs a commitment, the SDK and CLI can check whether the wallet can back its *whole* open book plus the new commitment, so an over-committed maker doesn't post liquidity that reverts at fill time. Additive; no breaking changes.
@@ -213,7 +229,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.6
 [0.4.5]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.5
 [0.4.4]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.4
 [0.4.3]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.3
