@@ -28,6 +28,9 @@ export class CommitmentsApi {
     if (options.includeExpired !== undefined) {
       query.includeExpired = options.includeExpired;
     }
+    if (options.includeFillability !== undefined) {
+      query.includeFillability = options.includeFillability;
+    }
     if (options.limit !== undefined) query.limit = options.limit;
     if (options.offset !== undefined) query.offset = options.offset;
     const body = await this.client.request<CommitmentsListBody>('/v1/commitments', { query });

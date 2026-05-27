@@ -78,6 +78,8 @@ export type {
   CommitmentStatus,
   StoredCommitmentStatus,
   CommitmentsListOptions,
+  CommitmentFillability,
+  MakerFundingStatus,
   // position
   Position,
   PositionTotals,
