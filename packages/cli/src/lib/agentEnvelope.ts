@@ -29,6 +29,7 @@ import {
   type AgentEnvelope,
   type AgentFailureEnvelope,
   type AgentError,
+  type AgentErrorCauseEntry,
   type AgentWarning,
   type AgentEffect,
   type AgentNextCommand,
@@ -46,6 +47,7 @@ import {
   type SpeculationMode,
   type WalletRole,
 } from '@ospex/sdk';
+import { sanitizeUntargetedMessage } from './redact.js';
 import { CLI_VERSION, SDK_VERSION } from './version.js';
 
 /* ------------------------------------------------------------------------- */
@@ -340,18 +342,126 @@ export function emitJsonFailure(args: EmitJsonFailureArgs): void {
  * reverted send) and `reason` are surfaced under `details` so agents
  * can recover the on-chain location of the failure without parsing
  * the message text.
+ *
+ * `err.cause` (ES2022 Error.cause) is walked into
+ * `details.causeChain[]` (sanitized) — this is the only path that
+ * surfaces underlying viem / transport / API errors in `--json` mode.
+ * Without it, a wrapped `OspexChainError("Transaction broadcast or
+ * inclusion failed.", { cause })` lands in the envelope as opaque text
+ * with no breadcrumb back to "rate-limited" / "timeout" / "underpriced".
  */
 export function errorToAgentError(err: unknown): AgentError {
   if (err instanceof OspexError) {
-    const details = extractOspexErrorDetails(err);
+    const details: Record<string, unknown> = { ...(extractOspexErrorDetails(err) ?? {}) };
+    const causeChain = buildCauseChain(readCause(err));
+    if (causeChain.length > 0) details.causeChain = causeChain;
     const agentError: AgentError = { code: err.code, message: err.message };
-    if (details !== undefined) agentError.details = details;
+    if (Object.keys(details).length > 0) agentError.details = details;
     return agentError;
   }
   if (err instanceof Error) {
-    return { code: 'UNKNOWN_ERROR', message: err.message };
+    const agentError: AgentError = { code: 'UNKNOWN_ERROR', message: err.message };
+    const causeChain = buildCauseChain(readCause(err));
+    if (causeChain.length > 0) agentError.details = { causeChain };
+    return agentError;
   }
   return { code: 'UNKNOWN_ERROR', message: String(err) };
+}
+
+/* ------------------------------------------------------------------------- */
+/* Cause-chain walker                                                        */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Maximum depth the cause-chain walker descends. Bounded so a
+ * self-referential or pathological chain can't bloat the envelope.
+ * Matches the depth Hermes's diagnose-create.mjs uses as a working
+ * reference; viem chains rarely exceed 2-3 levels in practice.
+ */
+export const MAX_CAUSE_CHAIN_DEPTH = 4;
+
+/**
+ * Walk `err.cause` outward into a flat, ordered list of safe summary
+ * entries. Index 0 is the most immediate nested cause. Stops at:
+ *
+ *   - `current === undefined | null`
+ *   - depth equal to `maxDepth` (default `MAX_CAUSE_CHAIN_DEPTH`)
+ *   - a cycle (`Set`-based seen check)
+ *
+ * String fields are sanitized via `sanitizeUntargetedMessage` so any
+ * RPC URLs or credential-shaped substrings viem put in `err.message` /
+ * `err.metaMessages[]` are redacted before reaching stdout.
+ */
+export function buildCauseChain(
+  initial: unknown,
+  maxDepth: number = MAX_CAUSE_CHAIN_DEPTH,
+): AgentErrorCauseEntry[] {
+  const chain: AgentErrorCauseEntry[] = [];
+  let current: unknown = initial;
+  const seen = new Set<object>();
+  for (let depth = 0; depth < maxDepth; depth++) {
+    if (current === undefined || current === null) break;
+    if (typeof current === 'object') {
+      if (seen.has(current)) break;
+      seen.add(current);
+    }
+    chain.push(causeEntryFor(current));
+    current = readCause(current);
+  }
+  return chain;
+}
+
+function readCause(err: unknown): unknown {
+  if (err === null || typeof err !== 'object') return undefined;
+  if (!('cause' in (err as Record<string, unknown>))) return undefined;
+  return (err as { cause: unknown }).cause;
+}
+
+/**
+ * Extract a single `AgentErrorCauseEntry` from one node of the cause
+ * chain. Pulls only the known-safe fields and sanitizes free-form
+ * strings. The `name === 'Error'` filter drops the noise from plain
+ * `Error` instances whose constructor name carries no information.
+ */
+function causeEntryFor(err: unknown): AgentErrorCauseEntry {
+  if (err === null || typeof err !== 'object') {
+    return { message: sanitizeUntargetedMessage(String(err)) };
+  }
+  const e = err as {
+    name?: unknown;
+    code?: unknown;
+    message?: unknown;
+    shortMessage?: unknown;
+    metaMessages?: unknown;
+    status?: unknown;
+    reason?: unknown;
+    revertReason?: unknown;
+    txHash?: unknown;
+  };
+  const out: AgentErrorCauseEntry = {};
+  if (typeof e.name === 'string' && e.name !== '' && e.name !== 'Error') {
+    out.name = e.name;
+  }
+  if (typeof e.code === 'string') out.code = e.code;
+  if (typeof e.message === 'string') {
+    out.message = sanitizeUntargetedMessage(e.message);
+  }
+  if (typeof e.shortMessage === 'string') {
+    out.shortMessage = sanitizeUntargetedMessage(e.shortMessage);
+  }
+  if (Array.isArray(e.metaMessages)) {
+    const meta = e.metaMessages
+      .filter((m): m is string => typeof m === 'string')
+      .map(sanitizeUntargetedMessage);
+    if (meta.length > 0) out.metaMessages = meta;
+  }
+  if (typeof e.status === 'number') out.status = e.status;
+  if (typeof e.reason === 'string') out.reason = e.reason;
+  if (typeof e.revertReason === 'string') {
+    out.revertReason = sanitizeUntargetedMessage(e.revertReason);
+  }
+  if (typeof e.txHash === 'string') out.txHash = e.txHash;
+  return out;
 }
 
 /**

@@ -7,7 +7,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { redactUrl, sanitizeMessageForUrl } from '../src/lib/redact.js';
+import {
+  redactUrl,
+  sanitizeMessageForUrl,
+  sanitizeUntargetedMessage,
+} from '../src/lib/redact.js';
 
 describe('redactUrl — Alchemy-style URLs', () => {
   it('strips a hex API key from the trailing path segment', () => {
@@ -236,5 +240,72 @@ describe('sanitizeMessageForUrl', () => {
       '\nRequest body: {"method":"eth_chainId","params":[]}\n\nDetails: connect ECONNREFUSED 127.0.0.1:9\nVersion: viem@2.x';
     const sanitized = sanitizeMessageForUrl(message, raw);
     expect(sanitized).not.toContain('supersecretkey0123456789abcdef');
+  });
+});
+
+describe('sanitizeUntargetedMessage — used by the JSON envelope cause-chain', () => {
+  it('redacts an Alchemy-shaped URL embedded in prose', () => {
+    const msg =
+      'HTTP request failed.\nURL: https://polygon-mainnet.g.alchemy.com/v2/abcdef0123456789abcdef0123456789';
+    const out = sanitizeUntargetedMessage(msg);
+    expect(out).not.toContain('abcdef0123456789abcdef0123456789');
+    expect(out).toContain('[redacted]');
+    // Surrounding text is preserved.
+    expect(out).toContain('HTTP request failed.');
+    expect(out).toContain('URL:');
+  });
+
+  it('handles multiple URLs in the same message', () => {
+    const msg =
+      'two: https://polygon-mainnet.g.alchemy.com/v2/keyaaaaaaaaaaaaaaaaaaaaaa ' +
+      'and https://polygon-mainnet.infura.io/v3/keybbbbbbbbbbbbbbbbbbbbbb';
+    const out = sanitizeUntargetedMessage(msg);
+    expect(out).not.toContain('keyaaaaaaaaaaaaaaaaaaaaaa');
+    expect(out).not.toContain('keybbbbbbbbbbbbbbbbbbbbbb');
+  });
+
+  it('redacts query-string credentials (apikey=, token=, etc.)', () => {
+    const out = sanitizeUntargetedMessage('GET https://api.example.com/rpc?apikey=topsecretvalue123');
+    expect(out).not.toContain('topsecretvalue123');
+    expect(out).toContain('[redacted]');
+  });
+
+  it('redacts api_key / authorization / bearer / token / password / passphrase pairs', () => {
+    const cases = [
+      'authorization: Bearer abcd1234',
+      'Authorization=Bearer xyz9999',
+      'api_key=topsecret',
+      'apikey:topsecret',
+      'token = abcdefgh',
+      'password: hunter2',
+      'passphrase=letmein',
+    ];
+    for (const c of cases) {
+      const out = sanitizeUntargetedMessage(c);
+      expect(out).not.toMatch(/abcd1234|xyz9999|topsecret|abcdefgh|hunter2|letmein/);
+      expect(out).toContain('[redacted]');
+    }
+  });
+
+  it('redacts postgres / postgresql connection URLs wholesale', () => {
+    const out = sanitizeUntargetedMessage(
+      'connect failed: postgres://user:pass@db.example.com:5432/mydb?sslmode=require',
+    );
+    expect(out).not.toContain('user:pass');
+    expect(out).not.toContain('db.example.com');
+    expect(out).toContain('[redacted]');
+  });
+
+  it('preserves trailing punctuation (period, comma) outside the URL', () => {
+    const out = sanitizeUntargetedMessage(
+      'Error from https://api.example.com/v1/health, retry suggested.',
+    );
+    // Punctuation outside the URL stays.
+    expect(out).toContain(', retry suggested.');
+  });
+
+  it('is idempotent on an already-clean message', () => {
+    const clean = 'NONCE_TOO_LOW: nonce 5 already used';
+    expect(sanitizeUntargetedMessage(clean)).toBe(clean);
   });
 });
