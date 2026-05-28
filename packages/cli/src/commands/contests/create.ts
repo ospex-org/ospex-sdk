@@ -98,6 +98,14 @@ export const contestCreateCommand = addSignerOptions(
     const approveEffects: AgentEffect[] = [];
 
     try {
+    // Resolve the signer address up-front so a failure envelope from
+    // the catch below still carries `wallet` / `signer` populated —
+    // otherwise a CHAIN_ERROR / API_ERROR during create lands with
+    // both fields `null` even though the keystore was already
+    // unlocked. The signer is guaranteed by `requiresSigner: true`
+    // above, so this can't fail with a missing-signer condition.
+    signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+
     let gameId: string;
     if (hasGameId) {
       gameId = opts.gameId as string;
@@ -205,7 +213,10 @@ export const contestCreateCommand = addSignerOptions(
     }
 
     if (wantJson) {
-      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+      // signerAddress was resolved at the top of the try; the
+      // non-null assertion documents the invariant for type-narrowing
+      // since the success path needs the Hex (not `Hex | null`) form.
+      const signerForEnvelope = signerAddress as Hex;
       // Hermes PR-71 blocker: when waitForVerified throws AFTER the
       // create tx landed, we previously wrote the success envelope
       // and THEN threw — producing TWO JSON envelopes on stdout AND
@@ -219,9 +230,15 @@ export const contestCreateCommand = addSignerOptions(
           action: 'contests.create',
           stage: 'execute',
           chainId,
-          wallet: signerAddress,
+          wallet: signerForEnvelope,
           walletRole: 'signer',
-          signer: signerAddress,
+          signer: signerForEnvelope,
+          // `contests create` is a write command — advertise the
+          // intent in the failure envelope so agents recovering from
+          // verification-poll failure see `requiresTransaction: true`
+          // (the tx already landed; the verify poll timed out).
+          requiresSignature: true,
+          requiresTransaction: true,
           effects: [...approveEffects, buildCreateContestEffect(result)],
           // Verification poll didn't land — suggest the standalone
           // wait-verified helper so the agent can keep polling.
@@ -237,7 +254,7 @@ export const contestCreateCommand = addSignerOptions(
       writeAgentEnvelope(
         toContestCreateAgentEnvelope(result, {
           chainId,
-          signerAddress,
+          signerAddress: signerForEnvelope,
           verification,
           approveEffects,
         }),
@@ -259,9 +276,17 @@ export const contestCreateCommand = addSignerOptions(
           action: 'contests.create',
           stage: 'execute',
           chainId,
+          // signerAddress is populated at the top of the try and
+          // therefore set even when the catch fires before any side
+          // effect (the historical null was the bug fixed here).
           wallet: signerAddress,
           walletRole: 'signer',
           signer: signerAddress,
+          // `contests create` is a write command — advertise the
+          // intent in the failure envelope so agents see this is a
+          // sig+tx command, not a no-op preview.
+          requiresSignature: true,
+          requiresTransaction: true,
           effects: approveEffects,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,

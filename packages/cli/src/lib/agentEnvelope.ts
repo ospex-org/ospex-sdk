@@ -280,6 +280,32 @@ export interface EmitJsonFailureArgs {
   signer?: Hex | null;
 
   /**
+   * Whether the command would have produced an EIP-712 signature had
+   * it succeeded. Defaults to `false` (the safe envelope-default), so
+   * write commands MUST pass `true` explicitly. Without it, an agent
+   * reading a failure envelope from `contests create` / `commitments
+   * submit` sees `requiresSignature: false` — misleading because the
+   * signer was resolved and a signature WAS the intent.
+   */
+  requiresSignature?: boolean;
+
+  /**
+   * Whether the command would have produced an on-chain transaction
+   * had it succeeded. Same rationale as `requiresSignature` — write
+   * commands MUST pass `true` so the failure envelope advertises
+   * write-intent to agent recovery logic.
+   */
+  requiresTransaction?: boolean;
+
+  /**
+   * Approval pre-flight requirements known at failure time. Surfaced
+   * verbatim in the envelope so an agent recovering from a
+   * pre-broadcast failure (e.g. balance / allowance gating) can act
+   * on the same information the success path would have advertised.
+   */
+  approvalRequirements?: ApprovalRequirement[];
+
+  /**
    * Completed on-chain / off-chain effects that landed BEFORE the
    * failure. Preserved in the envelope per Hermes's PR-6 scope:
    * "any already-completed effects[] when a command fails after
@@ -322,6 +348,9 @@ export function emitJsonFailure(args: EmitJsonFailureArgs): void {
     ...(args.wallet !== undefined ? { wallet: args.wallet } : {}),
     ...(args.walletRole !== undefined ? { walletRole: args.walletRole } : {}),
     ...(args.signer !== undefined ? { signer: args.signer } : {}),
+    ...(args.requiresSignature !== undefined ? { requiresSignature: args.requiresSignature } : {}),
+    ...(args.requiresTransaction !== undefined ? { requiresTransaction: args.requiresTransaction } : {}),
+    ...(args.approvalRequirements !== undefined ? { approvalRequirements: args.approvalRequirements } : {}),
     ...(args.effects !== undefined ? { effects: args.effects } : {}),
     ...(args.warnings !== undefined ? { warnings: args.warnings } : {}),
     ...(args.nextCommands !== undefined ? { nextCommands: args.nextCommands } : {}),

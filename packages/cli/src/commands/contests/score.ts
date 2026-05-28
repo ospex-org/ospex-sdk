@@ -57,6 +57,13 @@ export const contestScoreCommand = addSignerOptions(
     const approveEffects: AgentEffect[] = [];
 
     try {
+    // Resolve the signer address up-front so a failure envelope from
+    // the catch below still carries `wallet` / `signer` populated —
+    // mirrors the `contests create` fix; same reasoning, same
+    // failure mode (a CHAIN_ERROR during score lands with both
+    // fields `null` even though the keystore was already unlocked).
+    signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+
     const args: Parameters<typeof client.contests.score>[0] = {
       contestId: BigInt(contestIdArg),
     };
@@ -76,11 +83,13 @@ export const contestScoreCommand = addSignerOptions(
     }
 
     if (wantJson) {
-      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       writeAgentEnvelope(
         toContestScoreAgentEnvelope(result, {
           chainId,
-          signerAddress,
+          // Non-null assertion documents the invariant — signerAddress
+          // was just assigned at the top of the outer try, so the
+          // success path always has a Hex (not Hex | null).
+          signerAddress: signerAddress as Hex,
           approveEffects,
         }),
       );
@@ -98,9 +107,18 @@ export const contestScoreCommand = addSignerOptions(
           action: 'contests.score',
           stage: 'execute',
           chainId,
+          // signerAddress is populated at the top of the try and
+          // therefore set even when the catch fires before any side
+          // effect.
           wallet: signerAddress,
           walletRole: 'signer',
           signer: signerAddress,
+          // `contests score` is a write command — advertise sig + tx
+          // intent so failure-envelope readers don't see the
+          // misleading `requiresSignature: false / requiresTransaction:
+          // false` defaults.
+          requiresSignature: true,
+          requiresTransaction: true,
           effects: approveEffects,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
