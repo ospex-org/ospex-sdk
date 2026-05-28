@@ -591,7 +591,7 @@ try {
 | `VALIDATION_ERROR` | `OspexValidationError` | `field` | Caller-supplied argument failed a shape / range / regex check. |
 | `SIGNING_ERROR` | `OspexSigningError` | — | Keystore decrypt failed (wrong passphrase), EIP-712 sign failed. |
 | `ALLOWANCE_INSUFFICIENT` | `OspexAllowanceError` | `required: bigint`, `current: bigint`, `spender`, `token` | Pre-flight allowance shortfall. SDK never auto-approves. |
-| `CHAIN_ERROR` | `OspexChainError` | `reason?`, `revertReason?`, `txHash?` | RPC error, revert, receipt status reverted. |
+| `CHAIN_ERROR` | `OspexChainError` | `reason?`, `revertReason?`, `txHash?`, `causeChain?` | RPC error, revert, receipt status reverted. `causeChain[]` (when present) surfaces the underlying viem / transport error with `name` / `status` / `shortMessage` so agents can classify rate-limit vs timeout vs underpriced without parsing the wrapper message. |
 | `SCRIPT_APPROVAL_INVALID` | `OspexScriptApprovalError` | `reason: 'hash_mismatch' \| 'expired' \| 'not_configured'`, `expectedHash?`, `actualHash?` | Chainlink Functions ScriptApproval is unusable. |
 | `SUBSCRIPTION_ERROR` | `OspexSubscriptionError` | `reason: 'link_balance_insufficient' \| 'consumer_not_registered' \| 'subscription_id_missing'`, `subscriptionId?` | Chainlink Functions subscription unusable. |
 | `STREAM_ERROR` | `OspexStreamError` | `reason: 'connection_failed' \| 'capacity_exceeded' \| 'fatal'`, `status?` | An Ospex SSE stream failed (odds or a protocol `subscribe`). `connection_failed` / `capacity_exceeded` are retried; `fatal` ends the subscription. Delivered to `onError`. |

@@ -93,6 +93,7 @@ export type {
   AgentWarningSeverity,
   AgentBlockingCapability,
   AgentError,
+  AgentErrorCauseEntry,
   AgentEffect,
   AgentEffectType,
   AgentEffectStatus,
