@@ -516,6 +516,110 @@ describe('errorToAgentError — cause-chain walk (CHAIN_ERROR observability)', (
   });
 });
 
+describe('emitJsonFailure — requiresSignature / requiresTransaction / approvalRequirements', () => {
+  it('forwards requiresSignature + requiresTransaction onto the failure envelope', () => {
+    const sink = new StringSink();
+    const writeOrig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Buffer) => {
+      sink.write(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      emitJsonFailure({
+        action: 'contests.create',
+        stage: 'execute',
+        chainId: 137,
+        wallet: '0xaa00000000000000000000000000000000000001' as const,
+        walletRole: 'signer',
+        signer: '0xaa00000000000000000000000000000000000001' as const,
+        // Write command failed before any side effect — caller MUST
+        // advertise sig + tx intent so the envelope doesn't show the
+        // misleading default of `false`.
+        requiresSignature: true,
+        requiresTransaction: true,
+        error: new OspexChainError('Transaction broadcast or inclusion failed.'),
+      });
+    } finally {
+      process.stdout.write = writeOrig;
+    }
+    const parsed = JSON.parse(sink.buf.trim()) as {
+      ok: boolean;
+      requiresSignature: boolean;
+      requiresTransaction: boolean;
+      wallet: string | null;
+      signer: string | null;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.requiresSignature).toBe(true);
+    expect(parsed.requiresTransaction).toBe(true);
+    expect(parsed.wallet).toBe('0xaa00000000000000000000000000000000000001');
+    expect(parsed.signer).toBe('0xaa00000000000000000000000000000000000001');
+  });
+
+  it('forwards approvalRequirements onto the failure envelope', () => {
+    const sink = new StringSink();
+    const writeOrig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Buffer) => {
+      sink.write(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    const approvals: ApprovalRequirement[] = [
+      {
+        token: '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359' as const,
+        tokenSymbol: 'USDC',
+        spender: '0x1111111111111111111111111111111111111111' as const,
+        spenderLabel: 'PositionModule',
+        purpose: 'PositionModule pulls USDC at fill time',
+        requiredWei: '100000000',
+        requiredHuman: '100.000000',
+        currentWei: '0',
+        currentHuman: '0.000000',
+        needsApproval: true,
+      },
+    ];
+    try {
+      emitJsonFailure({
+        action: 'commitments.submit',
+        stage: 'execute',
+        chainId: 137,
+        approvalRequirements: approvals,
+        error: new OspexValidationError('boom'),
+      });
+    } finally {
+      process.stdout.write = writeOrig;
+    }
+    const parsed = JSON.parse(sink.buf.trim()) as { approvalRequirements: unknown[] };
+    expect(parsed.approvalRequirements).toEqual(approvals);
+  });
+
+  it('defaults requiresSignature/requiresTransaction to false when not passed (back-compat)', () => {
+    const sink = new StringSink();
+    const writeOrig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Buffer) => {
+      sink.write(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      emitJsonFailure({
+        action: 'health',
+        stage: 'read',
+        chainId: 137,
+        error: new OspexValidationError('boom'),
+      });
+    } finally {
+      process.stdout.write = writeOrig;
+    }
+    const parsed = JSON.parse(sink.buf.trim()) as {
+      requiresSignature: boolean;
+      requiresTransaction: boolean;
+    };
+    // Read commands stay false — the existing default. Only write
+    // commands flip to true.
+    expect(parsed.requiresSignature).toBe(false);
+    expect(parsed.requiresTransaction).toBe(false);
+  });
+});
+
 describe('emitJsonFailure', () => {
   it('writes a failure envelope to stdout with errors + preserved effects', () => {
     const sink = new StringSink();

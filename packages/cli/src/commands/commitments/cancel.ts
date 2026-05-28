@@ -71,6 +71,10 @@ export const commitmentsCancelCommand = addSignerOptions(
     let signerAddress: Hex | null = null;
 
     try {
+    // Resolve the signer up-front so a failure envelope from the
+    // catch below carries wallet/signer populated.
+    signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+
     const commitment = await client.commitments.resolveByPrefix(hashArg, {
       status: ['open', 'partially_filled'],
     });
@@ -83,11 +87,12 @@ export const commitmentsCancelCommand = addSignerOptions(
 
     if (!wantsOnchain) {
       if (wantJson) {
-        signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
         writeAgentEnvelope(
           toCancelOffchainAgentEnvelope(offChainResult, commitment, {
             chainId,
-            signerAddress,
+            // Non-null assertion: signerAddress was assigned at the
+            // top of the try, before the work began.
+            signerAddress: signerAddress as Hex,
             hash,
           }),
         );
@@ -122,7 +127,6 @@ export const commitmentsCancelCommand = addSignerOptions(
     }
 
     if (wantJson) {
-      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       const explorerUrl = onChainResult !== null
         ? polygonscanTxUrl(chainId, onChainResult.txHash)
         : null;
@@ -132,7 +136,7 @@ export const commitmentsCancelCommand = addSignerOptions(
           commitment,
           {
             chainId,
-            signerAddress,
+            signerAddress: signerAddress as Hex,
             hash,
           },
         ),
@@ -171,6 +175,11 @@ export const commitmentsCancelCommand = addSignerOptions(
           wallet: signerAddress,
           walletRole: 'signer',
           signer: signerAddress,
+          // EIP-712 cancel-auth sig always required; on-chain tx only
+          // when --also-onchain. The intent flags reflect the path
+          // the failed run was attempting.
+          requiresSignature: true,
+          requiresTransaction: wantsOnchain,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });

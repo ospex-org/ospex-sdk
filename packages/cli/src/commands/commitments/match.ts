@@ -198,7 +198,17 @@ export const commitmentsMatchCommand = addSignerOptions(
     const stageForFailure: 'preview' | 'execute' = previewOnly ? 'preview' : 'execute';
 
     try {
-    // ── 2. Resolve input via the SDK's prefix resolver. ─────────────
+    // ── 2. Resolve the taker address up-front so a failure envelope
+    //    from the catch below carries wallet/signer populated even
+    //    when the throw happens inside resolveByPrefix / prepareMatch
+    //    (API/RPC error, unknown commitment hash, validation revert).
+    if (previewOnly) {
+      wallet = (await resolvePreviewAddress(signerIntent)).toLowerCase() as Hex;
+    } else {
+      wallet = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+    }
+
+    // ── 3. Resolve input via the SDK's prefix resolver. ─────────────
     // Match scope is open + partially_filled (live commitments).
     const commitment = await client.commitments.resolveByPrefix(hashArg, {
       status: ['open', 'partially_filled'],
@@ -210,7 +220,7 @@ export const commitmentsMatchCommand = addSignerOptions(
       );
     }
 
-    // ── 3. Prepare match preview. ─────────────────────────────────
+    // ── 4. Prepare match preview. ─────────────────────────────────
     // In preview-only mode, pass `taker` as an explicit override so
     // prepareMatch skips its signer.getAddress() call entirely.
     const prepArgs: Parameters<typeof client.commitments.prepareMatch>[0] = {
@@ -220,10 +230,9 @@ export const commitmentsMatchCommand = addSignerOptions(
       prepArgs.takerDesiredRiskWei6 = usdcDecimalToWei6(opts.riskUsdc);
     }
     if (previewOnly) {
-      prepArgs.taker = await resolvePreviewAddress(signerIntent);
+      prepArgs.taker = wallet;
     }
     const preview = await client.commitments.prepareMatch(prepArgs);
-    wallet = preview.taker.toLowerCase() as Hex;
 
     // ── 4. --json alone (no --yes) is preview-only — emit + exit. ──
     if (previewOnly) {
@@ -420,8 +429,20 @@ export const commitmentsMatchCommand = addSignerOptions(
           stage: stageForFailure,
           chainId,
           wallet,
+          // Spec §3.2 / §5.1: preview-only sign envelopes are
+          // signer-intent envelopes (the resolved address is the
+          // would-be signer). Failure envelopes mirror the
+          // success-path contract — toMatchPreviewEnvelope also
+          // emits walletRole:'signer', signer: wallet.
           walletRole: 'signer',
           signer: wallet,
+          // match intends to sign + send (and possibly run an approve
+          // tx first). Both flags reflect that intent on failure so an
+          // agent sees this was a write command, not a no-op read.
+          // previewOnly is also write-intent — the preview describes
+          // what `--yes` WOULD have signed/sent.
+          requiresSignature: true,
+          requiresTransaction: true,
           effects: approveEffects,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
