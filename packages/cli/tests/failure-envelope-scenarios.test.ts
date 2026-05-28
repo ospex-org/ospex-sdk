@@ -407,18 +407,20 @@ describe('Hermes PR-6 scenario 3: mid-flight failure after one successful effect
   // attempted in this run — blanket-true would mislead an agent into
   // wasting a chain check on a pure off-chain failure path.
   describe('commitments.submit — requiresTransaction is path-specific', () => {
-    it('preview failure (no --yes): sig:true, tx:false', () => {
+    it('preview failure (no --yes): sig:true, tx:false, signer-intent context preserved', () => {
       // The preview path can't dispatch a tx — it's a read+compute
       // over `prepareSubmit`. Any failure here (API down, validation)
-      // is sig-intent only.
+      // is sig-intent only. Per spec §3.2, preview-only sign
+      // envelopes still carry walletRole:'signer' and signer=wallet
+      // (the resolved-no-unlock address is the would-be signer).
       const stdout = captureStdout(() => {
         emitJsonFailure({
           action: 'commitments.submit',
           stage: 'preview',
           chainId: POLYGON,
           wallet: SIGNER,
-          walletRole: 'subject',
-          signer: null,
+          walletRole: 'signer',
+          signer: SIGNER,
           requiresSignature: true,
           // No approval was attempted (the preview path doesn't enter
           // the approval branch) — tx flag stays false.
@@ -427,11 +429,19 @@ describe('Hermes PR-6 scenario 3: mid-flight failure after one successful effect
         });
       });
       const env = JSON.parse(stdout.trim()) as {
+        wallet: string | null;
+        walletRole: string;
+        signer: string | null;
         requiresSignature: boolean;
         requiresTransaction: boolean;
       };
       expect(env.requiresSignature).toBe(true);
       expect(env.requiresTransaction).toBe(false);
+      // Contract: preview-only failure mirrors preview-only success
+      // (walletRole:'signer', signer=wallet) — see spec §3.2.
+      expect(env.wallet).toBe(SIGNER);
+      expect(env.walletRole).toBe('signer');
+      expect(env.signer).toBe(SIGNER);
     });
 
     it('execute failure with no approval needed: sig:true, tx:false', () => {

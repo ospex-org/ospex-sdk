@@ -32,6 +32,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Hex } from '@ospex/sdk';
 import { commitmentsSubmitCommand } from '../src/commands/commitments/submit.js';
+import { commitmentsMatchCommand } from '../src/commands/commitments/match.js';
 import { positionsClaimAllCommand } from '../src/commands/positions/claim-all.js';
 
 const DEAD_API_URL = 'http://127.0.0.1:9';
@@ -125,7 +126,7 @@ async function runActionAndCaptureFailure(
 }
 
 describe('commitments submit — command-level failure envelope (preview mode, dead API)', () => {
-  it('preview path with --expected-address: stage=preview, sig:true, tx:false, walletRole=subject', async () => {
+  it('preview path with --expected-address: stage=preview, sig:true, tx:false, walletRole=signer', async () => {
     const ADDRESS = ('0x' + 'ab'.repeat(20)) as Hex;
     const { stdout, exitCode } = await runActionAndCaptureFailure(() =>
       commitmentsSubmitCommand.parseAsync(
@@ -165,15 +166,69 @@ describe('commitments submit — command-level failure envelope (preview mode, d
     expect(env.ok).toBe(false);
     expect(env.action).toBe('commitments.submit');
     expect(env.stage).toBe('preview');
+    // Spec §3.2: preview-only sign envelopes are signer-intent
+    // envelopes — the resolved-no-unlock address is the would-be
+    // signer if `--yes` were passed. Failure envelopes mirror the
+    // success-path contract here (see toSubmitPreviewEnvelope).
     expect(env.wallet).toBe(ADDRESS);
-    expect(env.walletRole).toBe('subject');
-    expect(env.signer).toBeNull();
+    expect(env.walletRole).toBe('signer');
+    expect(env.signer).toBe(ADDRESS);
     // Preview path can't sign or send. requiresSignature reflects what
     // the command WOULD sign (true — submit's intent is to sign).
     // requiresTransaction reflects whether this run attempted a tx:
     // it didn't, so false.
     expect(env.requiresSignature).toBe(true);
     expect(env.requiresTransaction).toBe(false);
+    expect(env.effects).toEqual([]);
+    expect(env.errors.length).toBeGreaterThan(0);
+  });
+});
+
+describe('commitments match — command-level failure envelope (preview mode, dead API)', () => {
+  it('preview path with --expected-address: stage=preview, sig:true, tx:true, walletRole=signer', async () => {
+    const ADDRESS = ('0x' + 'ef'.repeat(20)) as Hex;
+    // A 32-byte hex string for the prefix-resolver argument. Match's
+    // preview path runs `resolveByPrefix` against the API first, which
+    // is the call that should fail against the dead host. The exact
+    // hash bytes don't need to correspond to a real commitment — they
+    // just need to be syntactically valid so commander accepts the
+    // positional.
+    const HASH = '0x' + 'a'.repeat(64);
+    const { stdout, exitCode } = await runActionAndCaptureFailure(() =>
+      commitmentsMatchCommand.parseAsync(
+        [HASH, '--expected-address', ADDRESS, '--json'],
+        { from: 'user' },
+      ),
+    );
+
+    expect(exitCode).toBe(1);
+    const env = JSON.parse(stdout.trim()) as {
+      ok: boolean;
+      action: string;
+      stage: string;
+      wallet: string | null;
+      walletRole: string;
+      signer: string | null;
+      requiresSignature: boolean;
+      requiresTransaction: boolean;
+      effects: unknown[];
+      errors: Array<{ code: string }>;
+    };
+
+    expect(env.ok).toBe(false);
+    expect(env.action).toBe('commitments.match');
+    expect(env.stage).toBe('preview');
+    // Same signer-intent contract as submit — preview-only sign
+    // envelopes carry walletRole='signer', signer=wallet.
+    expect(env.wallet).toBe(ADDRESS);
+    expect(env.walletRole).toBe('signer');
+    expect(env.signer).toBe(ADDRESS);
+    // Match's execute path dispatches a tx; per spec §3.1 the
+    // preview-stage signals "what would execute do", so both flags
+    // are true even in preview mode (unlike submit, which is
+    // fundamentally off-chain).
+    expect(env.requiresSignature).toBe(true);
+    expect(env.requiresTransaction).toBe(true);
     expect(env.effects).toEqual([]);
     expect(env.errors.length).toBeGreaterThan(0);
   });

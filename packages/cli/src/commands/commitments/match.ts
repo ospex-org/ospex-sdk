@@ -429,8 +429,13 @@ export const commitmentsMatchCommand = addSignerOptions(
           stage: stageForFailure,
           chainId,
           wallet,
-          walletRole: previewOnly ? 'subject' : 'signer',
-          signer: previewOnly ? null : wallet,
+          // Spec §3.2 / §5.1: preview-only sign envelopes are
+          // signer-intent envelopes (the resolved address is the
+          // would-be signer). Failure envelopes mirror the
+          // success-path contract — toMatchPreviewEnvelope also
+          // emits walletRole:'signer', signer: wallet.
+          walletRole: 'signer',
+          signer: wallet,
           // match intends to sign + send (and possibly run an approve
           // tx first). Both flags reflect that intent on failure so an
           // agent sees this was a write command, not a no-op read.

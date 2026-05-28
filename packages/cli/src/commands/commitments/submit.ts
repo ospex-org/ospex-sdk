@@ -471,8 +471,15 @@ export const commitmentsSubmitCommand = addSignerOptions(
           stage: stageForFailure,
           chainId,
           wallet,
-          walletRole: previewOnly ? 'subject' : 'signer',
-          signer: previewOnly ? null : wallet,
+          // Spec §3.2 / §5.1: preview-only sign envelopes are
+          // signer-intent envelopes. Even though preview-only mode
+          // doesn't unlock the keystore (the address came via
+          // resolvePreviewAddress), the resolved address is the
+          // would-be signer if `--yes` were passed. Failure envelopes
+          // mirror the success-path contract here — toSubmitPreviewEnvelope
+          // also emits walletRole:'signer', signer: wallet.
+          walletRole: 'signer',
+          signer: wallet,
           // submit is fundamentally an off-chain signed write (EIP-712 +
           // POST) — the only on-chain side is the conditional USDC
           // approval. requiresSignature stays true throughout (the
