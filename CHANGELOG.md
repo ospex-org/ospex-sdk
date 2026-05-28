@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.4.8] — 2026-05-28
+
 Execute-envelope hygiene for `commitments match` / `commitments submit`. The auto-approve loop remediates short USDC allowances mid-command; previously, `payload.fillability` / `payload.fundability` and the shoulder `allowance-short` warning kept the pre-approval state, so a successful match (`ok: true`) could ship JSON saying `outcome: 'not-fillable'` with a `blocking` `allowance-short` warning — confusing for autonomous agents and artifact parsers (caught by the COL-LAD-D2 acceptance run, 2026-05-28). Now the verdict is re-checked after a confirmed approve and the pre-approval verdict is preserved alongside.
 
 ### CLI (`@ospex/cli`)
@@ -264,7 +268,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.8
 [0.4.7]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.7
 [0.4.6]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.6
 [0.4.5]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.5
