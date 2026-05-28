@@ -258,6 +258,8 @@ export const approvalsSetupCommand = addSignerOptions(
           wallet: owner,
           walletRole: 'signer',
           signer: owner,
+          requiresSignature: true,
+          requiresTransaction: true,
           effects,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,

@@ -205,17 +205,38 @@ export const commitmentsSubmitCommand = addSignerOptions(
     const chainId = client.chainId();
     let wallet: Hex | null = null;
     const approveEffects: AgentEffect[] = [];
+    // Tracks whether the action entered the approval branch (an
+    // approval tx was at least attempted). submit's fundamental shape
+    // is sign-EIP-712 + POST off-chain — NO on-chain tx — unless an
+    // ERC-20 approve was needed first. requiresTransaction on the
+    // failure envelope must reflect that: blanket-true would tell an
+    // agent "check the chain" for a pure off-chain failure, which is
+    // misleading. Set to true at the call site below before the
+    // approve dispatch so a mid-flight throw (RPC error, receipt
+    // never returned) is also captured — approveEffects only fills
+    // on a returned receipt.
+    let approvalTxAttempted = false;
     const stageForFailure: 'preview' | 'execute' = previewOnly ? 'preview' : 'execute';
 
     try {
-    // 1. Prepare. Decimal parsing, side resolution, contest/spec
+    // 1. Resolve the maker address up-front so a failure envelope
+    //    from the catch below carries wallet/signer populated even
+    //    when the throw happens inside prepareSubmit (API/RPC error,
+    //    validation revert). previewOnly resolves without unlocking
+    //    a keystore; execute mode pulls from the unlocked signer.
+    if (previewOnly) {
+      wallet = (await resolvePreviewAddress(signerIntent)).toLowerCase() as Hex;
+    } else {
+      wallet = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+    }
+
+    // 2. Prepare. Decimal parsing, side resolution, contest/spec
     //    fetches, allowance + nonce reads. No signing yet.
     const prepArgs: HighLevelSubmitArgs = { ...args };
     if (previewOnly) {
-      prepArgs.maker = await resolvePreviewAddress(signerIntent);
+      prepArgs.maker = wallet;
     }
     const preview = await client.commitments.prepareSubmit(prepArgs);
-    wallet = preview.raw.maker.toLowerCase() as Hex;
 
     // 2. `--json` alone (no --yes) is the preview-only mode — emit
     //    the v2 agent envelope and exit without prompting or signing.
@@ -378,6 +399,10 @@ export const commitmentsSubmitCommand = addSignerOptions(
           ? 'unlimited'
           : `${wei6ToDecimalUSDC(approveAmount)} USDC (${approveAmount} wei6)`;
       process.stderr.write(`Approving USDC → ${row.spender} (${display})...\n`);
+      // Mark write-intent BEFORE dispatch so the failure envelope's
+      // requiresTransaction flag flips true even if the approve call
+      // throws before returning a receipt (RPC error, etc.).
+      approvalTxAttempted = true;
       // Dispatch on `purpose`. Two paths for now (commitment-risk →
       // PositionModule; lazy-creation-fee → TreasuryModule); a future
       // ApprovalPurpose value would need a corresponding case here.
@@ -446,8 +471,26 @@ export const commitmentsSubmitCommand = addSignerOptions(
           stage: stageForFailure,
           chainId,
           wallet,
+          // Spec §3.2 / §5.1: preview-only sign envelopes are
+          // signer-intent envelopes. Even though preview-only mode
+          // doesn't unlock the keystore (the address came via
+          // resolvePreviewAddress), the resolved address is the
+          // would-be signer if `--yes` were passed. Failure envelopes
+          // mirror the success-path contract here — toSubmitPreviewEnvelope
+          // also emits walletRole:'signer', signer: wallet.
           walletRole: 'signer',
           signer: wallet,
+          // submit is fundamentally an off-chain signed write (EIP-712 +
+          // POST) — the only on-chain side is the conditional USDC
+          // approval. requiresSignature stays true throughout (the
+          // command's intent is to sign). requiresTransaction is true
+          // ONLY when an approval was attempted in this run; otherwise
+          // false even on a write-mode failure, so an agent reading the
+          // envelope doesn't waste a chain check on a pure off-chain
+          // failure path. The toSubmitPreviewEnvelope contract on
+          // success (requiresTransaction: false) is the mirror of this.
+          requiresSignature: true,
+          requiresTransaction: approvalTxAttempted,
           effects: approveEffects,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,

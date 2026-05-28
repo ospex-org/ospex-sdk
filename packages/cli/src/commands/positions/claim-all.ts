@@ -65,15 +65,20 @@ export const positionsClaimAllCommand = addSignerOptions(
     let signerAddress: Hex | null = null;
 
     try {
+    // Resolve the signer up-front (when one is required) so a failure
+    // envelope from the catch below carries wallet/signer populated.
+    // The dry-run-with-explicit-address path runs signer-free, hence
+    // the conditional.
+    if (requiresSigner) {
+      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+    }
+
     const result = await client.positions.claimAll({
       ...(opts.address !== undefined ? { address: opts.address } : {}),
       opts: { dryRun },
     });
 
     if (wantJson) {
-      signerAddress = requiresSigner
-        ? (((await client.signer().getAddress()) as string).toLowerCase() as Hex)
-        : null;
       writeAgentEnvelope(
         toClaimAllAgentEnvelope(result, {
           chainId,
@@ -128,13 +133,40 @@ export const positionsClaimAllCommand = addSignerOptions(
       // they land in result.entries[].success and surface as failed
       // effects in the success-envelope path above.
       if (wantJson) {
+        // Wallet/role for the failure envelope. Three shapes:
+        //   - signer mode (no --address):
+        //       wallet = signer, role = 'signer', signer = signer
+        //   - explicit-address signer mode (with signer loaded):
+        //       wallet = signer, role = 'signer', signer = signer
+        //   - explicit-address dry-run (signer-free):
+        //       wallet = address (lowered), role = 'subject', signer = null
+        // The last shape carries the subject address through to the
+        // envelope so a failure during the planning read still tells
+        // the agent which wallet was inspected.
+        const explicitAddressSubject =
+          dryRun && opts.address !== undefined && signerAddress === null;
+        const failureWallet = explicitAddressSubject
+          ? (opts.address!.toLowerCase() as Hex)
+          : signerAddress;
+        const failureWalletRole = explicitAddressSubject
+          ? 'subject'
+          : signerAddress !== null
+            ? 'signer'
+            : 'none';
         emitJsonFailure({
           action: 'claim-all',
           stage: dryRun ? 'dry-run' : 'execute',
           chainId,
-          wallet: signerAddress,
-          walletRole: signerAddress !== null ? 'signer' : 'none',
+          wallet: failureWallet,
+          walletRole: failureWalletRole,
           signer: signerAddress,
+          // Intent is independent of signer presence. dry-run mode
+          // ALWAYS has write intent (the planned txs are sig + tx).
+          // Live execute mode is sig + tx too. Only path that can be
+          // signer-free AND non-write is N/A here — every claim-all
+          // failure path describes a write that would or did happen.
+          requiresSignature: dryRun || signerAddress !== null,
+          requiresTransaction: dryRun || signerAddress !== null,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
