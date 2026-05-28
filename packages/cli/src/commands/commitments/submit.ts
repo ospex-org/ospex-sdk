@@ -205,6 +205,17 @@ export const commitmentsSubmitCommand = addSignerOptions(
     const chainId = client.chainId();
     let wallet: Hex | null = null;
     const approveEffects: AgentEffect[] = [];
+    // Tracks whether the action entered the approval branch (an
+    // approval tx was at least attempted). submit's fundamental shape
+    // is sign-EIP-712 + POST off-chain — NO on-chain tx — unless an
+    // ERC-20 approve was needed first. requiresTransaction on the
+    // failure envelope must reflect that: blanket-true would tell an
+    // agent "check the chain" for a pure off-chain failure, which is
+    // misleading. Set to true at the call site below before the
+    // approve dispatch so a mid-flight throw (RPC error, receipt
+    // never returned) is also captured — approveEffects only fills
+    // on a returned receipt.
+    let approvalTxAttempted = false;
     const stageForFailure: 'preview' | 'execute' = previewOnly ? 'preview' : 'execute';
 
     try {
@@ -388,6 +399,10 @@ export const commitmentsSubmitCommand = addSignerOptions(
           ? 'unlimited'
           : `${wei6ToDecimalUSDC(approveAmount)} USDC (${approveAmount} wei6)`;
       process.stderr.write(`Approving USDC → ${row.spender} (${display})...\n`);
+      // Mark write-intent BEFORE dispatch so the failure envelope's
+      // requiresTransaction flag flips true even if the approve call
+      // throws before returning a receipt (RPC error, etc.).
+      approvalTxAttempted = true;
       // Dispatch on `purpose`. Two paths for now (commitment-risk →
       // PositionModule; lazy-creation-fee → TreasuryModule); a future
       // ApprovalPurpose value would need a corresponding case here.
@@ -458,14 +473,17 @@ export const commitmentsSubmitCommand = addSignerOptions(
           wallet,
           walletRole: previewOnly ? 'subject' : 'signer',
           signer: previewOnly ? null : wallet,
-          // Submit intends to sign EIP-712 + (in execute mode) post + maybe
-          // run an approve tx. Both flags reflect that overall intent so
-          // an agent recovering from a pre-write failure sees this is a
-          // sig + tx command, not a no-op read. previewOnly is also a
-          // write-intent command — the preview describes what `--yes`
-          // WOULD have signed/sent.
+          // submit is fundamentally an off-chain signed write (EIP-712 +
+          // POST) — the only on-chain side is the conditional USDC
+          // approval. requiresSignature stays true throughout (the
+          // command's intent is to sign). requiresTransaction is true
+          // ONLY when an approval was attempted in this run; otherwise
+          // false even on a write-mode failure, so an agent reading the
+          // envelope doesn't waste a chain check on a pure off-chain
+          // failure path. The toSubmitPreviewEnvelope contract on
+          // success (requiresTransaction: false) is the mirror of this.
           requiresSignature: true,
-          requiresTransaction: true,
+          requiresTransaction: approvalTxAttempted,
           effects: approveEffects,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,

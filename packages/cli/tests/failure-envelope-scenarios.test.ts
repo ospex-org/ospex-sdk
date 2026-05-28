@@ -322,7 +322,6 @@ describe('Hermes PR-6 scenario 3: mid-flight failure after one successful effect
   // are all required to set requiresSignature: true and
   // requiresTransaction: true on failure.
   describe.each([
-    { action: 'commitments.submit', stage: 'execute' as const },
     { action: 'commitments.match', stage: 'execute' as const },
     { action: 'commitments.cancel-onchain', stage: 'execute' as const },
     { action: 'commitments.cancel-all', stage: 'execute' as const },
@@ -334,6 +333,9 @@ describe('Hermes PR-6 scenario 3: mid-flight failure after one successful effect
     { action: 'claim', stage: 'execute' as const },
     { action: 'settle', stage: 'execute' as const },
     { action: 'claim-all', stage: 'execute' as const },
+    // commitments.submit + commitments.cancel are NOT in this list —
+    // their requiresTransaction is path-specific, not blanket. See
+    // their dedicated scenario blocks below.
   ])('write-command failure envelope advertises write intent ($action)', ({ action, stage }) => {
     it('sets requiresSignature, requiresTransaction, wallet, signer on a pre-effect failure', () => {
       const stdout = captureStdout(() => {
@@ -398,6 +400,173 @@ describe('Hermes PR-6 scenario 3: mid-flight failure after one successful effect
       expect(env.requiresSignature).toBe(true);
       expect(env.requiresTransaction).toBe(wantsOnchain);
     }
+  });
+
+  // submit is fundamentally an off-chain signed write (EIP-712 + POST).
+  // requiresTransaction should be true ONLY when an approval tx was
+  // attempted in this run — blanket-true would mislead an agent into
+  // wasting a chain check on a pure off-chain failure path.
+  describe('commitments.submit — requiresTransaction is path-specific', () => {
+    it('preview failure (no --yes): sig:true, tx:false', () => {
+      // The preview path can't dispatch a tx — it's a read+compute
+      // over `prepareSubmit`. Any failure here (API down, validation)
+      // is sig-intent only.
+      const stdout = captureStdout(() => {
+        emitJsonFailure({
+          action: 'commitments.submit',
+          stage: 'preview',
+          chainId: POLYGON,
+          wallet: SIGNER,
+          walletRole: 'subject',
+          signer: null,
+          requiresSignature: true,
+          // No approval was attempted (the preview path doesn't enter
+          // the approval branch) — tx flag stays false.
+          requiresTransaction: false,
+          error: new OspexAPIError('API unreachable', { status: undefined }),
+        });
+      });
+      const env = JSON.parse(stdout.trim()) as {
+        requiresSignature: boolean;
+        requiresTransaction: boolean;
+      };
+      expect(env.requiresSignature).toBe(true);
+      expect(env.requiresTransaction).toBe(false);
+    });
+
+    it('execute failure with no approval needed: sig:true, tx:false', () => {
+      // `--yes --json` happy-path entry, but allowance is already
+      // sufficient → no approval tx attempted. Sign+POST fails (e.g.
+      // NONCE_TOO_LOW). The failure envelope still carries no tx intent
+      // because no tx was attempted.
+      const stdout = captureStdout(() => {
+        emitJsonFailure({
+          action: 'commitments.submit',
+          stage: 'execute',
+          chainId: POLYGON,
+          wallet: SIGNER,
+          walletRole: 'signer',
+          signer: SIGNER,
+          requiresSignature: true,
+          requiresTransaction: false,
+          error: new OspexAPIError('NONCE_TOO_LOW', {
+            status: 409,
+            apiCode: 'NONCE_TOO_LOW',
+          }),
+        });
+      });
+      const env = JSON.parse(stdout.trim()) as {
+        requiresSignature: boolean;
+        requiresTransaction: boolean;
+      };
+      expect(env.requiresSignature).toBe(true);
+      expect(env.requiresTransaction).toBe(false);
+    });
+
+    it('execute failure with approval landed before throw: sig:true, tx:true', () => {
+      // Approval tx confirmed, then the sign+POST throws. The approval
+      // landed; agents need to know about the on-chain side effect.
+      const confirmedApprove: AgentEffect = {
+        type: 'transaction',
+        purpose: 'approve-usdc',
+        ok: true,
+        txHash: '0xapprove' as Hex,
+        blockNumber: '1000',
+        status: 'confirmed',
+      };
+      const stdout = captureStdout(() => {
+        emitJsonFailure({
+          action: 'commitments.submit',
+          stage: 'execute',
+          chainId: POLYGON,
+          wallet: SIGNER,
+          walletRole: 'signer',
+          signer: SIGNER,
+          requiresSignature: true,
+          requiresTransaction: true,
+          effects: [confirmedApprove],
+          error: new OspexAPIError('NONCE_TOO_LOW', {
+            status: 409,
+            apiCode: 'NONCE_TOO_LOW',
+          }),
+        });
+      });
+      const env = JSON.parse(stdout.trim()) as {
+        requiresSignature: boolean;
+        requiresTransaction: boolean;
+        effects: Array<{ purpose: string }>;
+      };
+      expect(env.requiresSignature).toBe(true);
+      expect(env.requiresTransaction).toBe(true);
+      // The landed approval tx is preserved in effects[].
+      expect(env.effects[0]?.purpose).toBe('approve-usdc');
+    });
+  });
+
+  // claim-all has two failure shapes with distinct envelope context:
+  // signer mode (wallet=signer, role='signer') and explicit-address
+  // dry-run (wallet=address, role='subject', signer=null). The
+  // requires* intent flags must NOT collapse to false in the
+  // signer-free dry-run path — the dry-run plan describes a write.
+  describe('positions claim-all — dry-run + signer separation', () => {
+    it('--dry-run --address: subject context + write intent preserved on failure', () => {
+      // Explicit-address dry-run runs signer-free. Failure during the
+      // planning API call must STILL advertise sig + tx intent (the
+      // dry-run is showing what WOULD have signed/sent), and the
+      // address belongs in `wallet` (role='subject'), not `null`.
+      const ADDRESS = '0x' + 'cd'.repeat(20);
+      const stdout = captureStdout(() => {
+        emitJsonFailure({
+          action: 'claim-all',
+          stage: 'dry-run',
+          chainId: POLYGON,
+          wallet: ADDRESS as Hex,
+          walletRole: 'subject',
+          signer: null,
+          requiresSignature: true,
+          requiresTransaction: true,
+          error: new OspexAPIError('API unreachable'),
+        });
+      });
+      const env = JSON.parse(stdout.trim()) as {
+        stage: string;
+        wallet: string | null;
+        walletRole: string;
+        signer: string | null;
+        requiresSignature: boolean;
+        requiresTransaction: boolean;
+      };
+      expect(env.stage).toBe('dry-run');
+      expect(env.wallet).toBe(ADDRESS);
+      expect(env.walletRole).toBe('subject');
+      expect(env.signer).toBeNull();
+      expect(env.requiresSignature).toBe(true);
+      expect(env.requiresTransaction).toBe(true);
+    });
+
+    it('signer mode (no --address): wallet=signer, role=signer, both flags true', () => {
+      const stdout = captureStdout(() => {
+        emitJsonFailure({
+          action: 'claim-all',
+          stage: 'execute',
+          chainId: POLYGON,
+          wallet: SIGNER,
+          walletRole: 'signer',
+          signer: SIGNER,
+          requiresSignature: true,
+          requiresTransaction: true,
+          error: new OspexAPIError('API unreachable'),
+        });
+      });
+      const env = JSON.parse(stdout.trim()) as {
+        wallet: string | null;
+        walletRole: string;
+        signer: string | null;
+      };
+      expect(env.wallet).toBe(SIGNER);
+      expect(env.walletRole).toBe('signer');
+      expect(env.signer).toBe(SIGNER);
+    });
   });
 
   it('contests create: verification fails AFTER create tx — single envelope with create-contest preserved', () => {
