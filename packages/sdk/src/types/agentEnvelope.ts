@@ -273,10 +273,47 @@ export interface AgentWarning {
 }
 
 /**
+ * One entry in `AgentError.details.causeChain[]`. Captures a safe
+ * subset of fields from a nested error (typically a wrapped viem error
+ * or another `OspexError`). String fields are sanitized — credential
+ * patterns and full URLs are redacted before they land in the
+ * envelope. All fields optional; agents switch on `name` / `code` /
+ * `status` to classify (e.g. `name === 'HttpRequestError'` +
+ * `status === 429` → rate limit).
+ */
+export interface AgentErrorCauseEntry {
+  /** Constructor name (e.g. `'HttpRequestError'`, `'TimeoutError'`). */
+  name?: string;
+  /** Typed error code, when the nested error carries one. */
+  code?: string;
+  /** Sanitized full message. */
+  message?: string;
+  /** viem's one-line summary; sanitized. */
+  shortMessage?: string;
+  /** viem's chain-of-explanation lines; sanitized. */
+  metaMessages?: readonly string[];
+  /** HTTP status when the nested error was an HTTP response. */
+  status?: number;
+  /** Decoded revert discriminator on a nested `OspexChainError`. */
+  reason?: string;
+  /** Free-form revert reason on a nested `OspexChainError`. */
+  revertReason?: string;
+  /** Tx hash, when the nested error was tied to a broadcast tx. */
+  txHash?: string;
+}
+
+/**
  * `code` uses the existing `OspexError.code` taxonomy from `errors.ts`
  * (`'API_ERROR'`, `'ALLOWANCE_INSUFFICIENT'`, `'CHAIN_ERROR'`, etc.)
  * plus envelope-specific codes (`'non_interactive_password_required'`,
  * etc.). Same forward-compat rule as warnings.
+ *
+ * `details.causeChain` (when present) is an ordered array of
+ * `AgentErrorCauseEntry` capturing the nested-cause walk from the
+ * thrown error outward — index 0 is the most immediate cause,
+ * subsequent indices step further down the chain. Bounded to a small
+ * depth so a self-referential or pathological chain can't bloat the
+ * envelope. See `AgentErrorCauseEntry`.
  */
 export interface AgentError {
   code: string;
