@@ -642,12 +642,14 @@ The SDK does not retry for you. Build the retry loop in your agent.
 
 ### Safe retry rule for `CHAIN_ERROR` without `txHash`
 
-The thrown error has no `txHash` when the wrapped error occurred *before* the transport returned a hash — i.e. the broadcast itself failed (network blip, rate-limit, gateway timeout, dropped connection), and the tx was never accepted into the mempool. With `details.causeChain[]` populated, agents can distinguish three sub-cases:
+A missing `txHash` means the SDK/CLI did **not** receive a transaction hash from the transport. It is not proof that the raw transaction never reached a node or provider — timeout / dropped-connection cases are genuinely ambiguous (the tx may have been accepted by a node before the response was lost). Treat `details.causeChain[0]` as a classifier, not as standalone retry permission; the predicate below is what actually decides.
+
+With `details.causeChain[]` populated, agents can classify three sub-cases:
 
 | Sub-case | Detected via | Retry safe? |
 |---|---|---|
-| Transport / rate-limit / gateway transient | `details.causeChain[0]` carries `name: 'HttpRequestError'`, `status: 429` / `>= 500`, or a timeout indicator (`name: 'TimeoutError'`, `code: 'ETIMEDOUT'`, etc.). | Yes — backoff and retry. |
-| Underpriced / replacement-underpriced | `details.causeChain[0].shortMessage` / `message` contains `'underpriced'`. Pending nonce typically advances. | Sometimes — bump fees on retry; do not retry blindly. |
+| Transport / rate-limit / gateway transient | `details.causeChain[0]` carries `name: 'HttpRequestError'`, `status: 429` / `>= 500`, or a timeout indicator (`name: 'TimeoutError'`, `code: 'ETIMEDOUT'`, etc.). | **Conditionally yes** — backoff and retry **only** when the safe-retry predicate below also holds. |
+| Underpriced / replacement-underpriced | `details.causeChain[0].shortMessage` / `message` contains `'underpriced'`. The signer's pending nonce typically advances. | Sometimes — bump fees on retry; do not retry blindly. |
 | Pre-send revert that didn't surface via `estimateGas` | No transport markers in `causeChain[0]`; the nested error looks like a viem revert decoder result. | No — fix the request. |
 
 For write commands whose failure envelope reflects no side effect (`effects: []`), the agent-level safe-retry predicate is:
@@ -656,16 +658,19 @@ For write commands whose failure envelope reflects no side effect (`effects: []`
 errors[0].code === 'CHAIN_ERROR'
   && errors[0].details?.txHash === undefined
   && effects.length === 0
-  && maker's pending nonce is unchanged since the failed call
+  && envelope.signer !== null
+  && the signer's (envelope.signer) pending nonce is unchanged since before the failed call
   && the target row's pre-write state has not advanced
      (e.g. contests.create — the game still has contestCreated === false)
 ```
 
-If all four hold, ONE retry is safe. If a `txHash` exists OR the pending nonce moved, do NOT retry without first polling the chain — the original tx may already be landing.
+If all conditions hold, ONE retry is safe. If a `txHash` exists OR the signer's pending nonce moved, do NOT retry without first polling the chain — the original tx may already be landing.
 
-The pending-nonce check protects against the underpriced case: a tx that was accepted into the mempool but underpriced still moves pending nonce; a tx whose broadcast was dropped does not. The "row state unchanged" check is the second line of defense — even if the maker only-half-saw the broadcast succeed, the indexer-projected state catches up via the on-chain receipt.
+**If the failure envelope does not identify a signer (`envelope.signer === null`), the agent cannot perform the pending-nonce check and MUST NOT auto-retry.** Surface to the operator instead. Every write-command failure envelope post-#111 carries `signer` (and `wallet`) for the broadcasting wallet — `signer: null` reliably means "this envelope is not a broadcast attempt" (e.g. a read scoped via `--maker`, or `claim-all --dry-run --address`), and those are never retry candidates here.
 
-This pattern was first surfaced during a live `contests create` smoke (see the `2026-05-28-mlb-col-lad-contest-27-d2-solvency-lifecycle` run artifact in `ospex-org/ospex-artifacts`): two bundled-CLI calls failed with opaque `CHAIN_ERROR` (no tx hash, nonce unchanged); a direct SDK call ~52s later with the same signer / env succeeded. Until `details.causeChain[]` was added (see the `CHAIN_ERROR` row in §7 catalog), the failure shape carried no breadcrumb to distinguish "rate-limited" from "underpriced" from "request was malformed." With the cause chain populated, the same scenario today emits a structured `details.causeChain[0]` that lets the agent route via the table above.
+The pending-nonce check protects against the underpriced case: a tx that was accepted into the mempool but underpriced still moves the signer's pending nonce; a tx whose broadcast was dropped does not. **Use `envelope.signer`** (not the maker, not the taker, not the contest creator) — for `commitments match` the signer is the taker, for `contests create` the signer is the operator, for `claim` / `settle` the signer is the claimant / settler, etc. Routing by `envelope.signer` is the only nonce check that holds across all write commands. The "row state unchanged" check is the second line of defense — even if the signer / caller only-half-saw the broadcast succeed, the indexer-projected state catches up via the on-chain receipt.
+
+This pattern was first surfaced during a live `contests create` smoke (see the `2026-05-28-mlb-col-lad-contest-27-d2-solvency-lifecycle` run artifact in `ospex-org/ospex-artifacts`): two bundled-CLI calls failed with opaque `CHAIN_ERROR` (no tx hash, signer's nonce unchanged); a direct SDK call ~52s later with the same signer / env succeeded. Until `details.causeChain[]` was added (see the `CHAIN_ERROR` row in §7 catalog), the failure shape carried no breadcrumb to distinguish "rate-limited" from "underpriced" from "request was malformed." With the cause chain populated, the same scenario today emits a structured `details.causeChain[0]` that lets the agent route via the table above.
 
 ---
 
