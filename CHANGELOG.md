@@ -6,6 +6,28 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 —
 
+## [0.4.7] — 2026-05-28
+
+Failure-envelope fidelity for `--json` agent mode. A wrapped `OspexChainError({ cause: viemErr })` previously landed in the `--json` failure envelope as opaque text — the underlying viem `HttpRequestError` `shortMessage` / `status` / `metaMessages` were discarded — so an agent could not tell rate-limited from timeout from underpriced from a generic broadcast failure. Every write command's failure envelope now also carries the same signer + write-intent context the success envelopes do, so an agent reading a refusal-before-sign sees a wallet and an intent like it would on a confirmed write. Additive; no breaking changes.
+
+### SDK (`@ospex/sdk`)
+
+- **New exported type `AgentErrorCauseEntry`** — one entry in a failure envelope's `details.causeChain[]`. Carries `name` / `code` / `message` / `shortMessage` / `metaMessages` / `status` / `reason` / `revertReason` / `txHash`; all optional. Agents switch on `name` / `code` / `status` to classify (e.g. `name === 'HttpRequestError' && status === 429` ⇒ rate limit). String fields are sanitized in the SDK before they leave — embedded RPC URLs and credential-shaped substrings (`api_key=…`, `Bearer …`, postgres URLs) never reach stdout.
+
+### CLI (`@ospex/cli`)
+
+- **Fix: `--json` failure envelopes now preserve the `err.cause` chain in `details.causeChain[]`.** The envelope walker previously enumerated a fixed field list on the thrown error and never read `err.cause`, so a wrapped `OspexChainError({ cause: viemErr })` landed as opaque text. The walker now descends `err.cause` outward into a flat `details.causeChain[]` capped at depth 4 and cycle-safe (`AgentErrorCauseEntry[]`, see SDK section above). Reproduced on a live `contests.create` failure where the underlying transient (an HTTP 429 from the RPC) was unrecoverable from the envelope.
+- **Fix: every write command's `--json` failure envelope now advertises signer + write-intent context.** `approvals setup`, every `commitments {submit, submit-raw, match, approve, approve-raw, cancel, cancel-onchain, cancel-all}`, `contests {create, score}`, and the top-level `claim` / `claim-all` / `settle` populate `meta.signer` (resolved wallet) and `meta.writeIntent` (`'sign-only'` / `'broadcast-and-await'` / `'broadcast-no-await'`) on failure envelopes the same way they do on success. Refusals before signing (preflight blocks, fundability blocks) and preview-only failures from `submit` / `match` preserve the same context — so an agent reading a not-fillable refusal sees the same signer + write-intent fields as a confirmed match. `claim-all`'s per-row `steps[]` carry the corresponding `writeIntent` so a partial sweep envelope is honest about which legs broadcast.
+
+### Documentation
+
+- **`AGENT_CONTRACT.md` §7 documents the `CHAIN_ERROR`-without-`txHash` safe-retry rule.** A missing `txHash` means the SDK/CLI did not receive a transaction hash; it is not proof that the raw transaction never reached a node or provider. Agents should treat `details.causeChain[0]` as a classifier, not standalone retry permission, and auto-retry only when the failure envelope has no effects, identifies `envelope.signer`, the signer / broadcasting wallet's pending nonce is unchanged since before the failed call, and the target pre-write state has not advanced. If a `txHash` exists, the pending nonce moved, or `envelope.signer` is null, poll the chain / surface to the operator rather than retrying blindly. Generic across every write command (`commitments {submit, match, …}`, `contests {create, score}`, `claim` / `claim-all` / `settle`).
+- `AGENT_ENVELOPE_SPEC.md` §2.4 documents the new `details.causeChain` field.
+
+### Internal
+
+- Verify-approval expiry references refreshed for the Athletics MLB re-sign (script source hash changed `0x01c48e15…` → `0xec6a7e9c…`; expiry now `2026-11-27`). The SDK resolves the current approval from `core-api` at runtime, so no SDK code path changed — only an inline expiry comment and two test fixtures.
+
 ## [0.4.6] — 2026-05-27
 
 Advisory orderbook fillability, surfaced through the SDK + CLI — the read-side completion of the fillability initiative (the indexer maker-funding snapshot and the core-api `?includeFillability` support are already live). Additive; no breaking changes.
@@ -229,7 +251,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.4.7...HEAD
+[0.4.7]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.7
 [0.4.6]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.6
 [0.4.5]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.5
 [0.4.4]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.4
