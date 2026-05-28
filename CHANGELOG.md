@@ -21,7 +21,7 @@ Failure-envelope fidelity for `--json` agent mode. A wrapped `OspexChainError({ 
 
 ### Documentation
 
-- **`AGENT_CONTRACT.md` §7 documents the `CHAIN_ERROR`-without-`txHash` safe-retry rule.** When an `OspexChainError` failure envelope carries `code: 'CHAIN_ERROR'` and no `txHash`, the tx was never broadcast (sign / pre-flight / RPC unreachable), so the same command can be safely retried with the same nonce. With a `txHash`, the tx is on chain and a retry would double-spend the nonce. Generic across every write command (`commitments {submit, match, …}`, `contests {create, score}`, `claim` / `claim-all` / `settle`).
+- **`AGENT_CONTRACT.md` §7 documents the `CHAIN_ERROR`-without-`txHash` safe-retry rule.** A missing `txHash` means the SDK/CLI did not receive a transaction hash; it is not proof that the raw transaction never reached a node or provider. Agents should treat `details.causeChain[0]` as a classifier, not standalone retry permission, and auto-retry only when the failure envelope has no effects, identifies `envelope.signer`, the signer / broadcasting wallet's pending nonce is unchanged since before the failed call, and the target pre-write state has not advanced. If a `txHash` exists, the pending nonce moved, or `envelope.signer` is null, poll the chain / surface to the operator rather than retrying blindly. Generic across every write command (`commitments {submit, match, …}`, `contests {create, score}`, `claim` / `claim-all` / `settle`).
 - `AGENT_ENVELOPE_SPEC.md` §2.4 documents the new `details.causeChain` field.
 
 ### Internal
