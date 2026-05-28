@@ -50,6 +50,36 @@ export function selectBlockingSubmitReasons(
   );
 }
 
+/**
+ * Codes present in the pre-approval verdict's reasons but absent in the
+ * post-approval verdict's reasons, intersected with `SUBMIT_REMEDIABLE_REASON_CODES`.
+ * Empty when:
+ *   - the approve loop didn't resolve any remediable reasons, or
+ *   - the post-verdict's outcome is `unknown` (the re-check itself failed —
+ *     we can't claim a code was "resolved" from a verdict we couldn't compute).
+ */
+export function computeSubmitRemediatedReasonCodes(
+  pre: CheckSubmitFundabilityResult,
+  post: CheckSubmitFundabilityResult,
+): SubmitFundabilityReasonCode[] {
+  if (post.outcome === 'unknown') return [];
+  const postCodes = new Set(post.reasons.map((r) => r.code));
+  return SUBMIT_REMEDIABLE_REASON_CODES.filter(
+    (code) => pre.reasons.some((r) => r.code === code) && !postCodes.has(code),
+  );
+}
+
+/**
+ * Does the verdict still carry a remediable maker-allowance reason? If yes, the
+ * execute-envelope shoulder should keep its `allowance-short` blocking warning
+ * — the approve loop failed to fully remediate (or the verdict is `unknown`).
+ */
+export function hasRemediableShortfall(
+  verdict: CheckSubmitFundabilityResult,
+): boolean {
+  return verdict.reasons.some((r) => SUBMIT_REMEDIABLE_REASON_CODES.includes(r.code));
+}
+
 /** Human-readable, one-line explanation of a reason. Funding reasons carry the
  * required-vs-actual amounts; the balance reason spells out that approving won't
  * fix it. Exhaustive over `SubmitFundabilityReasonCode` (no default arm → a new

@@ -12,6 +12,8 @@ import { describe, expect, it } from 'vitest';
 import {
   SUBMIT_REMEDIABLE_REASON_CODES,
   buildSubmitRefusedEnvelope,
+  computeSubmitRemediatedReasonCodes,
+  hasRemediableShortfall,
   renderSubmitFundabilityNotice,
   renderSubmitPreflightRefusal,
   selectBlockingSubmitReasons,
@@ -168,5 +170,57 @@ describe('renderSubmitPreflightRefusal / renderSubmitFundabilityNotice', () => {
     const notice = renderSubmitFundabilityNotice(makeResult([reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT')]));
     expect(notice).toMatch(/advisory/i);
     expect(notice).toMatch(/PositionModule/);
+  });
+});
+
+describe('computeSubmitRemediatedReasonCodes', () => {
+  it('returns codes present pre but absent post, scoped to remediable set', () => {
+    const pre = makeResult([
+      reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT'),
+      reason('MAKER_TREASURY_ALLOWANCE_INSUFFICIENT'),
+    ]);
+    const post = makeResult([reason('MAKER_TREASURY_ALLOWANCE_INSUFFICIENT')]);
+    expect(computeSubmitRemediatedReasonCodes(pre, post)).toEqual([
+      'MAKER_POSITION_ALLOWANCE_INSUFFICIENT',
+    ]);
+  });
+
+  it('returns empty when post still has all the same remediable reasons (approve loop did not help)', () => {
+    const pre = makeResult([reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT')]);
+    const post = makeResult([reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT')]);
+    expect(computeSubmitRemediatedReasonCodes(pre, post)).toEqual([]);
+  });
+
+  it('returns empty when post is unknown — we do not claim "resolved" from a degraded read', () => {
+    const pre = makeResult([reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT')]);
+    const post = makeResult([reason('FUNDABILITY_UNKNOWN')]);
+    expect(computeSubmitRemediatedReasonCodes(pre, post)).toEqual([]);
+  });
+
+  it('ignores non-remediable codes that may have changed across pre/post', () => {
+    const pre = makeResult([
+      reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT'),
+      reason('MAKER_USDC_BALANCE_INSUFFICIENT'),
+    ]);
+    const post = makeResult([]);
+    expect(computeSubmitRemediatedReasonCodes(pre, post)).toEqual([
+      'MAKER_POSITION_ALLOWANCE_INSUFFICIENT',
+    ]);
+  });
+});
+
+describe('hasRemediableShortfall (submit)', () => {
+  it('true when the verdict has any maker-allowance reason', () => {
+    expect(hasRemediableShortfall(makeResult([reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT')]))).toBe(true);
+    expect(hasRemediableShortfall(makeResult([reason('MAKER_TREASURY_ALLOWANCE_INSUFFICIENT')]))).toBe(true);
+  });
+
+  it('false when the verdict is clean', () => {
+    expect(hasRemediableShortfall(makeResult([]))).toBe(false);
+  });
+
+  it('false when the verdict only has non-remediable / advisory reasons', () => {
+    expect(hasRemediableShortfall(makeResult([reason('MAKER_USDC_BALANCE_INSUFFICIENT')]))).toBe(false);
+    expect(hasRemediableShortfall(makeResult([reason('FUNDABILITY_UNKNOWN')]))).toBe(false);
   });
 });

@@ -72,6 +72,7 @@ import {
   type Hex,
   type HighLevelSubmitArgs,
   type PerspectiveAmount,
+  type SubmitFundabilityReasonCode,
   type SubmitParent,
   type SubmitPreview,
 } from '@ospex/sdk';
@@ -85,6 +86,8 @@ import {
 } from '../../lib/agentEnvelope.js';
 import {
   buildSubmitRefusedEnvelope,
+  computeSubmitRemediatedReasonCodes,
+  hasRemediableShortfall,
   renderSubmitFundabilityNotice,
   renderSubmitPreflightRefusal,
   selectBlockingSubmitReasons,
@@ -164,7 +167,8 @@ export const commitmentsSubmitCommand = addSignerOptions(
       new Option(
         '--json',
         'machine-readable output. ALONE = preview only, no signing (v2 AgentEnvelope, stage "preview", payload SubmitPreview). ' +
-          'WITH --yes = signs/posts and emits a v2 AgentEnvelope (stage "execute", payload { preview, result, fundability }).',
+          'WITH --yes = signs/posts and emits a v2 AgentEnvelope (stage "execute", payload { preview, result, fundability, preflightFundability?, approvalRemediation? }). ' +
+          '`fundability` is the EFFECTIVE send-time verdict (post-approval re-check when the auto-approve loop confirmed); when that re-check ran, `preflightFundability` preserves the pre-approval verdict.',
       ).hideHelp(false),
     ),
 )
@@ -205,6 +209,11 @@ export const commitmentsSubmitCommand = addSignerOptions(
     const chainId = client.chainId();
     let wallet: Hex | null = null;
     const approveEffects: AgentEffect[] = [];
+    // Mirrors `match.ts`: track which approval `purpose` rows produced
+    // a confirmed approve tx, so the success envelope can populate
+    // `payload.approvalRemediation.approvalPurposes` without forcing
+    // agents to diff fundability reasons themselves.
+    const confirmedApprovalPurposes: ApprovalPurpose[] = [];
     // Tracks whether the action entered the approval branch (an
     // approval tx was at least attempted). submit's fundamental shape
     // is sign-EIP-712 + POST off-chain — NO on-chain tx — unless an
@@ -273,14 +282,14 @@ export const commitmentsSubmitCommand = addSignerOptions(
     //     (→ fundability stays null). Threaded into the execute envelope below
     //     ("JSON always includes it"; null = skipped) — NOT into warnings[]
     //     (read `payload.fundability.reasons`), matching `match`.
-    let fundability: CheckSubmitFundabilityResult | null = null;
+    let preflightFundability: CheckSubmitFundabilityResult | null = null;
     const skipFundability = opts.skipFundabilityPreflight === true || opts.force === true;
     if (!skipFundability) {
-      fundability = await client.commitments.checkSubmitFundability({ preview });
-      const blocking = selectBlockingSubmitReasons(fundability.reasons);
+      preflightFundability = await client.commitments.checkSubmitFundability({ preview });
+      const blocking = selectBlockingSubmitReasons(preflightFundability.reasons);
       if (blocking.length > 0) {
         if (wantJson) {
-          writeAgentEnvelope(buildSubmitRefusedEnvelope(fundability, blocking, { chainId, wallet }));
+          writeAgentEnvelope(buildSubmitRefusedEnvelope(preflightFundability, blocking, { chainId, wallet }));
         } else {
           process.stderr.write(renderSubmitPreflightRefusal(blocking));
         }
@@ -294,8 +303,8 @@ export const commitmentsSubmitCommand = addSignerOptions(
     // 4.5 Advisory funding notice (non-blocking reasons) for the human path —
     //     under --json the same signal rides the execute envelope's
     //     `payload.fundability` (the full verdict, incl `reasons[]`), not warnings[].
-    if (!wantJson && fundability !== null) {
-      const notice = renderSubmitFundabilityNotice(fundability);
+    if (!wantJson && preflightFundability !== null) {
+      const notice = renderSubmitFundabilityNotice(preflightFundability);
       if (notice) process.stderr.write(notice);
     }
 
@@ -421,6 +430,37 @@ export const commitmentsSubmitCommand = addSignerOptions(
         blockNumber: approveResult.receipt.blockNumber.toString(),
         status: approveResult.receipt.status === 'success' ? 'confirmed' : 'reverted',
       });
+      if (approveResult.receipt.status === 'success') {
+        confirmedApprovalPurposes.push(row.purpose);
+      }
+    }
+
+    // 7.5 Post-approval fundability re-check. Mirrors `match.ts`: when the
+    //     approve loop confirmed at least one tx, the pre-approval verdict
+    //     is now stale (it reflected on-chain allowance BEFORE approve-usdc
+    //     landed). Re-run so `payload.fundability` carries the EFFECTIVE
+    //     send-time verdict; the pre-approval verdict is preserved under
+    //     `payload.preflightFundability`. Skipped when no approve confirmed
+    //     (pre = post) or when the preflight was skipped (no pre-state to
+    //     fork from; fundability stays null). On re-check throw, fall back
+    //     to a synthetic `unknown` verdict — never silently keep stale
+    //     "not-fundable" reasons.
+    let effectiveFundability: CheckSubmitFundabilityResult | null = preflightFundability;
+    if (preflightFundability !== null && confirmedApprovalPurposes.length > 0) {
+      try {
+        effectiveFundability = await client.commitments.checkSubmitFundability({ preview });
+      } catch (err) {
+        process.stderr.write(
+          'Post-approval fundability re-check failed; proceeding with the submit. ' +
+            `(${err instanceof Error ? err.message : String(err)})\n`,
+        );
+        effectiveFundability = {
+          ...preflightFundability,
+          fundableNow: false,
+          outcome: 'unknown',
+          reasons: [{ code: 'FUNDABILITY_UNKNOWN' }],
+        };
+      }
     }
 
     // 8. Sign + post the EIP-712 commitment.
@@ -441,11 +481,38 @@ export const commitmentsSubmitCommand = addSignerOptions(
     //    (preview + result under payload, effects logged).
     //    Otherwise pretty text.
     if (wantJson) {
+      const reranRecheck =
+        preflightFundability !== null &&
+        confirmedApprovalPurposes.length > 0 &&
+        effectiveFundability !== null &&
+        effectiveFundability !== preflightFundability;
+      const remediatedReasonCodes =
+        reranRecheck && preflightFundability !== null && effectiveFundability !== null
+          ? computeSubmitRemediatedReasonCodes(preflightFundability, effectiveFundability)
+          : [];
+      const approvalRemediation =
+        confirmedApprovalPurposes.length > 0
+          ? {
+              remediatedReasonCodes,
+              approvalPurposes: confirmedApprovalPurposes,
+            }
+          : undefined;
+      const builderArgs: ToSubmitExecuteEnvelopeArgs = {
+        chainId,
+        approveEffects,
+        fundability: effectiveFundability,
+      };
+      if (reranRecheck && preflightFundability !== null) {
+        builderArgs.preflightFundability = preflightFundability;
+      }
+      if (approvalRemediation !== undefined) {
+        builderArgs.approvalRemediation = approvalRemediation;
+      }
       writeAgentEnvelope(
         toSubmitExecuteEnvelope(
           preview,
           { hash: result.hash, commitment: result.commitment },
-          { chainId, approveEffects, fundability },
+          builderArgs,
         ),
       );
       return;
@@ -510,8 +577,39 @@ export type SubmitPreviewPayload = SubmitPreview;
 export interface SubmitExecutePayload {
   preview: SubmitPreview;
   result: { hash: Hex; commitment: Commitment };
-  /** The advisory submit-fundability verdict (B1b) — `null` when the preflight was skipped (--skip-fundability-preflight / --force). Always present, mirroring `match`'s `payload.fillability`. */
+  /**
+   * The **effective** send-time fundability verdict.
+   *
+   * - When the auto-approve loop confirmed at least one tx, this is the
+   *   post-approval re-check (a fresh `checkSubmitFundability` ran between
+   *   the approve loop and the EIP-712 sign + POST). The original
+   *   pre-approval verdict is preserved under `preflightFundability`.
+   * - When no approve was needed (or none confirmed), this is the same
+   *   verdict the preflight produced — `preflightFundability` is omitted.
+   * - `null` when the preflight was skipped (--skip-fundability-preflight
+   *   / --force).
+   * - `outcome: 'unknown'` (with `reasons: [{ code: 'FUNDABILITY_UNKNOWN' }]`)
+   *   when the post-approval re-check itself failed — the submit still
+   *   proceeded, but the envelope refuses to fabricate a clean verdict from
+   *   stale data.
+   */
   fundability: CheckSubmitFundabilityResult | null;
+  /**
+   * The original pre-approval verdict, preserved for auditability. Present
+   * **only** when the auto-approve loop confirmed at least one tx AND the
+   * preflight was run — i.e. exactly when `fundability` carries the
+   * post-approval re-check rather than the original verdict.
+   */
+  preflightFundability?: CheckSubmitFundabilityResult;
+  /**
+   * Summary of what the auto-approve loop resolved. Present **only** when at
+   * least one approve tx confirmed during this command. Mirrors
+   * `MatchExecutePayload.approvalRemediation`.
+   */
+  approvalRemediation?: {
+    remediatedReasonCodes: SubmitFundabilityReasonCode[];
+    approvalPurposes: ApprovalPurpose[];
+  };
 }
 
 export interface ToSubmitEnvelopeArgs {
@@ -529,8 +627,25 @@ export interface ToSubmitExecuteEnvelopeArgs extends ToSubmitEnvelopeArgs {
    * Empty (or omitted) when no approvals were needed.
    */
   approveEffects?: AgentEffect[];
-  /** The fundability verdict for `payload.fundability` — `null` when the preflight was skipped (mirrors `match`). */
+  /**
+   * The **effective** send-time fundability verdict (post-approval re-check
+   * when an approve confirmed; otherwise the original preflight verdict).
+   * `null` when the preflight was skipped. Threaded into `payload.fundability`.
+   */
   fundability: CheckSubmitFundabilityResult | null;
+  /**
+   * The original pre-approval verdict, present only when the caller ran a
+   * post-approval re-check. Threaded into `payload.preflightFundability`.
+   */
+  preflightFundability?: CheckSubmitFundabilityResult;
+  /**
+   * Approval-remediation summary, present only when at least one approve tx
+   * confirmed. Threaded into `payload.approvalRemediation`.
+   */
+  approvalRemediation?: {
+    remediatedReasonCodes: SubmitFundabilityReasonCode[];
+    approvalPurposes: ApprovalPurpose[];
+  };
 }
 
 /**
@@ -550,7 +665,7 @@ export function toSubmitPreviewEnvelope(
   args: ToSubmitEnvelopeArgs,
 ): AgentEnvelope<SubmitPreviewPayload> {
   const wallet = lowerHex(preview.raw.maker);
-  const shoulder = deriveSubmitShoulder(preview, args.chainId);
+  const shoulder = derivePreviewSubmitShoulder(preview, args.chainId);
   return buildAgentEnvelope<SubmitPreviewPayload>({
     ok: true,
     action: 'commitments.submit',
@@ -591,7 +706,8 @@ export function toSubmitExecuteEnvelope(
   args: ToSubmitExecuteEnvelopeArgs,
 ): AgentEnvelope<SubmitExecutePayload> {
   const wallet = lowerHex(preview.raw.maker);
-  const shoulder = deriveSubmitShoulder(preview, args.chainId);
+  const fundability = args.fundability ?? null;
+  const shoulder = deriveExecuteSubmitShoulder(preview, args.chainId, fundability);
   const approveEffects = args.approveEffects ?? [];
   // Order is chronological: approve txs ran first, then the
   // EIP-712 signature + off-chain POST. Agents reading effects[]
@@ -608,6 +724,17 @@ export function toSubmitExecuteEnvelope(
       ok: true,
     },
   ];
+  const payload: SubmitExecutePayload = {
+    preview,
+    result,
+    fundability,
+  };
+  if (args.preflightFundability !== undefined) {
+    payload.preflightFundability = args.preflightFundability;
+  }
+  if (args.approvalRemediation !== undefined) {
+    payload.approvalRemediation = args.approvalRemediation;
+  }
   return buildAgentEnvelope<SubmitExecutePayload>({
     ok: approveEffects.every((e) => e.ok) && finalEffects.every((e) => e.ok),
     action: 'commitments.submit',
@@ -626,7 +753,7 @@ export function toSubmitExecuteEnvelope(
     warnings: shoulder.warnings,
     effects: [...approveEffects, ...finalEffects],
     nextCommands: [VERIFY_COMMITMENT.build({ hash: result.hash })],
-    payload: { preview, result, fundability: args.fundability ?? null },
+    payload,
   });
 }
 
@@ -639,13 +766,15 @@ interface SubmitShoulder {
 }
 
 /**
- * Pull the cross-stage shoulder fields out of a SubmitPreview so the
- * preview and execute envelope builders share one derivation. Goes
- * through the SDK's `computeSubmitYouView` shim so mixed-version
- * previews (where `preview.you` might be undefined on older builds)
- * still resolve.
+ * Shared body of preview + execute shoulder derivation. Goes through the SDK's
+ * `computeSubmitYouView` shim so mixed-version previews (where `preview.you`
+ * might be undefined on older builds) still resolve. The `allowance-short`
+ * warning is layered on top by the caller — preview sources it from
+ * `preview.approvals[]`, execute sources it from the post-approval fundability
+ * verdict so the success envelope doesn't carry a stale "blocking" warning
+ * for an allowance the approve loop already remediated.
  */
-function deriveSubmitShoulder(preview: SubmitPreview, chainId: ChainId): SubmitShoulder {
+function deriveSubmitShoulderBase(preview: SubmitPreview, chainId: ChainId): SubmitShoulder {
   const { you } = computeSubmitYouView(preview);
   const approvalRequirements = mapPreviewApprovals(preview.approvals, chainId);
   const warnings: AgentWarning[] = [];
@@ -657,14 +786,6 @@ function deriveSubmitShoulder(preview: SubmitPreview, chainId: ChainId): SubmitS
       severity: 'warning',
     });
   }
-  if (approvalRequirements.some((r) => r.needsApproval)) {
-    warnings.push({
-      code: 'allowance-short',
-      message: 'At least one approval is short. Executing this commitment will require approve txs first.',
-      severity: 'blocking',
-      blockingFor: ['submit'],
-    });
-  }
   return {
     approvalRequirements,
     risk: you.risk,
@@ -672,6 +793,56 @@ function deriveSubmitShoulder(preview: SubmitPreview, chainId: ChainId): SubmitS
     sideSummary: you.backing,
     warnings,
   };
+}
+
+/**
+ * Preview-envelope shoulder: derives `allowance-short` from the preview's
+ * approvals[]. Unchanged behavior from the original `deriveSubmitShoulder`.
+ */
+function derivePreviewSubmitShoulder(preview: SubmitPreview, chainId: ChainId): SubmitShoulder {
+  const base = deriveSubmitShoulderBase(preview, chainId);
+  if (base.approvalRequirements.some((r) => r.needsApproval)) {
+    base.warnings.push({
+      code: 'allowance-short',
+      message: 'At least one approval is short. Executing this commitment will require approve txs first.',
+      severity: 'blocking',
+      blockingFor: ['submit'],
+    });
+  }
+  return base;
+}
+
+/**
+ * Execute-envelope shoulder: derives `allowance-short` from the EFFECTIVE
+ * (post-approval, when an approve confirmed) fundability verdict — not from
+ * `preview.approvals[]`, which was the snapshot BEFORE the auto-approve loop
+ * remediated maker allowance. Mirrors `deriveExecuteMatchShoulder`.
+ *
+ *   - `effectiveFundability` has a remediable maker-allowance reason → keep
+ *     `allowance-short` (the approve loop didn't resolve it).
+ *   - `effectiveFundability` is clean / has only non-remediable reasons →
+ *     omit `allowance-short`.
+ *   - `effectiveFundability` is `null` (preflight skipped) or `unknown` (the
+ *     re-check itself failed) → no fresh signal; omit `allowance-short`
+ *     rather than fabricate one from the stale preview.
+ */
+function deriveExecuteSubmitShoulder(
+  preview: SubmitPreview,
+  chainId: ChainId,
+  effectiveFundability: CheckSubmitFundabilityResult | null,
+): SubmitShoulder {
+  const base = deriveSubmitShoulderBase(preview, chainId);
+  if (effectiveFundability !== null && effectiveFundability.outcome !== 'unknown') {
+    if (hasRemediableShortfall(effectiveFundability)) {
+      base.warnings.push({
+        code: 'allowance-short',
+        message: 'At least one approval is still short after the auto-approve loop ran.',
+        severity: 'blocking',
+        blockingFor: ['submit'],
+      });
+    }
+  }
+  return base;
 }
 
 function lowerHex(addr: string): Hex {

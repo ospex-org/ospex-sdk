@@ -45,6 +45,40 @@ export function selectBlockingMatchReasons(
   );
 }
 
+/**
+ * Codes present in the pre-approval verdict's reasons but absent in the
+ * post-approval verdict's reasons, intersected with `MATCH_REMEDIABLE_REASON_CODES`.
+ * Empty when:
+ *   - the approve loop didn't resolve any remediable reasons (pre-verdict was
+ *     clean to begin with, or the same shortfalls are still present), or
+ *   - the post-verdict's outcome is `unknown` (the re-check itself failed —
+ *     we can't claim a code was "resolved" just because it's missing from a
+ *     verdict we couldn't compute).
+ */
+export function computeMatchRemediatedReasonCodes(
+  pre: CheckCommitmentFillabilityResult,
+  post: CheckCommitmentFillabilityResult,
+): FillabilityReasonCode[] {
+  if (post.outcome === 'unknown') return [];
+  const postCodes = new Set(post.reasons.map((r) => r.code));
+  return MATCH_REMEDIABLE_REASON_CODES.filter(
+    (code) => pre.reasons.some((r) => r.code === code) && !postCodes.has(code),
+  );
+}
+
+/**
+ * Does the verdict still carry a remediable taker-allowance reason? If yes, the
+ * execute-envelope shoulder should keep its `allowance-short` blocking warning —
+ * the approve loop failed to remediate everything (or the verdict is `unknown`
+ * with a `FILLABILITY_UNKNOWN` reason, in which case we don't know either way,
+ * so we don't claim "resolved").
+ */
+export function hasRemediableShortfall(
+  verdict: CheckCommitmentFillabilityResult,
+): boolean {
+  return verdict.reasons.some((r) => MATCH_REMEDIABLE_REASON_CODES.includes(r.code));
+}
+
 export interface MatchRefusedPayload {
   preflight: CheckCommitmentFillabilityResult;
   action: 'refused-before-send';
