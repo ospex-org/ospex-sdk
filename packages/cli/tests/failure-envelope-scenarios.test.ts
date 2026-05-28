@@ -312,6 +312,94 @@ describe('Hermes PR-6 scenario 3: mid-flight failure after one successful effect
   // shape contests/create.ts's fixed action passes to emitJsonFailure,
   // and asserts a single JSON envelope on stdout with all effects
   // intact.
+  // Per-command write-intent coverage: every named write command MUST
+  // emit a failure envelope that advertises the write-intent flags +
+  // populated signer (the AGENT_ENVELOPE_SPEC §6 contract). Without
+  // this, a failure looks like a no-op read to recovery logic. These
+  // tests exercise the args each command's catch passes to
+  // emitJsonFailure after the rollout fix — submit, match, claim,
+  // settle, claim-all, cancel-onchain, approve, contests create/score
+  // are all required to set requiresSignature: true and
+  // requiresTransaction: true on failure.
+  describe.each([
+    { action: 'commitments.submit', stage: 'execute' as const },
+    { action: 'commitments.match', stage: 'execute' as const },
+    { action: 'commitments.cancel-onchain', stage: 'execute' as const },
+    { action: 'commitments.cancel-all', stage: 'execute' as const },
+    { action: 'commitments.approve', stage: 'execute' as const },
+    { action: 'commitments.approve-raw', stage: 'execute' as const },
+    { action: 'approvals.setup', stage: 'execute' as const },
+    { action: 'contests.create', stage: 'execute' as const },
+    { action: 'contests.score', stage: 'execute' as const },
+    { action: 'claim', stage: 'execute' as const },
+    { action: 'settle', stage: 'execute' as const },
+    { action: 'claim-all', stage: 'execute' as const },
+  ])('write-command failure envelope advertises write intent ($action)', ({ action, stage }) => {
+    it('sets requiresSignature, requiresTransaction, wallet, signer on a pre-effect failure', () => {
+      const stdout = captureStdout(() => {
+        emitJsonFailure({
+          action,
+          stage,
+          chainId: POLYGON,
+          wallet: SIGNER,
+          walletRole: 'signer',
+          signer: SIGNER,
+          // The exact flag pair the per-command catch now passes after
+          // the spec-§6 rollout. Without these on every write-command
+          // catch, the spec's MUST clause becomes false at HEAD.
+          requiresSignature: true,
+          requiresTransaction: true,
+          error: new OspexChainError('Transaction broadcast or inclusion failed.'),
+        });
+      });
+      const env = JSON.parse(stdout.trim()) as {
+        ok: boolean;
+        action: string;
+        stage: string;
+        wallet: string | null;
+        signer: string | null;
+        requiresSignature: boolean;
+        requiresTransaction: boolean;
+        effects: unknown[];
+      };
+      expect(env.ok).toBe(false);
+      expect(env.action).toBe(action);
+      expect(env.stage).toBe(stage);
+      expect(env.wallet).toBe(SIGNER);
+      expect(env.signer).toBe(SIGNER);
+      expect(env.requiresSignature).toBe(true);
+      expect(env.requiresTransaction).toBe(true);
+      expect(env.effects).toEqual([]);
+    });
+  });
+
+  // The cancel command has a distinct flag matrix: EIP-712 cancel-auth
+  // is always signed, but the on-chain tx only runs with --also-onchain.
+  // The catch reflects that — requiresTransaction tracks `wantsOnchain`.
+  it('commitments.cancel — sig:true always, tx:true only with --also-onchain', () => {
+    for (const wantsOnchain of [true, false]) {
+      const stdout = captureStdout(() => {
+        emitJsonFailure({
+          action: 'commitments.cancel',
+          stage: 'execute',
+          chainId: POLYGON,
+          wallet: SIGNER,
+          walletRole: 'signer',
+          signer: SIGNER,
+          requiresSignature: true,
+          requiresTransaction: wantsOnchain,
+          error: new OspexChainError('cancel failed'),
+        });
+      });
+      const env = JSON.parse(stdout.trim()) as {
+        requiresSignature: boolean;
+        requiresTransaction: boolean;
+      };
+      expect(env.requiresSignature).toBe(true);
+      expect(env.requiresTransaction).toBe(wantsOnchain);
+    }
+  });
+
   it('contests create: verification fails AFTER create tx — single envelope with create-contest preserved', () => {
     const linkApprove: AgentEffect = {
       type: 'transaction',

@@ -66,10 +66,13 @@ export const positionsSettleCommand = addSignerOptions(
     let signerAddress: Hex | null = null;
 
     try {
+      // Resolve the signer up-front so a failure envelope from the
+      // catch below carries wallet/signer populated.
+      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+
       const result = await client.positions.ensureSpeculationSettled({ speculationId });
 
       if (wantJson) {
-        signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
         writeAgentEnvelope(
           toSettleAgentEnvelope(result, {
             chainId,
@@ -121,6 +124,8 @@ export const positionsSettleCommand = addSignerOptions(
           wallet: signerAddress,
           walletRole: 'signer',
           signer: signerAddress,
+          requiresSignature: true,
+          requiresTransaction: true,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });

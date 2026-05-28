@@ -65,6 +65,10 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
     const wantJson = opts.json === true;
 
     try {
+    // Resolve the signer up-front so a failure envelope from the
+    // catch below carries wallet/signer populated.
+    signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+
     const commitment = await client.commitments.resolveByPrefix(hashArg, {
       status: ['open', 'partially_filled'],
     });
@@ -87,11 +91,10 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
 
     const explorerUrl = polygonscanTxUrl(chainId, result.txHash);
     if (wantJson) {
-      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       writeAgentEnvelope(
         toCancelOnchainAgentEnvelope(result, commitment, {
           chainId,
-          signerAddress,
+          signerAddress: signerAddress as Hex,
           explorer: explorerUrl,
         }),
       );
@@ -115,6 +118,8 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
           wallet: signerAddress,
           walletRole: 'signer',
           signer: signerAddress,
+          requiresSignature: true,
+          requiresTransaction: true,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });

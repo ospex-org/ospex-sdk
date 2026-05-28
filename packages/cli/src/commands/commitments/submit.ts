@@ -208,14 +208,24 @@ export const commitmentsSubmitCommand = addSignerOptions(
     const stageForFailure: 'preview' | 'execute' = previewOnly ? 'preview' : 'execute';
 
     try {
-    // 1. Prepare. Decimal parsing, side resolution, contest/spec
+    // 1. Resolve the maker address up-front so a failure envelope
+    //    from the catch below carries wallet/signer populated even
+    //    when the throw happens inside prepareSubmit (API/RPC error,
+    //    validation revert). previewOnly resolves without unlocking
+    //    a keystore; execute mode pulls from the unlocked signer.
+    if (previewOnly) {
+      wallet = (await resolvePreviewAddress(signerIntent)).toLowerCase() as Hex;
+    } else {
+      wallet = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+    }
+
+    // 2. Prepare. Decimal parsing, side resolution, contest/spec
     //    fetches, allowance + nonce reads. No signing yet.
     const prepArgs: HighLevelSubmitArgs = { ...args };
     if (previewOnly) {
-      prepArgs.maker = await resolvePreviewAddress(signerIntent);
+      prepArgs.maker = wallet;
     }
     const preview = await client.commitments.prepareSubmit(prepArgs);
-    wallet = preview.raw.maker.toLowerCase() as Hex;
 
     // 2. `--json` alone (no --yes) is the preview-only mode — emit
     //    the v2 agent envelope and exit without prompting or signing.
@@ -446,8 +456,16 @@ export const commitmentsSubmitCommand = addSignerOptions(
           stage: stageForFailure,
           chainId,
           wallet,
-          walletRole: 'signer',
-          signer: wallet,
+          walletRole: previewOnly ? 'subject' : 'signer',
+          signer: previewOnly ? null : wallet,
+          // Submit intends to sign EIP-712 + (in execute mode) post + maybe
+          // run an approve tx. Both flags reflect that overall intent so
+          // an agent recovering from a pre-write failure sees this is a
+          // sig + tx command, not a no-op read. previewOnly is also a
+          // write-intent command — the preview describes what `--yes`
+          // WOULD have signed/sent.
+          requiresSignature: true,
+          requiresTransaction: true,
           effects: approveEffects,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,

@@ -180,6 +180,11 @@ export const commitmentsCancelAllCommand = addSignerOptions(
           wallet: maker,
           walletRole: 'signer',
           signer: maker,
+          // Sends an on-chain raiseMinNonce tx (dry-run or executed —
+          // both advertise the write intent so failure consumers route
+          // the error correctly).
+          requiresSignature: true,
+          requiresTransaction: true,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });

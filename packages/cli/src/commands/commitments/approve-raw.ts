@@ -67,6 +67,10 @@ export const commitmentsApproveRawCommand = addSignerOptions(
     let signerAddress: Hex | null = null;
 
     try {
+    // Resolve the signer up-front so a failure envelope from the
+    // catch below carries wallet/signer populated.
+    signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+
     if (!skipPrompt) {
       const summary =
         parsed === 'max'
@@ -86,7 +90,6 @@ export const commitmentsApproveRawCommand = addSignerOptions(
     const result = await client.commitments.approve(parsed);
 
     if (wantJson) {
-      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       const blockNumber = result.receipt.blockNumber.toString();
       writeAgentEnvelope(
         buildAgentEnvelope({
@@ -146,6 +149,8 @@ export const commitmentsApproveRawCommand = addSignerOptions(
           wallet: signerAddress,
           walletRole: 'signer',
           signer: signerAddress,
+          requiresSignature: true,
+          requiresTransaction: true,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });

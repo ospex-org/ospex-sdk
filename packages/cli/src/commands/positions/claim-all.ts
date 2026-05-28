@@ -65,15 +65,20 @@ export const positionsClaimAllCommand = addSignerOptions(
     let signerAddress: Hex | null = null;
 
     try {
+    // Resolve the signer up-front (when one is required) so a failure
+    // envelope from the catch below carries wallet/signer populated.
+    // The dry-run-with-explicit-address path runs signer-free, hence
+    // the conditional.
+    if (requiresSigner) {
+      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+    }
+
     const result = await client.positions.claimAll({
       ...(opts.address !== undefined ? { address: opts.address } : {}),
       opts: { dryRun },
     });
 
     if (wantJson) {
-      signerAddress = requiresSigner
-        ? (((await client.signer().getAddress()) as string).toLowerCase() as Hex)
-        : null;
       writeAgentEnvelope(
         toClaimAllAgentEnvelope(result, {
           chainId,
@@ -135,6 +140,11 @@ export const positionsClaimAllCommand = addSignerOptions(
           wallet: signerAddress,
           walletRole: signerAddress !== null ? 'signer' : 'none',
           signer: signerAddress,
+          // Sends settle + claim txs (or would, on dry-run). Walking
+          // the address-only dry-run path is signer-free — those
+          // flags stay false there since the run can't sign or send.
+          requiresSignature: signerAddress !== null,
+          requiresTransaction: signerAddress !== null,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });

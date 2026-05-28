@@ -76,6 +76,11 @@ export const commitmentsApproveCommand = addSignerOptions(
     let signerAddress: Hex | null = null;
 
     try {
+    // Resolve the signer up-front so a failure envelope from the
+    // catch below carries wallet/signer populated (mirrors the
+    // contests create/score fix — same null-on-failure pattern).
+    signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
+
     if (!skipPrompt) {
       const summary = parsed === 'max' ? 'unlimited (uint256 max)' : `${wei6ToDecimalUSDC(parsed)} USDC`;
       process.stderr.write(
@@ -92,7 +97,6 @@ export const commitmentsApproveCommand = addSignerOptions(
     const result = await client.commitments.approve(parsed);
 
     if (wantJson) {
-      signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
       const blockNumber = result.receipt.blockNumber.toString();
       writeAgentEnvelope(
         buildAgentEnvelope({
@@ -149,6 +153,11 @@ export const commitmentsApproveCommand = addSignerOptions(
           wallet: signerAddress,
           walletRole: 'signer',
           signer: signerAddress,
+          // Signs + sends an ERC-20 approve tx — both write-intent
+          // flags must be true on failure so the envelope's contract
+          // matches AGENT_ENVELOPE_SPEC §6.
+          requiresSignature: true,
+          requiresTransaction: true,
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
