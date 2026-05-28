@@ -4,7 +4,20 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+Execute-envelope hygiene for `commitments match` / `commitments submit`. The auto-approve loop remediates short USDC allowances mid-command; previously, `payload.fillability` / `payload.fundability` and the shoulder `allowance-short` warning kept the pre-approval state, so a successful match (`ok: true`) could ship JSON saying `outcome: 'not-fillable'` with a `blocking` `allowance-short` warning — confusing for autonomous agents and artifact parsers (caught by the COL-LAD-D2 acceptance run, 2026-05-28). Now the verdict is re-checked after a confirmed approve and the pre-approval verdict is preserved alongside.
+
+### CLI (`@ospex/cli`)
+
+- **`payload.fillability` / `payload.fundability` semantics on `--yes --json` are now "effective send-time"** — a post-approval re-check when the auto-approve loop confirmed any tx (otherwise unchanged from the pre-approval verdict, or `null` when `--skip-*-preflight` / `--force`). Soft-breaking for agents that relied on the field being the pre-approval verdict; the pre-approval verdict is now preserved under the new optional `payload.preflightFillability` / `payload.preflightFundability` field (present only when the re-check ran).
+- **New `payload.approvalRemediation: { remediatedReasonCodes, approvalPurposes }`** — present only when the auto-approve loop confirmed at least one tx. Summarizes the reason codes the loop resolved (intersection of the pre-verdict's remediable reasons and the codes absent from the post-verdict) and which `ApprovalPurpose` rows confirmed (`'commitment-risk'` / `'lazy-creation-fee'`).
+- **The blocking `allowance-short` shoulder warning is now derived from the effective (post-approval) verdict**, so a successful match/submit envelope never carries it for an allowance the approve loop just remediated. If the re-check itself failed (`outcome: 'unknown'` / `FILLABILITY_UNKNOWN` / `FUNDABILITY_UNKNOWN`), the warning is omitted rather than fabricated from stale data.
+- **New helpers exposed by the preflight lib modules** for testing + reuse: `computeMatchRemediatedReasonCodes` / `computeSubmitRemediatedReasonCodes` and `hasRemediableShortfall` (in `matchFillabilityPreflight` / `submitFundabilityPreflight`).
+
+### Documentation
+
+- `AGENT_CONTRACT.md` §"Payload TypeScript shapes" and §"Advisory preflights" updated to reflect the post-approval re-check, the new `preflight*` / `approvalRemediation` fields, and the explicit guarantee that a successful proceed envelope can't carry a stale blocking `allowance-short` warning.
+- `AGENT_ENVELOPE_SPEC.md` §3.1 (execute-stage payload row) updated to match.
+- `QUICKSTART.md` §"Submit a commitment" + the `--yes --json` section reflect the new payload shape.
 
 ## [0.4.7] — 2026-05-28
 

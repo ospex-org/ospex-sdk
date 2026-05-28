@@ -11,6 +11,8 @@ import { describe, expect, it } from 'vitest';
 import {
   MATCH_REMEDIABLE_REASON_CODES,
   buildMatchRefusedEnvelope,
+  computeMatchRemediatedReasonCodes,
+  hasRemediableShortfall,
   reasonMessage,
   selectBlockingMatchReasons,
 } from '../src/lib/matchFillabilityPreflight.js';
@@ -155,3 +157,72 @@ describe('buildMatchRefusedEnvelope', () => {
     expect(env.effects).toHaveLength(0);
   });
 });
+
+describe('computeMatchRemediatedReasonCodes', () => {
+  it('returns codes present pre but absent post, scoped to remediable set', () => {
+    const pre = makeResult([
+      reason('TAKER_TREASURY_ALLOWANCE_INSUFFICIENT'),
+      reason('TAKER_POSITION_ALLOWANCE_INSUFFICIENT'),
+    ]);
+    const post = makeResult([reason('TAKER_POSITION_ALLOWANCE_INSUFFICIENT')]);
+    expect(computeMatchRemediatedReasonCodes(pre, post)).toEqual([
+      'TAKER_TREASURY_ALLOWANCE_INSUFFICIENT',
+    ]);
+  });
+
+  it('returns empty when post still has all the same remediable reasons (approve loop did not help)', () => {
+    const pre = makeResult([reason('TAKER_TREASURY_ALLOWANCE_INSUFFICIENT')]);
+    const post = makeResult([reason('TAKER_TREASURY_ALLOWANCE_INSUFFICIENT')]);
+    expect(computeMatchRemediatedReasonCodes(pre, post)).toEqual([]);
+  });
+
+  it('returns empty when pre had no remediable reasons', () => {
+    const pre = makeResult([reason('MAKER_USDC_BALANCE_INSUFFICIENT')]);
+    const post = makeResult([]);
+    expect(computeMatchRemediatedReasonCodes(pre, post)).toEqual([]);
+  });
+
+  it('returns empty when post is unknown — we do not claim "resolved" from a degraded read', () => {
+    const pre = makeResult([reason('TAKER_TREASURY_ALLOWANCE_INSUFFICIENT')]);
+    const post = makeResult([reason('FILLABILITY_UNKNOWN')]);
+    // FILLABILITY_UNKNOWN is not in MATCH_REMEDIABLE_REASON_CODES, but the
+    // critical assertion is that we do NOT claim TAKER_TREASURY_ALLOWANCE_INSUFFICIENT
+    // got resolved just because it's missing from a verdict we couldn't read.
+    expect(computeMatchRemediatedReasonCodes(pre, post)).toEqual([]);
+  });
+
+  it('ignores non-remediable codes that may have changed across pre/post', () => {
+    const pre = makeResult([
+      reason('TAKER_TREASURY_ALLOWANCE_INSUFFICIENT'),
+      reason('MAKER_USDC_BALANCE_INSUFFICIENT'),
+    ]);
+    const post = makeResult([]);
+    expect(computeMatchRemediatedReasonCodes(pre, post)).toEqual([
+      'TAKER_TREASURY_ALLOWANCE_INSUFFICIENT',
+    ]);
+  });
+});
+
+describe('hasRemediableShortfall', () => {
+  it('true when the verdict has any taker-allowance reason', () => {
+    expect(
+      hasRemediableShortfall(makeResult([reason('TAKER_TREASURY_ALLOWANCE_INSUFFICIENT')])),
+    ).toBe(true);
+    expect(
+      hasRemediableShortfall(makeResult([reason('TAKER_POSITION_ALLOWANCE_INSUFFICIENT')])),
+    ).toBe(true);
+  });
+
+  it('false when the verdict is clean', () => {
+    expect(hasRemediableShortfall(makeResult([]))).toBe(false);
+  });
+
+  it('false when the verdict only has non-remediable reasons', () => {
+    expect(hasRemediableShortfall(makeResult([reason('MAKER_USDC_BALANCE_INSUFFICIENT')]))).toBe(false);
+    expect(hasRemediableShortfall(makeResult([reason('NOT_LIVE')]))).toBe(false);
+  });
+});
+
+// Hermes round 1 follow-up — see commitments-v2-transforms.test.ts for the
+// envelope-shaped tests (`payload.fillability` / `preflightFillability` /
+// `approvalRemediation`); kept here are the pure-function helpers.

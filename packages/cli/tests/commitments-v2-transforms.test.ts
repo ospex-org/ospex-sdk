@@ -20,6 +20,8 @@ import {
   type AgentEffect,
   type BuildMatchPreviewArgs,
   type BuildSubmitPreviewArgs,
+  type CheckCommitmentFillabilityResult,
+  type CheckSubmitFundabilityResult,
   type Commitment,
   type Hex,
   type MatchPreviewWarning,
@@ -297,10 +299,102 @@ describe('toSubmitExecuteEnvelope', () => {
     const env = toSubmitExecuteEnvelope(
       preview,
       { hash: '0xdead', commitment: stubCommitment },
-      { chainId: POLYGON },
+      { chainId: POLYGON, fundability: null },
     );
     expect(env.payload.result.commitment).toBe(stubCommitment);
     expect('schemaVersion' in (env.payload as Record<string, unknown>)).toBe(false);
+  });
+
+  // ── Post-approval fundability re-check + remediation contract ───
+  // Mirrors the match-side regression: the auto-approve loop in submit
+  // also remediates short allowances mid-command, and the success
+  // envelope must reflect post-approval state (not the stale preflight).
+  function fundabilityResult(
+    overrides: Partial<CheckSubmitFundabilityResult> = {},
+  ): CheckSubmitFundabilityResult {
+    return {
+      maker: MAKER.toLowerCase() as Hex,
+      fundableNow: true,
+      outcome: 'fundable',
+      advisory: true,
+      reasons: [],
+      ...overrides,
+    };
+  }
+
+  it('omits preflightFundability + approvalRemediation when no approve was needed', () => {
+    const env = toSubmitExecuteEnvelope(
+      preview,
+      { hash: '0xdead', commitment: stubCommitment },
+      { chainId: POLYGON, fundability: fundabilityResult() },
+    );
+    expect(env.payload.fundability?.outcome).toBe('fundable');
+    expect(env.payload.preflightFundability).toBeUndefined();
+    expect(env.payload.approvalRemediation).toBeUndefined();
+    expect(env.warnings.find((w) => w.code === 'allowance-short')).toBeUndefined();
+  });
+
+  it('REGRESSION: post-approval re-check + remediation produces clean success envelope', () => {
+    const approve = approveEffect('0xa1');
+    const pre = fundabilityResult({
+      fundableNow: false,
+      outcome: 'not-fundable',
+      reasons: [{ code: 'MAKER_POSITION_ALLOWANCE_INSUFFICIENT' }],
+    });
+    const post = fundabilityResult();
+    const env = toSubmitExecuteEnvelope(
+      preview,
+      { hash: '0xdead', commitment: stubCommitment },
+      {
+        chainId: POLYGON,
+        approveEffects: [approve],
+        fundability: post,
+        preflightFundability: pre,
+        approvalRemediation: {
+          remediatedReasonCodes: ['MAKER_POSITION_ALLOWANCE_INSUFFICIENT'],
+          approvalPurposes: ['commitment-risk'],
+        },
+      },
+    );
+    expect(env.ok).toBe(true);
+    expect(env.payload.fundability?.outcome).toBe('fundable');
+    expect(env.payload.preflightFundability?.outcome).toBe('not-fundable');
+    expect(env.payload.approvalRemediation?.remediatedReasonCodes).toEqual([
+      'MAKER_POSITION_ALLOWANCE_INSUFFICIENT',
+    ]);
+    expect(env.payload.approvalRemediation?.approvalPurposes).toEqual(['commitment-risk']);
+    expect(env.warnings.find((w) => w.code === 'allowance-short')).toBeUndefined();
+  });
+
+  it('keeps allowance-short when the post-approval fundability still has a remediable shortfall', () => {
+    const stillShort = fundabilityResult({
+      fundableNow: false,
+      outcome: 'not-fundable',
+      reasons: [{ code: 'MAKER_TREASURY_ALLOWANCE_INSUFFICIENT' }],
+    });
+    const env = toSubmitExecuteEnvelope(
+      preview,
+      { hash: '0xdead', commitment: stubCommitment },
+      { chainId: POLYGON, fundability: stillShort },
+    );
+    const allowanceShort = env.warnings.find((w) => w.code === 'allowance-short');
+    expect(allowanceShort?.severity).toBe('blocking');
+    expect(allowanceShort?.blockingFor).toEqual(['submit']);
+  });
+
+  it('omits allowance-short when post-approval re-check is unknown', () => {
+    const unknown = fundabilityResult({
+      fundableNow: false,
+      outcome: 'unknown',
+      reasons: [{ code: 'FUNDABILITY_UNKNOWN' }],
+    });
+    const env = toSubmitExecuteEnvelope(
+      preview,
+      { hash: '0xdead', commitment: stubCommitment },
+      { chainId: POLYGON, fundability: unknown },
+    );
+    expect(env.payload.fundability?.outcome).toBe('unknown');
+    expect(env.warnings.find((w) => w.code === 'allowance-short')).toBeUndefined();
   });
 });
 
@@ -532,5 +626,135 @@ describe('toMatchExecuteEnvelope', () => {
     );
     expect('schemaVersion' in (env.payload.preview as Record<string, unknown>)).toBe(false);
     expect(env.payload.result.txHash).toBe('0xdead');
+  });
+
+  // ── Post-approval fillability re-check + remediation contract ───
+  // Regression for the COL-LAD-D2 artifact (2026-05-28):
+  // `commitments match --yes --json` auto-approved USDC and matched
+  // successfully, but the execute envelope still carried the
+  // pre-approval verdict ("not-fillable" / TAKER_TREASURY_ALLOWANCE_INSUFFICIENT)
+  // alongside a blocking `allowance-short` warning. Contract: when the
+  // re-check ran post-approval, payload.fillability is the EFFECTIVE
+  // verdict, payload.preflightFillability preserves the pre-state for
+  // audit, payload.approvalRemediation lists what got resolved, and the
+  // shoulder no longer emits `allowance-short` on a clean post-verdict.
+  const result = {
+    txHash: '0xmatch' as Hex,
+    status: 'success' as const,
+    blockNumber: '1000',
+    takerRiskWei6: '1500000',
+    fillMakerRiskWei6: '1000000',
+  };
+
+  function fillabilityResult(
+    overrides: Partial<CheckCommitmentFillabilityResult> = {},
+  ): CheckCommitmentFillabilityResult {
+    return {
+      commitmentHash: HASH,
+      fillableNow: true,
+      outcome: 'fillable',
+      advisory: true,
+      reasons: [],
+      ...overrides,
+    };
+  }
+
+  it('omits preflightFillability + approvalRemediation when no approve was needed', () => {
+    const env = toMatchExecuteEnvelope(preview, result, {
+      chainId: POLYGON,
+      fillability: fillabilityResult(),
+    });
+    expect(env.payload.fillability?.outcome).toBe('fillable');
+    expect(env.payload.preflightFillability).toBeUndefined();
+    expect(env.payload.approvalRemediation).toBeUndefined();
+    expect(env.warnings.find((w) => w.code === 'allowance-short')).toBeUndefined();
+  });
+
+  it('payload.fillability is null when preflight was skipped (no re-check, no remediation)', () => {
+    const env = toMatchExecuteEnvelope(preview, result, {
+      chainId: POLYGON,
+      fillability: null,
+    });
+    expect(env.payload.fillability).toBeNull();
+    expect(env.payload.preflightFillability).toBeUndefined();
+    expect(env.payload.approvalRemediation).toBeUndefined();
+    expect(env.warnings.find((w) => w.code === 'allowance-short')).toBeUndefined();
+  });
+
+  it('REGRESSION: post-approval re-check + remediation produces clean success envelope (COL-LAD-D2 bug)', () => {
+    const approve = approveEffect('0xa1');
+    const pre = fillabilityResult({
+      fillableNow: false,
+      outcome: 'not-fillable',
+      reasons: [{ code: 'TAKER_TREASURY_ALLOWANCE_INSUFFICIENT' }],
+    });
+    const post = fillabilityResult(); // clean
+    const env = toMatchExecuteEnvelope(preview, result, {
+      chainId: POLYGON,
+      approveEffects: [approve],
+      fillability: post,
+      preflightFillability: pre,
+      approvalRemediation: {
+        remediatedReasonCodes: ['TAKER_TREASURY_ALLOWANCE_INSUFFICIENT'],
+        approvalPurposes: ['commitment-risk'],
+      },
+    });
+    expect(env.ok).toBe(true);
+    // Effective verdict on payload.fillability — post-approval, fillable.
+    expect(env.payload.fillability?.outcome).toBe('fillable');
+    expect(env.payload.fillability?.reasons).toEqual([]);
+    // Pre-approval verdict preserved for audit.
+    expect(env.payload.preflightFillability?.outcome).toBe('not-fillable');
+    expect(env.payload.preflightFillability?.reasons[0]?.code).toBe(
+      'TAKER_TREASURY_ALLOWANCE_INSUFFICIENT',
+    );
+    // Remediation block summarizes what the approve loop fixed.
+    expect(env.payload.approvalRemediation?.remediatedReasonCodes).toEqual([
+      'TAKER_TREASURY_ALLOWANCE_INSUFFICIENT',
+    ]);
+    expect(env.payload.approvalRemediation?.approvalPurposes).toEqual(['commitment-risk']);
+    // Shoulder no longer carries a blocking allowance-short warning.
+    expect(env.warnings.find((w) => w.code === 'allowance-short')).toBeUndefined();
+  });
+
+  it('keeps allowance-short when the post-approval verdict still has a remediable shortfall', () => {
+    // E.g. an approve reverted, or only one of two short rows got approved.
+    const stillShort = fillabilityResult({
+      fillableNow: false,
+      outcome: 'not-fillable',
+      reasons: [{ code: 'TAKER_TREASURY_ALLOWANCE_INSUFFICIENT' }],
+    });
+    const env = toMatchExecuteEnvelope(preview, result, {
+      chainId: POLYGON,
+      fillability: stillShort,
+    });
+    const allowanceShort = env.warnings.find((w) => w.code === 'allowance-short');
+    expect(allowanceShort?.severity).toBe('blocking');
+    expect(allowanceShort?.blockingFor).toEqual(['match']);
+  });
+
+  it('omits allowance-short when post-approval re-check is unknown (do not fabricate from stale)', () => {
+    const unknown = fillabilityResult({
+      fillableNow: false,
+      outcome: 'unknown',
+      reasons: [{ code: 'FILLABILITY_UNKNOWN' }],
+    });
+    const env = toMatchExecuteEnvelope(preview, result, {
+      chainId: POLYGON,
+      approveEffects: [approveEffect('0xa1')],
+      fillability: unknown,
+      preflightFillability: fillabilityResult({
+        fillableNow: false,
+        outcome: 'not-fillable',
+        reasons: [{ code: 'TAKER_TREASURY_ALLOWANCE_INSUFFICIENT' }],
+      }),
+      approvalRemediation: {
+        remediatedReasonCodes: [],
+        approvalPurposes: ['commitment-risk'],
+      },
+    });
+    expect(env.payload.fillability?.outcome).toBe('unknown');
+    expect(env.payload.preflightFillability?.outcome).toBe('not-fillable');
+    expect(env.warnings.find((w) => w.code === 'allowance-short')).toBeUndefined();
   });
 });

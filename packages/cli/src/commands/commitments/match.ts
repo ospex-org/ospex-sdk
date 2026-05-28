@@ -56,6 +56,7 @@ import {
   type ChainId,
   type CheckCommitmentFillabilityResult,
   type Commitment,
+  type FillabilityReasonCode,
   type Hex,
   type MatchPreview,
   type MatchPreviewWarning,
@@ -74,6 +75,8 @@ import {
 } from '../../lib/agentEnvelope.js';
 import {
   buildMatchRefusedEnvelope,
+  computeMatchRemediatedReasonCodes,
+  hasRemediableShortfall,
   renderMatchPreflightRefusal,
   selectBlockingMatchReasons,
 } from '../../lib/matchFillabilityPreflight.js';
@@ -142,7 +145,8 @@ export const commitmentsMatchCommand = addSignerOptions(
       new Option(
         '--json',
         'machine-readable output. ALONE = preview only, no signing (v2 AgentEnvelope, stage "preview", payload MatchPreview). ' +
-          'WITH --yes = signs/sends and emits a v2 AgentEnvelope (stage "execute", payload { preview, result, fillability }).',
+          'WITH --yes = signs/sends and emits a v2 AgentEnvelope (stage "execute", payload { preview, result, fillability, preflightFillability?, approvalRemediation? }). ' +
+          '`fillability` is the EFFECTIVE send-time verdict (post-approval re-check when the auto-approve loop confirmed); when that re-check ran, `preflightFillability` preserves the pre-approval verdict.',
       ).hideHelp(false),
     ),
 )
@@ -191,10 +195,15 @@ export const commitmentsMatchCommand = addSignerOptions(
     // Failure-envelope state (Hermes PR-6 scope) — wallet known once
     // prepareMatch sets preview.taker; approveEffects accumulates
     // during the approval loop. Catch at bottom emits a v2 failure
-    // envelope that preserves any confirmed approve txs.
+    // envelope that preserves any confirmed approve txs. `confirmedApprovalPurposes`
+    // tracks which approval `purpose` rows produced a confirmed tx — used
+    // below to populate `payload.approvalRemediation.approvalPurposes` so
+    // an agent can see what the auto-approve loop resolved without
+    // diff'ing pre/post fillability reasons themselves.
     const chainId = client.chainId();
     let wallet: Hex | null = null;
     const approveEffects: AgentEffect[] = [];
+    const confirmedApprovalPurposes: ApprovalPurpose[] = [];
     const stageForFailure: 'preview' | 'execute' = previewOnly ? 'preview' : 'execute';
 
     try {
@@ -248,25 +257,27 @@ export const commitmentsMatchCommand = addSignerOptions(
     // non-remediable reasons (maker balance/allowance, taker balance,
     // liveness, closed-spec); `FILLABILITY_UNKNOWN` (a failed read) is
     // advisory — warn, don't block. Bypass with
-    // --skip-fillability-preflight / --force. The verdict is threaded
-    // into the execute envelope below ("JSON always includes the
-    // preflight result"); `null` there means it was skipped.
-    let fillability: CheckCommitmentFillabilityResult | null = null;
+    // --skip-fillability-preflight / --force. The pre-approval verdict
+    // is preserved as `preflightFillability` and (when an approve loop
+    // confirms) is re-checked post-approval below; both are threaded
+    // into the execute envelope. A `null` `payload.fillability` means
+    // the preflight was skipped.
+    let preflightFillability: CheckCommitmentFillabilityResult | null = null;
     const skipFillability = opts.skipFillabilityPreflight === true || opts.force === true;
+    const fillArgs: Parameters<typeof client.commitments.checkCommitmentFillability>[0] = {
+      commitment,
+      taker: preview.taker,
+    };
+    if (opts.riskUsdc !== undefined) {
+      fillArgs.takerDesiredRiskWei6 = usdcDecimalToWei6(opts.riskUsdc);
+    }
     if (!skipFillability) {
-      const fillArgs: Parameters<typeof client.commitments.checkCommitmentFillability>[0] = {
-        commitment,
-        taker: preview.taker,
-      };
-      if (opts.riskUsdc !== undefined) {
-        fillArgs.takerDesiredRiskWei6 = usdcDecimalToWei6(opts.riskUsdc);
-      }
-      fillability = await client.commitments.checkCommitmentFillability(fillArgs);
-      const blocking = selectBlockingMatchReasons(fillability.reasons);
+      preflightFillability = await client.commitments.checkCommitmentFillability(fillArgs);
+      const blocking = selectBlockingMatchReasons(preflightFillability.reasons);
       if (blocking.length > 0) {
         if (wantJson) {
           writeAgentEnvelope(
-            buildMatchRefusedEnvelope(fillability, blocking, {
+            buildMatchRefusedEnvelope(preflightFillability, blocking, {
               chainId,
               wallet: preview.taker,
             }),
@@ -276,7 +287,7 @@ export const commitmentsMatchCommand = addSignerOptions(
         }
         process.exit(1);
       }
-      if (fillability.outcome === 'unknown') {
+      if (preflightFillability.outcome === 'unknown') {
         process.stderr.write(
           'Fillability preflight: funding could not be confirmed (an on-chain read failed). ' +
             'Proceeding — the match may revert. Re-run, or pass --skip-fillability-preflight to silence.\n',
@@ -377,6 +388,40 @@ export const commitmentsMatchCommand = addSignerOptions(
         blockNumber: approveResult.receipt.blockNumber.toString(),
         status: approveResult.receipt.status === 'success' ? 'confirmed' : 'reverted',
       });
+      if (approveResult.receipt.status === 'success') {
+        confirmedApprovalPurposes.push(row.purpose);
+      }
+    }
+
+    // ── 6.5 Post-approval fillability re-check. ────────────────────
+    // When the approve loop confirmed at least one tx, the pre-approval
+    // verdict is now stale (its reasons reflected the on-chain state at
+    // step 4.5, before approve-usdc landed). Re-run the same check so
+    // `payload.fillability` carries the EFFECTIVE send-time verdict; the
+    // pre-approval verdict is preserved under `payload.preflightFillability`.
+    //   - Skip when no approve confirmed (pre = post; no extra RPC hop).
+    //   - Skip when the preflight was skipped (--force / --skip-fillability-
+    //     preflight; we have no pre-state to fork from, fillability stays null).
+    //   - On re-check throw, fall back to a synthetic `unknown` verdict so the
+    //     envelope never silently keeps stale "not-fillable" reasons. The
+    //     match itself still proceeds — re-check is informational, not a gate.
+    let effectiveFillability: CheckCommitmentFillabilityResult | null = preflightFillability;
+    if (preflightFillability !== null && confirmedApprovalPurposes.length > 0) {
+      try {
+        effectiveFillability = await client.commitments.checkCommitmentFillability(fillArgs);
+      } catch (err) {
+        process.stderr.write(
+          'Post-approval fillability re-check failed; proceeding with the match. ' +
+            `(${err instanceof Error ? err.message : String(err)})\n`,
+        );
+        effectiveFillability = {
+          commitmentHash: preflightFillability.commitmentHash,
+          fillableNow: false,
+          outcome: 'unknown',
+          advisory: true,
+          reasons: [{ code: 'FILLABILITY_UNKNOWN' }],
+        };
+      }
     }
 
     // ── 7. Sign + send. matchFromPreview always re-fetches first. ──
@@ -393,6 +438,33 @@ export const commitmentsMatchCommand = addSignerOptions(
     }
 
     if (wantJson) {
+      const reranRecheck =
+        preflightFillability !== null &&
+        confirmedApprovalPurposes.length > 0 &&
+        effectiveFillability !== null &&
+        effectiveFillability !== preflightFillability;
+      const remediatedReasonCodes =
+        reranRecheck && preflightFillability !== null && effectiveFillability !== null
+          ? computeMatchRemediatedReasonCodes(preflightFillability, effectiveFillability)
+          : [];
+      const approvalRemediation =
+        confirmedApprovalPurposes.length > 0
+          ? {
+              remediatedReasonCodes,
+              approvalPurposes: confirmedApprovalPurposes,
+            }
+          : undefined;
+      const builderArgs: ToMatchExecuteEnvelopeArgs = {
+        chainId,
+        approveEffects,
+        fillability: effectiveFillability,
+      };
+      if (reranRecheck && preflightFillability !== null) {
+        builderArgs.preflightFillability = preflightFillability;
+      }
+      if (approvalRemediation !== undefined) {
+        builderArgs.approvalRemediation = approvalRemediation;
+      }
       writeAgentEnvelope(
         toMatchExecuteEnvelope(
           preview,
@@ -403,7 +475,7 @@ export const commitmentsMatchCommand = addSignerOptions(
             takerRiskWei6: result.takerRisk.toString(),
             fillMakerRiskWei6: result.fillMakerRisk.toString(),
           },
-          { chainId, approveEffects, fillability },
+          builderArgs,
         ),
       );
       return;
@@ -476,12 +548,45 @@ export interface MatchExecutePayload {
   preview: MatchPreviewPayload;
   result: MatchExecuteResult;
   /**
-   * The advisory fillability verdict run before sending. `null` when the
-   * preflight was skipped (--skip-fillability-preflight / --force). "JSON
-   * always includes the preflight result" — present (or explicitly null) on
-   * every executed match envelope.
+   * The **effective** send-time fillability verdict.
+   *
+   * - When the auto-approve loop confirmed at least one tx, this is the
+   *   post-approval re-check (a fresh `checkCommitmentFillability` ran
+   *   between the approve loop and the match send). The original
+   *   pre-approval verdict is preserved under `preflightFillability`.
+   * - When no approve was needed (or none confirmed), this is the same
+   *   verdict the preflight produced — `preflightFillability` is omitted.
+   * - `null` when the preflight was skipped (--skip-fillability-preflight
+   *   / --force).
+   * - `outcome: 'unknown'` (with `reasons: [{ code: 'FILLABILITY_UNKNOWN' }]`)
+   *   when the post-approval re-check itself failed — the match still proceeded,
+   *   but the envelope refuses to fabricate a clean verdict from stale data.
    */
   fillability: CheckCommitmentFillabilityResult | null;
+  /**
+   * The original pre-approval verdict, preserved for auditability. Present
+   * **only** when the auto-approve loop confirmed at least one tx AND the
+   * preflight was run — i.e. exactly when `fillability` carries the
+   * post-approval re-check rather than the original verdict.
+   */
+  preflightFillability?: CheckCommitmentFillabilityResult;
+  /**
+   * Summary of what the auto-approve loop resolved. Present **only** when at
+   * least one approve tx confirmed during this command.
+   *
+   * - `remediatedReasonCodes`: codes that were in `preflightFillability.reasons`
+   *   but are absent in `fillability.reasons`, intersected with the
+   *   taker-allowance reasons the approve loop is designed to remediate
+   *   (`TAKER_POSITION_ALLOWANCE_INSUFFICIENT`,
+   *   `TAKER_TREASURY_ALLOWANCE_INSUFFICIENT`). Empty when the re-check itself
+   *   returned `unknown` or the pre-verdict had no remediable shortfall.
+   * - `approvalPurposes`: which `ApprovalPurpose` rows the loop confirmed
+   *   (subset of `'commitment-risk' | 'lazy-creation-fee'`).
+   */
+  approvalRemediation?: {
+    remediatedReasonCodes: FillabilityReasonCode[];
+    approvalPurposes: ApprovalPurpose[];
+  };
 }
 
 export interface ToMatchEnvelopeArgs {
@@ -499,10 +604,24 @@ export interface ToMatchExecuteEnvelopeArgs extends ToMatchEnvelopeArgs {
    */
   approveEffects?: AgentEffect[];
   /**
-   * The pre-send fillability verdict, or `null` when the preflight was
-   * skipped. Threaded into `payload.fillability`.
+   * The **effective** send-time fillability verdict (post-approval re-check
+   * when an approve confirmed; otherwise the original preflight verdict).
+   * `null` when the preflight was skipped. Threaded into `payload.fillability`.
    */
   fillability?: CheckCommitmentFillabilityResult | null;
+  /**
+   * The original pre-approval verdict, present only when the caller ran a
+   * post-approval re-check. Threaded into `payload.preflightFillability`.
+   */
+  preflightFillability?: CheckCommitmentFillabilityResult;
+  /**
+   * Approval-remediation summary, present only when at least one approve tx
+   * confirmed. Threaded into `payload.approvalRemediation`.
+   */
+  approvalRemediation?: {
+    remediatedReasonCodes: FillabilityReasonCode[];
+    approvalPurposes: ApprovalPurpose[];
+  };
 }
 
 /**
@@ -518,7 +637,7 @@ export function toMatchPreviewEnvelope(
 ): AgentEnvelope<MatchPreviewPayload> {
   const { schemaVersion: _legacy, ...payload } = preview;
   const wallet = preview.taker.toLowerCase() as Hex;
-  const shoulder = deriveMatchShoulder(preview, args.chainId);
+  const shoulder = derivePreviewMatchShoulder(preview, args.chainId);
   return buildAgentEnvelope<MatchPreviewPayload>({
     ok: true,
     action: 'commitments.match',
@@ -554,7 +673,8 @@ export function toMatchExecuteEnvelope(
 ): AgentEnvelope<MatchExecutePayload> {
   const { schemaVersion: _legacy, ...previewPayload } = preview;
   const wallet = preview.taker.toLowerCase() as Hex;
-  const shoulder = deriveMatchShoulder(preview, args.chainId);
+  const fillability = args.fillability ?? null;
+  const shoulder = deriveExecuteMatchShoulder(preview, args.chainId, fillability);
   const approveEffects = args.approveEffects ?? [];
   const matchEffect: AgentEffect = {
     type: 'transaction',
@@ -566,6 +686,17 @@ export function toMatchExecuteEnvelope(
   };
   // Chronological order: approve txs land first, then the match tx.
   const effects: AgentEffect[] = [...approveEffects, matchEffect];
+  const payload: MatchExecutePayload = {
+    preview: previewPayload,
+    result,
+    fillability,
+  };
+  if (args.preflightFillability !== undefined) {
+    payload.preflightFillability = args.preflightFillability;
+  }
+  if (args.approvalRemediation !== undefined) {
+    payload.approvalRemediation = args.approvalRemediation;
+  }
   return buildAgentEnvelope<MatchExecutePayload>({
     ok: effects.every((e) => e.ok),
     action: 'commitments.match',
@@ -586,7 +717,7 @@ export function toMatchExecuteEnvelope(
     nextCommands: [
       VERIFY_COMMITMENT.build({ hash: preview.commitment.commitmentHash }),
     ],
-    payload: { preview: previewPayload, result, fillability: args.fillability ?? null },
+    payload,
   });
 }
 
@@ -601,33 +732,30 @@ interface MatchShoulder {
 }
 
 /**
- * Shared shoulder derivation for the preview + execute envelopes.
- * Lifts the MatchPreviewWarning enum into structured `AgentWarning[]`
- * entries with stable codes (the enum values themselves are the
- * codes); adds `allowance-short` when any approval row is short.
+ * Shared body of preview + execute shoulder derivation. Lifts the
+ * `MatchPreviewWarning` enum into structured `AgentWarning[]` entries with
+ * stable codes (the enum values themselves are the codes).
  *
- * `contest` is the v1 MatchPreviewContest, which differs from the
- * v2 PreviewContest shoulder shape (extra fields). We pass it
- * through as-is — agents that depend on the canonical PreviewContest
- * shape will get the same data plus a couple of extras; mapping
- * to the strict v2 shape is queued for PR-6.
+ * `contest` is the v1 MatchPreviewContest, which differs from the v2
+ * `PreviewContest` shoulder shape (extra fields). We pass it through as-is —
+ * agents depending on the canonical `PreviewContest` shape will get the same
+ * data plus a couple of extras; mapping to the strict v2 shape is queued for
+ * PR-6.
  *
- * `speculation` is reshaped to fit the v2 `SpeculationMode` shoulder
- * (which mirrors what `commitments submit` emits) so both write
- * commands present the same shape under `envelope.speculation`.
+ * `speculation` is reshaped to fit the v2 `SpeculationMode` shoulder (which
+ * mirrors what `commitments submit` emits) so both write commands present the
+ * same shape under `envelope.speculation`.
+ *
+ * The `allowance-short` warning is layered on top by the caller (preview vs
+ * execute) — preview sources it from `preview.approvals[]`, execute sources
+ * it from the post-approval fillability verdict so the success envelope
+ * doesn't carry a stale "blocking" warning for an allowance the approve loop
+ * already remediated.
  */
-function deriveMatchShoulder(preview: MatchPreview, chainId: ChainId): MatchShoulder {
+function deriveMatchShoulderBase(preview: MatchPreview, chainId: ChainId): MatchShoulder {
   const { you } = computeMatchYouView(preview);
   const approvalRequirements = mapPreviewApprovals(preview.approvals, chainId);
   const warnings: AgentWarning[] = preview.warnings.map(matchWarningToAgentWarning);
-  if (approvalRequirements.some((r) => r.needsApproval)) {
-    warnings.push({
-      code: 'allowance-short',
-      message: 'At least one approval is short. Executing this match will require approve txs first.',
-      severity: 'blocking',
-      blockingFor: ['match'],
-    });
-  }
   return {
     approvalRequirements,
     risk: you.risk,
@@ -637,6 +765,59 @@ function deriveMatchShoulder(preview: MatchPreview, chainId: ChainId): MatchShou
     sideSummary: you.backing,
     warnings,
   };
+}
+
+/**
+ * Preview-envelope shoulder: derives `allowance-short` from the preview's
+ * approvals[] (the snapshot the user is about to commit to). Unchanged
+ * behavior from the original `deriveMatchShoulder`.
+ */
+function derivePreviewMatchShoulder(preview: MatchPreview, chainId: ChainId): MatchShoulder {
+  const base = deriveMatchShoulderBase(preview, chainId);
+  if (base.approvalRequirements.some((r) => r.needsApproval)) {
+    base.warnings.push({
+      code: 'allowance-short',
+      message: 'At least one approval is short. Executing this match will require approve txs first.',
+      severity: 'blocking',
+      blockingFor: ['match'],
+    });
+  }
+  return base;
+}
+
+/**
+ * Execute-envelope shoulder: derives `allowance-short` from the EFFECTIVE
+ * (post-approval, when an approve confirmed) fillability verdict — not from
+ * `preview.approvals[]`, which was the snapshot BEFORE the auto-approve loop
+ * remediated taker allowance and would otherwise leave a stale blocking
+ * warning on a successful match envelope. Rules:
+ *
+ *   - `effectiveFillability` has a remediable taker-allowance reason → keep
+ *     `allowance-short` (the approve loop didn't resolve it, e.g. it
+ *     reverted).
+ *   - `effectiveFillability` is clean / has only non-remediable reasons →
+ *     omit `allowance-short`.
+ *   - `effectiveFillability` is `null` (preflight skipped) or `unknown` (the
+ *     re-check itself failed) → no fresh signal; omit `allowance-short`
+ *     rather than fabricate one from the stale preview.
+ */
+function deriveExecuteMatchShoulder(
+  preview: MatchPreview,
+  chainId: ChainId,
+  effectiveFillability: CheckCommitmentFillabilityResult | null,
+): MatchShoulder {
+  const base = deriveMatchShoulderBase(preview, chainId);
+  if (effectiveFillability !== null && effectiveFillability.outcome !== 'unknown') {
+    if (hasRemediableShortfall(effectiveFillability)) {
+      base.warnings.push({
+        code: 'allowance-short',
+        message: 'At least one approval is still short after the auto-approve loop ran.',
+        severity: 'blocking',
+        blockingFor: ['match'],
+      });
+    }
+  }
+  return base;
 }
 
 /**

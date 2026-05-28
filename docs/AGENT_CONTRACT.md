@@ -41,8 +41,8 @@ Three commands ship a **dual-mode** `--json`: preview-only without `--yes`, exec
 
 | Command | `--json` alone | `--yes --json` |
 |---|---|---|
-| `ospex commitments submit` | `stage: 'preview'`, `payload: SubmitPreview`. **No signing, no POST.** | `stage: 'execute'`, `payload: { preview: SubmitPreview; result: SubmitResult; fundability: CheckSubmitFundabilityResult \| null }`. Signs and posts. The `preview` mirrors the `--json`-alone envelope so agents can audit what they signed for; `result` carries the post-sign artifacts (`hash`, `commitment`); `fundability` is the advisory submit-preflight verdict (always present, `null` when the preflight was skipped). |
-| `ospex commitments match` | `stage: 'preview'`, `payload: MatchPreview`. **No tx.** The signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight) — only when a non-interactive credential is configured. See §4 (lazy-unlock contract). | `stage: 'execute'`, `payload: { preview: MatchPreview; result: MatchResult; fillability: CheckCommitmentFillabilityResult \| null }`. Sends a tx. Same audit-friendly shape as submit — `preview` mirrors the preview envelope; `result` carries `txHash`, `status`, `blockNumber`, and the per-side risk wei6 figures; `fillability` is the advisory match-preflight verdict (always present, `null` when skipped). |
+| `ospex commitments submit` | `stage: 'preview'`, `payload: SubmitPreview`. **No signing, no POST.** | `stage: 'execute'`, `payload: { preview: SubmitPreview; result: SubmitResult; fundability: CheckSubmitFundabilityResult \| null; preflightFundability?; approvalRemediation? }`. Signs and posts. The `preview` mirrors the `--json`-alone envelope so agents can audit what they signed for; `result` carries the post-sign artifacts (`hash`, `commitment`); `fundability` is the **effective send-time** submit-preflight verdict (post-approval re-check when the auto-approve loop confirmed; `null` when skipped). When the loop confirmed at least one tx, `preflightFundability` preserves the pre-approval verdict and `approvalRemediation` lists what got resolved. |
+| `ospex commitments match` | `stage: 'preview'`, `payload: MatchPreview`. **No tx.** The signer may unlock once to derive the taker address (for the `selfMatch` flag and allowance preflight) — only when a non-interactive credential is configured. See §4 (lazy-unlock contract). | `stage: 'execute'`, `payload: { preview: MatchPreview; result: MatchResult; fillability: CheckCommitmentFillabilityResult \| null; preflightFillability?; approvalRemediation? }`. Sends a tx. Same audit-friendly shape as submit — `preview` mirrors the preview envelope; `result` carries `txHash`, `status`, `blockNumber`, and the per-side risk wei6 figures; `fillability` is the **effective send-time** match-preflight verdict (post-approval re-check when the auto-approve loop confirmed; `null` when skipped). When the loop confirmed at least one tx, `preflightFillability` preserves the pre-approval verdict and `approvalRemediation` lists what got resolved. |
 | `ospex approvals setup` | `stage: 'preview'`, `payload: { plan: SetupPlan }`. No tx. | `stage: 'execute'`, `payload: { plan: SetupPlan; results: SetupResult[] }`. Executes the plan; one entry in `results` per approval tx. |
 
 Other write commands (`contests score`, `settle`, `claim`, `claim-all`, `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`) treat `--json` as **output format only** — they may still send a transaction. Use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
@@ -64,11 +64,23 @@ type SubmitResultEnvelope = AgentEnvelope<{
     commitment: Commitment;
   };
   fundability: CheckSubmitFundabilityResult | null;
+  preflightFundability?: CheckSubmitFundabilityResult;
+  approvalRemediation?: {
+    remediatedReasonCodes: SubmitFundabilityReasonCode[];
+    approvalPurposes: ApprovalPurpose[];
+  };
 }>;
 // payload.preview mirrors the --json-alone envelope verbatim.
 // payload.result.hash is the commitment hash; payload.result.commitment is the persisted row.
-// payload.fundability is the advisory submit-preflight verdict (outcome + reasons[] + requirement);
-//   always present, null when the preflight was skipped (--skip-fundability-preflight / --force).
+// payload.fundability is the EFFECTIVE send-time submit-preflight verdict:
+//   - post-approval re-check when the auto-approve loop confirmed any tx
+//   - the pre-approval verdict when no approve was needed
+//   - null when --skip-fundability-preflight / --force was set
+//   - outcome:'unknown' (with FUNDABILITY_UNKNOWN) when the re-check itself failed
+// payload.preflightFundability preserves the pre-approval verdict — present ONLY
+//   when the re-check ran (i.e. some approve confirmed AND preflight was not skipped).
+// payload.approvalRemediation summarizes what the loop resolved — present ONLY when
+//   at least one approve tx confirmed.
 
 // commitments match --json (no --yes)  →  AgentEnvelope<MatchPreview>
 // MatchPreview: commitment, taker, selfMatch, contest, market, odds, economics, expiry,
@@ -85,8 +97,17 @@ type MatchResultEnvelope = AgentEnvelope<{
     takerRiskWei6: string;
     fillMakerRiskWei6: string;
   };
-  fillability: CheckCommitmentFillabilityResult | null;  // advisory match-preflight verdict; null when skipped
+  fillability: CheckCommitmentFillabilityResult | null;
+  preflightFillability?: CheckCommitmentFillabilityResult;
+  approvalRemediation?: {
+    remediatedReasonCodes: FillabilityReasonCode[];
+    approvalPurposes: ApprovalPurpose[];
+  };
 }>;
+// Same pre/post split as submit (see comment block above). On a successful
+// match where the auto-approve loop resolved a taker-allowance shortfall,
+// payload.fillability is the post-approval re-check (typically `fillable`)
+// and payload.preflightFillability preserves the original verdict for audit.
 ```
 
 The `{ preview, result, … }` shape on execute envelopes is deliberate: agents reading the result can verify the preview block in the same envelope against the preview block they accepted at signing time, without holding state across two invocations. `submit` / `match` add the preflight verdict (`fundability` / `fillability`) alongside. Reach for `payload.result.txHash` (not `payload.txHash`); `payload.preview` is identical-shape to the preview envelope and carries the same audit fields.
@@ -160,7 +181,7 @@ A signed commitment can be perfectly valid yet still revert at fill time because
 Both preflights run on the **execute path** by default (not on a `--json`-only preview); bypass with **`--force`** (alias for **`--skip-fillability-preflight`** / **`--skip-fundability-preflight`**). JSON contract:
 
 - A **refusal** is an `ok: false`, `stage: 'execute'` envelope. The blocking reason(s) are surfaced as `severity: 'blocking'` `warnings[]` (`blockingFor: ['match']` / `['submit']`), the full verdict + a marker sit in the payload (`{ preflight, action: 'refused-before-send' }` for match / `{ fundability, action: 'refused-before-sign' }` for submit), and `effects` is empty (nothing was signed or sent).
-- A **proceeding** (executed) write carries the full verdict — including its `reasons[]` — under `payload.fillability` (match) / `payload.fundability` (submit), **always present** and **`null` when the preflight was skipped**. The verdict's non-blocking reasons are NOT duplicated into the proceed envelope's `warnings[]` — read them from `payload.<verdict>.reasons`; the human (non-`--json`) path prints them to stderr. A `--json`-only preview (no `--yes`) does not carry the verdict (the preflight is execute-path only).
+- A **proceeding** (executed) write carries the **effective send-time verdict** — including its `reasons[]` — under `payload.fillability` (match) / `payload.fundability` (submit), **always present** and **`null` when the preflight was skipped**. When the auto-approve loop confirmed at least one tx, the verdict is a **post-approval re-check** (a fresh `checkCommitmentFillability` / `checkSubmitFundability` ran between the approve loop and the send), and the original pre-approval verdict is preserved under `payload.preflightFillability` / `payload.preflightFundability` (only present in that case). A `payload.approvalRemediation: { remediatedReasonCodes, approvalPurposes }` block accompanies the re-check, listing the reason codes the loop resolved and which `ApprovalPurpose` rows confirmed. If the re-check itself failed (RPC blip), `payload.<verdict>.outcome` is `'unknown'` with a `FILLABILITY_UNKNOWN` / `FUNDABILITY_UNKNOWN` reason — the write still proceeded, but the envelope refuses to fabricate a clean verdict from stale data. The verdict's non-blocking reasons are NOT duplicated into the proceed envelope's `warnings[]` — read them from `payload.<verdict>.reasons`; the human (non-`--json`) path prints them to stderr. A `--json`-only preview (no `--yes`) does not carry the verdict (the preflight is execute-path only). **Contract guarantee:** a `proceed` envelope (`ok: true` with a successful match/submit effect) MUST NOT carry a blocking `allowance-short` warning sourced from a stale pre-approval verdict; the shoulder warning is derived from the post-approval state.
 
 The above are **per-fill / per-submit** checks. There is also a **book-wide read advisory**: `ospex commitments list --with-fillability` (SDK: `client.commitments.list({ includeFillability: true })`) attaches an advisory `fillability` object to each commitment, sourced from the indexer's ~30s maker-funding snapshot — no per-fill on-chain reads, so it's cheap to triage a whole book. Each object carries `makerFundingStatus` (`fully_backed` | `overcommitted` | `unknown` | `stale`), `orderIndividuallyBackedNow` (backing covers THIS order's remaining risk) vs `makerBookBackedNow` (backing covers the maker's *whole* visible book — a maker can be the former but not the latter, which is the "fake liquidity" signal), `makerBackingWei6` / `makerVisibleCommittedWei6` / `makerCoverageRatioBps`, `checkedAtBlock`, and `stale`. The `…BackedNow` booleans are `null` when `unknown`/`stale` (a "now" assertion can't be made from a missing/old snapshot). Advisory + point-in-time, **never folded into `status`**. Under `--json` each commitment in the `commitments.list` payload simply gains the `fillability` field; it's omitted entirely without the flag. For a definitive go/no-go on a *single* fill, use the `match` preflight / `checkCommitmentFillability` above.
 
