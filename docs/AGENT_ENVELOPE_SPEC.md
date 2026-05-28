@@ -174,7 +174,21 @@ interface AgentError {
   message: string;
   details?: unknown;
 }
+
+interface AgentErrorCauseEntry {
+  name?: string;                         // constructor name, e.g. 'HttpRequestError'
+  code?: string;                         // typed code if present
+  message?: string;                      // sanitized
+  shortMessage?: string;                 // viem's one-line summary, sanitized
+  metaMessages?: readonly string[];      // viem's chain-of-explanation, sanitized
+  status?: number;                       // HTTP status when applicable
+  reason?: string;                       // nested OspexChainError reason
+  revertReason?: string;                 // nested OspexChainError revert reason
+  txHash?: string;                       // when the nested cause was tx-bound
+}
 ```
+
+When the thrown error carries an ES2022 `Error.cause`, the CLI walks the chain into `details.causeChain[]` of type `AgentErrorCauseEntry[]`. The list is ordered from immediate cause outward, capped at depth 4, and cycle-safe. String fields are sanitized — embedded RPC URLs and known credential-name pairs (`api_key`, `authorization: Bearer …`, `token=`, `password`, `passphrase`, `postgres://…`) are masked to `[redacted]` before they reach stdout. This is the only path that surfaces underlying viem / transport / API errors in `--json` mode — without it, a wrapped `OspexChainError("Transaction broadcast or inclusion failed.", { cause })` lands as opaque text with no breadcrumb back to "rate-limited" / "timeout" / "underpriced". Agents classify by `causeChain[0].name` + `code` + `status` (e.g. `name === 'HttpRequestError'` + `status === 429` → rate limit).
 
 Initial stable `warning.code` catalog (additive — consumers log + ignore unknown):
 

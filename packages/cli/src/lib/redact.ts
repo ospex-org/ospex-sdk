@@ -183,6 +183,77 @@ function computeFingerprint(raw: string): string {
  * be worse than the leak this defends against (the caller still
  * returns a structured error result either way).
  */
+/**
+ * Strip credential-bearing substrings out of a free-form error message
+ * when the target URL isn't known up-front. Used by the JSON envelope's
+ * cause-chain walker to scrub nested viem / transport / API errors: viem's
+ * `HttpRequestError`, for instance, embeds the full request URL — possibly
+ * with an Alchemy key — in `err.message` and `err.metaMessages[]`.
+ *
+ * Defense in depth:
+ *   1. Replace every HTTP(S) URL match with `redactUrl()`'s structured
+ *      `redactedValue` (path-segment + secret-named query + userinfo
+ *      masked). Falls back to `[REDACTED_URL]` if the match doesn't
+ *      cleanly parse.
+ *   2. Mask `<credential-name>=<value>` and `<credential-name>: <value>`
+ *      pairs (api_key, authorization, bearer, token, password,
+ *      passphrase) — same regex shape as the Hermes diagnose-create.mjs
+ *      template, anchored to known names so a JSON-shaped message
+ *      containing a `token:` field is also caught.
+ *   3. `postgres://` / `postgresql://` connection strings are masked
+ *      wholesale (these never appear in viem errors but the sanitizer
+ *      is defense-in-depth for anything else that might land in a
+ *      cause-chain entry — same threat surface as `redact-doctor`).
+ *
+ * Never throws — sanitisation is best-effort. The envelope is the
+ * threat surface; better to ship the message slightly over-redacted
+ * than leak.
+ */
+export function sanitizeUntargetedMessage(message: string): string {
+  let result = message;
+
+  // (1) Named-credential pair substitution. Run BEFORE URL redaction so
+  // an `apikey=secret` inside a URL string is caught here as `apikey=`
+  // (raw value still present, no `[redacted]` brackets in the way),
+  // and so the post-URL pass on the same URL substring is a no-op via
+  // the URL parser's structured replacement. Matches `name=value`,
+  // `name: value`, and `"name": "value"` JSON-ish forms. The optional
+  // `bearer\s+` prefix consumes the literal "Bearer" token that
+  // precedes the actual secret in `Authorization: Bearer <token>`
+  // headers; without it the regex would stop at the first whitespace
+  // (eating only "Bearer") and leave the real token exposed. The
+  // `(?!\[redacted)` negative lookahead skips values that are already
+  // `[redacted]` sentinels from a prior pass — prevents a
+  // `apikey=[redacted` partial-match that would produce a trailing
+  // `]` artifact.
+  result = result.replace(
+    /(api[_-]?key|authorization|bearer|token|password|passphrase)(\s*[:=]\s*)(?!\[redacted)(?:bearer\s+)?["']?[^\s"',;}\]]+["']?/gi,
+    (_match, name: string, sep: string) => `${name}${sep}${REDACTED}`,
+  );
+
+  // (2) HTTP(S) URL substitution. The character class deliberately rejects
+  // whitespace and common quote/bracket terminators so a URL embedded in
+  // prose (`"URL: https://example.com/path"`) is captured up to but not
+  // including the surrounding punctuation.
+  result = result.replace(/https?:\/\/[^\s"'`<>)]+/g, (match) => {
+    try {
+      // Strip a trailing `.` / `,` / `;` that the character class let
+      // through but is almost certainly punctuation, not part of the URL.
+      const trimmed = match.replace(/[.,;]+$/, '');
+      const punct = match.slice(trimmed.length);
+      const field = redactUrl(trimmed, 'message');
+      return field.redactedValue + punct;
+    } catch {
+      return REDACTED;
+    }
+  });
+
+  // (3) Postgres connection strings — wholesale mask.
+  result = result.replace(/postgres(?:ql)?:\/\/[^\s"'`<>]+/gi, REDACTED);
+
+  return result;
+}
+
 export function sanitizeMessageForUrl(
   message: string,
   rawUrl: string | null | undefined,

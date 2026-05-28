@@ -3,12 +3,14 @@ import { Writable } from 'node:stream';
 import type {
   AgentEnvelope,
   AgentError,
+  AgentErrorCauseEntry,
   AgentWarning,
   ApprovalRequirement,
 } from '@ospex/sdk';
 import { OspexAllowanceError, OspexAPIError, OspexChainError, OspexValidationError } from '@ospex/sdk';
 import {
   CLI_VERSION,
+  MAX_CAUSE_CHAIN_DEPTH,
   MAX_NEXT_COMMANDS,
   SDK_VERSION,
   buildAgentEnvelope,
@@ -390,6 +392,127 @@ describe('errorToAgentError', () => {
     const out = errorToAgentError('not even an error');
     expect(out.code).toBe('UNKNOWN_ERROR');
     expect(out.message).toBe('not even an error');
+  });
+});
+
+describe('errorToAgentError — cause-chain walk (CHAIN_ERROR observability)', () => {
+  it('preserves a wrapped viem-style cause under details.causeChain', () => {
+    // The exact shape buildSignAndSend produces on a sendRawTransaction
+    // transport failure: wrap with cause, no txHash yet.
+    class HttpRequestError extends Error {
+      override name = 'HttpRequestError';
+      shortMessage = 'HTTP request failed.';
+      status = 429;
+      metaMessages = ['URL: https://example.invalid/v2/[redacted]', 'Method: eth_sendRawTransaction'];
+    }
+    const viemErr = new HttpRequestError(
+      'HTTP request failed.\n\nURL: https://example.invalid/v2/aaaaaaaaaaaaaaaaaaaa\nStatus: 429',
+    );
+    const wrapped = new OspexChainError('Transaction broadcast or inclusion failed.', {
+      cause: viemErr,
+    });
+    const out = errorToAgentError(wrapped);
+    expect(out.code).toBe('CHAIN_ERROR');
+    expect(out.message).toBe('Transaction broadcast or inclusion failed.');
+    const details = out.details as { causeChain?: AgentErrorCauseEntry[] };
+    expect(Array.isArray(details.causeChain)).toBe(true);
+    expect(details.causeChain).toHaveLength(1);
+    const top = details.causeChain![0]!;
+    expect(top.name).toBe('HttpRequestError');
+    expect(top.status).toBe(429);
+    expect(top.shortMessage).toBe('HTTP request failed.');
+  });
+
+  it('redacts URLs (with credential path segments) embedded in the nested message + metaMessages', () => {
+    class HttpRequestError extends Error {
+      override name = 'HttpRequestError';
+      shortMessage = 'HTTP request failed.';
+      metaMessages = ['URL: https://eth-mainnet.g.alchemy.com/v2/aaaaaaaaaaaaaaaaaaaa'];
+    }
+    const viemErr = new HttpRequestError(
+      'HTTP request failed.\n\nURL: https://eth-mainnet.g.alchemy.com/v2/aaaaaaaaaaaaaaaaaaaa',
+    );
+    const wrapped = new OspexChainError('Transaction broadcast or inclusion failed.', {
+      cause: viemErr,
+    });
+    const out = errorToAgentError(wrapped);
+    const top = (out.details as { causeChain: AgentErrorCauseEntry[] }).causeChain[0]!;
+    // Long opaque path segment must be scrubbed from both the message
+    // and metaMessages — agents read both.
+    expect(top.message).not.toContain('aaaaaaaaaaaaaaaaaaaa');
+    expect(top.metaMessages?.[0]).not.toContain('aaaaaaaaaaaaaaaaaaaa');
+    expect(top.message).toContain('[redacted]');
+  });
+
+  it('walks multi-level cause chains up to MAX_CAUSE_CHAIN_DEPTH', () => {
+    // Build a 6-deep chain; expect the walker to stop at the cap.
+    let deepest = new Error('leaf');
+    deepest.name = 'LeafError';
+    for (let i = 0; i < 5; i++) {
+      const wrapped = new Error(`wrap-${i}`);
+      (wrapped as { cause?: unknown }).cause = deepest;
+      deepest = wrapped;
+    }
+    const top = new OspexChainError('outer', { cause: deepest });
+    const out = errorToAgentError(top);
+    const chain = (out.details as { causeChain: AgentErrorCauseEntry[] }).causeChain;
+    // 6 nested causes; capped at 4.
+    expect(chain).toHaveLength(MAX_CAUSE_CHAIN_DEPTH);
+    expect(MAX_CAUSE_CHAIN_DEPTH).toBe(4);
+  });
+
+  it('breaks self-referential cause chains without looping', () => {
+    const a = new Error('a');
+    const b = new Error('b');
+    (a as { cause?: unknown }).cause = b;
+    (b as { cause?: unknown }).cause = a;
+    const top = new OspexChainError('outer', { cause: a });
+    const out = errorToAgentError(top);
+    const chain = (out.details as { causeChain: AgentErrorCauseEntry[] }).causeChain;
+    // a → b, then b's cause === a (already seen) → stop. 2 entries.
+    expect(chain).toHaveLength(2);
+  });
+
+  it('redacts named-credential tokens in nested messages', () => {
+    const inner = new Error('Request failed: authorization=Bearer abcd1234secret api_key=xyzlongtoken');
+    inner.name = 'TransportError';
+    const top = new OspexChainError('outer', { cause: inner });
+    const out = errorToAgentError(top);
+    const chain = (out.details as { causeChain: AgentErrorCauseEntry[] }).causeChain;
+    expect(chain[0]?.message).not.toContain('abcd1234secret');
+    expect(chain[0]?.message).not.toContain('xyzlongtoken');
+    expect(chain[0]?.message).toContain('[redacted]');
+  });
+
+  it('extracts a nested OspexError reason / revertReason / txHash', () => {
+    const inner = new OspexChainError('nested revert', {
+      reason: 'NotCommitmentMaker',
+      txHash: '0xdeadbeef',
+      revertReason: 'caller not authorized',
+    });
+    const outer = new OspexChainError('outer wrapper', { cause: inner });
+    const out = errorToAgentError(outer);
+    const top = (out.details as { causeChain: AgentErrorCauseEntry[] }).causeChain[0]!;
+    expect(top.reason).toBe('NotCommitmentMaker');
+    expect(top.txHash).toBe('0xdeadbeef');
+    expect(top.revertReason).toBe('caller not authorized');
+  });
+
+  it('does not emit details.causeChain when err has no cause', () => {
+    const out = errorToAgentError(new OspexValidationError('plain validation, no cause'));
+    expect(out.details).toBeUndefined();
+  });
+
+  it('also surfaces causeChain for plain Error throws that carry a cause', () => {
+    const inner = new Error('inner transport boom');
+    inner.name = 'TransportError';
+    const top = new Error('outer wrap');
+    (top as { cause?: unknown }).cause = inner;
+    const out = errorToAgentError(top);
+    expect(out.code).toBe('UNKNOWN_ERROR');
+    expect((out.details as { causeChain: AgentErrorCauseEntry[] }).causeChain[0]?.name).toBe(
+      'TransportError',
+    );
   });
 });
 
