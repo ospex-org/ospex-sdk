@@ -110,7 +110,7 @@ export const commitmentsCancelCommand = addSignerOptions(
     let onChainResult: Awaited<ReturnType<OspexClient['commitments']['cancelOnchain']>> | null = null;
     let onChainError: { code: string; message: string } | null = null;
     try {
-      onChainResult = await client.commitments.cancelOnchain(hash);
+      onChainResult = await client.commitments.cancelOnchain({ hash });
     } catch (err) {
       if (err instanceof OspexChainError) {
         process.stderr.write(

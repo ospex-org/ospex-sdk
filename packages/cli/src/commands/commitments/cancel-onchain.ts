@@ -79,7 +79,7 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
 
     let result;
     try {
-      result = await client.commitments.cancelOnchain(hash);
+      result = await client.commitments.cancelOnchain({ hash });
     } catch (err) {
       if (err instanceof OspexChainError && err.reason === 'NotCommitmentMaker') {
         process.stderr.write(

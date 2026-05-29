@@ -13,7 +13,11 @@
 import { CommitmentsApi, toCommitment } from '../api/commitments.js';
 import { OspexValidationError } from '../errors.js';
 import type { CommitmentsContext } from './context.js';
-import type { Commitment, CommitmentsListOptions } from '../types/commitment.js';
+import type {
+  Commitment,
+  CommitmentsListOptions,
+  SignedCommitmentPayload,
+} from '../types/commitment.js';
 import type { CommitmentBody } from '../api/types.js';
 import type { Hex } from '../types/signer.js';
 import type { HighLevelSubmitArgs, SubmitPreview } from '../types/preview.js';
@@ -35,6 +39,8 @@ import {
 } from './cancelAllOnSpeculation.js';
 import {
   cancelOnchain,
+  cancelOnchainSigned,
+  type CancelOnchainArgs,
   type CancelOnchainResult,
 } from './cancelOnchain.js';
 import { getNonceFloor, type GetNonceFloorArgs } from './getNonceFloor.js';
@@ -277,8 +283,32 @@ export class Commitments {
 
   // ── On-chain cancel + nonce floor (M2.5) ──────────────────────────
 
-  cancelOnchain(hash: Hex): Promise<CancelOnchainResult> {
-    return cancelOnchain(this.ctx, hash);
+  /**
+   * On-chain cancel — convenience overload. Pass `{ signedCommitment }` when
+   * you already hold the maker-signed payload locally (zero API round-trips,
+   * works against book-hidden rows). Pass `{ hash }` when you only have the
+   * EIP-712 hash and the row is still on the public book; the SDK fetches via
+   * the public commitments API, narrows redaction with
+   * {@link requireVisibleCommitment} (M5/PR1) BEFORE any signer / RPC access,
+   * then delegates to {@link cancelOnchainSigned}.
+   *
+   * Mutually exclusive: passing both fields throws `OspexValidationError`.
+   */
+  cancelOnchain(args: CancelOnchainArgs): Promise<CancelOnchainResult> {
+    return cancelOnchain(this.ctx, args);
+  }
+
+  /**
+   * On-chain cancel — canonical low-level primitive. Takes a complete
+   * {@link SignedCommitmentPayload} (the maker-signed 9-field struct plus its
+   * EIP-712 hash and signature) and broadcasts
+   * `MatchingModule.cancelCommitment(commitment)`. Hits no API endpoint, so
+   * it is the right primitive for makers / market-makers holding signed
+   * payloads in local state — including book-hidden commitments whose public
+   * representation is redacted.
+   */
+  cancelOnchainSigned(payload: SignedCommitmentPayload): Promise<CancelOnchainResult> {
+    return cancelOnchainSigned(this.ctx, payload);
   }
 
   raiseMinNonce(args: RaiseMinNonceArgs): Promise<RaiseMinNonceResult> {
@@ -302,7 +332,7 @@ export type {
   CancelAllOnSpeculationArgs,
   CancelAllOnSpeculationResult,
 } from './cancelAllOnSpeculation.js';
-export type { CancelOnchainResult } from './cancelOnchain.js';
+export type { CancelOnchainArgs, CancelOnchainResult } from './cancelOnchain.js';
 export type { GetNonceFloorArgs } from './getNonceFloor.js';
 export type { MatchArgs, MatchResult } from './match.js';
 export type { PrepareMatchArgs } from './prepareMatch.js';

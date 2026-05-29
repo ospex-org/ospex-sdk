@@ -77,6 +77,7 @@ export type {
   Commitment,
   PublicVisibleCommitment,
   PublicHiddenCommitment,
+  SignedCommitmentPayload,
   CommitmentStatus,
   StoredCommitmentStatus,
   CommitmentsListOptions,

@@ -1,7 +1,9 @@
 /**
- * `client.commitments.cancelOnchain(hash)` — happy path, validation
- * errors, idempotent re-cancel, and the two error-classification paths
- * for `MatchingModule__NotCommitmentMaker` (structured + raw selector).
+ * `client.commitments.cancelOnchain({ hash } | { signedCommitment })` +
+ * `client.commitments.cancelOnchainSigned(payload)` — happy paths,
+ * validation errors, mutually-exclusive args, hash↔struct round-trip,
+ * idempotent re-cancel, and the two error-classification paths for
+ * `MatchingModule__NotCommitmentMaker` (structured + raw selector).
  *
  * Same fake-publicClient + fake-signer pattern as positions-claim.test.ts.
  */
@@ -127,7 +129,7 @@ function fakeContext(opts: FakeOpts = {}): { ctx: CommitmentsContext } {
 describe('commitments.cancelOnchain', () => {
   it('returns txHash + commitmentHash on success', async () => {
     const { ctx } = fakeContext();
-    const result = await cancelOnchain(ctx, HASH as `0x${string}`);
+    const result = await cancelOnchain(ctx, { hash: HASH as `0x${string}` });
     expect(result.txHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(result.commitmentHash).toBe(HASH);
     expect(result.receipt.blockNumber).toBe(12345n);
@@ -135,7 +137,7 @@ describe('commitments.cancelOnchain', () => {
 
   it('rejects a malformed hash before any API/RPC call', async () => {
     const { ctx } = fakeContext();
-    await expect(cancelOnchain(ctx, '0xabc' as `0x${string}`)).rejects.toBeInstanceOf(
+    await expect(cancelOnchain(ctx, { hash: '0xabc' as `0x${string}` })).rejects.toBeInstanceOf(
       OspexValidationError,
     );
   });
@@ -144,7 +146,7 @@ describe('commitments.cancelOnchain', () => {
     const { ctx } = fakeContext({
       apiResponder: () => fullCommitmentBody({ scorer: null, lineTicks: null }),
     });
-    await expect(cancelOnchain(ctx, HASH as `0x${string}`)).rejects.toBeInstanceOf(
+    await expect(cancelOnchain(ctx, { hash: HASH as `0x${string}` })).rejects.toBeInstanceOf(
       OspexValidationError,
     );
   });
@@ -161,7 +163,7 @@ describe('commitments.cancelOnchain', () => {
         estimateGasCalled = true;
         return 0n;
       };
-    await expect(cancelOnchain(ctx, HASH as `0x${string}`)).rejects.toBeInstanceOf(OspexAPIError);
+    await expect(cancelOnchain(ctx, { hash: HASH as `0x${string}` })).rejects.toBeInstanceOf(OspexAPIError);
     expect(estimateGasCalled).toBe(false);
   });
 
@@ -179,7 +181,7 @@ describe('commitments.cancelOnchain', () => {
         estimateGasCalled = true;
         return 0n;
       };
-    await expect(cancelOnchain(ctx, HASH as `0x${string}`)).rejects.toBeInstanceOf(
+    await expect(cancelOnchain(ctx, { hash: HASH as `0x${string}` })).rejects.toBeInstanceOf(
       OspexValidationError,
     );
     expect(estimateGasCalled).toBe(false);
@@ -192,7 +194,7 @@ describe('commitments.cancelOnchain', () => {
     const { ctx } = fakeContext({
       apiResponder: () => fullCommitmentBody({ status: 'cancelled' }),
     });
-    const result = await cancelOnchain(ctx, HASH as `0x${string}`);
+    const result = await cancelOnchain(ctx, { hash: HASH as `0x${string}` });
     expect(result.txHash).toMatch(/^0x[0-9a-f]{64}$/);
   });
 
@@ -205,7 +207,7 @@ describe('commitments.cancelOnchain', () => {
       },
     };
     const { ctx } = fakeContext({ estimateGasErr: revertErr });
-    await expect(cancelOnchain(ctx, HASH as `0x${string}`)).rejects.toMatchObject({
+    await expect(cancelOnchain(ctx, { hash: HASH as `0x${string}` })).rejects.toMatchObject({
       name: 'OspexChainError',
       reason: 'NotCommitmentMaker',
     });
@@ -217,7 +219,7 @@ describe('commitments.cancelOnchain', () => {
       data: NOT_MAKER_SELECTOR,
     };
     const { ctx } = fakeContext({ estimateGasErr: rawErr });
-    await expect(cancelOnchain(ctx, HASH as `0x${string}`)).rejects.toMatchObject({
+    await expect(cancelOnchain(ctx, { hash: HASH as `0x${string}` })).rejects.toMatchObject({
       name: 'OspexChainError',
       reason: 'NotCommitmentMaker',
     });
@@ -225,7 +227,7 @@ describe('commitments.cancelOnchain', () => {
 
   it('wraps unknown reverts as plain OspexChainError without a reason', async () => {
     const { ctx } = fakeContext({ estimateGasErr: new Error('rpc went sideways') });
-    const promise = cancelOnchain(ctx, HASH as `0x${string}`);
+    const promise = cancelOnchain(ctx, { hash: HASH as `0x${string}` });
     await expect(promise).rejects.toBeInstanceOf(OspexChainError);
     await expect(promise).rejects.toMatchObject({ reason: undefined });
   });
@@ -268,10 +270,149 @@ describe('commitments.cancelOnchain', () => {
       },
       nonceCounter: new NonceCounter(),
     };
-    await expect(cancelOnchain(ctx, HASH as `0x${string}`)).rejects.toMatchObject({
+    await expect(cancelOnchain(ctx, { hash: HASH as `0x${string}` })).rejects.toMatchObject({
       name: 'OspexValidationError',
       field: 'commitment',
       message: expect.stringContaining('cancel on chain'),
+    });
+  });
+});
+
+// ─── cancelOnchainSigned (M5/PR2) ────────────────────────────────────────
+
+import { cancelOnchainSigned } from '../src/commitments/cancelOnchain.js';
+import type { SignedCommitmentPayload } from '../src/types/commitment.js';
+
+const VALID_SIG = ('0x' + 'cc'.repeat(65)) as `0x${string}`;
+
+function makeSignedPayload(
+  overrides: Partial<SignedCommitmentPayload> = {},
+): SignedCommitmentPayload {
+  return {
+    commitmentHash: HASH,
+    commitment: { ...BODY_STRUCT },
+    signature: VALID_SIG,
+    ...overrides,
+  };
+}
+
+describe('commitments.cancelOnchainSigned — canonical low-level primitive', () => {
+  it('broadcasts cancelCommitment with the supplied struct on the happy path', async () => {
+    // The payload encodes the same nine struct fields the contract expects;
+    // the signature is captured but never re-sent on chain (the contract
+    // recomputes the hash from the struct). Mock signer / chain to assert
+    // the calldata reaches buildSignAndSend.
+    const { ctx } = fakeContext();
+    const result = await cancelOnchainSigned(ctx, makeSignedPayload());
+    expect(result.txHash).toMatch(/^0x[0-9a-f]+$/i);
+    expect(result.commitmentHash).toBe(HASH.toLowerCase());
+    expect(result.receipt.status).toBe('success');
+  });
+
+  it('does NOT hit the public commitments API — load-bearing for book-hidden makers', async () => {
+    // Hidden rows redact the matchable payload from the anonymous list, so
+    // a maker holding the signed payload in local state must be able to
+    // cancel without touching CommitmentsApi.get. Wire the API to throw
+    // and assert the cancel still lands.
+    const { ctx } = fakeContext({
+      apiResponder: () => {
+        throw new Error('cancelOnchainSigned must not hit the commitments API');
+      },
+    });
+    const result = await cancelOnchainSigned(ctx, makeSignedPayload());
+    expect(result.txHash).toMatch(/^0x[0-9a-f]+$/i);
+  });
+
+  it('refuses a payload whose struct does not hash to commitmentHash', async () => {
+    const { ctx } = fakeContext();
+    // Bump the nonce — the recomputed hash will diverge from HASH.
+    const bad = makeSignedPayload({
+      commitment: { ...BODY_STRUCT, nonce: BODY_STRUCT.nonce + 1n },
+    });
+    await expect(cancelOnchainSigned(ctx, bad)).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      field: 'commitmentHash',
+      message: expect.stringContaining('does not match commitmentHash'),
+    });
+  });
+
+  it('refuses an invalid commitmentHash format', async () => {
+    const { ctx } = fakeContext();
+    const bad = makeSignedPayload({ commitmentHash: '0xnothex' as `0x${string}` });
+    await expect(cancelOnchainSigned(ctx, bad)).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      field: 'commitmentHash',
+    });
+  });
+
+  it('refuses an invalid signature format (length / hex)', async () => {
+    const { ctx } = fakeContext();
+    // Real EIP-712 sigs are 65 bytes = 130 hex chars; truncated payloads
+    // are a programming error, not a contract revert. Surface them clearly.
+    const bad = makeSignedPayload({ signature: ('0x' + 'aa') as `0x${string}` });
+    await expect(cancelOnchainSigned(ctx, bad)).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      field: 'signature',
+    });
+  });
+
+  it.each([
+    ['contestId', { ...BODY_STRUCT, contestId: '42' as unknown as bigint }],
+    ['riskAmount', { ...BODY_STRUCT, riskAmount: 1_000_000 as unknown as bigint }],
+    ['lineTicks', { ...BODY_STRUCT, lineTicks: '-35' as unknown as number }],
+  ])('refuses a malformed commitment.%s (wrong type)', async (_field, badStruct) => {
+    const { ctx } = fakeContext();
+    await expect(
+      cancelOnchainSigned(
+        ctx,
+        makeSignedPayload({ commitment: badStruct as typeof BODY_STRUCT }),
+      ),
+    ).rejects.toBeInstanceOf(OspexValidationError);
+  });
+});
+
+describe('commitments.cancelOnchain — overload routing', () => {
+  it('{ signedCommitment } branch delegates to cancelOnchainSigned (no API hit)', async () => {
+    // The signed branch is the canonical path; it skips the fetch + narrow
+    // entirely. Wire the API to throw so we prove the function never reaches it.
+    const { ctx } = fakeContext({
+      apiResponder: () => {
+        throw new Error('signedCommitment branch must not fetch from the API');
+      },
+    });
+    const result = await cancelOnchain(ctx, {
+      signedCommitment: makeSignedPayload(),
+    });
+    expect(result.txHash).toMatch(/^0x[0-9a-f]+$/i);
+    expect(result.commitmentHash).toBe(HASH.toLowerCase());
+  });
+
+  it('throws when BOTH { hash } and { signedCommitment } are supplied (mutually exclusive)', async () => {
+    const { ctx } = fakeContext();
+    await expect(
+      cancelOnchain(ctx, {
+        // Use a loose any-cast: the type system already forbids this
+        // shape statically; the runtime guard catches dynamic callers
+        // (CLI building args via spread, ad-hoc tooling).
+        hash: HASH as `0x${string}`,
+        signedCommitment: makeSignedPayload(),
+      } as unknown as Parameters<typeof cancelOnchain>[1]),
+    ).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      message: expect.stringContaining('not both'),
+    });
+  });
+
+  it('throws when NEITHER { hash } nor { signedCommitment } is supplied', async () => {
+    const { ctx } = fakeContext();
+    await expect(
+      cancelOnchain(
+        ctx,
+        {} as unknown as Parameters<typeof cancelOnchain>[1],
+      ),
+    ).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      message: expect.stringContaining('one of'),
     });
   });
 });
