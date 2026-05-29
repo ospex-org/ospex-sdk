@@ -25,6 +25,25 @@
  * Supabase rows on `nonce < newMinNonce`. Indexer lag means the actual
  * post-tx count may be slightly higher (commitments not yet projected),
  * but never lower for already-on-chain rows.
+ *
+ * **Limitation — hidden cross-process commitments.** The Supabase candidate
+ * (`supabaseMaxStored`) reads `GET /v1/commitments`, which the core API
+ * filters to `book_visible=true` rows for anonymous callers (own-state SSE
+ * plan §M2). A commitment the maker pulled off the public book via off-chain
+ * DELETE — but never raised a higher floor against — stays matchable on
+ * chain at its original nonce yet is invisible to this list. If that
+ * commitment was signed by a DIFFERENT process (so `lastInProcess` here
+ * doesn't capture it either) and its nonce exceeds the on-chain floor, the
+ * auto-default `newMinNonce` may pick a value that does NOT invalidate it.
+ *
+ * For makers using book-hide in production, pass an explicit
+ * `newMinNonce` derived from a process-local nonce ledger or the
+ * owner-auth own-state recovery surface (M5/PR3
+ * `client.ownState.*`). The defensive narrow below filters any hidden
+ * row that nevertheless slips through the public list (e.g. a future
+ * recovery-overlap response) so the calc never crashes on a missing
+ * `speculationKey`; the safety of the chosen floor against unseen
+ * hidden rows is the caller's responsibility until owner-auth lands.
  */
 
 import type { Hash, TransactionReceipt } from 'viem';
@@ -127,26 +146,19 @@ export async function cancelAllOnSpeculation(
     }
   }
 
-  // Hidden bodies redact `nonce` + `speculationKey` per the public allow-list
-  // (own-state SSE plan §2.3), so an anonymous list cannot see the maker's
-  // own off-book commitments' nonces. The default-floor calc would silently
-  // skip them and choose a `newMinNonce` that leaves a hidden-but-still-matchable
-  // row live — exactly the failure mode this primitive exists to prevent.
-  // Refuse to auto-compute in that case; the caller can either pass an
-  // explicit `newMinNonce` or fetch their hidden book via owner-auth
-  // (M5/PR3 `client.ownState.list*`) to compute the correct floor.
+  // The public list is filtered to `book_visible=true` upstream (core-api
+  // M2), so in practice `allRows` carries only visible bodies and
+  // `hiddenRowCount` is always 0 here. The defensive narrow below stays as
+  // belt-and-braces against a future recovery-overlap response or a server
+  // bug that lets a hidden body through — those rows have no
+  // `speculationKey`, and reading it would crash the `matching` filter
+  // below. We do NOT throw on a non-zero count: the caller's hidden book
+  // is fundamentally invisible to anonymous reads (see jsdoc), and pretending
+  // a thrown error here delivers safety in that case would be a false
+  // guarantee. Refusing to auto-compute would also break the common case
+  // (no book-hide at all) for no security gain — the verdict is the same
+  // either way: callers using book-hide need to provide their own floor.
   const visibleRows = allRows.filter((c): c is CommitmentBody => c.redacted !== true);
-  const hiddenRowCount = allRows.length - visibleRows.length;
-  if (hiddenRowCount > 0 && args.newMinNonce === undefined) {
-    throw new OspexValidationError(
-      `Maker has ${hiddenRowCount} hidden (book_visible=false) commitment(s) on ` +
-        `(contestId=${args.contestId}, scorer); their nonces are redacted from anonymous reads, ` +
-        'so the safe default newMinNonce cannot be auto-computed (a too-low floor would leave ' +
-        'a hidden commitment matchable). Pass an explicit newMinNonce to bypass, or recover ' +
-        'the full book via owner-auth `client.ownState.*` to compute it.',
-      { field: 'newMinNonce' },
-    );
-  }
 
   const speculationKeyLower = speculationKey.toLowerCase();
   const matching = visibleRows.filter(

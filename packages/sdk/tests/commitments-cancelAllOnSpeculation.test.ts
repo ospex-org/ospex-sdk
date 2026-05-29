@@ -292,41 +292,20 @@ describe('commitments.cancelAllOnSpeculation', () => {
     expect(apiCallCount()).toBe(1);
   });
 
-  // ── Hidden-row safety (M5/PR1) ──────────────────────────────────────────
-  // Public anonymous list responses redact `nonce` + `speculationKey` for any
-  // `book_visible=false` row (own-state SSE plan §2.3 allow-list). If the maker
-  // has hidden commitments on this (contestId, scorer) tuple, the default
-  // floor calc cannot see their nonces — picking a too-low newMinNonce would
-  // leave a hidden-but-still-matchable row live. The function must refuse to
-  // auto-compute in that case.
-  it('throws on hidden rows in the maker book when newMinNonce is not provided', async () => {
-    const hiddenRow = {
-      redacted: true as const,
-      payloadAvailable: false as const,
-      commitmentHash: '0x' + 'ab'.repeat(32),
-      maker: SIGNER_ADDR,
-      contestId: CONTEST_ID.toString(),
-      positionType: 0 as const,
-      status: 'cancelled' as const,
-      storedStatus: 'open' as const,
-      filledRiskAmount: '0',
-      expiry: '2099-01-01T00:00:00.000Z',
-      bookVisible: false as const,
-      nonceInvalidated: false,
-    };
-    const rows = [
-      makeRow({ nonce: '100', status: 'open' }),
-      hiddenRow as unknown as CommitmentBody,
-    ];
-    const { ctx } = fakeContext({ onChainFloor: 0n, rows });
-    await expect(cancelAllOnSpeculation(ctx, baseArgs)).rejects.toMatchObject({
-      name: 'OspexValidationError',
-      field: 'newMinNonce',
-      message: expect.stringContaining('hidden'),
-    });
-  });
-
-  it('proceeds when newMinNonce is explicit, counting only the visible rows in invalidatedCount', async () => {
+  // ── Hidden-row defensive narrow (M5/PR1) ────────────────────────────────
+  // The PUBLIC list is filtered to `book_visible=true` upstream (core-api M2),
+  // so in production hidden bodies don't reach this function — the maker's
+  // hidden book is fundamentally invisible to anonymous reads. The default
+  // floor cannot account for it; that's a documented limitation, NOT a thrown
+  // safety guard (a thrown guard would have been a false guarantee — see the
+  // function docstring for the recommended explicit-newMinNonce path).
+  // The defensive narrow stays as belt-and-braces against a future
+  // recovery-overlap response or server bug that leaks a hidden row: the
+  // function must not crash on a missing `speculationKey` if one slips through.
+  it('defensively skips a hidden row leaked into the list response without crashing', async () => {
+    // Construct a wire body shaped like a redacted M2 body. The defensive
+    // narrow must filter it out of the matching set; the function still
+    // produces a verdict from the visible rows.
     const hiddenRow = {
       redacted: true as const,
       payloadAvailable: false as const,
@@ -347,13 +326,10 @@ describe('commitments.cancelAllOnSpeculation', () => {
       makeRow({ nonce: '200', status: 'open' }),
     ];
     const { ctx, sentTxs } = fakeContext({ onChainFloor: 0n, rows });
-    const result = await cancelAllOnSpeculation(ctx, {
-      ...baseArgs,
-      newMinNonce: 999n,
-    });
-    expect(result.newMinNonce).toBe(999n);
-    // invalidatedCount can only count visible rows — the two `open` rows with
-    // nonce 100 and 200 are both below 999.
+    const result = await cancelAllOnSpeculation(ctx, baseArgs);
+    // Default-path computation should succeed against the visible rows
+    // (max of {onChainFloor=0, lastInProcess=0, supabaseMaxStored=200} + 1).
+    expect(result.newMinNonce).toBe(201n);
     expect(result.invalidatedCount).toBe(2);
     expect(sentTxs).toHaveLength(1);
   });

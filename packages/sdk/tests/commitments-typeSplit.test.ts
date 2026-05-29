@@ -203,26 +203,26 @@ describe('requireVisibleCommitment', () => {
 // ─── Call-site refusals — checkCommitmentFillability ─────────────────────
 
 describe('checkCommitmentFillability — redaction short-circuit', () => {
-  it('returns not-fillable with COMMITMENT_REDACTED when the commitment is hidden', async () => {
-    // No chain reads should happen — the redaction verdict is definitive for
-    // an anonymous caller regardless of funding. Pass a context whose chain
-    // reads would explode if reached.
+  it('returns not-fillable with COMMITMENT_REDACTED when the commitment is hidden, with NO chain or address access', async () => {
+    // Doc contract (AGENT_CONTRACT.md §1.5): hidden input yields
+    // `not-fillable` / `COMMITMENT_REDACTED` with "No chain read". That
+    // means a caller without an RPC config — `requireChainClient` itself
+    // throws — must STILL get the redaction verdict. Wire the context so
+    // every chain-adjacent accessor (requireChainClient AND getAddresses
+    // AND requireSigner) throws if touched; the redaction check must
+    // resolve without exercising any of them.
     const hidden = toCommitment(makeHiddenBody()) as PublicHiddenCommitment;
     const ctx = {
       api: { request: () => Promise.reject(new Error('no API read expected')) },
-      requireChainClient: () => ({
-        readContract: () => Promise.reject(new Error('no chain read expected')),
-        getBlockNumber: () => Promise.reject(new Error('no chain read expected')),
-      }),
-      requireSigner: () => {
-        throw new Error('no signer read expected');
+      requireChainClient: () => {
+        throw new Error('no rpcUrl configured — chain client must not be accessed for a redaction-only verdict');
       },
-      getAddresses: () => ({
-        usdc: '0x' + '11'.repeat(20),
-        positionModule: '0x' + '22'.repeat(20),
-        treasuryModule: '0x' + '33'.repeat(20),
-        matchingModule: '0x' + '44'.repeat(20),
-      }),
+      requireSigner: () => {
+        throw new Error('no signer expected for a redaction-only verdict');
+      },
+      getAddresses: () => {
+        throw new Error('no addresses access expected for a redaction-only verdict');
+      },
       getChainId: () => 137,
     } as unknown as CommitmentsContext;
 

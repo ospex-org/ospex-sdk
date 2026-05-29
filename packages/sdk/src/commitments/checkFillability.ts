@@ -172,25 +172,18 @@ export async function checkCommitmentFillability(
   ctx: CommitmentsContext,
   args: CheckCommitmentFillabilityArgs,
 ): Promise<CheckCommitmentFillabilityResult> {
-  // Fillability is fundamentally a chain-read feature. Surface a missing-rpcUrl
-  // config error immediately (consistent with the `ensure*` primitives), rather
-  // than partway through after an API fetch.
-  const publicClient = ctx.requireChainClient();
-  const addresses = ctx.getAddresses();
-  const usdc = (addresses.usdc as string).toLowerCase() as Hex;
-  const positionModule = (addresses.positionModule as string).toLowerCase() as Hex;
-  const treasuryModule = (addresses.treasuryModule as string).toLowerCase() as Hex;
-
-  const resolved = await resolveCommitment(ctx, args);
-  const commitmentHash = resolved.commitmentHash;
-
-  // ── 0. Redaction short-circuit (no chain read) ─────────────────────
+  // ── 0. Redaction short-circuit (no chain or address access) ────────
   // A book-hidden body has no signature / nonce / odds / risk in the public
   // surface (own-state SSE plan §2.3 allow-list, locked). An anonymous caller
   // has no fill path against it regardless of funding, so the verdict is
-  // definitively `not-fillable` for this audience. The maker recovers the full
-  // payload (and can then call `checkCommitmentFillability` with the rehydrated
-  // visible commitment) via owner-auth `client.ownState.getCommitment(hash)`.
+  // definitively `not-fillable` for this audience without ANY chain read or
+  // RPC dependency — so the resolve-and-check pair runs BEFORE
+  // `requireChainClient` / `getAddresses` are touched. That keeps the
+  // public no-chain-read contract honest for callers without an RPC config
+  // (the result is still produced and an `OspexConfigError` is never raised
+  // ahead of the redaction verdict).
+  const resolved = await resolveCommitment(ctx, args);
+  const commitmentHash = resolved.commitmentHash;
   if (resolved.redacted === true) {
     return result({
       commitmentHash,
@@ -199,6 +192,16 @@ export async function checkCommitmentFillability(
     });
   }
   const commitment: PublicVisibleCommitment = resolved;
+
+  // Fillability is fundamentally a chain-read feature from here on. Surface a
+  // missing-rpcUrl config error immediately (consistent with the `ensure*`
+  // primitives), rather than partway through after a liveness short-circuit
+  // that might have answered without an RPC.
+  const publicClient = ctx.requireChainClient();
+  const addresses = ctx.getAddresses();
+  const usdc = (addresses.usdc as string).toLowerCase() as Hex;
+  const positionModule = (addresses.positionModule as string).toLowerCase() as Hex;
+  const treasuryModule = (addresses.treasuryModule as string).toLowerCase() as Hex;
 
   // ── 1. Liveness (no chain read) ───────────────────────────────────
   // Re-derive matchability FRESH from the commitment's fields rather than
