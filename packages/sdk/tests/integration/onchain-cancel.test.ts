@@ -70,7 +70,7 @@ describe.skipIf(!RUN)('integration: M2.5 on-chain cancel', () => {
       if (!PRIVATE_KEY || !LIVE_HASH) throw new Error('write env required');
       const signer = KeystoreSigner.fromPrivateKey(PRIVATE_KEY);
       const client = makeClient({ signer });
-      const result = await client.commitments.cancelOnchain(LIVE_HASH);
+      const result = await client.commitments.cancelOnchain({ hash: LIVE_HASH });
       expect(result.txHash).toMatch(/^0x[0-9a-f]{64}$/);
       expect(result.commitmentHash.toLowerCase()).toBe(LIVE_HASH.toLowerCase());
       // Poll Supabase via the API for up to 30s for the indexer projection.
@@ -89,7 +89,7 @@ describe.skipIf(!RUN)('integration: M2.5 on-chain cancel', () => {
       if (!PRIVATE_KEY || !LIVE_HASH) throw new Error('write env required');
       const signer = KeystoreSigner.fromPrivateKey(PRIVATE_KEY);
       const client = makeClient({ signer });
-      const result = await client.commitments.cancelOnchain(LIVE_HASH);
+      const result = await client.commitments.cancelOnchain({ hash: LIVE_HASH });
       expect(result.txHash).toMatch(/^0x[0-9a-f]{64}$/);
       const row = await client.commitments.get(LIVE_HASH);
       expect(row.status).toBe('cancelled');
