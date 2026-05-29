@@ -1,4 +1,38 @@
+import type { OspexCommitmentMessage } from '../chain/eip712.js';
 import type { MarketType } from './odds.js';
+import type { Hex } from './signer.js';
+
+/**
+ * The canonical signed commitment payload — the three pieces a third party
+ * needs to act on a commitment without re-fetching it: the EIP-712 hash
+ * the maker signed against, the 9-field commitment struct that hashes
+ * back to it, and the maker's signature over that struct.
+ *
+ * `cancelOnchainSigned(payload)` is the SDK's low-level write primitive
+ * built on this shape — it bypasses the API fetch entirely, making it
+ * the natural surface for makers and market-makers who hold their own
+ * signed payloads in local state (e.g. after off-chain book-hide → they
+ * can still authoritatively cancel on chain without round-tripping a
+ * redacted public read). `cancelOnchain({ signedCommitment })` is the
+ * convenience overload that delegates to it; `cancelOnchain({ hash })`
+ * is the alternative that fetches via the public commitments API and
+ * narrows redaction before constructing the equivalent payload.
+ *
+ * Although `MatchingModule.cancelCommitment` only consumes `commitment`
+ * on chain (the contract recomputes the hash from the struct and uses
+ * that to set `s_cancelledCommitments`), this type carries `signature`
+ * too: it captures the full authenticated unit (same shape the maker
+ * originally signed and POSTed) and lets the SDK assert
+ * `hashCommitment(commitment) === commitmentHash` before signing the
+ * cancel — so a row that drifted from the signed payload (e.g. a
+ * truncated expiry) can never cause an unguarded cancel on the wrong
+ * `s_cancelledCommitments` slot.
+ */
+export interface SignedCommitmentPayload {
+  commitmentHash: Hex;
+  commitment: OspexCommitmentMessage;
+  signature: Hex;
+}
 
 /**
  * Raw lifecycle status as stored by the indexer / submission relay. These are
