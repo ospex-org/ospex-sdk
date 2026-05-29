@@ -1,11 +1,15 @@
 /**
- * `client.commitments.cancelAllOnSpeculation(args)` — auto-default
- * newMinNonce calculation, explicit override, and invalidatedCount.
+ * `client.commitments.cancelAllOnSpeculation(args)` — explicit-newMinNonce
+ * gating + invalidatedCount preview (M5/PR1).
  *
- * The default-path test pins the formula:
- *   newMinNonce = max(onChainFloor, lastInProcess, supabaseMaxStored) + 1
- * by mocking each candidate to a different value and asserting the
- * resulting tx encodes the highest-plus-one.
+ * The function requires an explicit `newMinNonce` (own-state SSE plan §M2:
+ * the public commitments list filters `book_visible=true` upstream, so any
+ * SDK-side default sourced from that list could silently leave a maker's
+ * cross-process book-hidden commitments matchable). These tests pin the
+ * required-arg gate, the explicit-override execute path, the visible-rows
+ * `invalidatedCount` preview, the pagination loop, and the defensive
+ * hidden-row narrow that keeps the function from crashing if a hidden body
+ * ever leaks into the public list response.
  */
 
 import { describe, expect, it } from 'vitest';

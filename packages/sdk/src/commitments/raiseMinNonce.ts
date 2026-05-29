@@ -7,10 +7,14 @@
  * setting `nonce_invalidated = true` on the affected rows — the row's
  * `status` is NOT changed.
  *
- * Use `cancelAllOnSpeculation` for the convenience wrapper that
- * computes a sensible default `newMinNonce`. This raw method is for
- * callers that want exact control over the floor value (e.g. after
- * external coordination through a Redis-backed counter).
+ * `commitments.cancelAllOnSpeculation` is a sibling wrapper that adds an
+ * `invalidatedCount` preview from the maker's VISIBLE book before
+ * calling this same primitive. Neither auto-computes `newMinNonce`:
+ * the caller supplies it explicitly because anonymous reads cannot
+ * enumerate a maker's book-hidden commitments and any default would
+ * silently leave latent exposure live (own-state SSE plan §M2; M5/PR3
+ * will reintroduce a hidden-safe default once owner-auth own-state
+ * recovery ships).
  *
  * Reverts mapped:
  *   `MatchingModule__NonceMustIncrease` →
