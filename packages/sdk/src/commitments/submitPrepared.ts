@@ -28,6 +28,7 @@ import {
   type OspexCommitmentMessage,
 } from '../chain/eip712.js';
 import { toCommitment } from '../api/commitments.js';
+import { requireVisibleCommitment } from './requireVisible.js';
 import { OspexValidationError } from '../errors.js';
 import type { CommitmentsContext } from './context.js';
 import type { SubmitPreview } from '../types/preview.js';
@@ -122,5 +123,10 @@ export async function submitPrepared(
       signature,
     },
   });
-  return { hash, commitment: toCommitment(body) };
+  // Submission inserts `book_visible=true` by construction; the server
+  // response must decode visible. See submitRaw.ts for the same defensive narrow.
+  const commitment = requireVisibleCommitment(toCommitment(body), {
+    purpose: 'persist the newly-submitted',
+  });
+  return { hash, commitment };
 }

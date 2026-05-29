@@ -56,6 +56,8 @@ const ADDRESSES = {
 
 function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
   return {
+    visibility: 'visible',
+    redacted: false,
     commitmentHash: HASH,
     maker: MAKER,
     contestId: '42',
@@ -72,6 +74,7 @@ function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
     speculationKey: '0x'.padEnd(66, 'a'),
     signature: ('0x' + 'sig'.padEnd(130, '0')) as string,
     status: 'open',
+    storedStatus: 'open',
     source: 'submit',
     network: 'polygon',
     nonceInvalidated: false,
@@ -253,9 +256,14 @@ describe('matchFromPreview — happy path', () => {
 
 describe('matchFromPreview — staleness checks', () => {
   it('status changed since preview → throws', async () => {
+    // matchFromPreview keys liveness off RAW `storedStatus` (not effective
+    // `status`) because the effective value folds in book-visibility and a
+    // book-hidden row stays on-chain matchable. So this stale-cancel test
+    // overrides BOTH — `storedStatus: 'cancelled'` is the on-chain truth
+    // that should force the throw.
     const preview = buildPreview();
     const { ctx } = buildCtx({
-      freshCommitment: makeCommitment({ status: 'cancelled' }),
+      freshCommitment: makeCommitment({ status: 'cancelled', storedStatus: 'cancelled' }),
     });
     await expect(matchFromPreview(ctx, preview)).rejects.toThrow(/no longer matchable.*cancelled/);
   });
@@ -347,6 +355,37 @@ describe('matchFromPreview — book-visibility (raw storedStatus, not effective 
       freshCommitment: makeCommitment({ status: 'filled', storedStatus: 'filled' }),
     });
     await expect(matchFromPreview(ctx, preview)).rejects.toThrow(/no longer matchable.*filled/);
+  });
+
+  it('re-fetch returns a REDACTED hidden body → throws via requireVisibleCommitment', async () => {
+    // The maker raced an off-chain DELETE between preview and match — the public
+    // re-fetch now returns the allow-list-projected hidden body (no signature,
+    // no nonce, no oddsTick). matchFromPreview must refuse before reading any
+    // signed field, surfacing a structured error pointing at the owner-auth
+    // recovery path. This is the public-surface mirror of the book-visibility
+    // tests above — for an anonymous caller, redaction is a hard stop.
+    const preview = buildPreview();
+    const hiddenFresh = {
+      visibility: 'hidden' as const,
+      redacted: true as const,
+      payloadAvailable: false as const,
+      commitmentHash: HASH,
+      maker: MAKER,
+      contestId: '42',
+      positionType: 0 as const,
+      status: 'cancelled' as const,
+      storedStatus: 'open' as const,
+      filledRiskAmount: '0',
+      expiry: FAR_FUTURE_ISO,
+      bookVisible: false as const,
+      nonceInvalidated: false,
+    };
+    const { ctx } = buildCtx({ freshCommitment: hiddenFresh });
+    await expect(matchFromPreview(ctx, preview)).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      field: 'commitment',
+      message: expect.stringContaining('submit a match for'),
+    });
   });
 });
 

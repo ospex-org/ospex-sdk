@@ -59,6 +59,8 @@ function buildSigner(addr: Hex = TAKER): Signer {
 
 function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
   return {
+    visibility: 'visible',
+    redacted: false,
     commitmentHash: HASH,
     maker: MAKER,
     contestId: '42',
@@ -75,6 +77,7 @@ function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
     speculationKey: '0x'.padEnd(66, 'a'),
     signature: '0x'.padEnd(132, 's'),
     status: 'open',
+    storedStatus: 'open',
     source: 'submit',
     network: 'polygon',
     nonceInvalidated: false,
@@ -534,5 +537,60 @@ describe('prepareMatch — taker override (preview-only without signer unlock)',
     };
     await prepareMatch(ctx, { commitment: makeCommitment() });
     expect(signer.getAddress).toHaveBeenCalled();
+  });
+});
+
+describe('prepareMatch — redacted commitment refusal', () => {
+  it('throws OspexValidationError({ field: "commitment" }) when the input commitment is redacted', async () => {
+    // Pass a PublicHiddenCommitment as the input. The narrow at the top of
+    // prepareMatch must fire BEFORE any contest fetch / chain read, so the
+    // context can refuse every dependency without affecting the verdict.
+    const hidden = {
+      visibility: 'hidden' as const,
+      redacted: true as const,
+      payloadAvailable: false as const,
+      commitmentHash: HASH,
+      maker: MAKER,
+      contestId: '42',
+      positionType: 0 as const,
+      status: 'cancelled' as const,
+      storedStatus: 'open' as const,
+      filledRiskAmount: '0',
+      expiry: FAR_FUTURE_ISO,
+      bookVisible: false as const,
+      nonceInvalidated: false,
+    };
+    const ctx: CommitmentsContext = {
+      api: {
+        request: () => {
+          throw new Error('no API read expected — narrow should fire first');
+        },
+      } as unknown as CommitmentsContext['api'],
+      requireSigner: () => {
+        throw new Error('no signer expected — narrow should fire first');
+      },
+      getChainId: () => 137,
+      getAddresses: () => ADDRESSES,
+      requireChainClient: () => {
+        throw new Error('no chain client expected — narrow should fire first');
+      },
+      nonceCounter: new NonceCounter(),
+      getContestsApi: () => ({
+        get: () => {
+          throw new Error('no contest fetch expected — narrow should fire first');
+        },
+        list: vi.fn(),
+        scripts: vi.fn(),
+      }) as unknown as ReturnType<CommitmentsContext['getContestsApi']>,
+      getSpeculationsApi: () => ({}) as ReturnType<CommitmentsContext['getSpeculationsApi']>,
+      getTeams: () => ({}) as ReturnType<CommitmentsContext['getTeams']>,
+    };
+    await expect(
+      prepareMatch(ctx, { commitment: hidden }),
+    ).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      field: 'commitment',
+      message: expect.stringContaining('prepare a match against'),
+    });
   });
 });

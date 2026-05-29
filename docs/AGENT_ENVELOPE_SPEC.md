@@ -349,6 +349,7 @@ Examples:
 - Single clear context → populate the top-level field.
 - Multi-object list → top-level `null`; rows carry IDs/details inside `payload`.
 - Detail-fetch commands (`contests show <id>`, `speculations show <id>`, `commitments show <hash>`) still populate the top-level summary even though the full object is also in `payload`. Generic agents render context from the shoulder block without inspecting the payload shape.
+- `commitment` is the discriminated union `PublicVisibleCommitment | PublicHiddenCommitment` (see AGENT_CONTRACT.md §1.5). Both variants carry the `visibility` / `redacted` discriminants; a hidden body carries only the allow-list fields (`commitmentHash`, `maker`, `contestId`, `positionType`, `status`, `storedStatus`, `filledRiskAmount`, `expiry`, `bookVisible: false`, `nonceInvalidated`). Agents narrow on `redacted` before reading matchable fields (`signature`, `nonce`, `oddsTick`, `riskAmount`, `scorer`, `lineTicks`, `marketType`, `speculationKey`) — those keys are absent on a hidden body. Preview-bearing write commands (`commitments submit --yes`, `commitments match --yes`) only ever carry a visible commitment because the preview itself refuses redacted input upstream.
 
 ### 3.5 `sideSummary`
 

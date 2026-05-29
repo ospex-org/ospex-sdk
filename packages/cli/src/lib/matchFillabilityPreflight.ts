@@ -116,6 +116,8 @@ export function reasonMessage(r: FillabilityReason): string {
       return 'Commitment has no remaining capacity to fill.';
     case 'SPECULATION_CLOSED':
       return 'The speculation is closed (settled or scored); a match would revert.';
+    case 'COMMITMENT_REDACTED':
+      return 'Commitment is hidden (book_visible=false); the matchable payload is redacted from anonymous reads and a match cannot be constructed.';
     case 'FILLABILITY_UNKNOWN':
       return 'Fillability could not be determined (an on-chain read failed).';
   }

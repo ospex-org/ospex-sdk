@@ -53,7 +53,7 @@ import { prepareMatch, type PrepareMatchArgs } from './prepareMatch.js';
 import { erc20Abi } from '../contracts/abi/erc20.js';
 import { CommitmentsApi } from '../api/commitments.js';
 import type { CommitmentsContext } from './context.js';
-import type { Commitment } from '../types/commitment.js';
+import type { Commitment, PublicVisibleCommitment } from '../types/commitment.js';
 import type { MatchPreview } from '../types/matchPreview.js';
 import type { Hex } from '../types/signer.js';
 
@@ -103,6 +103,14 @@ export type FillabilityReasonCode =
   | 'NONCE_INVALIDATED'
   | 'NO_REMAINING_CAPACITY'
   | 'SPECULATION_CLOSED'
+  /**
+   * The maker pulled the commitment off the public book (`book_visible=false`)
+   * and the matchable payload (signature/nonce/odds/risk) is redacted from
+   * anonymous reads per own-state SSE plan §2.3. An anonymous caller has no
+   * path to fill the row — the maker recovers the payload via owner-auth
+   * `client.ownState.getCommitment`.
+   */
+  | 'COMMITMENT_REDACTED'
   // Degraded:
   | 'FILLABILITY_UNKNOWN';
 
@@ -173,16 +181,34 @@ export async function checkCommitmentFillability(
   const positionModule = (addresses.positionModule as string).toLowerCase() as Hex;
   const treasuryModule = (addresses.treasuryModule as string).toLowerCase() as Hex;
 
-  const commitment = await resolveCommitment(ctx, args);
-  const commitmentHash = commitment.commitmentHash;
+  const resolved = await resolveCommitment(ctx, args);
+  const commitmentHash = resolved.commitmentHash;
+
+  // ── 0. Redaction short-circuit (no chain read) ─────────────────────
+  // A book-hidden body has no signature / nonce / odds / risk in the public
+  // surface (own-state SSE plan §2.3 allow-list, locked). An anonymous caller
+  // has no fill path against it regardless of funding, so the verdict is
+  // definitively `not-fillable` for this audience. The maker recovers the full
+  // payload (and can then call `checkCommitmentFillability` with the rehydrated
+  // visible commitment) via owner-auth `client.ownState.getCommitment(hash)`.
+  if (resolved.redacted === true) {
+    return result({
+      commitmentHash,
+      outcome: 'not-fillable',
+      reasons: [{ code: 'COMMITMENT_REDACTED' }],
+    });
+  }
+  const commitment: PublicVisibleCommitment = resolved;
 
   // ── 1. Liveness (no chain read) ───────────────────────────────────
   // Re-derive matchability FRESH from the commitment's fields rather than
   // trusting the API's snapshot `isLive` flag — that flag is computed at decode
   // time, so a row fetched just before its expiry would carry a stale
   // `isLive: true`. We check the same preconditions `matchCommitment` enforces,
-  // keyed off `storedStatus` (NOT effective status — a book-hidden row is still
-  // matchable on chain). A dead order short-circuits before any chain read.
+  // keyed off `storedStatus` — for a visible row that's the trustworthy
+  // on-chain matchability signal. (The hidden case was already short-circuited
+  // above; we'd never reach here on a redacted body.) A dead order
+  // short-circuits before any chain read.
   const liveness = livenessReasons(commitment);
   if (liveness.length > 0) {
     return result({ commitmentHash, outcome: 'not-fillable', reasons: liveness });
@@ -350,8 +376,10 @@ interface Debit {
  * (the same set `matchCommitment` enforces and the API's `isLive` summarizes).
  * Returns the specific failing reason(s); an empty array means live. A null
  * expiry isn't flagged here — `buildMatchPreview` requires the field, so the
- * pricing step surfaces that case as NOT_LIVE instead. */
-function livenessReasons(c: Commitment): FillabilityReason[] {
+ * pricing step surfaces that case as NOT_LIVE instead. Operates on a
+ * {@link PublicVisibleCommitment} — the redacted case is short-circuited by
+ * the caller before this runs. */
+function livenessReasons(c: PublicVisibleCommitment): FillabilityReason[] {
   const reasons: FillabilityReason[] = [];
   if (c.storedStatus !== 'open' && c.storedStatus !== 'partially_filled') {
     reasons.push({ code: 'NOT_LIVE' });

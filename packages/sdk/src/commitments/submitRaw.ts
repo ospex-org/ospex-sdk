@@ -29,6 +29,7 @@ import {
   type OspexCommitmentMessage,
 } from '../chain/eip712.js';
 import { toCommitment } from '../api/commitments.js';
+import { requireVisibleCommitment } from './requireVisible.js';
 import { assertSufficientAllowance } from './allowance.js';
 import { readNonceFloor } from './nonce.js';
 import {
@@ -40,7 +41,7 @@ import {
   nowUnixSec,
 } from './validation.js';
 import type { CommitmentsContext } from './context.js';
-import type { Commitment } from '../types/commitment.js';
+import type { PublicVisibleCommitment } from '../types/commitment.js';
 import type { CommitmentBody } from '../api/types.js';
 import type { Hex } from '../types/signer.js';
 
@@ -71,7 +72,13 @@ export interface RawSubmitArgs {
 
 export interface SubmitResult {
   hash: Hex;
-  commitment: Commitment;
+  /**
+   * The freshly-created row as decoded from the submit response. Always a
+   * {@link PublicVisibleCommitment} — submission inserts a `book_visible=true`
+   * row by construction, and the server response carries the full matchable
+   * payload (the maker is the authoring caller).
+   */
+  commitment: PublicVisibleCommitment;
 }
 
 const DEFAULT_EXPIRY_OFFSET_SEC = 24n * 60n * 60n;
@@ -135,7 +142,11 @@ export async function submitRaw(
 
   // 6. POST /v1/commitments with idempotency-key header.
   // 7. On NONCE_TOO_LOW, refetch the floor and retry exactly once.
-  const post = async (msg: OspexCommitmentMessage, sig: Hex, hashHex: Hex): Promise<Commitment> => {
+  const post = async (
+    msg: OspexCommitmentMessage,
+    sig: Hex,
+    hashHex: Hex,
+  ): Promise<PublicVisibleCommitment> => {
     const body = await ctx.api.request<CommitmentBody>('/v1/commitments', {
       method: 'POST',
       headers: { 'Idempotency-Key': hashHex },
@@ -155,7 +166,12 @@ export async function submitRaw(
         signature: sig,
       },
     });
-    return toCommitment(body);
+    // Submission inserts `book_visible=true` by construction — the server
+    // response must decode visible. Narrow defensively; a redacted response
+    // here would be a server bug, not a normal flow.
+    return requireVisibleCommitment(toCommitment(body), {
+      purpose: 'persist the newly-submitted',
+    });
   };
 
   ctx.nonceCounter.observe(maker, speculationKey, nonce);

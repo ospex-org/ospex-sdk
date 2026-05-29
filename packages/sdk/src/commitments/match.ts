@@ -19,7 +19,7 @@ import type { Hash, TransactionReceipt } from 'viem';
 import { prepareMatch } from './prepareMatch.js';
 import { matchFromPreview } from './matchFromPreview.js';
 import type { CommitmentsContext } from './context.js';
-import type { Commitment } from '../types/commitment.js';
+import type { PublicVisibleCommitment } from '../types/commitment.js';
 import type { Hex } from '../types/signer.js';
 
 export interface MatchArgs {
@@ -39,8 +39,12 @@ export interface MatchResult {
   takerRisk: bigint;
   /** What the contract math says the maker side fills (post lot-size rounding). */
   fillMakerRisk: bigint;
-  /** The fresh commitment row (post-revalidation). */
-  commitment: Commitment;
+  /**
+   * The fresh commitment row (post-revalidation). Always a
+   * {@link PublicVisibleCommitment} — the match path refuses redacted bodies
+   * upstream in `prepareMatch` / `matchFromPreview`.
+   */
+  commitment: PublicVisibleCommitment;
 }
 
 export async function match(

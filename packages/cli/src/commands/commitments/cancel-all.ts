@@ -20,6 +20,7 @@ import type {
   Commitment,
   Hex,
   OspexClient,
+  PublicVisibleCommitment,
 } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
@@ -97,7 +98,23 @@ export const commitmentsCancelAllCommand = addSignerOptions(
           );
         }
       }
-      const rows = rawRows.filter((c) => c.lineTicks === lineTicks);
+      // Hidden bodies redact `lineTicks` + `nonce` + `riskAmount` — they can't
+      // contribute to the lineTicks filter or the dry-run preview. Surface
+      // them as a warning so the operator knows the preview may understate
+      // what `cancelAllOnSpeculation` would actually act on; the SDK refuses
+      // to auto-compute newMinNonce on a book with hidden rows anyway.
+      const visibleRows = rawRows.filter(
+        (c): c is PublicVisibleCommitment => c.redacted !== true,
+      );
+      const hiddenCount = rawRows.length - visibleRows.length;
+      if (hiddenCount > 0) {
+        process.stderr.write(
+          `Warning: ${hiddenCount} hidden (book_visible=false) commitment(s) excluded from this ` +
+            "preview — their nonces/risks are redacted. Pass an explicit --new-min-nonce to bypass " +
+            'when running the actual cancel-all.\n',
+        );
+      }
+      const rows = visibleRows.filter((c) => c.lineTicks === lineTicks);
       const count = rows.length;
       if (opts.json === true) {
         writeAgentEnvelope(
@@ -236,7 +253,8 @@ export interface ToCancelAllEnvelopeBaseArgs {
 
 export interface ToCancelAllDryRunArgs extends ToCancelAllEnvelopeBaseArgs {
   invalidatedCount: number;
-  commitments: Commitment[];
+  /** Always visible — the dry-run upstream filters hidden rows out before reaching here. */
+  commitments: PublicVisibleCommitment[];
 }
 
 export function toCancelAllDryRunEnvelope(

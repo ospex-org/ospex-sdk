@@ -26,9 +26,10 @@ import { matchingModuleAbi } from '../contracts/abi/index.js';
 import { CommitmentsApi } from '../api/commitments.js';
 import { OspexValidationError } from '../errors.js';
 import { assertSufficientAllowance } from './allowance.js';
+import { requireVisibleCommitment } from './requireVisible.js';
 import { buildSignAndSend } from './sendTx.js';
 import type { CommitmentsContext } from './context.js';
-import type { Commitment } from '../types/commitment.js';
+import type { PublicVisibleCommitment } from '../types/commitment.js';
 import type { MatchPreview } from '../types/matchPreview.js';
 import type { MatchResult } from './match.js';
 import type { Hex } from '../types/signer.js';
@@ -62,10 +63,18 @@ export async function matchFromPreview(
   const contestsApi = ctx.getContestsApi();
   const hash = preview.commitment.commitmentHash as Hex;
   const contestId = preview.commitment.contestId as string;
-  const [fresh, freshContest] = await Promise.all([
+  const [freshResolved, freshContest] = await Promise.all([
     commitmentsApi.get(hash),
     contestsApi.get(contestId),
   ]);
+
+  // The fresh fetch can return a redacted body if the maker raced an off-chain
+  // DELETE between preview and match — that's a hard stop, the matchable
+  // payload (signature/nonce/odds) is gone from the public surface. Narrow
+  // before any field access; downstream sees a single concrete shape.
+  const fresh: PublicVisibleCommitment = requireVisibleCommitment(freshResolved, {
+    purpose: 'submit a match for',
+  });
 
   // ── 3. Compare canonical signed fields byte-for-byte. ─────────────
   // These are what the EIP-712 signature binds. If the API returns a
@@ -75,13 +84,13 @@ export async function matchFromPreview(
 
   // ── 4. Status / liveness re-check. ────────────────────────────────
   // Key off the RAW on-chain lifecycle (`storedStatus`), NOT the effective `status`. The
-  // core API folds book-visibility into effective status: a *book-hidden* commitment (the
-  // maker pulled it from the orderbook off-chain) reads effective `status: 'cancelled'`, but
-  // its signed payload is still matchable on chain — `matchCommitment` ignores book-visibility
-  // — so a stored `open` / `partially_filled` row must NOT be rejected here. The nonce / expiry
-  // / remaining-capacity checks below independently cover the conditions effective status
-  // otherwise folds in. (`?? fresh.status` mirrors `toCommitment`'s fallback for a core-api
-  // predating effective status, where the raw value rides on `status`.)
+  // core API folds book-visibility into effective status — but we already rejected the
+  // hidden case in the visibility narrow above, so here we're definitively reading a
+  // PUBLIC visible row whose stored lifecycle is the trustworthy matchability signal. The
+  // nonce / expiry / remaining-capacity checks below independently cover the conditions
+  // effective status otherwise folds in. (`?? fresh.status` mirrors `toCommitment`'s
+  // fallback for a core-api predating effective status, where the raw value rides on
+  // `status`.)
   const freshLifecycle = fresh.storedStatus ?? fresh.status;
   if (freshLifecycle !== 'open' && freshLifecycle !== 'partially_filled') {
     throw new OspexValidationError(
@@ -232,8 +241,11 @@ export async function matchFromPreview(
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function assertSignedFieldsUnchanged(prev: Commitment, fresh: Commitment): void {
-  const checks: Array<[keyof Commitment, string]> = [
+function assertSignedFieldsUnchanged(
+  prev: PublicVisibleCommitment,
+  fresh: PublicVisibleCommitment,
+): void {
+  const checks: Array<[keyof PublicVisibleCommitment, string]> = [
     ['maker', 'maker'],
     ['contestId', 'contestId'],
     ['scorer', 'scorer'],

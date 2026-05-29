@@ -366,6 +366,16 @@ async function tryFetchExistingOpenRisk(
         offset,
       });
       for (const r of rows) {
+        // Hidden bodies redact `remainingRiskAmount` + `speculationKey` per the
+        // public allow-list (own-state SSE plan §2.3), so we cannot account for
+        // them in either the existing-risk sum or the maybe-lazy-key set.
+        // Skipping would silently UNDER-count the maker's open exposure — the
+        // one error a funding guard must never make. Degrade to `unknown`
+        // (caller surfaces `EXISTING_OPEN_RISK_UNDETERMINED`) so the verdict is
+        // honest. The maker recovers a definite verdict by re-running with the
+        // owner-auth own-state surface (M5/PR3 `client.ownState.list*`), which
+        // delivers the full payload for their own hidden rows.
+        if (r.redacted === true) return null;
         const remaining = BigInt(r.remainingRiskAmount);
         if (remaining > 0n) {
           riskWei6 += remaining;

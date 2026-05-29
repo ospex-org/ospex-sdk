@@ -31,7 +31,7 @@
  */
 
 import { OspexValidationError } from '../errors.js';
-import type { Commitment } from '../types/commitment.js';
+import type { PublicVisibleCommitment } from '../types/commitment.js';
 import {
   ticksToDecimalLine,
   tickToAmericanOdds,
@@ -84,7 +84,7 @@ export interface TakerView {
 }
 
 export function computeTakerView(
-  commitment: Commitment,
+  commitment: PublicVisibleCommitment,
   context: TakerViewContext,
 ): TakerView {
   const { marketType, positionType, oddsTick, lineTicks } = commitment;

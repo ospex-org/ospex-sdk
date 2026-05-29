@@ -61,7 +61,16 @@ export interface AuthDomainBody {
   };
 }
 
+/**
+ * Wire body for a publicly visible commitment (`book_visible=true`). Carries the
+ * full matchable payload (signature, EIP-712 fields). The `redacted` discriminant
+ * is optional on the wire for back-compat with core-api builds predating M2 of
+ * the own-state SSE migration stack — those builds emit no flag and `toCommitment`
+ * treats the absence as visible.
+ */
 export interface CommitmentBody {
+  /** Discriminator — present on M2+ wire; absent on pre-M2 (interpreted as visible). */
+  redacted?: false;
   commitmentHash: string;
   maker: string;
   contestId: string | null;
@@ -88,12 +97,44 @@ export interface CommitmentBody {
   source: string;
   network: string;
   nonceInvalidated: boolean;
+  /** Optional on the wire — pre-M2 builds omit it; post-M2 always emits `true` for visible bodies. */
+  bookVisible?: true;
   createdAt: string;
   /** Advisory maker-funding fillability — present only when the list was
    *  requested with `includeFillability=true`. Flows through `toCommitment`'s
    *  spread to the public `Commitment.fillability`. */
   fillability?: CommitmentFillability;
 }
+
+/**
+ * Wire body for a redacted public hidden commitment (`book_visible=false`) as
+ * emitted by core-api M2 of the own-state SSE migration stack. Mirrors
+ * `CommitmentHiddenBody` in `ospex-core-api/src/v1/commitments.ts` and the
+ * PUBLIC_HIDDEN_ALLOWLIST locked in own-state-sse-plan.md §2.3 — the matchable
+ * payload (signature, nonce, riskAmount, oddsTick, scorer, lineTicks,
+ * speculationKey, marketType) is intentionally absent. Maker-authenticated
+ * reads via owner-auth `client.ownState.*` deliver the full payload back.
+ */
+export interface CommitmentHiddenBody {
+  redacted: true;
+  payloadAvailable: false;
+  commitmentHash: string;
+  maker: string;
+  contestId: string | null;
+  positionType: 0 | 1 | null;
+  status: CommitmentStatus;
+  storedStatus: StoredCommitmentStatus;
+  filledRiskAmount: string;
+  expiry: string | null;
+  bookVisible: false;
+  nonceInvalidated: boolean;
+}
+
+/**
+ * Wire union surfaced by any public anonymous commitment read. Decoded by
+ * `toCommitment` into the corresponding public {@link Commitment} variant.
+ */
+export type CommitmentWireBody = CommitmentBody | CommitmentHiddenBody;
 
 export interface SpeculationBody {
   speculationId: string;
@@ -195,7 +236,15 @@ export interface ApprovedScriptsBody {
 }
 
 export interface CommitmentsListBody {
-  commitments: CommitmentBody[];
+  /**
+   * Each row is either {@link CommitmentBody} (visible / unredacted) or
+   * {@link CommitmentHiddenBody} (redacted via the M2 allow-list). The list
+   * endpoint applies `book_visible=true` upstream so visible bodies dominate
+   * in practice; the `?since=` recovery path is what surfaces hidden bodies
+   * (to converge a reconnecting client across the `book_visible=true→false`
+   * transition). `toCommitment` discriminates on `redacted` per row.
+   */
+  commitments: CommitmentWireBody[];
   pagination: PaginationBody;
 }
 

@@ -34,7 +34,7 @@ import { readNonceFloor } from './nonce.js';
 import { raiseMinNonce } from './raiseMinNonce.js';
 import { validateLineTicks } from './validation.js';
 import type { CommitmentsContext } from './context.js';
-import type { CommitmentBody, CommitmentsListBody } from '../api/types.js';
+import type { CommitmentBody, CommitmentsListBody, CommitmentWireBody } from '../api/types.js';
 import type { Hex } from '../types/signer.js';
 
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
@@ -92,7 +92,7 @@ export async function cancelAllOnSpeculation(
   // (`speculation_key` filtering happens client-side because the API
   // takes contestId + scorer + speculationId as filters but not
   // lineTicks directly.)
-  const allRows: CommitmentBody[] = [];
+  const allRows: CommitmentWireBody[] = [];
   let offset = 0;
   for (let page = 0; page < MAX_PAGES; page++) {
     const body = await ctx.api.request<CommitmentsListBody>('/v1/commitments', {
@@ -126,8 +126,30 @@ export async function cancelAllOnSpeculation(
       );
     }
   }
+
+  // Hidden bodies redact `nonce` + `speculationKey` per the public allow-list
+  // (own-state SSE plan §2.3), so an anonymous list cannot see the maker's
+  // own off-book commitments' nonces. The default-floor calc would silently
+  // skip them and choose a `newMinNonce` that leaves a hidden-but-still-matchable
+  // row live — exactly the failure mode this primitive exists to prevent.
+  // Refuse to auto-compute in that case; the caller can either pass an
+  // explicit `newMinNonce` or fetch their hidden book via owner-auth
+  // (M5/PR3 `client.ownState.list*`) to compute the correct floor.
+  const visibleRows = allRows.filter((c): c is CommitmentBody => c.redacted !== true);
+  const hiddenRowCount = allRows.length - visibleRows.length;
+  if (hiddenRowCount > 0 && args.newMinNonce === undefined) {
+    throw new OspexValidationError(
+      `Maker has ${hiddenRowCount} hidden (book_visible=false) commitment(s) on ` +
+        `(contestId=${args.contestId}, scorer); their nonces are redacted from anonymous reads, ` +
+        'so the safe default newMinNonce cannot be auto-computed (a too-low floor would leave ' +
+        'a hidden commitment matchable). Pass an explicit newMinNonce to bypass, or recover ' +
+        'the full book via owner-auth `client.ownState.*` to compute it.',
+      { field: 'newMinNonce' },
+    );
+  }
+
   const speculationKeyLower = speculationKey.toLowerCase();
-  const matching = allRows.filter(
+  const matching = visibleRows.filter(
     (c) => (c.speculationKey ?? '').toLowerCase() === speculationKeyLower,
   );
 

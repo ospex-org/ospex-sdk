@@ -291,4 +291,70 @@ describe('commitments.cancelAllOnSpeculation', () => {
     // 2 rows fit in one 1000-page → exactly 1 API call.
     expect(apiCallCount()).toBe(1);
   });
+
+  // ── Hidden-row safety (M5/PR1) ──────────────────────────────────────────
+  // Public anonymous list responses redact `nonce` + `speculationKey` for any
+  // `book_visible=false` row (own-state SSE plan §2.3 allow-list). If the maker
+  // has hidden commitments on this (contestId, scorer) tuple, the default
+  // floor calc cannot see their nonces — picking a too-low newMinNonce would
+  // leave a hidden-but-still-matchable row live. The function must refuse to
+  // auto-compute in that case.
+  it('throws on hidden rows in the maker book when newMinNonce is not provided', async () => {
+    const hiddenRow = {
+      redacted: true as const,
+      payloadAvailable: false as const,
+      commitmentHash: '0x' + 'ab'.repeat(32),
+      maker: SIGNER_ADDR,
+      contestId: CONTEST_ID.toString(),
+      positionType: 0 as const,
+      status: 'cancelled' as const,
+      storedStatus: 'open' as const,
+      filledRiskAmount: '0',
+      expiry: '2099-01-01T00:00:00.000Z',
+      bookVisible: false as const,
+      nonceInvalidated: false,
+    };
+    const rows = [
+      makeRow({ nonce: '100', status: 'open' }),
+      hiddenRow as unknown as CommitmentBody,
+    ];
+    const { ctx } = fakeContext({ onChainFloor: 0n, rows });
+    await expect(cancelAllOnSpeculation(ctx, baseArgs)).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      field: 'newMinNonce',
+      message: expect.stringContaining('hidden'),
+    });
+  });
+
+  it('proceeds when newMinNonce is explicit, counting only the visible rows in invalidatedCount', async () => {
+    const hiddenRow = {
+      redacted: true as const,
+      payloadAvailable: false as const,
+      commitmentHash: '0x' + 'cd'.repeat(32),
+      maker: SIGNER_ADDR,
+      contestId: CONTEST_ID.toString(),
+      positionType: 0 as const,
+      status: 'cancelled' as const,
+      storedStatus: 'open' as const,
+      filledRiskAmount: '0',
+      expiry: '2099-01-01T00:00:00.000Z',
+      bookVisible: false as const,
+      nonceInvalidated: false,
+    };
+    const rows = [
+      makeRow({ nonce: '100', status: 'open' }),
+      hiddenRow as unknown as CommitmentBody,
+      makeRow({ nonce: '200', status: 'open' }),
+    ];
+    const { ctx, sentTxs } = fakeContext({ onChainFloor: 0n, rows });
+    const result = await cancelAllOnSpeculation(ctx, {
+      ...baseArgs,
+      newMinNonce: 999n,
+    });
+    expect(result.newMinNonce).toBe(999n);
+    // invalidatedCount can only count visible rows — the two `open` rows with
+    // nonce 100 and 200 are both below 999.
+    expect(result.invalidatedCount).toBe(2);
+    expect(sentTxs).toHaveLength(1);
+  });
 });

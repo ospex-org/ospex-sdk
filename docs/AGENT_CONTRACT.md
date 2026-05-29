@@ -29,6 +29,37 @@ Additive changes inside `schemaVersion: 2` (new optional fields on the envelope 
 
 ---
 
+## 1.5. Public commitments — visible vs. hidden type split
+
+Every public commitment read (`client.commitments.get(hash)`, `client.commitments.list(...)`, any embedded orderbook in a contest/speculation response) returns the discriminated union `Commitment = PublicVisibleCommitment | PublicHiddenCommitment`. The discriminant fields:
+
+```ts
+type PublicVisibleCommitment = { visibility: 'visible'; redacted: false; /* full matchable payload */ };
+type PublicHiddenCommitment   = { visibility: 'hidden';  redacted: true; payloadAvailable: false; /* allow-list only */ };
+```
+
+A commitment is `hidden` when its maker pulled it from the public order book via a signed off-chain `DELETE /v1/commitments/:hash` (`book_visible=false`). The signed payload may still be matchable on chain until expiry / nonce-floor / on-chain `cancelCommitment` — but third parties cannot reach it from public reads. The public hidden body is allow-list-projected: `commitmentHash`, `maker`, `contestId`, `positionType`, `status`, `storedStatus`, `filledRiskAmount`, `expiry`, `bookVisible`, `nonceInvalidated` (plus the three discriminant fields). Anything in `MatchingModule.matchCommitment`'s struct (`signature`, `nonce`, `riskAmount`, `oddsTick`, `scorer`, `lineTicks`, `marketType`, `speculationKey`) is **never** present on a hidden body.
+
+**How to discriminate.**
+
+- Predicate: `if (isVisibleCommitment(c)) { /* PublicVisibleCommitment */ }` / `if (isHiddenCommitment(c)) { /* PublicHiddenCommitment */ }` (both exported from the SDK barrel).
+- Inline: `if (c.redacted === false) { /* visible */ }` / `if (c.redacted === true) { /* hidden */ }`.
+- `if (c.visibility === 'visible')` also narrows; both discriminants always agree.
+
+**Consequences for write-path SDK calls.** Operations that need the matchable payload refuse on a redacted body, surfaced as `OspexValidationError({ field: 'commitment' })` with an error message that names the hash and points at owner-auth `client.ownState.getCommitment(hash)` (the M5/PR3 maker-authenticated path). Refusing callers:
+
+| SDK surface | Behavior on redacted input |
+|---|---|
+| `commitments.prepareMatch({ hash \| commitment })` | Throws `OspexValidationError({ field: 'commitment' })`. |
+| `commitments.matchFromPreview(preview)` | Fresh re-fetch is a hidden body → throws (same shape). |
+| `commitments.checkCommitmentFillability({ hash \| commitment })` | Returns `outcome: 'not-fillable'` with `reasons: [{ code: 'COMMITMENT_REDACTED' }]`. No chain read. |
+| `commitments.checkSubmitFundability({ preview })` | Encountering a hidden row in the maker's open book degrades to `outcome: 'unknown'` with `reasons: [{ code: 'FUNDABILITY_UNKNOWN' }]` and no `requirement` block (the hidden row's `remainingRiskAmount` is redacted, so the aggregate cannot be computed — degrading is the only safe verdict). |
+| `commitments.cancelAllOnSpeculation({ ..., newMinNonce? })` | If the maker has any hidden commitments on `(contestId, scorer)` AND `newMinNonce` was not provided, throws `OspexValidationError({ field: 'newMinNonce' })`. Pass an explicit `newMinNonce` to bypass; the function counts only visible rows in `invalidatedCount`. |
+
+**Backwards compatibility.** Older core-api builds (pre-M2 of the own-state SSE migration stack) omit the `redacted` flag entirely and serve only visible bodies; the SDK treats absence as `visibility: 'visible'`, so an SDK running against an older API behaves exactly like the pre-split code.
+
+---
+
 ## 2. CLI: the `--json` contract
 
 Every Class A `--json` invocation emits a single envelope matching `AgentEnvelope<TPayload>` — a shared shoulder block (`ok`, `action`, `stage`, `network`, `wallet`, `warnings`, `errors`, `effects`, `nextCommands`, …) wrapped around a command-specific `payload`. Agents route on the shoulder fields and read the payload only when they need command-specific data.

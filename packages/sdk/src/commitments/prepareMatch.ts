@@ -29,9 +29,10 @@ import { deriveSpeculationKey } from '../chain/eip712.js';
 import { OspexValidationError } from '../errors.js';
 import { buildMatchPreview } from './buildMatchPreview.js';
 import { readAllowance } from './allowance.js';
+import { requireVisibleCommitment } from './requireVisible.js';
 import { SPECULATION_CREATION_FEE_WEI6 } from '../contracts/constants.js';
 import type { CommitmentsContext } from './context.js';
-import type { Commitment } from '../types/commitment.js';
+import type { Commitment, PublicVisibleCommitment } from '../types/commitment.js';
 import type {
   BuildMatchPreviewArgs,
   MatchPreview,
@@ -73,7 +74,14 @@ export async function prepareMatch(
   args: PrepareMatchArgs,
 ): Promise<MatchPreview> {
   // ── 1. Resolve commitment ─────────────────────────────────────────
-  const commitment = await resolveCommitment(ctx, args);
+  // The matchable payload is REQUIRED here — every check below dereferences
+  // signed fields (signature/nonce/oddsTick/scorer/lineTicks) that a public
+  // hidden body redacts per the own-state SSE plan §2.3 allow-list. Narrow up
+  // front so the rest of the function operates on a single concrete shape.
+  const resolved = await resolveCommitment(ctx, args);
+  const commitment: PublicVisibleCommitment = requireVisibleCommitment(resolved, {
+    purpose: 'prepare a match against',
+  });
 
   // Required fields — mirrors `match.ts` so the orchestrator catches
   // the same missing-field cases the convenience wrapper would have.
