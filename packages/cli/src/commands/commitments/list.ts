@@ -178,24 +178,33 @@ export const commitmentsListCommand = new Command('list')
       return;
     }
     formatOutput(
-      sorted.map((r) => ({
-        hash: parsed.fullHash === true
-          ? r.commitment.commitmentHash
-          : r.commitment.commitmentHash.slice(0, 2 + MIN_PREFIX_HEX_LEN) + '…',
-        matchup: r.contest !== null
-          ? `${r.contest.awayTeam} @ ${r.contest.homeTeam}`
-          : '-',
-        market: r.commitment.marketType ?? '-',
-        'you back': r.taker?.youBack ?? '-',
-        'your odds': r.taker !== null
-          ? `${r.taker.takerDecimal} / ${r.taker.takerAmerican}`
-          : '-',
-        'max bet': r.taker !== null ? `$${r.taker.maxBetUSDC}` : '-',
-        'to win': r.taker !== null ? `$${r.taker.toWinUSDC}` : '-',
-        ...(parsed.withFillability === true
-          ? { funding: fundingLabel(r.commitment.fillability) }
-          : {}),
-      })),
+      sorted.map((r) => {
+        // Hidden rows redact `marketType` + `fillability` — keep the row in
+        // the table for grep-ability but flag the redaction in the market
+        // column so the operator sees there's nothing to fill from this row.
+        const market = r.commitment.redacted === true
+          ? '[hidden]'
+          : (r.commitment.marketType ?? '-');
+        const funding = r.commitment.redacted === true
+          ? '-'
+          : fundingLabel(r.commitment.fillability);
+        return {
+          hash: parsed.fullHash === true
+            ? r.commitment.commitmentHash
+            : r.commitment.commitmentHash.slice(0, 2 + MIN_PREFIX_HEX_LEN) + '…',
+          matchup: r.contest !== null
+            ? `${r.contest.awayTeam} @ ${r.contest.homeTeam}`
+            : '-',
+          market,
+          'you back': r.taker?.youBack ?? '-',
+          'your odds': r.taker !== null
+            ? `${r.taker.takerDecimal} / ${r.taker.takerAmerican}`
+            : '-',
+          'max bet': r.taker !== null ? `$${r.taker.maxBetUSDC}` : '-',
+          'to win': r.taker !== null ? `$${r.taker.toWinUSDC}` : '-',
+          ...(parsed.withFillability === true ? { funding } : {}),
+        };
+      }),
       { json: false },
     );
   });
@@ -243,6 +252,13 @@ function enrich(
     if (contest === null) {
       return { commitment: c, contest: null, taker: null };
     }
+    // takerView needs the matchable payload (oddsTick / lineTicks / marketType
+    // / remainingRiskAmount) — redacted hidden bodies have none of those. Skip
+    // the computation rather than throwing; the table renderer falls back to
+    // '-' placeholders for the missing taker columns.
+    if (c.redacted === true) {
+      return { commitment: c, contest, taker: null };
+    }
     try {
       const taker = computeTakerView(c, {
         awayTeam: contest.awayTeam,
@@ -288,7 +304,12 @@ function sortRows(
       // Higher taker decimal = better price for the taker.
       return b.taker.takerOddsTick - a.taker.takerOddsTick;
     }
-    // newest
+    // newest. Hidden rows have no `createdAt` in the public allow-list, but
+    // by construction `enrich` always sets `taker: null` for them — so the
+    // early `taker === null` return above pushed them to the bottom already
+    // and we only reach here with visible rows on both sides. The narrow is
+    // for the type checker; the runtime guard is the taker-null fast path.
+    if (a.commitment.redacted === true || b.commitment.redacted === true) return 0;
     return b.commitment.createdAt.localeCompare(a.commitment.createdAt);
   });
   return copy;
@@ -299,25 +320,48 @@ function renderRaw(commitments: Commitment[], fullHash: boolean, showFillability
     process.stdout.write('(no commitments)\n');
     return;
   }
+  const HIDDEN = '[redacted]';
   formatOutput(
-    commitments.map((c) => ({
-      hash: fullHash
-        ? c.commitmentHash
-        : c.commitmentHash.slice(0, 2 + MIN_PREFIX_HEX_LEN) + '…',
-      maker: c.maker,
-      contest: c.contestId ?? '-',
-      market: c.marketType ?? '-',
-      line: c.lineTicks ?? '-',
-      side: c.positionType === 0 ? 'upper' : c.positionType === 1 ? 'lower' : '-',
-      odds:
-        c.oddsTick !== null
-          ? `${tickToDecimalOdds(c.oddsTick)} / ${tickToAmericanOdds(c.oddsTick)}`
-          : '-',
-      risk: formatUSDC(c.riskAmount),
-      remaining: formatUSDC(c.remainingRiskAmount),
-      status: c.status,
-      ...(showFillability ? { funding: fundingLabel(c.fillability) } : {}),
-    })),
+    commitments.map((c) => {
+      if (c.redacted === true) {
+        // Hidden body — render the allow-list fields plus sentinels for the
+        // redacted ones (own-state SSE plan §2.3). `fillability` is never
+        // attached to a hidden row at the API boundary.
+        return {
+          hash: fullHash
+            ? c.commitmentHash
+            : c.commitmentHash.slice(0, 2 + MIN_PREFIX_HEX_LEN) + '…',
+          maker: c.maker,
+          contest: c.contestId ?? '-',
+          market: HIDDEN,
+          line: HIDDEN,
+          side: c.positionType === 0 ? 'upper' : c.positionType === 1 ? 'lower' : '-',
+          odds: HIDDEN,
+          risk: HIDDEN,
+          remaining: HIDDEN,
+          status: c.status,
+          ...(showFillability ? { funding: HIDDEN } : {}),
+        };
+      }
+      return {
+        hash: fullHash
+          ? c.commitmentHash
+          : c.commitmentHash.slice(0, 2 + MIN_PREFIX_HEX_LEN) + '…',
+        maker: c.maker,
+        contest: c.contestId ?? '-',
+        market: c.marketType ?? '-',
+        line: c.lineTicks ?? '-',
+        side: c.positionType === 0 ? 'upper' : c.positionType === 1 ? 'lower' : '-',
+        odds:
+          c.oddsTick !== null
+            ? `${tickToDecimalOdds(c.oddsTick)} / ${tickToAmericanOdds(c.oddsTick)}`
+            : '-',
+        risk: formatUSDC(c.riskAmount),
+        remaining: formatUSDC(c.remainingRiskAmount),
+        status: c.status,
+        ...(showFillability ? { funding: fundingLabel(c.fillability) } : {}),
+      };
+    }),
     { json: false },
   );
 }

@@ -356,7 +356,12 @@ ospex commitments cancel-onchain 0xe900c6dd
 Bulk cancel everything from your wallet on one speculation:
 
 ```bash
-ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks>
+# 1. Read the current on-chain floor.
+ospex commitments nonce-floor --maker <yourAddr> --contest-id <id> --scorer <addr> --line <ticks>
+
+# 2. Raise to (floor + headroom). The SDK does not auto-compute a default —
+#    anonymous reads cannot enumerate your hidden book, so you choose the floor.
+ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks> --new-min-nonce <n>
 ```
 
 ### Advanced: `commitments submit-raw` (escape hatch)
@@ -539,7 +544,7 @@ The CLI separates **one-shot user actions** (request → reply → exits) from *
 | See your active and claimable positions | `ospex positions status <yourAddress>` |
 | Cancel an open commitment off-chain | `ospex commitments cancel <hash-or-prefix>` |
 | Cancel authoritatively on-chain | `ospex commitments cancel-onchain <hash-or-prefix>` |
-| Bulk-cancel all your orders on a speculation | `ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks>` |
+| Bulk-cancel all your orders on a speculation | `ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks> --new-min-nonce <n>` (read the current floor first with `ospex commitments nonce-floor ...`) |
 | Claim a winning position after settlement | `ospex claim <speculationId> --type upper\|lower` |
 | Claim everything claimable for a wallet | `ospex claim-all` |
 | Settle a scored speculation (permissionless) | `ospex settle <speculationId>` |

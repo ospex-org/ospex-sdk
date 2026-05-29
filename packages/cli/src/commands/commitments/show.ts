@@ -55,6 +55,36 @@ export const commitmentsShowCommand = new Command('show')
       );
       return;
     }
+    if (commitment.redacted === true) {
+      // Hidden body — only the public allow-list fields are present (own-state
+      // SSE plan §2.3). Render those plus a sentinel for the redacted ones so
+      // the operator immediately sees what's not available without a
+      // confusing "undefined" cell. The maker recovers the full payload via
+      // `client.ownState.getCommitment` (M5/PR3).
+      const HIDDEN = '[redacted: book_visible=false]';
+      formatOutput(
+        {
+          hash: commitment.commitmentHash,
+          maker: commitment.maker,
+          contestId: commitment.contestId ?? '-',
+          scorer: HIDDEN,
+          market: HIDDEN,
+          line: HIDDEN,
+          side: commitment.positionType === 0 ? 'upper' : commitment.positionType === 1 ? 'lower' : '-',
+          odds: HIDDEN,
+          risk: HIDDEN,
+          filled: commitment.filledRiskAmount,
+          remaining: HIDDEN,
+          nonce: HIDDEN,
+          expiry: commitment.expiry ?? '-',
+          speculationKey: HIDDEN,
+          status: commitment.status,
+          createdAt: HIDDEN,
+        },
+        { json: false },
+      );
+      return;
+    }
     formatOutput(
       {
         hash: commitment.commitmentHash,

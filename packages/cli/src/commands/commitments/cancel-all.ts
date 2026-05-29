@@ -1,14 +1,26 @@
 /**
  * `ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks>
- *                              [--new-min-nonce <n>] [--dry-run]`
+ *                              --new-min-nonce <n> [--dry-run]`
  *
  * Bulk-invalidate every one of the maker's open commitments on a single
  * speculation by raising the on-chain nonce floor. Friendly wrapper over
  * `MatchingModule.raiseMinNonce`.
  *
- * `--dry-run` lists the maker's currently-matchable commitments on the
- * speculation and prints a count without sending a tx — useful for
- * sanity-checking before the gas spend.
+ * `--new-min-nonce` is REQUIRED — the SDK no longer auto-computes a
+ * floor because the public commitments list filters `book_visible=true`
+ * upstream, so cross-process book-hidden commitments at higher nonces
+ * are invisible to anonymous reads and any "convenience default" would
+ * silently leave them matchable on chain. Compute the floor yourself:
+ * read the current on-chain floor via `ospex commitments nonce-floor
+ * --maker <addr> --contest-id <id> --scorer <addr> --line <ticks>`,
+ * add any headroom you need for cross-process signatures, and pass the
+ * result here. Once M5/PR3 ships owner-auth own-state recovery, the
+ * SDK will restore a hidden-safe auto-default sourced from the maker's
+ * full book.
+ *
+ * `--dry-run` previews `invalidatedCount` for the given `--new-min-nonce`
+ * without sending a tx — useful for sanity-checking before the gas
+ * spend. The preview is VISIBLE-rows-only.
  */
 
 import { Command } from '@commander-js/extra-typings';
@@ -20,6 +32,7 @@ import type {
   Commitment,
   Hex,
   OspexClient,
+  PublicVisibleCommitment,
 } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
@@ -44,7 +57,11 @@ const optionsSchema = z.object({
   contestId: z.string().regex(/^[0-9]+$/, 'must be a non-negative integer'),
   scorer: z.string().regex(/^0x[0-9a-fA-F]{40}$/, 'must be a 0x-prefixed 20-byte address'),
   line: z.string().regex(/^-?[0-9]+$/, 'must be an int32'),
-  newMinNonce: z.string().regex(/^[0-9]+$/, 'must be a non-negative integer').optional(),
+  // `--new-min-nonce` is required by the SDK now; commander's
+  // `.requiredOption()` already enforces presence at parse time, but
+  // keep the runtime regex check so an empty / non-numeric value still
+  // surfaces as an `OspexValidationError`-class CLI message.
+  newMinNonce: z.string().regex(/^[1-9][0-9]*$/, 'must be a positive integer'),
   dryRun: z.boolean().optional(),
   json: z.boolean().optional(),
 });
@@ -57,8 +74,11 @@ export const commitmentsCancelAllCommand = addSignerOptions(
     .requiredOption('--contest-id <id>', 'contest id (uint256)')
     .requiredOption('--scorer <addr>', 'scorer module address')
     .requiredOption('--line <ticks>', 'line ticks (int32, 10× scale)')
-    .option('--new-min-nonce <n>', 'override the computed default (must exceed current floor)')
-    .option('--dry-run', 'count what would be invalidated; do not send a tx')
+    .requiredOption(
+      '--new-min-nonce <n>',
+      'required on-chain floor to raise to. The SDK does not auto-compute (anonymous reads cannot enumerate the maker’s hidden book). Read the current floor with `ospex commitments nonce-floor ...` and add the headroom you need.',
+    )
+    .option('--dry-run', 'preview invalidatedCount for --new-min-nonce; do not send a tx')
     .option('--json', 'output as JSON'),
 )
   .action(async (rawOpts) => {
@@ -74,6 +94,7 @@ export const commitmentsCancelAllCommand = addSignerOptions(
     const wantJson = opts.json === true;
     const dryRun = opts.dryRun === true;
 
+    const newMinNonce = BigInt(opts.newMinNonce);
     try {
     if (dryRun) {
       const rawRows: Commitment[] = [];
@@ -93,11 +114,31 @@ export const commitmentsCancelAllCommand = addSignerOptions(
         if (page === DRY_RUN_MAX_PAGES - 1) {
           process.stderr.write(
             `Warning: stopped paginating at ${DRY_RUN_MAX_PAGES * DRY_RUN_PAGE_LIMIT} rows; ` +
-              'preview may be incomplete. Pass an explicit --new-min-nonce and skip --dry-run.\n',
+              'preview may be incomplete.\n',
           );
         }
       }
-      const rows = rawRows.filter((c) => c.lineTicks === lineTicks);
+      // Hidden bodies redact `nonce` + `lineTicks` + `riskAmount` — they can't
+      // contribute to the lineTicks filter or the nonce-floor filter either.
+      // Surface them as a warning so the operator knows the preview excludes
+      // them; on chain `raiseMinNonce` still invalidates hidden commitments
+      // whose nonce < newMinNonce, but the preview can't account for those.
+      const visibleRows = rawRows.filter(
+        (c): c is PublicVisibleCommitment => c.redacted !== true,
+      );
+      const hiddenCount = rawRows.length - visibleRows.length;
+      if (hiddenCount > 0) {
+        process.stderr.write(
+          `Warning: ${hiddenCount} hidden (book_visible=false) commitment(s) excluded from this ` +
+            'preview (their nonces are redacted from anonymous reads). On-chain raiseMinNonce will ' +
+            'still invalidate them if their nonce is below the floor; this preview just cannot show them.\n',
+        );
+      }
+      // Restrict the preview to commitments at the specified lineTicks that
+      // would actually flip — nonce strictly below newMinNonce.
+      const rows = visibleRows
+        .filter((c) => c.lineTicks === lineTicks)
+        .filter((c) => BigInt(c.nonce) < newMinNonce);
       const count = rows.length;
       if (opts.json === true) {
         writeAgentEnvelope(
@@ -109,11 +150,19 @@ export const commitmentsCancelAllCommand = addSignerOptions(
             lineTicks,
             invalidatedCount: count,
             commitments: rows,
+            newMinNonce,
           }),
         );
         return;
       }
-      formatOutput({ dryRun: true, invalidatedCount: count }, { json: false });
+      formatOutput(
+        {
+          dryRun: true,
+          newMinNonce: newMinNonce.toString(),
+          invalidatedCount: count,
+        },
+        { json: false },
+      );
       if (count > 0) {
         process.stdout.write('\nWould invalidate:\n');
         formatOutput(
@@ -135,7 +184,7 @@ export const commitmentsCancelAllCommand = addSignerOptions(
         contestId,
         scorer,
         lineTicks,
-        ...(opts.newMinNonce !== undefined ? { newMinNonce: BigInt(opts.newMinNonce) } : {}),
+        newMinNonce,
       });
     } catch (err) {
       if (err instanceof OspexChainError && err.reason === 'NonceMustIncrease') {
@@ -205,6 +254,8 @@ export interface CancelAllDryRunPayload {
   scorer: Hex;
   lineTicks: number;
   dryRun: true;
+  /** Floor previewed against. Decimal string mirroring the JSON convention for bigints. */
+  newMinNonce: string;
   invalidatedCount: number;
   commitments: Array<{
     hash: string;
@@ -236,7 +287,10 @@ export interface ToCancelAllEnvelopeBaseArgs {
 
 export interface ToCancelAllDryRunArgs extends ToCancelAllEnvelopeBaseArgs {
   invalidatedCount: number;
-  commitments: Commitment[];
+  /** Always visible — the dry-run upstream filters hidden rows out before reaching here. */
+  commitments: PublicVisibleCommitment[];
+  /** Floor the dry-run was previewed against; round-tripped into the `complete-cancel-all` nextCommand. */
+  newMinNonce: bigint;
 }
 
 export function toCancelAllDryRunEnvelope(
@@ -258,6 +312,7 @@ export function toCancelAllDryRunEnvelope(
         contestId: args.contestId.toString(),
         scorer: args.scorer,
         lineTicks: args.lineTicks,
+        newMinNonce: args.newMinNonce.toString(),
       }),
     ],
     payload: {
@@ -265,6 +320,7 @@ export function toCancelAllDryRunEnvelope(
       scorer: args.scorer,
       lineTicks: args.lineTicks,
       dryRun: true,
+      newMinNonce: args.newMinNonce.toString(),
       invalidatedCount: args.invalidatedCount,
       commitments: args.commitments.map((c) => ({
         hash: c.commitmentHash,

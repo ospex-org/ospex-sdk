@@ -176,13 +176,14 @@ describe('toCancelOnchainAgentEnvelope', () => {
 });
 
 describe('toCancelAllDryRunEnvelope', () => {
-  it('stage dry-run, requiresSignature+Transaction true, no effects', () => {
+  it('stage dry-run, requiresSignature+Transaction true, no effects, round-trips newMinNonce', () => {
     const env = toCancelAllDryRunEnvelope({
       chainId: POLYGON,
       signerAddress: SIGNER,
       contestId: 42n,
       scorer: SCORER,
       lineTicks: 0,
+      newMinNonce: 17_000_000_005n,
       invalidatedCount: 3,
       commitments: [makeCommitment(), makeCommitment(), makeCommitment()],
     });
@@ -190,8 +191,14 @@ describe('toCancelAllDryRunEnvelope', () => {
     expect(env.requiresSignature).toBe(true);
     expect(env.requiresTransaction).toBe(true);
     expect(env.effects).toEqual([]);
+    expect(env.payload.newMinNonce).toBe('17000000005');
     expect(env.payload.invalidatedCount).toBe(3);
     expect(env.payload.commitments).toHaveLength(3);
+    // The `complete-cancel-all` nextCommand must carry the previewed floor
+    // verbatim so the suggested execute form runs against the same plan.
+    expect(env.nextCommands?.[0]?.argv).toEqual(
+      expect.arrayContaining(['--new-min-nonce', '17000000005']),
+    );
   });
 });
 

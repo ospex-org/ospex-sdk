@@ -7,12 +7,15 @@ export type {
 } from './signer.js';
 export type {
   Commitment,
+  PublicVisibleCommitment,
+  PublicHiddenCommitment,
   CommitmentStatus,
   StoredCommitmentStatus,
   CommitmentsListOptions,
   CommitmentFillability,
   MakerFundingStatus,
 } from './commitment.js';
+export { isVisibleCommitment, isHiddenCommitment } from './commitment.js';
 export type {
   Position,
   PositionTotals,

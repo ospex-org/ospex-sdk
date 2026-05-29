@@ -75,6 +75,8 @@ export type {
   ContestsSubscribeFilters,
   // commitment
   Commitment,
+  PublicVisibleCommitment,
+  PublicHiddenCommitment,
   CommitmentStatus,
   StoredCommitmentStatus,
   CommitmentsListOptions,
@@ -142,6 +144,8 @@ export type {
   AgentNextCommand,
   AgentNextCommandIntent,
 } from './types/index.js';
+
+export { isVisibleCommitment, isHiddenCommitment } from './types/index.js';
 
 // Resolver-layer surface — preview model + high-level submit args + the
 // resolver primitives. CLI and external agents render text from

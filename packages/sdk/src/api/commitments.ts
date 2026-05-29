@@ -2,9 +2,16 @@ import type { ApiClient } from './client.js';
 import type {
   Commitment,
   CommitmentsListOptions,
+  PublicHiddenCommitment,
+  PublicVisibleCommitment,
   StoredCommitmentStatus,
 } from '../types/commitment.js';
-import type { CommitmentBody, CommitmentsListBody } from './types.js';
+import type {
+  CommitmentBody,
+  CommitmentHiddenBody,
+  CommitmentsListBody,
+  CommitmentWireBody,
+} from './types.js';
 import type { Hex } from '../types/signer.js';
 import { OspexValidationError } from '../errors.js';
 
@@ -40,8 +47,11 @@ export class CommitmentsApi {
   /**
    * Single-row fetch by EIP-712 hash. Lowercases on the wire (the
    * server normalizes anyway, but consistency keeps logs tidy).
-   * Returns the canonical Commitment shape; throws OspexAPIError on
-   * 404, OspexValidationError on a malformed hash.
+   * Returns the public discriminated union {@link Commitment}; a redacted
+   * body (`book_visible=false` for an anonymous caller) decodes to
+   * {@link PublicHiddenCommitment} — narrow on `redacted` / `visibility`
+   * before reading matchable fields. Throws OspexAPIError on 404,
+   * OspexValidationError on a malformed hash.
    */
   async get(hash: Hex): Promise<Commitment> {
     if (!HASH_PATTERN.test(hash)) {
@@ -50,7 +60,7 @@ export class CommitmentsApi {
         { field: 'hash' },
       );
     }
-    const body = await this.client.request<CommitmentBody>(
+    const body = await this.client.request<CommitmentWireBody>(
       `/v1/commitments/${hash.toLowerCase()}`,
     );
     return toCommitment(body);
@@ -58,28 +68,60 @@ export class CommitmentsApi {
 }
 
 /**
- * Wire body → public Commitment shape. The `isLive` predicate is
- * computed here (the API doesn't return it) so every consumer sees a
- * consistent value without each having to recompute it.
+ * Wire body → public {@link Commitment} discriminated union. Branches on the
+ * core-api M2 `redacted` discriminant: a `true` value yields
+ * {@link PublicHiddenCommitment} (matchable payload suppressed); a `false` /
+ * `undefined` value yields {@link PublicVisibleCommitment} with the `isLive`
+ * predicate computed at decode time. The undefined-fallback handles core-api
+ * builds predating M2 — those emit the legacy visible-only shape with no flag,
+ * and the SDK treats their bodies as visible by default.
  *
- * Exported (vs file-local) so other API mappers — orderbooks embedded
- * in contest detail responses, the body returned by `match`, the
- * canonical row returned by `submit` — go through the same code path
- * instead of each redoing the predicate.
+ * Exported (vs file-local) so other API mappers — orderbooks embedded in
+ * contest detail responses, the body returned by `match`, the canonical row
+ * returned by `submit` — go through the same code path. Visible bodies always
+ * carry the same decoded shape regardless of source.
  *
  * `storedStatus` falls back to `status` for back-compat: a core-api build
  * predating effective-status omits `storedStatus` on the wire, so an SDK
  * pointed at an older API still yields a defined value (equal to `status`)
  * rather than `undefined`.
  */
-export function toCommitment(body: CommitmentBody): Commitment {
+export function toCommitment(body: CommitmentWireBody): Commitment {
+  if (body.redacted === true) return toHiddenCommitment(body);
+  return toVisibleCommitment(body);
+}
+
+function toVisibleCommitment(body: CommitmentBody): PublicVisibleCommitment {
+  // Strip the wire-only discriminants that don't belong on the public type, then
+  // re-tag with the canonical narrow-ready fields.
+  const { redacted: _redacted, bookVisible: _bookVisible, ...rest } = body;
   return {
-    ...body,
+    ...rest,
+    visibility: 'visible',
+    redacted: false,
     // Old core-api builds omit storedStatus; their `status` is the raw stored
     // value (those builds never derived an effective `expired`), so the cast is
     // sound on that path and short-circuited when storedStatus is present.
     storedStatus: body.storedStatus ?? (body.status as StoredCommitmentStatus),
     isLive: computeIsLive(body),
+  };
+}
+
+function toHiddenCommitment(body: CommitmentHiddenBody): PublicHiddenCommitment {
+  return {
+    visibility: 'hidden',
+    redacted: true,
+    payloadAvailable: false,
+    commitmentHash: body.commitmentHash,
+    maker: body.maker,
+    contestId: body.contestId,
+    positionType: body.positionType,
+    status: body.status,
+    storedStatus: body.storedStatus,
+    filledRiskAmount: body.filledRiskAmount,
+    expiry: body.expiry,
+    bookVisible: false,
+    nonceInvalidated: body.nonceInvalidated,
   };
 }
 

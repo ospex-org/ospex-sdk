@@ -73,6 +73,8 @@ function buildSigner(addr: Hex = TAKER): Signer {
 
 function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
   return {
+    visibility: 'visible',
+    redacted: false,
     commitmentHash: HASH,
     maker: MAKER,
     contestId: '42',

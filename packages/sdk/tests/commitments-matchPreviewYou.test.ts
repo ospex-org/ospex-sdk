@@ -33,6 +33,8 @@ const HOME = 'Los Angeles Dodgers';
 
 function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
   return {
+    visibility: 'visible',
+    redacted: false,
     commitmentHash: HASH,
     maker: MAKER,
     contestId: '42',
@@ -49,6 +51,7 @@ function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
     speculationKey: SPEC_KEY,
     signature: '0xsig',
     status: 'open',
+    storedStatus: 'open',
     source: 'submit',
     network: 'polygon',
     nonceInvalidated: false,

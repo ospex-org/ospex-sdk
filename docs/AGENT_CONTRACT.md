@@ -29,6 +29,38 @@ Additive changes inside `schemaVersion: 2` (new optional fields on the envelope 
 
 ---
 
+## 1.5. Public commitments — visible vs. hidden type split
+
+Every public commitment read (`client.commitments.get(hash)`, `client.commitments.list(...)`, any embedded orderbook in a contest/speculation response) returns the discriminated union `Commitment = PublicVisibleCommitment | PublicHiddenCommitment`. The discriminant fields:
+
+```ts
+type PublicVisibleCommitment = { visibility: 'visible'; redacted: false; /* full matchable payload */ };
+type PublicHiddenCommitment   = { visibility: 'hidden';  redacted: true; payloadAvailable: false; /* allow-list only */ };
+```
+
+A commitment is `hidden` when its maker pulled it from the public order book via a signed off-chain `DELETE /v1/commitments/:hash` (`book_visible=false`). The signed payload may still be matchable on chain until expiry / nonce-floor / on-chain `cancelCommitment` — but third parties cannot reach it from public reads. The public hidden body is allow-list-projected: `commitmentHash`, `maker`, `contestId`, `positionType`, `status`, `storedStatus`, `filledRiskAmount`, `expiry`, `bookVisible`, `nonceInvalidated` (plus the three discriminant fields). Anything in `MatchingModule.matchCommitment`'s struct (`signature`, `nonce`, `riskAmount`, `oddsTick`, `scorer`, `lineTicks`, `marketType`, `speculationKey`) is **never** present on a hidden body.
+
+**How to discriminate.**
+
+- Predicate: `if (isVisibleCommitment(c)) { /* PublicVisibleCommitment */ }` / `if (isHiddenCommitment(c)) { /* PublicHiddenCommitment */ }` (both exported from the SDK barrel).
+- Inline: `if (c.redacted === false) { /* visible */ }` / `if (c.redacted === true) { /* hidden */ }`.
+- `if (c.visibility === 'visible')` also narrows; both discriminants always agree.
+
+**Consequences for write-path SDK calls.** Operations that need the matchable payload refuse on a redacted body, surfaced as `OspexValidationError({ field: 'commitment' })` with an error message that names the hash and points at owner-auth `client.ownState.getCommitment(hash)` (the M5/PR3 maker-authenticated path). Refusing callers:
+
+| SDK surface | Behavior on redacted input |
+|---|---|
+| `commitments.prepareMatch({ hash \| commitment })` | Throws `OspexValidationError({ field: 'commitment' })`. |
+| `commitments.matchFromPreview(preview)` | Fresh re-fetch is a hidden body → throws (same shape). |
+| `commitments.checkCommitmentFillability({ hash \| commitment })` | Returns `outcome: 'not-fillable'` with `reasons: [{ code: 'COMMITMENT_REDACTED' }]`. No chain read, no `requireChainClient` / `getAddresses` access — the verdict resolves even for callers without an RPC config. |
+| `commitments.cancelOnchain(hash)` | Fetches via `CommitmentsApi.get` → `toCommitment`, narrows with `requireVisibleCommitment` BEFORE any signer / RPC / gas access; redacted input throws `OspexValidationError({ field: 'commitment' })` without unlocking the keystore or spending a chain-client round-trip. |
+| `commitments.checkSubmitFundability({ preview })` | Encountering a hidden row in the maker's open book degrades to `outcome: 'unknown'` with `reasons: [{ code: 'FUNDABILITY_UNKNOWN' }]` and no `requirement` block (the hidden row's `remainingRiskAmount` is redacted, so the aggregate cannot be computed — degrading is the only safe verdict). |
+| `commitments.cancelAllOnSpeculation({ ..., newMinNonce })` | **`newMinNonce` is REQUIRED** (interface-required AND runtime-validated; `OspexValidationError({ field: 'newMinNonce' })` on undefined or `<= 0`). The SDK no longer auto-computes a default because the public commitments list filters `book_visible=true` upstream, so a maker's cross-process book-hidden commitments at higher nonces are invisible to anonymous reads — any "convenience default" would silently leave them on-chain matchable. Callers must supply the floor from a source they trust (process-local nonce ledger, on-chain floor + headroom). Once M5/PR3 wires owner-auth own-state recovery, the SDK can restore a hidden-safe auto-default sourced from the maker's full book. The CLI's `commitments cancel-all` reflects this — `--new-min-nonce` is required for both `--dry-run` (preview) and execute (the dry-run filters its preview to `nonce < newMinNonce` so it shows what THIS floor would invalidate). The `complete-cancel-all` next-command round-trips the previewed floor verbatim. |
+
+**Backwards compatibility.** Older core-api builds (pre-M2 of the own-state SSE migration stack) omit the `redacted` flag entirely and serve only visible bodies; the SDK treats absence as `visibility: 'visible'`, so an SDK running against an older API behaves exactly like the pre-split code.
+
+---
+
 ## 2. CLI: the `--json` contract
 
 Every Class A `--json` invocation emits a single envelope matching `AgentEnvelope<TPayload>` — a shared shoulder block (`ok`, `action`, `stage`, `network`, `wallet`, `warnings`, `errors`, `effects`, `nextCommands`, …) wrapped around a command-specific `payload`. Agents route on the shoulder fields and read the payload only when they need command-specific data.
@@ -721,7 +753,7 @@ The SDK has no module-level state. Multiple `OspexClient` instances are fully is
 | `commitments.submit` with **identical inputs** | Yes | Server-side dedup on `commitmentHash`. Same hash returned, no duplicate row. |
 | `commitments.cancel(hash)` (off-chain DELETE) | Yes | Re-cancel on a cancelled row returns `200`. |
 | `commitments.cancelOnchain(hash)` | Yes | The contract has **no `AlreadyCancelled` revert path** — the second `cancelCommitment` succeeds. Don't infer "first cancel" from tx success; check off-chain status if you need that signal. |
-| `commitments.raiseMinNonce` / `cancelAllOnSpeculation` with `newMinNonce` ≤ current floor | No | Reverts `NonceMustIncrease`. Use the default-path floor computation (`max(onChainFloor, lastInProcess, supabaseMaxStored) + 1`) for safe retries. |
+| `commitments.raiseMinNonce` / `cancelAllOnSpeculation` with `newMinNonce` ≤ current floor | No | Reverts `NonceMustIncrease`. Read the current floor with `commitments.getNonceFloor(...)` and pass `max(thatFloor, anyHigherNonceYouSigned) + 1` as the explicit `newMinNonce` — the SDK no longer auto-computes (anonymous reads cannot enumerate the maker's hidden book, so any default would be a fail-open guarantee). |
 | `positions.claim(speculationId, type)` re-claim | No | Strict primitive — reverts `AlreadyClaimed`. Surface as `OspexChainError`. Use `ensurePositionClaimed` when you want idempotent "make this claimed" semantics instead. |
 | `positions.settleSpeculation(speculationId)` re-settle | No | Strict primitive — reverts `AlreadySettled`. Surface as `OspexChainError`. Use `ensureSpeculationSettled` when you want idempotent "make this settled" semantics instead. |
 | `positions.ensureSpeculationSettled(speculationId)` | Yes | Resolves to success whenever the speculation IS settled — `{ outcome: 'settled' \| 'alreadySettled' \| 'recovered' }`. Skips the tx on a pre-flight read showing it already closed; recovers from a concurrent settle that reverts mid-flight. The recovery decision is an authoritative on-chain re-read, so it's safe under core-API projection lag. `alreadySettled` sends no tx. `recovered` sends no tx **only** when recovery came via the pre-flight read or a pre-send (`estimateGas`) revert; if this wallet had already broadcast a settle that then reverted on inclusion (lost the race, spent gas), the result carries `revertedTxHash` **and `revertedReceipt`** (the reverted tx's receipt, re-fetched so consumers can account the POL gas it spent — gas budgets must include reverted txs), and `claim-all` emits a `status:'reverted'` settle effect. The confirmed-settle `txHash` is present only on `settled`. The `ospex settle <id>` CLI and `claim-all`'s settle leg both route through this (not the strict primitive). |

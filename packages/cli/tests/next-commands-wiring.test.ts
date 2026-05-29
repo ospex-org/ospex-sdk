@@ -219,19 +219,26 @@ describe('PR-7 wiring: success envelopes carry the right verify suggestions', ()
 });
 
 describe('PR-7 wiring: dry-run envelopes carry the right complete suggestions', () => {
-  it('cancel-all dry-run → complete-cancel-all with the same contest/scorer/line', () => {
+  it('cancel-all dry-run → complete-cancel-all with the same contest/scorer/line + newMinNonce', () => {
     const env = toCancelAllDryRunEnvelope({
       chainId: POLYGON,
       signerAddress: SIGNER,
       contestId: 42n,
       scorer: ('0x' + '11'.repeat(20)) as Hex,
       lineTicks: -35,
+      newMinNonce: 17_000_000_005n,
       invalidatedCount: 3,
       commitments: [],
     });
     expect(env.nextCommands[0]?.id).toBe('complete-cancel-all');
     expect(env.nextCommands[0]?.argv).toContain('42');
     expect(env.nextCommands[0]?.argv).toContain('-35');
+    // The execute form must carry the previewed floor through verbatim —
+    // anything else would silently let the maker confirm a plan against a
+    // different `newMinNonce` than the dry-run priced.
+    expect(env.nextCommands[0]?.argv).toEqual(
+      expect.arrayContaining(['--new-min-nonce', '17000000005']),
+    );
     expect(env.nextCommands[0]?.safeToAutoRun).toBe(false); // it's a write
   });
 

@@ -229,4 +229,49 @@ describe('commitments.cancelOnchain', () => {
     await expect(promise).rejects.toBeInstanceOf(OspexChainError);
     await expect(promise).rejects.toMatchObject({ reason: undefined });
   });
+
+  it('refuses a redacted (book-hidden) response BEFORE touching signer / RPC / gas', async () => {
+    // Hidden public bodies omit signature/nonce/risk/odds — letting them through
+    // would land in `BigInt(undefined)` and throw `TypeError`. cancelOnchain
+    // must route through CommitmentsApi.get → toCommitment → requireVisible so
+    // the verdict is a typed OspexValidationError({ field: 'commitment' }).
+    // The narrow has to fire BEFORE any signer / chain-client / gas
+    // estimation — wire those accessors to throw so the test asserts the
+    // ordering as well as the verdict.
+    const hiddenWireBody: Record<string, unknown> = {
+      redacted: true,
+      payloadAvailable: false,
+      commitmentHash: HASH,
+      maker: SIGNER_ADDR,
+      contestId: '42',
+      positionType: 0,
+      status: 'cancelled',
+      storedStatus: 'open',
+      filledRiskAmount: '0',
+      expiry: '2099-01-01T00:00:00.000Z',
+      bookVisible: false,
+      nonceInvalidated: false,
+    };
+    const ctx: CommitmentsContext = {
+      api: {
+        request: async () => hiddenWireBody,
+      } as unknown as CommitmentsContext['api'],
+      requireSigner: () => {
+        throw new Error('signer must not be accessed for a redacted commitment');
+      },
+      requireChainClient: () => {
+        throw new Error('chain client must not be accessed for a redacted commitment');
+      },
+      getChainId: () => CHAIN_ID,
+      getAddresses: () => {
+        throw new Error('addresses must not be accessed for a redacted commitment');
+      },
+      nonceCounter: new NonceCounter(),
+    };
+    await expect(cancelOnchain(ctx, HASH as `0x${string}`)).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      field: 'commitment',
+      message: expect.stringContaining('cancel on chain'),
+    });
+  });
 });

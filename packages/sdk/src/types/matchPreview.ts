@@ -20,7 +20,7 @@
  * `wei6ToDecimalUSDC` and round-trip with `usdcDecimalToWei6`.
  */
 
-import type { Commitment } from './commitment.js';
+import type { PublicVisibleCommitment } from './commitment.js';
 import type { MarketType } from './odds.js';
 import type {
   ApprovalPurpose,
@@ -209,8 +209,14 @@ export interface MatchPreviewSpeculation {
 export interface MatchPreview {
   /** Lock the contract early so future-language agents have a stable hook. */
   schemaVersion: 1;
-  /** Maker commitment as fetched from the API (with `isLive` derived). */
-  commitment: Commitment;
+  /**
+   * Maker commitment as fetched from the API (with `isLive` derived).
+   * Always a {@link PublicVisibleCommitment} — `prepareMatch` and
+   * `matchFromPreview` refuse to operate on a redacted hidden body via
+   * `requireVisibleCommitment`, so the matchable payload (signature, nonce,
+   * oddsTick, etc.) is guaranteed present here.
+   */
+  commitment: PublicVisibleCommitment;
   /** Configured chain id — must match the client at execute time. */
   chainId: number;
   /** MatchingModule address — must match the client at execute time. */
@@ -317,8 +323,8 @@ export interface MatchJsonResult {
  * safety.
  */
 export interface BuildMatchPreviewArgs {
-  /** Already-fetched (with `isLive` derived). */
-  commitment: Commitment;
+  /** Already-fetched (with `isLive` derived). Visible-only — see {@link MatchPreview.commitment}. */
+  commitment: PublicVisibleCommitment;
   chainId: number;
   matchingModuleAddress: Hex;
   taker: Hex;

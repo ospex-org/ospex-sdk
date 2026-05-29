@@ -137,11 +137,19 @@ export const COMPLETE_CANCEL_ALL = registerNextCommand({
     contestId: string;
     scorer: Hex;
     lineTicks: number;
+    /**
+     * Required — the explicit floor passed to the original `--dry-run`
+     * call. The CLI's `cancel-all` requires `--new-min-nonce` (anonymous
+     * reads cannot enumerate the maker's hidden book, so the SDK doesn't
+     * auto-compute a floor). Round-trip the value verbatim.
+     */
+    newMinNonce: string;
   }) => ({
     description: 'Execute the planned cancel-all.',
     command:
       `ospex commitments cancel-all --contest-id ${params.contestId} ` +
-      `--scorer ${params.scorer} --line ${params.lineTicks} --json`,
+      `--scorer ${params.scorer} --line ${params.lineTicks} ` +
+      `--new-min-nonce ${params.newMinNonce} --json`,
     argv: [
       'commitments',
       'cancel-all',
@@ -151,6 +159,8 @@ export const COMPLETE_CANCEL_ALL = registerNextCommand({
       params.scorer,
       '--line',
       String(params.lineTicks),
+      '--new-min-nonce',
+      params.newMinNonce,
       '--json',
     ],
   }),

@@ -35,8 +35,9 @@ import { OspexValidationError } from '../errors.js';
 import { buildDomain, hashCommitment, type OspexCommitmentMessage } from '../chain/eip712.js';
 import { buildSignAndSend } from './sendTx.js';
 import { sendWithMatchingErrorClassification } from './matchingErrors.js';
+import { requireVisibleCommitment } from './requireVisible.js';
+import { CommitmentsApi } from '../api/commitments.js';
 import type { CommitmentsContext } from './context.js';
-import type { CommitmentBody } from '../api/types.js';
 import type { Hex } from '../types/signer.js';
 
 const HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
@@ -59,12 +60,17 @@ export async function cancelOnchain(
   }
   const lowercaseHash = hash.toLowerCase() as Hex;
 
-  // Fetch the full commitment so we can reconstruct the struct. The
-  // contract recomputes the hash from the struct internally and reverts
-  // if it doesn't match what was originally stored.
-  const body = await ctx.api.request<CommitmentBody>(
-    `/v1/commitments/${lowercaseHash}`,
-  );
+  // Fetch the full commitment so we can reconstruct the struct. Routes through
+  // `CommitmentsApi.get` → `toCommitment` so the M2 `redacted` discriminant is
+  // decoded into the public {@link Commitment} union. A hidden body has NO
+  // signature / nonce / oddsTick / riskAmount / scorer / lineTicks (the public
+  // allow-list excludes everything `cancelCommitment`'s struct needs) — narrow
+  // BEFORE any signer / chain-client / addresses access so a redacted row
+  // never reaches the BigInt() conversions (which would TypeError on
+  // undefined) and never spends a Foundry-passphrase decrypt on a request
+  // that's about to fail.
+  const fetched = await new CommitmentsApi(ctx.api).get(lowercaseHash);
+  const visible = requireVisibleCommitment(fetched, { purpose: 'cancel on chain' });
 
   // Indexer-only rows can have nulls in fields the contract requires.
   // Fail fast with a clear error rather than hitting a silent revert.
@@ -77,7 +83,7 @@ export async function cancelOnchain(
       'oddsTick',
       'expiry',
     ] as const
-  ).filter((k) => body[k] === null);
+  ).filter((k) => visible[k] === null);
   if (required.length > 0) {
     const first = required[0];
     throw new OspexValidationError(
@@ -85,6 +91,12 @@ export async function cancelOnchain(
         ', ',
       )}.`,
       first !== undefined ? { field: first } : undefined,
+    );
+  }
+  if (visible.signature === null) {
+    throw new OspexValidationError(
+      `Commitment ${lowercaseHash} has no signature field; the row is not reconstructable into the EIP-712 struct.`,
+      { field: 'signature' },
     );
   }
 
@@ -102,15 +114,15 @@ export async function cancelOnchain(
   // matchable — and a maker bot would release its headroom on a phantom cancel. Fail
   // closed instead. Both hashes are public; the message carries no secrets.
   const commitment: OspexCommitmentMessage = {
-    maker: body.maker as Hex,
-    contestId: BigInt(body.contestId as string),
-    scorer: body.scorer as Hex,
-    lineTicks: body.lineTicks as number,
-    positionType: body.positionType as 0 | 1,
-    oddsTick: body.oddsTick as number,
-    riskAmount: BigInt(body.riskAmount),
-    nonce: BigInt(body.nonce),
-    expiry: BigInt(Math.floor(new Date(body.expiry as string).getTime() / 1000)),
+    maker: visible.maker as Hex,
+    contestId: BigInt(visible.contestId as string),
+    scorer: visible.scorer as Hex,
+    lineTicks: visible.lineTicks as number,
+    positionType: visible.positionType as 0 | 1,
+    oddsTick: visible.oddsTick as number,
+    riskAmount: BigInt(visible.riskAmount),
+    nonce: BigInt(visible.nonce),
+    expiry: BigInt(Math.floor(new Date(visible.expiry as string).getTime() / 1000)),
   };
   const reconstructedHash = hashCommitment(buildDomain(chainId, matchingModule), commitment);
   if (reconstructedHash.toLowerCase() !== lowercaseHash) {

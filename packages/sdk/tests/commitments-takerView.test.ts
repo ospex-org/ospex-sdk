@@ -27,6 +27,8 @@ const GIANTS_DODGERS = {
 
 function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
   return {
+    visibility: 'visible',
+    redacted: false,
     commitmentHash: '0xac741f71' + 'a'.repeat(56),
     maker: '0x5316fa54c170d1927f30d1a497ac9e85e3826a9b',
     contestId: '9',
@@ -43,6 +45,7 @@ function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
     speculationKey: null,
     signature: '0xsig',
     status: 'open',
+    storedStatus: 'open',
     source: 'unit-test',
     network: 'polygon',
     nonceInvalidated: false,

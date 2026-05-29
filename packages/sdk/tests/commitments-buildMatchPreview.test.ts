@@ -35,6 +35,8 @@ const FAR_FUTURE_ISO = '2099-05-08T02:00:00Z';
 
 function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
   return {
+    visibility: 'visible',
+    redacted: false,
     commitmentHash: HASH,
     maker: MAKER,
     contestId: '42',
@@ -51,6 +53,7 @@ function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
     speculationKey: SPEC_KEY,
     signature: '0xsig',
     status: 'open',
+    storedStatus: 'open',
     source: 'submit',
     network: 'polygon',
     nonceInvalidated: false,

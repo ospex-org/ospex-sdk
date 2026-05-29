@@ -424,4 +424,33 @@ describe('checkSubmitFundability — degraded reads', () => {
     expect(r.outcome).toBe('fundable');
     expect(r.checkedAtBlock).toBeUndefined();
   });
+
+  it('a redacted hidden row in the maker book → unknown (cannot account for its risk)', async () => {
+    // Hidden bodies (book_visible=false) redact `remainingRiskAmount` +
+    // `speculationKey` per the public allow-list (own-state SSE plan §2.3).
+    // Skipping them would silently under-count the maker's open exposure —
+    // exactly the failure a solvency guard must never make. Degrade to
+    // `unknown` so the verdict is honest. The maker recovers a definite
+    // verdict via owner-auth `client.ownState.*`.
+    const hiddenRow: Record<string, unknown> = {
+      commitmentHash: '0x' + 'ff'.repeat(32),
+      maker: MAKER,
+      contestId: '42',
+      positionType: 0,
+      status: 'cancelled',
+      storedStatus: 'open',
+      filledRiskAmount: '0',
+      expiry: '2099-01-01T00:00:00Z',
+      bookVisible: false,
+      nonceInvalidated: false,
+      redacted: true,
+      payloadAvailable: false,
+    };
+    const { ctx } = buildContext({ existing: [row(1_000_000n), hiddenRow] });
+    const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n }) });
+    expect(r.outcome).toBe('unknown');
+    expect(r.fundableNow).toBe(false);
+    expect(r.reasons.map((x) => x.code)).toEqual(['FUNDABILITY_UNKNOWN']);
+    expect(r.requirement).toBeUndefined();
+  });
 });
