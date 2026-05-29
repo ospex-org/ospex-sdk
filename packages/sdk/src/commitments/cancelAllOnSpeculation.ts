@@ -1,55 +1,44 @@
 /**
- * `commitments.cancelAllOnSpeculation(args)` — convenience wrapper
- * around `raiseMinNonce` that picks a safe default `newMinNonce` when
- * the caller doesn't specify one.
+ * `commitments.cancelAllOnSpeculation(args)` — wrapper around `raiseMinNonce`
+ * that broadcasts the on-chain nonce-floor raise AND returns a visible-rows
+ * preview count so the caller can confirm the floor before/after the tx.
  *
- * Default newMinNonce = max(onChainFloor, lastInProcess, supabaseMaxStored) + 1.
- * Three candidates are blended for belt-and-suspenders coverage:
- *   1. on-chain `s_minNonces[maker][specKey]` — canonical authority,
- *      always available, but doesn't account for as-yet-unraised
- *      commitments the maker just signed.
- *   2. SDK's per-instance `lastInProcess` — picks up nonces this
- *      process just allocated for new commitments via `submit`. May be
- *      unset on a fresh process.
- *   3. Supabase max-stored nonce — projects all known commitments for
- *      this maker × speculation. Lags the chain by 5–20s on average,
- *      but covers the case where the SDK process restarted between
- *      `submit` and `cancelAllOnSpeculation`.
+ * **`newMinNonce` is REQUIRED.** The function does not auto-compute a default
+ * because no anonymous read surface can prove the floor is hidden-safe: the
+ * core-api public list filters `book_visible=true` upstream (own-state SSE
+ * plan §M2), so a maker's hidden-but-still-on-chain-matchable commitments at
+ * higher nonces are invisible to the SDK from anonymous reads. Any
+ * "convenience default" computed from those reads would silently leave such
+ * commitments live — exactly the latent-exposure failure mode this primitive
+ * exists to defend against. Until M5/PR3 wires owner-auth own-state
+ * recovery (which CAN enumerate the maker's full book), callers MUST supply
+ * the floor themselves from a source they trust: a process-local nonce
+ * ledger, a private store of all signed commitments, or
+ * `commitments.getNonceFloor` + a delta they're confident covers their
+ * off-book signatures.
  *
- * Taking the max of the three avoids the failure mode where one source
- * is stale and the chosen `newMinNonce` doesn't actually invalidate the
- * commitments the caller wants gone.
+ * What the function still provides on top of `raiseMinNonce`:
+ *   - Argument validation (positive `newMinNonce`, address-shaped scorer,
+ *     valid lineTicks, non-negative contestId).
+ *   - An `invalidatedCount` preview computed by paging the maker's
+ *     visible book on `(contestId, scorer)`, filtering to the speculation
+ *     key, and counting rows currently matchable (status open /
+ *     partially_filled, not nonce-invalidated) whose `nonce < newMinNonce`.
+ *     This count is VISIBLE-ROWS-ONLY by construction; hidden rows are not
+ *     counted (they don't appear in the list at all), but the on-chain
+ *     `raiseMinNonce` itself DOES invalidate any matching commitment whose
+ *     nonce < floor, hidden or not — the count is a preview of what the
+ *     indexer will project, not a measurement of total chain effect.
  *
- * `invalidatedCount` is the number of rows that will flip
- * `nonce_invalidated=true` post-tx — computed up-front by filtering
- * Supabase rows on `nonce < newMinNonce`. Indexer lag means the actual
- * post-tx count may be slightly higher (commitments not yet projected),
- * but never lower for already-on-chain rows.
- *
- * **Limitation — hidden cross-process commitments.** The Supabase candidate
- * (`supabaseMaxStored`) reads `GET /v1/commitments`, which the core API
- * filters to `book_visible=true` rows for anonymous callers (own-state SSE
- * plan §M2). A commitment the maker pulled off the public book via off-chain
- * DELETE — but never raised a higher floor against — stays matchable on
- * chain at its original nonce yet is invisible to this list. If that
- * commitment was signed by a DIFFERENT process (so `lastInProcess` here
- * doesn't capture it either) and its nonce exceeds the on-chain floor, the
- * auto-default `newMinNonce` may pick a value that does NOT invalidate it.
- *
- * For makers using book-hide in production, pass an explicit
- * `newMinNonce` derived from a process-local nonce ledger or the
- * owner-auth own-state recovery surface (M5/PR3
- * `client.ownState.*`). The defensive narrow below filters any hidden
- * row that nevertheless slips through the public list (e.g. a future
- * recovery-overlap response) so the calc never crashes on a missing
- * `speculationKey`; the safety of the chosen floor against unseen
- * hidden rows is the caller's responsibility until owner-auth lands.
+ * `invalidatedCount` is computed up-front by filtering Supabase rows on
+ * `nonce < newMinNonce`. Indexer lag means the actual post-tx count may be
+ * slightly higher (commitments not yet projected), but never lower for
+ * already-on-chain visible rows.
  */
 
 import type { Hash, TransactionReceipt } from 'viem';
 import { OspexValidationError } from '../errors.js';
 import { deriveSpeculationKey } from '../chain/eip712.js';
-import { readNonceFloor } from './nonce.js';
 import { raiseMinNonce } from './raiseMinNonce.js';
 import { validateLineTicks } from './validation.js';
 import type { CommitmentsContext } from './context.js';
@@ -63,17 +52,34 @@ export interface CancelAllOnSpeculationArgs {
   scorer: Hex;
   lineTicks: number;
   /**
-   * Override the computed default. Must be strictly greater than the
-   * on-chain floor (the contract reverts with `NonceMustIncrease`
-   * otherwise).
+   * Required. The on-chain floor to raise to — every commitment whose
+   * `nonce < newMinNonce` for `(maker, speculationKey)` becomes
+   * unmatchable post-tx (`MatchingModule__NonceTooLow` on subsequent
+   * `matchCommitment` attempts). Must be strictly greater than the
+   * current on-chain floor (`s_minNonces[maker][specKey]`); the contract
+   * reverts with `NonceMustIncrease` otherwise. Must be positive.
+   *
+   * The function does NOT auto-compute this value. See the file-level
+   * jsdoc for the reason — anonymous reads cannot enumerate the maker's
+   * hidden book, so no SDK-computed default can prove the floor is
+   * hidden-safe. Until M5/PR3 lands owner-auth own-state recovery,
+   * callers using book-hide must supply the floor from a process-local
+   * source they trust.
    */
-  newMinNonce?: bigint;
+  newMinNonce: bigint;
 }
 
 export interface CancelAllOnSpeculationResult {
   txHash: Hash;
   receipt: TransactionReceipt;
-  /** Rows that will flip `nonce_invalidated=true` — counted before the tx is sent. */
+  /**
+   * Number of VISIBLE rows that will flip `nonce_invalidated=true` once
+   * the indexer projects this tx — counted before the tx is sent. Hidden
+   * commitments are not counted (they don't surface on anonymous reads),
+   * but on-chain `raiseMinNonce` still invalidates them if their nonce
+   * is below `newMinNonce` — the count understates the actual chain
+   * effect, never overstates it.
+   */
   invalidatedCount: number;
   newMinNonce: bigint;
 }
@@ -81,14 +87,35 @@ export interface CancelAllOnSpeculationResult {
 const PAGE_LIMIT = 1000;
 // Hard ceiling on pagination depth. 50 × 1000 = 50,000 rows for one
 // (maker, contestId, scorer) tuple is already extreme; any caller above
-// that should be coordinating nonces externally and passing an explicit
-// `newMinNonce`.
+// that should be coordinating outside this preview entirely.
 const MAX_PAGES = 50;
 
 export async function cancelAllOnSpeculation(
   ctx: CommitmentsContext,
   args: CancelAllOnSpeculationArgs,
 ): Promise<CancelAllOnSpeculationResult> {
+  // Validate ARGS BEFORE any chain or API access — keep the rejection
+  // above any side effects (sibling of `requireVisibleCommitment` ordering
+  // in `cancelOnchain` + the redaction short-circuit in `checkFillability`).
+  // `newMinNonce` undefined → typed error pointing operators at the reason
+  // we removed the auto-default, so a stale caller learns about it instead
+  // of silently hitting the contract's `NonceMustIncrease` revert with a
+  // default value derived from a non-hidden-safe list.
+  if (args.newMinNonce === undefined) {
+    throw new OspexValidationError(
+      'cancelAllOnSpeculation requires an explicit newMinNonce. The SDK cannot auto-compute ' +
+        'a hidden-safe default from anonymous reads (the public commitments list filters ' +
+        'book_visible=true upstream, so cross-process book-hidden commitments at higher nonces ' +
+        'are invisible here). Supply the floor from a process-local nonce ledger you trust — ' +
+        'or, once M5/PR3 ships, from owner-auth own-state recovery (which can enumerate the ' +
+        "maker's hidden book). For a one-off chain read of the current floor, use " +
+        'commitments.getNonceFloor.',
+      { field: 'newMinNonce' },
+    );
+  }
+  if (args.newMinNonce <= 0n) {
+    throw new OspexValidationError('newMinNonce must be positive.', { field: 'newMinNonce' });
+  }
   if (args.contestId < 0n) {
     throw new OspexValidationError('contestId must be non-negative.', { field: 'contestId' });
   }
@@ -98,19 +125,16 @@ export async function cancelAllOnSpeculation(
   validateLineTicks(args.lineTicks);
 
   const signer = ctx.requireSigner();
-  const publicClient = ctx.requireChainClient();
-  const { matchingModule } = ctx.getAddresses();
   const maker = (await signer.getAddress()).toLowerCase() as Hex;
   const scorer = args.scorer.toLowerCase() as Hex;
   const speculationKey = deriveSpeculationKey(args.contestId, scorer, args.lineTicks);
 
-  // Pull EVERY one of this maker's commitments on this (contestId,
-  // scorer) tuple. We need the complete nonce history to pick a safe
-  // default floor, AND a complete count of affected rows. The list
-  // endpoint caps at limit=1000, so paginate until hasMore=false.
-  // (`speculation_key` filtering happens client-side because the API
-  // takes contestId + scorer + speculationId as filters but not
-  // lineTicks directly.)
+  // Pull EVERY one of this maker's visible commitments on this (contestId,
+  // scorer) tuple — for the `invalidatedCount` preview only. The on-chain
+  // raise itself doesn't need this list. The list endpoint caps at
+  // limit=1000, so paginate until hasMore=false. (`speculation_key`
+  // filtering happens client-side because the API takes contestId + scorer
+  // + speculationId as filters but not lineTicks directly.)
   const allRows: CommitmentWireBody[] = [];
   let offset = 0;
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -139,25 +163,18 @@ export async function cancelAllOnSpeculation(
     if (page === MAX_PAGES - 1) {
       throw new OspexValidationError(
         `Maker has more than ${MAX_PAGES * PAGE_LIMIT} commitments matching ` +
-          `(maker, contestId=${args.contestId}, scorer); cannot safely auto-compute newMinNonce. ` +
-          'Pass an explicit newMinNonce to bypass.',
-        { field: 'newMinNonce' },
+          `(maker, contestId=${args.contestId}, scorer); cannot compute invalidatedCount preview. ` +
+          'The on-chain raise itself does not need this list — call raiseMinNonce directly.',
+        { field: 'contestId' },
       );
     }
   }
 
   // The public list is filtered to `book_visible=true` upstream (core-api
-  // M2), so in practice `allRows` carries only visible bodies and
-  // `hiddenRowCount` is always 0 here. The defensive narrow below stays as
-  // belt-and-braces against a future recovery-overlap response or a server
-  // bug that lets a hidden body through — those rows have no
-  // `speculationKey`, and reading it would crash the `matching` filter
-  // below. We do NOT throw on a non-zero count: the caller's hidden book
-  // is fundamentally invisible to anonymous reads (see jsdoc), and pretending
-  // a thrown error here delivers safety in that case would be a false
-  // guarantee. Refusing to auto-compute would also break the common case
-  // (no book-hide at all) for no security gain — the verdict is the same
-  // either way: callers using book-hide need to provide their own floor.
+  // M2), so in practice `allRows` carries only visible bodies. The narrow
+  // below stays as belt-and-braces against a future recovery-overlap
+  // response or server bug that leaks a hidden body — those rows have no
+  // `speculationKey`, and reading it would crash the `matching` filter.
   const visibleRows = allRows.filter((c): c is CommitmentBody => c.redacted !== true);
 
   const speculationKeyLower = speculationKey.toLowerCase();
@@ -165,36 +182,15 @@ export async function cancelAllOnSpeculation(
     (c) => (c.speculationKey ?? '').toLowerCase() === speculationKeyLower,
   );
 
-  let newMinNonce: bigint;
-  if (args.newMinNonce !== undefined) {
-    if (args.newMinNonce <= 0n) {
-      throw new OspexValidationError('newMinNonce must be positive.', { field: 'newMinNonce' });
-    }
-    newMinNonce = args.newMinNonce;
-  } else {
-    const onChainFloor = await readNonceFloor(
-      publicClient,
-      matchingModule,
-      maker,
-      speculationKey,
-    );
-    const lastInProcess = ctx.nonceCounter.peek(maker, speculationKey) ?? 0n;
-    const supabaseMaxStored = matching.reduce<bigint>((max, c) => {
-      const n = BigInt(c.nonce);
-      return n > max ? n : max;
-    }, 0n);
-    const candidates = [onChainFloor, lastInProcess, supabaseMaxStored];
-    const peakRef = candidates.reduce<bigint>((m, v) => (v > m ? v : m), 0n);
-    newMinNonce = peakRef + 1n;
-  }
-
-  // Count what's actually going to flip — only currently-matchable rows
-  // below the new floor. Filled / cancelled rows aren't surface-level
-  // affected (they're already terminal); cancelled is a separate status.
+  // Count what's actually going to flip on the visible side — only
+  // currently-matchable rows below the new floor. Filled / cancelled rows
+  // aren't surface-level affected (they're already terminal). Hidden rows
+  // can't be counted (not in `allRows`); on-chain they're still invalidated
+  // if nonce < newMinNonce, but this count is a VISIBLE-only preview.
   const invalidatedCount = matching.reduce<number>((count, c) => {
     if (c.nonceInvalidated) return count;
     if (c.status !== 'open' && c.status !== 'partially_filled') return count;
-    if (BigInt(c.nonce) >= newMinNonce) return count;
+    if (BigInt(c.nonce) >= args.newMinNonce) return count;
     return count + 1;
   }, 0);
 
@@ -202,8 +198,8 @@ export async function cancelAllOnSpeculation(
     contestId: args.contestId,
     scorer,
     lineTicks: args.lineTicks,
-    newMinNonce,
+    newMinNonce: args.newMinNonce,
   });
 
-  return { txHash, receipt, invalidatedCount, newMinNonce };
+  return { txHash, receipt, invalidatedCount, newMinNonce: args.newMinNonce };
 }

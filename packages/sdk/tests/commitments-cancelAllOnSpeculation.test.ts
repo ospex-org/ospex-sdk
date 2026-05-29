@@ -176,45 +176,39 @@ describe('commitments.cancelAllOnSpeculation', () => {
     lineTicks: LINE_TICKS,
   };
 
-  it('default newMinNonce = max(onChainFloor, lastInProcess, supabaseMaxStored) + 1 (chain wins)', async () => {
-    const { ctx, sentTxs } = fakeContext({
-      onChainFloor: 5_000n,
-      rows: [
-        makeRow({ nonce: '2_000'.replace(/_/g, ''), status: 'open' }),
-        makeRow({ nonce: '3_500'.replace(/_/g, ''), status: 'partially_filled' }),
-      ],
-      preObserve: { speculationKey: SPEC_KEY, nonce: 1_500n },
+  // ── newMinNonce is REQUIRED (M5/PR1 — Hermes round 3) ──────────────────
+  // Auto-computing a default from the public list cannot be hidden-safe
+  // (the list filters `book_visible=true` upstream; a maker's hidden book
+  // is invisible to anonymous reads), so we removed the auto-default and
+  // require the caller to supply the floor. Until M5/PR3 wires owner-auth
+  // own-state recovery, callers using book-hide must source the floor
+  // themselves; everyone else passes a floor they're confident covers
+  // their open commitments.
+
+  it('requires an explicit newMinNonce — throws OspexValidationError({ field: "newMinNonce" }) when undefined', async () => {
+    const { ctx } = fakeContext({ onChainFloor: 0n, rows: [] });
+    await expect(
+      cancelAllOnSpeculation(
+        ctx,
+        // Force the dynamic call path: the type says newMinNonce is
+        // required, but the runtime guard must also catch a stale caller.
+        baseArgs as unknown as Parameters<typeof cancelAllOnSpeculation>[1],
+      ),
+    ).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      field: 'newMinNonce',
+      message: expect.stringContaining('explicit newMinNonce'),
     });
-    const result = await cancelAllOnSpeculation(ctx, baseArgs);
-    expect(result.newMinNonce).toBe(5_001n);
-    const decoded = decodeRaiseMinNonceCall(sentTxs[0]!.data);
-    expect(decoded.newMinNonce).toBe(5_001n);
   });
 
-  it('default newMinNonce — supabase max wins', async () => {
-    const { ctx } = fakeContext({
-      onChainFloor: 1_000n,
-      rows: [
-        makeRow({ nonce: '7_777'.replace(/_/g, ''), status: 'open' }),
-        makeRow({ nonce: '4_000'.replace(/_/g, ''), status: 'cancelled' }),
-      ],
-      preObserve: { speculationKey: SPEC_KEY, nonce: 2_000n },
-    });
-    const result = await cancelAllOnSpeculation(ctx, baseArgs);
-    expect(result.newMinNonce).toBe(7_778n);
+  it('rejects newMinNonce <= 0', async () => {
+    const { ctx } = fakeContext({ onChainFloor: 0n, rows: [] });
+    await expect(
+      cancelAllOnSpeculation(ctx, { ...baseArgs, newMinNonce: 0n }),
+    ).rejects.toMatchObject({ name: 'OspexValidationError', field: 'newMinNonce' });
   });
 
-  it('default newMinNonce — in-process counter wins', async () => {
-    const { ctx } = fakeContext({
-      onChainFloor: 1_000n,
-      rows: [makeRow({ nonce: '3_000'.replace(/_/g, ''), status: 'open' })],
-      preObserve: { speculationKey: SPEC_KEY, nonce: 9_999n },
-    });
-    const result = await cancelAllOnSpeculation(ctx, baseArgs);
-    expect(result.newMinNonce).toBe(10_000n);
-  });
-
-  it('explicit newMinNonce override path', async () => {
+  it('explicit newMinNonce → sends raiseMinNonce with that exact value', async () => {
     const { ctx, sentTxs } = fakeContext({
       onChainFloor: 1_000n,
       rows: [makeRow({ nonce: '500', status: 'open' })],
@@ -224,7 +218,7 @@ describe('commitments.cancelAllOnSpeculation', () => {
     expect(decodeRaiseMinNonceCall(sentTxs[0]!.data).newMinNonce).toBe(12_345n);
   });
 
-  it('invalidatedCount counts only currently-matchable rows below newMinNonce', async () => {
+  it('invalidatedCount counts only currently-matchable VISIBLE rows below newMinNonce', async () => {
     const { ctx } = fakeContext({
       onChainFloor: 0n,
       rows: [
@@ -241,7 +235,7 @@ describe('commitments.cancelAllOnSpeculation', () => {
         }),
       ],
     });
-    const result = await cancelAllOnSpeculation(ctx, baseArgs);
+    const result = await cancelAllOnSpeculation(ctx, { ...baseArgs, newMinNonce: 1_000n });
     expect(result.invalidatedCount).toBe(2);
   });
 
@@ -254,19 +248,14 @@ describe('commitments.cancelAllOnSpeculation', () => {
     expect(result.invalidatedCount).toBe(0);
   });
 
-  it('paginates past page 1 — the highest nonce on page 2 wins the supabaseMaxStored candidate', async () => {
+  it('paginates past page 1 when computing the visible-rows invalidatedCount preview', async () => {
     // Maker has 7 commitments on this speculation. With pageSize=3, the
-    // SDK has to fetch 3 pages to see them all. The highest nonce
-    // (50_000) lives on page 2, so a single-page implementation would
-    // pick newMinNonce=2_001 (max of page-1 nonces=2000, +1) and miss
-    // the 50_000 commitment entirely. With pagination, newMinNonce
-    // should be 50_001.
+    // SDK has to fetch 3 pages to see them all. The invalidatedCount
+    // counts every visible matching row below newMinNonce — a
+    // single-page implementation would miss pages 2-3.
     const rows: CommitmentBody[] = [];
-    // Page 1: nonces 1000, 2000, 1500
     for (const n of [1000, 2000, 1500]) rows.push(makeRow({ nonce: String(n), status: 'open' }));
-    // Page 2: nonces 50000, 3000, 4000  ← max lives here
     for (const n of [50_000, 3000, 4000]) rows.push(makeRow({ nonce: String(n), status: 'open' }));
-    // Page 3: just one row
     rows.push(makeRow({ nonce: '5000', status: 'open' }));
 
     const { ctx, apiCallCount } = fakeContext({
@@ -274,8 +263,11 @@ describe('commitments.cancelAllOnSpeculation', () => {
       rows,
       pageSize: 3,
     });
-    const result = await cancelAllOnSpeculation(ctx, baseArgs);
-    expect(result.newMinNonce).toBe(50_001n);
+    const result = await cancelAllOnSpeculation(ctx, {
+      ...baseArgs,
+      newMinNonce: 100_000n,
+    });
+    expect(result.newMinNonce).toBe(100_000n);
     expect(result.invalidatedCount).toBe(7);
     // 3 GET requests (3-3-1) is the expected pagination cost.
     expect(apiCallCount()).toBe(3);
@@ -287,7 +279,7 @@ describe('commitments.cancelAllOnSpeculation', () => {
       makeRow({ nonce: '200', status: 'open' }),
     ];
     const { ctx, apiCallCount } = fakeContext({ onChainFloor: 0n, rows, pageSize: 1000 });
-    await cancelAllOnSpeculation(ctx, baseArgs);
+    await cancelAllOnSpeculation(ctx, { ...baseArgs, newMinNonce: 1_000n });
     // 2 rows fit in one 1000-page → exactly 1 API call.
     expect(apiCallCount()).toBe(1);
   });
@@ -295,17 +287,13 @@ describe('commitments.cancelAllOnSpeculation', () => {
   // ── Hidden-row defensive narrow (M5/PR1) ────────────────────────────────
   // The PUBLIC list is filtered to `book_visible=true` upstream (core-api M2),
   // so in production hidden bodies don't reach this function — the maker's
-  // hidden book is fundamentally invisible to anonymous reads. The default
-  // floor cannot account for it; that's a documented limitation, NOT a thrown
-  // safety guard (a thrown guard would have been a false guarantee — see the
-  // function docstring for the recommended explicit-newMinNonce path).
-  // The defensive narrow stays as belt-and-braces against a future
-  // recovery-overlap response or server bug that leaks a hidden row: the
-  // function must not crash on a missing `speculationKey` if one slips through.
+  // hidden book is fundamentally invisible to anonymous reads. The
+  // explicit-newMinNonce requirement (above) protects against the
+  // latent-exposure failure mode; this narrow is the type-level + runtime
+  // belt-and-braces that prevents the function from crashing if a hidden
+  // body ever slips through (a future recovery-overlap response, a server
+  // bug).
   it('defensively skips a hidden row leaked into the list response without crashing', async () => {
-    // Construct a wire body shaped like a redacted M2 body. The defensive
-    // narrow must filter it out of the matching set; the function still
-    // produces a verdict from the visible rows.
     const hiddenRow = {
       redacted: true as const,
       payloadAvailable: false as const,
@@ -326,10 +314,8 @@ describe('commitments.cancelAllOnSpeculation', () => {
       makeRow({ nonce: '200', status: 'open' }),
     ];
     const { ctx, sentTxs } = fakeContext({ onChainFloor: 0n, rows });
-    const result = await cancelAllOnSpeculation(ctx, baseArgs);
-    // Default-path computation should succeed against the visible rows
-    // (max of {onChainFloor=0, lastInProcess=0, supabaseMaxStored=200} + 1).
-    expect(result.newMinNonce).toBe(201n);
+    const result = await cancelAllOnSpeculation(ctx, { ...baseArgs, newMinNonce: 1_000n });
+    expect(result.newMinNonce).toBe(1_000n);
     expect(result.invalidatedCount).toBe(2);
     expect(sentTxs).toHaveLength(1);
   });

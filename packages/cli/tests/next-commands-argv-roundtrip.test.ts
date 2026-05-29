@@ -50,6 +50,7 @@ const STUB_PARAMS: Record<string, unknown> = {
     contestId: '42',
     scorer: '0x' + 'ef'.repeat(20),
     lineTicks: -35,
+    newMinNonce: '17000000005',
   },
   'complete-claim-all': { address: '0x' + 'cd'.repeat(20) },
   'complete-contests-wait-verified': { contestId: '42' },
