@@ -3,13 +3,12 @@
  * §2.4). The SDK boundary for the M3+M4 backend pieces (token mint +
  * snapshot REST + composite SSE stream).
  *
- * PR3b lands the REST surface (snapshot + getCommitment); PR3c will add
- * `subscribe(handlers)` on the same class without changing the existing
- * methods' signatures. Each method is a one-shot call — a fresh token
- * mint per snapshot/getCommitment is the explicit trade-off (see
- * `auth.ts` JSDoc); the subscribe path owns the proactive-refresh state
- * machine because that's the only place a long-lived token actually
- * matters for cost.
+ * `snapshot` + `getCommitment` are one-shot REST calls — a fresh token
+ * mint per call is the explicit trade-off (see `auth.ts` JSDoc).
+ * `subscribe` (M5/PR3c) owns the proactive-refresh state machine
+ * because that's the only place a long-lived token actually matters
+ * for cost; the cached bearer survives across reconnects and refreshes
+ * ~120 s before expiry.
  *
  * The address argument is INTENTIONAL on every method: `client.ownState`
  * is bound to the configured signer, but spec §2.4 takes `{address}` so
@@ -23,9 +22,16 @@ import type { ApiClient } from '../api/client.js';
 import type { OspexAddresses } from '../contracts/addresses.js';
 import type { ChainId } from '../types/protocol.js';
 import type { Hex, Signer } from '../types/signer.js';
-import type { OwnerCommitment, OwnerStateSnapshot } from '../types/ownState.js';
+import type {
+  OwnerCommitment,
+  OwnerStateSnapshot,
+  OwnerStateSubscribeHandlers,
+  OwnStateSubscribeOptions,
+} from '../types/ownState.js';
+import type { Subscription } from '../types/odds.js';
 import { loadOwnStateSnapshot } from './snapshot.js';
 import { getOwnerCommitment } from './getCommitment.js';
+import { subscribeToOwnState } from './subscribe.js';
 
 export interface OwnStateContext {
   api: ApiClient;
@@ -115,5 +121,50 @@ export class OwnState {
       matchingModule,
       hash: options.hash,
     });
+  }
+
+  /**
+   * Composite SSE subscription to the maker's own-state stream
+   * (`GET /v1/stream/own-state`). Delivers:
+   *
+   *   - `onSnapshot` — for every snapshot page (cold-start inline + any
+   *     REST paging triggered by `truncated:true`);
+   *   - `onReady` — after the final untruncated snapshot page (cold-
+   *     start) or after server catchup (resume reconnect) — "safe to
+   *     resume trading" signal;
+   *   - `onCommitment` / `onFill` / `onPositionStatus` — per-resource
+   *     deltas (full owner-auth payload on commitment);
+   *   - `onStatus` — `'connected' | 'reconnecting' | 'degraded' | 'resync'`;
+   *   - `onError` — non-fatal transport errors (transient drops; SDK
+   *     keeps reconnecting unless fatal).
+   *
+   * Token lifecycle is internal: the SDK caches the bearer minted via
+   * the M3 challenge/token flow and proactively refreshes ~120 s before
+   * expiry, NON-INTERACTIVELY (BYO posture — `KeystoreSigner` has its
+   * passphrase already resolved). On 401 mid-stream the cached token is
+   * dropped and re-minted on the next reconnect attempt.
+   *
+   * Reconnects with `Last-Event-ID = <running cursor>` and resumes
+   * server catchup. A server-side `event: resync` drops the cursor and
+   * the next reconnect is a fresh cold-start.
+   *
+   * The returned `Subscription.unsubscribe()` is the ONLY way to close
+   * — handlers NEVER fire after `await sub.unsubscribe()` returns.
+   */
+  subscribe(
+    options: OwnStateSubscribeOptions,
+    handlers: OwnerStateSubscribeHandlers,
+  ): Subscription {
+    const { matchingModule } = this.ctx.getAddresses();
+    return subscribeToOwnState(
+      {
+        api: this.ctx.api,
+        signer: this.ctx.requireSigner(),
+        address: options.address,
+        chainId: this.ctx.getChainId(),
+        matchingModule,
+      },
+      handlers,
+    );
   }
 }
