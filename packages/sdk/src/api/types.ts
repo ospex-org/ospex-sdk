@@ -81,6 +81,80 @@ export interface StreamTokenResponseBody {
   expiresAt: number;
 }
 
+/**
+ * Wire body for a single commitment in the owner-authenticated `/v1/own-state/snapshot`
+ * response. Mirrors `CommitmentBody` (full payload) but allows `bookVisible: false` —
+ * the snapshot helper bypasses public redaction and serves the maker's full payload
+ * regardless of `book_visible`. Decoded into {@link OwnerCommitment} by `toOwnerCommitment`.
+ */
+export interface OwnerCommitmentBody {
+  commitmentHash: string;
+  maker: string;
+  contestId: string | null;
+  scorer: string | null;
+  lineTicks: number | null;
+  positionType: 0 | 1 | null;
+  oddsTick: number | null;
+  marketType: 'moneyline' | 'spread' | 'total' | null;
+  riskAmount: string;
+  filledRiskAmount: string;
+  remainingRiskAmount: string;
+  nonce: string;
+  expiry: string | null;
+  speculationKey: string | null;
+  signature: string | null;
+  status: CommitmentStatus;
+  storedStatus?: StoredCommitmentStatus;
+  source: string;
+  network: string;
+  nonceInvalidated: boolean;
+  /** May be `true` (still on the public book) or `false` (off-chain hidden). */
+  bookVisible?: boolean;
+  createdAt: string;
+}
+
+/** Wire body for an owner-auth position row. Discriminated by `status`. */
+interface OwnerPositionBaseBody {
+  positionId: string;
+  speculationId: string;
+  positionType: 0 | 1;
+  team: string;
+  opponent: string;
+  market: 'moneyline' | 'spread' | 'total';
+  oddsDecimal: number | null;
+  riskAmountUSDC: number;
+  profitAmountUSDC: number;
+}
+
+export type OwnerPositionBody =
+  | (OwnerPositionBaseBody & { status: 'active' })
+  | (OwnerPositionBaseBody & {
+      status: 'pendingSettle';
+      result: 'won' | 'push' | 'void';
+      predictedWinSide: 'away' | 'home' | 'over' | 'under' | 'push';
+      estimatedPayoutUSDC: number;
+      estimatedPayoutWei6: string;
+    })
+  | (OwnerPositionBaseBody & {
+      status: 'claimable';
+      result: 'won' | 'push' | 'void';
+      estimatedPayoutUSDC: number;
+      estimatedPayoutWei6: string;
+    })
+  | (OwnerPositionBaseBody & {
+      status: 'claimed';
+      claimedAt: string | null;
+    });
+
+/** Wire body for `GET /v1/own-state/snapshot?cursor=`. */
+export interface OwnerStateSnapshotBody {
+  cursor: string;
+  commitments: OwnerCommitmentBody[];
+  positions: OwnerPositionBody[];
+  truncated: boolean;
+  positionsTruncated: boolean;
+}
+
 export interface AuthDomainBody {
   domain: {
     name: string;

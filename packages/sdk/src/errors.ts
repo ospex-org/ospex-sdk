@@ -16,7 +16,8 @@ export type OspexErrorCode =
   | 'SCRIPT_APPROVAL_INVALID'
   | 'SUBSCRIPTION_ERROR'
   | 'STREAM_ERROR'
-  | 'SIGNER_RESOLUTION_ERROR';
+  | 'SIGNER_RESOLUTION_ERROR'
+  | 'OWN_STATE_ERROR';
 
 export class OspexError extends Error {
   readonly code: OspexErrorCode;
@@ -302,6 +303,43 @@ export class OspexStreamError extends OspexError {
     this.name = 'OspexStreamError';
     this.reason = init.reason;
     this.status = init.status;
+  }
+}
+
+/**
+ * Discriminator for failures on the owner-auth own-state surface
+ * (`client.ownState.*`).
+ *
+ *   scan_limit_exceeded — `getCommitment` walked its defensive page bound
+ *                         (`MAX_SNAPSHOT_PAGES`) and the server was still
+ *                         returning `truncated:true`. The result is
+ *                         UNKNOWN, not "not in scope" — callers MUST NOT
+ *                         treat this as a found/not-found verdict. Drive
+ *                         the recovery via `snapshot()` manually, or wait
+ *                         for the dedicated by-hash endpoint.
+ */
+export type OspexOwnStateReason = 'scan_limit_exceeded';
+
+/**
+ * A failure specific to the owner-auth own-state surface. Distinct from
+ * `OspexAPIError` (which covers transport / HTTP) and from `OspexStreamError`
+ * (which covers the SSE composite stream landing in PR3c) — this is the
+ * SDK signaling a bounded local helper couldn't reach a definitive verdict.
+ * The carried `pagesScanned` lets observability code report on the scan
+ * scope reached before the bound kicked in.
+ */
+export class OspexOwnStateError extends OspexError {
+  readonly reason: OspexOwnStateReason;
+  readonly pagesScanned: number;
+
+  constructor(
+    message: string,
+    init: { reason: OspexOwnStateReason; pagesScanned: number; cause?: unknown },
+  ) {
+    super('OWN_STATE_ERROR', message, init.cause !== undefined ? { cause: init.cause } : undefined);
+    this.name = 'OspexOwnStateError';
+    this.reason = init.reason;
+    this.pagesScanned = init.pagesScanned;
   }
 }
 

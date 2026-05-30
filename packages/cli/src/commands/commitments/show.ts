@@ -60,7 +60,10 @@ export const commitmentsShowCommand = new Command('show')
       // SSE plan §2.3). Render those plus a sentinel for the redacted ones so
       // the operator immediately sees what's not available without a
       // confusing "undefined" cell. The maker recovers the full payload via
-      // `client.ownState.getCommitment` (M5/PR3).
+      // `client.ownState.snapshot({address, cursor?})` (returns ONE page;
+      // drain via cursor loop while truncated:true) or
+      // `client.ownState.getCommitment({address, hash})` for a single-row
+      // snapshot-scope lookup — M5/PR3b.
       const HIDDEN = '[redacted: book_visible=false]';
       formatOutput(
         {

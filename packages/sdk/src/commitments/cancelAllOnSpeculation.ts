@@ -10,12 +10,20 @@
  * higher nonces are invisible to the SDK from anonymous reads. Any
  * "convenience default" computed from those reads would silently leave such
  * commitments live — exactly the latent-exposure failure mode this primitive
- * exists to defend against. Until M5/PR3 wires owner-auth own-state
- * recovery (which CAN enumerate the maker's full book), callers MUST supply
- * the floor themselves from a source they trust: a process-local nonce
- * ledger, a private store of all signed commitments, or
- * `commitments.getNonceFloor` + a delta they're confident covers their
- * off-book signatures.
+ * exists to defend against. M5/PR3b ships the owner-auth `client.ownState.
+ * snapshot({address, cursor?})` surface that CAN enumerate the maker's full
+ * book (visible + hidden + recently-terminal), so a caller can externally
+ * derive a hidden-safe floor; the SDK still requires the floor as an
+ * explicit argument here to keep the failure mode loud. Source it from a
+ * process-local nonce ledger, a private store of all signed commitments,
+ * `commitments.getNonceFloor` + a delta covering off-book signatures, or
+ * an owner-auth snapshot scan over the (contestId, scorer, lineTicks)
+ * triple's max nonce + 1. **`snapshot()` returns ONE PAGE — to compute a
+ * hidden-safe floor over the full book, callers MUST loop while
+ * `snapshot.truncated === true`, passing `snapshot.cursor` back on each
+ * call.** Computing `max(nonce) + 1` from only the first snapshot page
+ * can leave higher-nonce hidden commitments live and is the same failure
+ * mode the explicit-argument contract here is meant to prevent.
  *
  * What the function still provides on top of `raiseMinNonce`:
  *   - Argument validation (positive `newMinNonce`, address-shaped scorer,
@@ -62,9 +70,13 @@ export interface CancelAllOnSpeculationArgs {
    * The function does NOT auto-compute this value. See the file-level
    * jsdoc for the reason — anonymous reads cannot enumerate the maker's
    * hidden book, so no SDK-computed default can prove the floor is
-   * hidden-safe. Until M5/PR3 lands owner-auth own-state recovery,
-   * callers using book-hide must supply the floor from a process-local
-   * source they trust.
+   * hidden-safe. M5/PR3b ships `client.ownState.snapshot({address, cursor?})`
+   * which can enumerate the maker's hidden book; callers using
+   * book-hide can now scan that surface for a hidden-safe floor before
+   * calling this function. **`snapshot()` returns one page — callers
+   * MUST drain every page (loop while `truncated:true`) before
+   * computing `max(nonce) + 1`; a single-page read can leave
+   * higher-nonce hidden commitments live.**
    */
   newMinNonce: bigint;
 }
@@ -106,10 +118,12 @@ export async function cancelAllOnSpeculation(
       'cancelAllOnSpeculation requires an explicit newMinNonce. The SDK cannot auto-compute ' +
         'a hidden-safe default from anonymous reads (the public commitments list filters ' +
         'book_visible=true upstream, so cross-process book-hidden commitments at higher nonces ' +
-        'are invisible here). Supply the floor from a process-local nonce ledger you trust — ' +
-        'or, once M5/PR3 ships, from owner-auth own-state recovery (which can enumerate the ' +
-        "maker's hidden book). For a one-off chain read of the current floor, use " +
-        'commitments.getNonceFloor.',
+        'are invisible here). Supply the floor from a process-local nonce ledger you trust, ' +
+        "from owner-auth own-state recovery (`client.ownState.snapshot({address, cursor?})` " +
+        "enumerates the maker's full book — caller MUST drain every page while truncated:true " +
+        'before computing max nonce; a single-page read can leave higher-nonce hidden ' +
+        'commitments live), or via `commitments.getNonceFloor` for a one-off chain read of ' +
+        'the current floor.',
       { field: 'newMinNonce' },
     );
   }

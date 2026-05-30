@@ -29,6 +29,7 @@ import { NonceCounter } from './commitments/context.js';
 import { Contests } from './contests/index.js';
 import { Fills } from './fills/index.js';
 import { Games } from './games/index.js';
+import { OwnState } from './ownState/index.js';
 import { Positions } from './positions/index.js';
 import { Teams } from './teams/index.js';
 import { getAddresses, type OspexAddresses } from './contracts/addresses.js';
@@ -87,6 +88,7 @@ export class OspexClient {
   readonly contests: Contests;
   readonly fills: Fills;
   readonly games: Games;
+  readonly ownState: OwnState;
   readonly teams: Teams;
   readonly speculations: SpeculationsApi;
   readonly positions: Positions;
@@ -177,6 +179,13 @@ export class OspexClient {
       getChainId: () => this._chainId,
       getAddresses: () => this._addresses,
       requireChainClient: () => this.requirePublicClient(),
+    });
+
+    this.ownState = new OwnState({
+      api: this.api,
+      requireSigner: () => this.signer(),
+      getChainId: () => this._chainId,
+      getAddresses: () => this._addresses,
     });
   }
 

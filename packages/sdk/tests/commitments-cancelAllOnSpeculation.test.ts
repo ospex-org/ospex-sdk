@@ -184,10 +184,10 @@ describe('commitments.cancelAllOnSpeculation', () => {
   // Auto-computing a default from the public list cannot be hidden-safe
   // (the list filters `book_visible=true` upstream; a maker's hidden book
   // is invisible to anonymous reads), so we removed the auto-default and
-  // require the caller to supply the floor. Until M5/PR3 wires owner-auth
-  // own-state recovery, callers using book-hide must source the floor
-  // themselves; everyone else passes a floor they're confident covers
-  // their open commitments.
+  // require the caller to supply the floor. M5/PR3b ships
+  // `client.ownState.snapshot({address})` which can enumerate the maker's
+  // hidden book; callers can now derive a hidden-safe floor externally
+  // from that surface — auto-defaulting from it is a future enhancement.
 
   it('requires an explicit newMinNonce — throws OspexValidationError({ field: "newMinNonce" }) when undefined', async () => {
     const { ctx } = fakeContext({ onChainFloor: 0n, rows: [] });
