@@ -45,6 +45,42 @@ export interface ProtocolInfoBody {
   fees: { platformFeePct: number; description: string };
 }
 
+/**
+ * Wire body for the EIP-712 challenge minted by `POST /v1/auth/stream-challenge`
+ * (own-state SSE plan §3.2). Mirrors `StreamChallenge` in
+ * `ospex-core-api/src/lib/streamAuth.ts` byte-for-byte. The SDK passes this
+ * structure VERBATIM back to the server on `POST /v1/auth/stream-token`; any
+ * field mutation (including a one-second `expiresAt` shift) fails the
+ * `tampered` consume check on the server. The SDK BigInt-coerces the
+ * `network.chainId` / `issuedAt` / `expiresAt` fields before signing in
+ * `ownState/auth.ts`; the over-the-wire form keeps them as `number` so
+ * round-trip JSON equality holds with what the server emitted.
+ */
+export interface StreamChallenge {
+  address: string;
+  resource: 'own-state';
+  scope: 'read:own-state';
+  network: { chainId: number };
+  audience: string;
+  challengeId: string;
+  issuedAt: number;
+  expiresAt: number;
+}
+
+/** Wire body for `POST /v1/auth/stream-challenge`. */
+export interface StreamChallengeResponseBody {
+  challenge: StreamChallenge;
+  expiresAt: number;
+}
+
+/** Wire body for `POST /v1/auth/stream-token`. */
+export interface StreamTokenResponseBody {
+  /** Opaque bearer token. Caller MUST send back as `Authorization: Bearer <token>` on subsequent owner-auth requests; never log it. */
+  token: string;
+  /** Unix-seconds absolute expiry. Refresh ~1-2 min before this value. */
+  expiresAt: number;
+}
+
 export interface AuthDomainBody {
   domain: {
     name: string;

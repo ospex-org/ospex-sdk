@@ -18,11 +18,16 @@ import { ethers, TypedDataEncoder } from 'ethers';
 import { encodeAbiParameters, keccak256, toBytes } from 'viem';
 import {
   buildDomain,
+  buildStreamAuthDomain,
   CANCEL_COMMITMENT_TYPES,
   deriveSpeculationKey,
   hashCommitment,
+  hashStreamChallenge,
   OSPEX_COMMITMENT_TYPES,
+  OSPEX_STREAM_AUTH_DOMAIN_NAME,
+  STREAM_AUTH_TYPES,
   type OspexCommitmentMessage,
+  type StreamChallengeMessage,
 } from '../src/chain/eip712.js';
 import type { Hex } from '../src/types/signer.js';
 
@@ -125,6 +130,127 @@ describe('chain/eip712 — typehash + hashCommitment', () => {
     expect(hashCommitment(domain, { ...base, riskAmount: 1_100n })).not.toBe(baseHash);
     expect(hashCommitment(domain, { ...base, positionType: 1 })).not.toBe(baseHash);
     expect(hashCommitment(domain, { ...base, oddsTick: 201 })).not.toBe(baseHash);
+  });
+});
+
+describe('chain/eip712 — OspexStreamAuth', () => {
+  // Verbatim from `ospex-core-api/src/lib/eip712.ts:122-135`. The two halves
+  // — SDK signer + core-api verifier — MUST agree byte-for-byte on the
+  // typed-data layout for the EIP-712 hash to match across implementations.
+  const STREAM_AUTH_TYPEHASH_STRING =
+    'OspexStreamAuth(' +
+    'address address,' +
+    'string resource,' +
+    'string scope,' +
+    'StreamAuthNetwork network,' +
+    'string audience,' +
+    'string challengeId,' +
+    'uint256 issuedAt,' +
+    'uint256 expiresAt' +
+    ')' +
+    'StreamAuthNetwork(uint256 chainId)';
+
+  it('SDK typed-data declaration produces the core-api typehash byte-for-byte', () => {
+    const sdkOuter = STREAM_AUTH_TYPES.OspexStreamAuth.map(
+      (f) => `${f.type} ${f.name}`,
+    ).join(',');
+    const sdkInner = STREAM_AUTH_TYPES.StreamAuthNetwork.map(
+      (f) => `${f.type} ${f.name}`,
+    ).join(',');
+    const sdkString =
+      `OspexStreamAuth(${sdkOuter})StreamAuthNetwork(${sdkInner})`;
+    expect(sdkString).toBe(STREAM_AUTH_TYPEHASH_STRING);
+    expect(keccak256(toBytes(sdkString))).toBe(
+      keccak256(toBytes(STREAM_AUTH_TYPEHASH_STRING)),
+    );
+  });
+
+  it('hashStreamChallenge matches an ethers cross-implementation', () => {
+    const domain = buildStreamAuthDomain(80002, MATCHING_MODULE_AMOY);
+    const message: StreamChallengeMessage = {
+      address: '0x1111111111111111111111111111111111111111',
+      resource: 'own-state',
+      scope: 'read:own-state',
+      network: { chainId: 80002n },
+      audience: 'api.ospex.test',
+      challengeId: 'GcM1Lkpb7CL6wFCgC5_eIA',
+      issuedAt: 1_790_000_000n,
+      expiresAt: 1_790_000_180n,
+    };
+
+    const sdkHash = hashStreamChallenge(domain, message);
+
+    // Pass the full nested-types graph to ethers, mirroring viem's `STREAM_AUTH_TYPES`.
+    const ethersTypes = {
+      OspexStreamAuth: STREAM_AUTH_TYPES.OspexStreamAuth.map((f) => ({
+        name: f.name,
+        type: f.type,
+      })),
+      StreamAuthNetwork: STREAM_AUTH_TYPES.StreamAuthNetwork.map((f) => ({
+        name: f.name,
+        type: f.type,
+      })),
+    };
+    const ethersHash = TypedDataEncoder.hash(
+      {
+        name: OSPEX_STREAM_AUTH_DOMAIN_NAME,
+        version: '1',
+        chainId: 80002,
+        verifyingContract: MATCHING_MODULE_AMOY,
+      },
+      ethersTypes,
+      { ...message },
+    );
+
+    expect(sdkHash.toLowerCase()).toBe(ethersHash.toLowerCase());
+  });
+
+  it('stream-auth domain separator differs from OspexCommitment — replay refusal', () => {
+    // If the two domain separators collided, an OspexCommitment signature
+    // could be re-presented as an OspexStreamAuth signature (or vice-versa),
+    // letting a maker accidentally hand out token-mint authority by signing
+    // a commitment. The differing `name` field (`Ospex` vs `OspexStreamAuth`)
+    // is what guarantees separation.
+    const commitmentDomain = buildDomain(137, MATCHING_MODULE_AMOY);
+    const streamDomain = buildStreamAuthDomain(137, MATCHING_MODULE_AMOY);
+    expect(streamDomain.name).toBe(OSPEX_STREAM_AUTH_DOMAIN_NAME);
+    expect(commitmentDomain.name).not.toBe(streamDomain.name);
+  });
+
+  it('hash changes when any single field changes', () => {
+    const domain = buildStreamAuthDomain(137, MATCHING_MODULE_AMOY);
+    const base: StreamChallengeMessage = {
+      address: '0x1111111111111111111111111111111111111111',
+      resource: 'own-state',
+      scope: 'read:own-state',
+      network: { chainId: 137n },
+      audience: 'api.ospex.org',
+      challengeId: 'aaaa',
+      issuedAt: 1_790_000_000n,
+      expiresAt: 1_790_000_180n,
+    };
+    const baseHash = hashStreamChallenge(domain, base);
+    expect(
+      hashStreamChallenge(domain, {
+        ...base,
+        address: '0x2222222222222222222222222222222222222222',
+      }),
+    ).not.toBe(baseHash);
+    expect(
+      hashStreamChallenge(domain, { ...base, challengeId: 'bbbb' }),
+    ).not.toBe(baseHash);
+    expect(
+      hashStreamChallenge(domain, { ...base, issuedAt: base.issuedAt + 1n }),
+    ).not.toBe(baseHash);
+    expect(
+      hashStreamChallenge(domain, { ...base, expiresAt: base.expiresAt + 1n }),
+    ).not.toBe(baseHash);
+    expect(
+      hashStreamChallenge(domain, {
+        ...base,
+        network: { chainId: 80002n },
+      }),
+    ).not.toBe(baseHash);
   });
 });
 

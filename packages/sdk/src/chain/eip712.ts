@@ -18,6 +18,9 @@ import type { Hex } from '../types/signer.js';
 export const OSPEX_DOMAIN_NAME = 'Ospex';
 export const OSPEX_DOMAIN_VERSION = '1';
 
+export const OSPEX_STREAM_AUTH_DOMAIN_NAME = 'OspexStreamAuth';
+export const OSPEX_STREAM_AUTH_DOMAIN_VERSION = '1';
+
 export const OSPEX_COMMITMENT_TYPES = {
   OspexCommitment: [
     { name: 'maker', type: 'address' },
@@ -76,6 +79,90 @@ export function hashCommitment(domain: EIP712Domain, message: OspexCommitmentMes
     domain: { ...domain },
     types: OSPEX_COMMITMENT_TYPES,
     primaryType: 'OspexCommitment',
+    message,
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────
+// OspexStreamAuth — owner-auth stream-token challenge (own-state SSE
+// plan §3.2). Signed by the maker to trade for a short-lived bearer
+// token on `/v1/auth/stream-{challenge,token}`; the token gates the
+// owner-auth own-state surfaces (`/v1/own-state/snapshot`,
+// `/v1/stream/own-state`).
+//
+// Separate `domainSeparator` from the OspexCommitment domain — the
+// `name` field differs, so an `OspexCommitment` signature can never
+// be replayed as an `OspexStreamAuth` and vice-versa. The
+// `verifyingContract` reuses the MatchingModule address only to keep
+// the domain shape identical to the existing idiom; nothing on chain
+// reads stream-auth domains.
+//
+// Nested struct: `network` is a `StreamAuthNetwork` (one `uint256
+// chainId` field) so future network metadata (`network.name`, etc.)
+// doesn't require a breaking schema change. Both struct sets must be
+// passed to viem / ethers as the `types` argument for EIP-712
+// encoding.
+// ────────────────────────────────────────────────────────────────────
+
+export const STREAM_AUTH_TYPES = {
+  OspexStreamAuth: [
+    { name: 'address', type: 'address' },
+    { name: 'resource', type: 'string' },
+    { name: 'scope', type: 'string' },
+    { name: 'network', type: 'StreamAuthNetwork' },
+    { name: 'audience', type: 'string' },
+    { name: 'challengeId', type: 'string' },
+    { name: 'issuedAt', type: 'uint256' },
+    { name: 'expiresAt', type: 'uint256' },
+  ],
+  StreamAuthNetwork: [
+    { name: 'chainId', type: 'uint256' },
+  ],
+} as const;
+
+/**
+ * EIP-712 message for the stream-auth challenge. The wire body (a
+ * `StreamChallenge` returned by `POST /v1/auth/stream-challenge`)
+ * carries `chainId` / `issuedAt` / `expiresAt` as `number`; this
+ * type is the BigInt-coerced shape ready for viem's `hashTypedData`
+ * / `signTypedData`. `mintStreamToken` (`ownState/auth.ts`) does the
+ * coercion before signing.
+ */
+export interface StreamChallengeMessage {
+  address: Hex;
+  resource: 'own-state';
+  scope: 'read:own-state';
+  network: { chainId: bigint };
+  audience: string;
+  challengeId: string;
+  issuedAt: bigint;
+  expiresAt: bigint;
+}
+
+export function buildStreamAuthDomain(chainId: ChainId, matchingModule: Hex): EIP712Domain {
+  return {
+    name: OSPEX_STREAM_AUTH_DOMAIN_NAME,
+    version: OSPEX_STREAM_AUTH_DOMAIN_VERSION,
+    chainId,
+    verifyingContract: matchingModule,
+  };
+}
+
+/**
+ * Compute the EIP-712 hash of a stream-auth challenge locally — the
+ * same digest the server's verifier reconstructs in
+ * `POST /v1/auth/stream-token`. Used by the round-trip test and
+ * available to callers that want to log the challenge fingerprint
+ * without revealing the signature.
+ */
+export function hashStreamChallenge(
+  domain: EIP712Domain,
+  message: StreamChallengeMessage,
+): Hex {
+  return hashTypedData({
+    domain: { ...domain },
+    types: STREAM_AUTH_TYPES,
+    primaryType: 'OspexStreamAuth',
     message,
   });
 }
