@@ -128,5 +128,9 @@ export async function submitPrepared(
   const commitment = requireVisibleCommitment(toCommitment(body), {
     purpose: 'persist the newly-submitted',
   });
-  return { hash, commitment };
+  return {
+    hash,
+    commitment,
+    signedPayload: { commitmentHash: hash, commitment: message, signature },
+  };
 }

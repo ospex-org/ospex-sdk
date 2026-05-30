@@ -41,7 +41,7 @@ import {
   nowUnixSec,
 } from './validation.js';
 import type { CommitmentsContext } from './context.js';
-import type { PublicVisibleCommitment } from '../types/commitment.js';
+import type { PublicVisibleCommitment, SignedCommitmentPayload } from '../types/commitment.js';
 import type { CommitmentBody } from '../api/types.js';
 import type { Hex } from '../types/signer.js';
 
@@ -79,6 +79,25 @@ export interface SubmitResult {
    * payload (the maker is the authoring caller).
    */
   commitment: PublicVisibleCommitment;
+  /**
+   * The canonical signed payload exactly as the SDK signed and broadcast it —
+   * the three pieces a third party (or this same caller, later, holding only
+   * local state) needs to act on the commitment without re-fetching it:
+   * `commitmentHash`, the 9-field EIP-712 `OspexCommitmentMessage`, and the
+   * `signature` over that struct. Surfaced so callers (notably market-makers)
+   * can persist the canonical shape locally and feed
+   * `commitments.cancelOnchainSigned(payload)` without round-tripping through
+   * the public commitments API — important for book-hidden rows whose public
+   * read is allow-list-projected (own-state SSE plan §M6).
+   *
+   * Equivalent in content to the fields of `commitment` (a
+   * {@link PublicVisibleCommitment}) plus the locally-computed hash, but in
+   * the canonical typed shape `cancelOnchainSigned` expects (bigint, not
+   * decimal-string). Always present on the fresh-submit happy path; on a
+   * `NONCE_TOO_LOW` retry, this is the retry's signed payload (the original
+   * is discarded by design — no longer matches the persisted server row).
+   */
+  signedPayload: SignedCommitmentPayload;
 }
 
 const DEFAULT_EXPIRY_OFFSET_SEC = 24n * 60n * 60n;
@@ -177,7 +196,11 @@ export async function submitRaw(
   ctx.nonceCounter.observe(maker, speculationKey, nonce);
   try {
     const stored = await post(message, signature, hash);
-    return { hash, commitment: stored };
+    return {
+      hash,
+      commitment: stored,
+      signedPayload: { commitmentHash: hash, commitment: message, signature },
+    };
   } catch (err) {
     if (err instanceof OspexAPIError && err.apiCode === 'NONCE_TOO_LOW') {
       const fresh = await readNonceFloor(publicClient, matchingModule, maker, speculationKey);
@@ -192,7 +215,11 @@ export async function submitRaw(
       const retryHash = hashCommitment(domain, retryMessage);
       ctx.nonceCounter.observe(maker, speculationKey, newNonce);
       const stored = await post(retryMessage, retrySig, retryHash);
-      return { hash: retryHash, commitment: stored };
+      return {
+        hash: retryHash,
+        commitment: stored,
+        signedPayload: { commitmentHash: retryHash, commitment: retryMessage, signature: retrySig },
+      };
     }
     throw err;
   }

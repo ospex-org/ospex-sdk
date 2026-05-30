@@ -4,7 +4,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### SDK (`@ospex/sdk`)
+
+- **`commitments.submitRaw` / `commitments.submitPrepared` now surface a `signedPayload: SignedCommitmentPayload` field on `SubmitResult`** — the three-piece canonical authenticated unit (`commitmentHash`, the 9-field `OspexCommitmentMessage`, and the maker `signature`) is now returned alongside the existing `hash` + `commitment` (the API-decoded `PublicVisibleCommitment`). Additive — existing callers ignoring the new field compile unchanged; downstream consumers (notably `ospex-market-maker` in M6 of the own-state SSE plan) can now persist the canonical typed shape and hand it directly to `commitments.cancelOnchainSigned(payload)` without reconstructing from `PublicVisibleCommitment` (which would mean conversions like `BigInt(c.contestId)` in caller code and a dependency on the public-row schema). Equivalent in content to the fields already on `commitment`, but in the canonical typed shape `cancelOnchainSigned` expects (bigint, not decimal-string). On a `NONCE_TOO_LOW` retry, the returned `signedPayload` reflects the retry's signed bundle (the original is discarded by design — it no longer matches the persisted server row). No CLI behavior change — the CLI's `--json` envelope renders `hash` + selected commitment fields explicitly; the new field is not added to the legacy `SubmitJsonResult` wire shape unless callers reach for `result.signedPayload` themselves.
 
 ## [0.5.0] — 2026-05-29
 
