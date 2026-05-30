@@ -484,11 +484,20 @@ export interface SubmitPreviewEnvelope {
  * now emits a v2 `AgentEnvelope` (`stage: 'execute'`, `payload: { preview, result,
  * fundability }`) — see `docs/AGENT_CONTRACT.md`. Retained (exported) for back-compat
  * only; it is NOT the current `--json` shape (it omits `fundability` and the v2 shoulder).
+ *
+ * `result` is pinned to the **v0.5.0 SubmitResult subset** — `hash` + `commitment` —
+ * rather than the live in-memory {@link SubmitResult}. The SDK's `submitRaw` /
+ * `submitPrepared` may grow new return fields over time (v0.5.1 added
+ * `signedPayload`) that the legacy CLI `--json` runtime path does NOT emit; the
+ * `Pick` keeps the wire schema and the typed shape aligned so typed legacy
+ * consumers don't see fields the CLI never writes. Reach for `signedPayload`
+ * (or any future addition) via the in-memory `SubmitResult` returned from the
+ * SDK, or via the v2 `AgentEnvelope`.
  */
 export interface SubmitJsonResult {
   schemaVersion: 1;
   preview: SubmitPreview;
-  result: SubmitResult;
+  result: Pick<SubmitResult, 'hash' | 'commitment'>;
 }
 
 /**

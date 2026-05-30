@@ -170,11 +170,21 @@ export type {
   OwnStateGetCommitmentOptions,
 } from './ownState/index.js';
 
+// In-memory return types from the SDK's submit pipeline. `SubmitResult` is
+// the canonical return shape from `submitRaw` / `submitPrepared` (carries
+// `hash` + `commitment` + `signedPayload` — see commitments/submitRaw.ts);
+// `RawSubmitArgs` is the protocol-tuple input shape. Root-exported so
+// consumers can declare typed return / arg variables without reaching into
+// a subpath.
+export type { SubmitResult, RawSubmitArgs } from './commitments/submitRaw.js';
+
 // Resolver-layer surface — preview model + high-level submit args + the
 // resolver primitives. CLI and external agents render text from
 // SubmitPreview; the CLI's --json emits a v2 AgentEnvelope wrapping it (see
 // docs/AGENT_CONTRACT.md). SubmitPreviewEnvelope / SubmitJsonResult are
-// @deprecated legacy pre-v2 wire types (exported for back-compat only).
+// @deprecated legacy pre-v2 wire types (exported for back-compat only);
+// SubmitJsonResult.result is pinned to the v0.5.0 SubmitResult subset
+// (`hash` + `commitment`), NOT the live in-memory shape.
 export type {
   SubmitPreview,
   SubmitPreviewEnvelope,

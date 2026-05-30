@@ -4,40 +4,74 @@
  * `AgentEnvelope` (see `docs/AGENT_CONTRACT.md`); these assertions just keep the
  * retained legacy shape from drifting.
  *
- * We lock `schemaVersion: 1` on `SubmitJsonResult`, so the legacy wire shape
- * must agree with the SDK's actual `SubmitResult` (which is
- * `{ hash: Hex; commitment: Commitment }`) — otherwise we'd ship a
- * legacy schema that disagrees with what `commitments.submit` returns.
+ * The legacy `result` payload is pinned to the **v0.5.0 SubmitResult subset**
+ * — `hash` + `commitment` — NOT the live in-memory {@link SubmitResult}. The
+ * SDK's `submitRaw` / `submitPrepared` may grow new return fields over time
+ * (v0.5.1 added `signedPayload`) that the legacy CLI `--json` runtime path
+ * does NOT emit; pinning prevents typed legacy consumers from seeing fields
+ * the CLI never writes. New fields land on the in-memory `SubmitResult` and
+ * the v2 `AgentEnvelope`, not here.
  *
  * These tests use compile-time type assertions to guarantee any
- * future drift is caught before merge — if `SubmitResult` grows a
- * field, the tests still pass; if `SubmitJsonResult.result` diverges
- * structurally from `SubmitResult`, this file fails to compile.
+ * future drift is caught before merge — if `SubmitJsonResult.result`
+ * widens (extra fields) or narrows (missing fields), or diverges
+ * structurally from the v0.5.0 pick, this file fails to compile.
  */
 
 import { describe, expect, it } from 'vitest';
 import type { SubmitJsonResult, SubmitPreviewEnvelope } from '../src/types/preview.js';
 import type { SubmitResult } from '../src/commitments/submitRaw.js';
-// Root-importability check: consumers must be able to bring in the
-// new expiry types from the package barrel without reaching into
-// internal subpaths. If either type is dropped from the root export
-// list, this import fails at compile time.
+// Root-importability checks: consumers must be able to bring in these
+// types from the package barrel without reaching into internal subpaths.
+// If any of them is dropped from the root export list, this import fails
+// at compile time. `SubmitResult` was added to the root barrel alongside
+// the v0.5.1 `signedPayload` field so consumers can declare typed return
+// variables (e.g. for adapters that wrap the SDK's submit surface).
 import type {
   ExpirySource as RootExpirySource,
   PreviewExpiry as RootPreviewExpiry,
+  SubmitResult as RootSubmitResult,
 } from '../src/index.js';
 import type {
   ExpirySource as InternalExpirySource,
   PreviewExpiry as InternalPreviewExpiry,
 } from '../src/types/preview.js';
+import type { PublicVisibleCommitment } from '../src/types/commitment.js';
+import type { Hex } from '../src/types/signer.js';
 
-// Compile-time identity: SubmitJsonResult['result'] === SubmitResult.
+// Compile-time identity: SubmitJsonResult['result'] is the LOCKED v0.5.0
+// subset of SubmitResult, NOT the live SubmitResult. If the legacy interface
+// reverts to `result: SubmitResult` (silent re-widening), or grows a third
+// field beyond `hash | commitment`, this assertion fails.
 type AssertEqual<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2
   ? true
   : false;
-type _ResultMatches = AssertEqual<SubmitJsonResult['result'], SubmitResult>;
-const _resultMatches: _ResultMatches = true;
-void _resultMatches;
+type _LegacyResultIsV050Subset = AssertEqual<
+  SubmitJsonResult['result'],
+  Pick<SubmitResult, 'hash' | 'commitment'>
+>;
+const _legacyResultIsV050Subset: _LegacyResultIsV050Subset = true;
+void _legacyResultIsV050Subset;
+
+// Behavioural lock: a legacy consumer constructing a SubmitJsonResult.result
+// from just `hash` + `commitment` must compile. If a future change adds
+// `signedPayload` (or any other field) as REQUIRED on the legacy shape,
+// this literal fails to compile with "Property 'X' is missing in type ...".
+// This is the dual of the AssertEqual above — same invariant, surfaced as a
+// concrete construction site so the failure message names the unwanted field.
+const _legacyConsumerCanConstructWithoutSignedPayload: SubmitJsonResult['result'] = {
+  hash: ('0x' + '0'.repeat(64)) as Hex,
+  commitment: {} as PublicVisibleCommitment,
+};
+void _legacyConsumerCanConstructWithoutSignedPayload;
+
+// Root-export identity for SubmitResult — the type at the root barrel must
+// be the same type as the one in commitments/submitRaw. If someone re-types
+// the root export by accident (e.g. an `interface SubmitResult { … }`
+// declaration shadowing the re-export), this fails to compile.
+type _RootSubmitResultMatches = AssertEqual<RootSubmitResult, SubmitResult>;
+const _rootSubmitResultMatches: _RootSubmitResultMatches = true;
+void _rootSubmitResultMatches;
 
 // schemaVersion is the literal 1, not number — agents pin on this.
 type _SchemaVersionLiteral = AssertEqual<SubmitJsonResult['schemaVersion'], 1>;
@@ -67,16 +101,20 @@ describe('SubmitJsonResult schema contract', () => {
     expect(v).toBe(1);
   });
 
-  it("result type structurally matches SubmitResult — see _ResultMatches type assertion above", () => {
-    // The work is done at compile time; this case exists so the test
-    // runner reports the assertion in `yarn test` output.
+  it('result type is locked to the v0.5.0 SubmitResult subset (hash + commitment) and rejects new required fields', () => {
+    // Two compile-time assertions back this:
+    //   - `_legacyResultIsV050Subset` (AssertEqual with `Pick<SubmitResult, 'hash' | 'commitment'>`)
+    //   - `_legacyConsumerCanConstructWithoutSignedPayload` (literal construction)
+    // Both fail at build time if the legacy schema silently re-aliases to
+    // the full SubmitResult or adds a required field — this case surfaces
+    // the assertion in `yarn test` output.
     expect(true).toBe(true);
   });
 
-  it('ExpirySource and PreviewExpiry are importable from the package root', () => {
-    // Compile-time check above (`_RootExpirySourceMatches` /
-    // `_RootPreviewExpiryMatches`); this case surfaces it in the
-    // runtime test output.
+  it('ExpirySource / PreviewExpiry / SubmitResult are importable from the package root', () => {
+    // Compile-time checks above (`_RootExpirySourceMatches` /
+    // `_RootPreviewExpiryMatches` / `_RootSubmitResultMatches`); this case
+    // surfaces them in the runtime test output.
     expect(true).toBe(true);
   });
 });

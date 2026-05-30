@@ -1,0 +1,226 @@
+/**
+ * `submitRaw` happy-path + NONCE_TOO_LOW retry — focused on the canonical
+ * `SubmitResult.signedPayload` contract (v0.5.1).
+ *
+ * Closes the pre-existing coverage gap (`submitRaw` had no happy-path unit
+ * test) and locks the retry-path invariant Hermes flagged in the v0.5.1
+ * review: when the first POST hits NONCE_TOO_LOW, the returned
+ * `signedPayload` MUST be the retry's bundle (commitmentHash + signature +
+ * message all rebuilt with the new nonce), never the original's. Field-by-
+ * field assertions across `hash` / `commitmentHash` / nonce / signature
+ * catch any regression that wires the retry path to return stale fields.
+ */
+
+import { describe, expect, it } from 'vitest';
+import type { PublicClient } from 'viem';
+import { submitRaw } from '../src/commitments/submitRaw.js';
+import { NonceCounter } from '../src/commitments/context.js';
+import { buildDomain, hashCommitment } from '../src/chain/eip712.js';
+import { OspexAPIError } from '../src/errors.js';
+import type { CommitmentsContext } from '../src/commitments/context.js';
+import type { CommitmentBody } from '../src/api/types.js';
+import type { Signer } from '../src/types/signer.js';
+
+const MAKER = ('0x' + 'aa'.repeat(20)) as `0x${string}`;
+const SCORER = ('0x' + 'cc'.repeat(20)) as `0x${string}`;
+const MATCHING_MODULE = ('0x' + '11'.repeat(20)) as `0x${string}`;
+const POSITION_MODULE = ('0x' + '22'.repeat(20)) as `0x${string}`;
+const USDC = ('0x' + '33'.repeat(20)) as `0x${string}`;
+const CHAIN_ID = 137 as const;
+
+const SIG_ORIGINAL = ('0x' + '11'.repeat(65)) as `0x${string}`;
+const SIG_RETRY = ('0x' + '22'.repeat(65)) as `0x${string}`;
+
+// 30 days from test-run time — well under the protocol's 1-year-from-now
+// expiry cap regardless of when the suite runs (mirrors the moving-target
+// fixture pattern in commitments-prepareSubmit.test.ts).
+const EXPIRY_SEC = BigInt(Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60);
+
+const ARGS = {
+  contestId: 42n,
+  scorer: SCORER,
+  lineTicks: 0,
+  positionType: 0 as const,
+  oddsTick: 200,
+  riskAmount: 1_000_000n,
+  expiry: EXPIRY_SEC,
+};
+
+// Minimum-viable api wire body that decodes to a visible commitment
+// (no `bookVisible: false` ⇒ visible). The submitRaw post() decoder runs
+// `toCommitment` + `requireVisibleCommitment` on this, so the field set
+// just has to satisfy `CommitmentBody`. Hash is updated per-test to
+// match whichever struct the SDK signed.
+function fullBody(hash: string): CommitmentBody {
+  return {
+    commitmentHash: hash,
+    maker: MAKER,
+    contestId: '42',
+    scorer: SCORER,
+    lineTicks: 0,
+    positionType: 0,
+    oddsTick: 200,
+    marketType: 'moneyline',
+    riskAmount: '1000000',
+    filledRiskAmount: '0',
+    remainingRiskAmount: '1000000',
+    nonce: '0',
+    expiry: new Date(Number(EXPIRY_SEC) * 1000).toISOString(),
+    speculationKey: ('0x' + 'ee'.repeat(32)) as `0x${string}`,
+    signature: SIG_ORIGINAL,
+    status: 'open',
+    source: 'agent',
+    network: 'polygon',
+    nonceInvalidated: false,
+    createdAt: '2026-05-30T00:00:00.000Z',
+  };
+}
+
+/**
+ * Build a CommitmentsContext fake. `nonceFloorSeq` is consumed in order
+ * by sequential `s_minNonces` reads — so the retry test can return a
+ * HIGHER floor on the second read (forcing the retry to pick a different
+ * nonce than the original). `apiResponder` lets each test script the
+ * `/v1/commitments` POST sequence (e.g. throw NONCE_TOO_LOW once then
+ * succeed). `signatureSeq` does the same for `signer.signTypedData` so
+ * the retry's signature can differ from the original's.
+ */
+function fakeContext(opts: {
+  apiResponder: (callIndex: number) => Promise<CommitmentBody>;
+  nonceFloorSeq: bigint[];
+  signatureSeq: `0x${string}`[];
+}): CommitmentsContext {
+  let nonceReadIdx = 0;
+  let sigIdx = 0;
+  let apiCallIdx = 0;
+
+  const publicClient = {
+    readContract: async ({ functionName }: { functionName: string }) => {
+      if (functionName === 'allowance') return 1_000_000n;
+      if (functionName === 's_minNonces') {
+        const floor = opts.nonceFloorSeq[nonceReadIdx] ?? opts.nonceFloorSeq[opts.nonceFloorSeq.length - 1];
+        nonceReadIdx += 1;
+        return floor ?? 0n;
+      }
+      throw new Error(`unexpected readContract: ${functionName}`);
+    },
+  } as unknown as PublicClient;
+
+  const signer: Signer = {
+    getAddress: async () => MAKER,
+    signTypedData: async () => {
+      const sig = opts.signatureSeq[sigIdx] ?? opts.signatureSeq[opts.signatureSeq.length - 1];
+      sigIdx += 1;
+      return sig ?? SIG_ORIGINAL;
+    },
+    signTransaction: async () => '0xdead' as `0x${string}`,
+  };
+
+  return {
+    api: {
+      request: async () => {
+        // Pre-increment: an apiResponder throw (the retry test's path)
+        // must still advance the index, otherwise the SDK's NONCE_TOO_LOW
+        // retry POSTs against the same callIndex and the test ends up in
+        // an infinite-throw loop instead of exercising the retry success.
+        const idx = apiCallIdx;
+        apiCallIdx += 1;
+        return opts.apiResponder(idx);
+      },
+    } as unknown as CommitmentsContext['api'],
+    requireSigner: () => signer,
+    getChainId: () => CHAIN_ID,
+    getAddresses: () =>
+      ({
+        matchingModule: MATCHING_MODULE,
+        positionModule: POSITION_MODULE,
+        usdc: USDC,
+      }) as unknown as ReturnType<CommitmentsContext['getAddresses']>,
+    requireChainClient: () => publicClient,
+    nonceCounter: new NonceCounter(),
+  };
+}
+
+describe('submitRaw — happy path returns signedPayload', () => {
+  it('result.signedPayload matches the SDK-signed struct (hash + signature + nonce)', async () => {
+    const ctx = fakeContext({
+      apiResponder: async () => fullBody('0xPLACEHOLDER'),
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+    });
+
+    const result = await submitRaw(ctx, ARGS);
+
+    // The hash on the envelope is the same hash the SDK locally computed
+    // via `hashCommitment(domain, message)` — and that same hash is in the
+    // canonical signedPayload (so a caller can hand `signedPayload`
+    // directly to `cancelOnchainSigned` without recomputing).
+    expect(result.signedPayload.commitmentHash).toBe(result.hash);
+    // The signature on the payload is verbatim from the signer (the SDK
+    // never re-derives it after the sign call).
+    expect(result.signedPayload.signature).toBe(SIG_ORIGINAL);
+    // The struct on the payload is the same OspexCommitmentMessage the SDK
+    // signed, in canonical bigint form (NOT decimal-string).
+    expect(result.signedPayload.commitment.maker.toLowerCase()).toBe(MAKER.toLowerCase());
+    expect(result.signedPayload.commitment.contestId).toBe(ARGS.contestId);
+    expect(result.signedPayload.commitment.scorer.toLowerCase()).toBe(SCORER.toLowerCase());
+    expect(result.signedPayload.commitment.lineTicks).toBe(ARGS.lineTicks);
+    expect(result.signedPayload.commitment.positionType).toBe(ARGS.positionType);
+    expect(result.signedPayload.commitment.oddsTick).toBe(ARGS.oddsTick);
+    expect(result.signedPayload.commitment.riskAmount).toBe(ARGS.riskAmount);
+    expect(result.signedPayload.commitment.expiry).toBe(ARGS.expiry);
+
+    // The struct hashes back to the result hash under the configured
+    // domain — proves the payload is "act-on-able" without re-fetching.
+    const domain = buildDomain(CHAIN_ID, MATCHING_MODULE);
+    expect(hashCommitment(domain, result.signedPayload.commitment)).toBe(result.hash);
+  });
+});
+
+describe('submitRaw — NONCE_TOO_LOW retry path returns the retry signedPayload (not the original)', () => {
+  it('returned signedPayload reflects the retry struct, hash, and signature — original is discarded', async () => {
+    // The retry path: first POST throws NONCE_TOO_LOW, SDK re-reads the
+    // nonce floor (now higher), picks a NEW nonce, signs a NEW struct,
+    // hashes a NEW hash, POSTs again, and returns the retry bundle. The
+    // invariant: the returned signedPayload is the RETRY's bundle —
+    // never the original (which doesn't match the persisted server row).
+    const ctx = fakeContext({
+      apiResponder: async (callIndex) => {
+        if (callIndex === 0) {
+          throw new OspexAPIError('nonce too low', { apiCode: 'NONCE_TOO_LOW', status: 409 });
+        }
+        return fullBody('0xPLACEHOLDER');
+      },
+      // First read picks nonce N=0; after NONCE_TOO_LOW, the fresh read
+      // bumps the floor to 5_000_000_000 (well above the initial pick).
+      nonceFloorSeq: [0n, 5_000_000_000n],
+      // Different signatures so we can directly assert the retry's, not
+      // the original's, is on the returned payload.
+      signatureSeq: [SIG_ORIGINAL, SIG_RETRY],
+    });
+
+    const result = await submitRaw(ctx, ARGS);
+
+    // The retry's signature won — original (SIG_ORIGINAL) is discarded.
+    expect(result.signedPayload.signature).toBe(SIG_RETRY);
+    expect(result.signedPayload.signature).not.toBe(SIG_ORIGINAL);
+
+    // The retry struct's nonce is the post-floor-bump value, not the
+    // initial pick. (The exact retry nonce comes from `NonceCounter.next`
+    // and depends on `nowUnixSec()` too, but it MUST be ≥ the new floor
+    // — anything less would mean the SDK ignored the floor.)
+    expect(result.signedPayload.commitment.nonce).toBeGreaterThanOrEqual(5_000_000_000n);
+
+    // The hash on the envelope is the retry hash — and the canonical
+    // signedPayload's commitmentHash matches it. If the SDK regressed
+    // and put the original signedPayload on a retry envelope, this would
+    // fail (envelope hash from retryHash, signedPayload hash from original).
+    expect(result.signedPayload.commitmentHash).toBe(result.hash);
+
+    // Cross-check the hash via the canonical helper — proves the
+    // commitment struct on the payload actually hashes to the envelope's
+    // hash (not just a coincidentally-matching string).
+    const domain = buildDomain(CHAIN_ID, MATCHING_MODULE);
+    expect(hashCommitment(domain, result.signedPayload.commitment)).toBe(result.hash);
+  });
+});
