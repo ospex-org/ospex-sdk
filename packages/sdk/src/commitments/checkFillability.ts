@@ -108,8 +108,10 @@ export type FillabilityReasonCode =
    * and the matchable payload (signature/nonce/odds/risk) is redacted from
    * anonymous reads per own-state SSE plan §2.3. An anonymous caller has no
    * path to fill the row — the maker recovers the payload via owner-auth
-   * `client.ownState.snapshot({address})` (or `getCommitment({address, hash})`
-   * for a single-row snapshot-scope lookup).
+   * `client.ownState.snapshot({address, cursor?})` (returns ONE page; drain
+   * via cursor loop while truncated:true) or
+   * `client.ownState.getCommitment({address, hash})` for a single-row
+   * snapshot-scope lookup.
    */
   | 'COMMITMENT_REDACTED'
   // Degraded:

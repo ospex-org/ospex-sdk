@@ -191,12 +191,15 @@ export interface PublicVisibleCommitment {
  *
  * A maker recovering their own full payload authenticates via the
  * owner-auth own-state surface (M5/PR3b+):
- *   - `client.ownState.snapshot({address})` returns every commitment in
- *     scope (active + recently-terminal-since-cursor) with full payload;
- *   - `client.ownState.getCommitment({address, hash})` is a convenience
- *     wrapper that pages the same snapshot looking for one hash and
- *     returns `OwnerCommitment | null` — `null` MEANS "not in the snapshot
- *     scope", NOT "doesn't exist".
+ *   - `client.ownState.snapshot({ address, cursor? })` returns ONE page.
+ *     To enumerate every commitment in snapshot scope (active + recently-
+ *     terminal-since-cursor, with full payload regardless of `book_visible`),
+ *     callers MUST loop while `snapshot.truncated === true`, passing back
+ *     `snapshot.cursor` on each call.
+ *   - `client.ownState.getCommitment({ address, hash })` pages internally
+ *     for one hash and returns `OwnerCommitment | null`; `null` only means
+ *     the snapshot drained without finding it (NOT "doesn't exist"). Page-
+ *     cap exhaustion throws `OspexOwnStateError({ reason: 'scan_limit_exceeded' })`.
  * For hashes outside that scope (e.g. a commitment whose only terminal
  * transition is a long-past passive expiry), a dedicated
  * `/v1/own-state/commitments/:hash` endpoint is the right primitive — TBD,
