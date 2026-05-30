@@ -456,6 +456,84 @@ describe('subscribeToOwnState — truncated snapshot REST paging', () => {
     expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBe('FINAL_LIVE');
   });
 
+  it('clears cursor + cold-starts on REST paging 401 (no Last-Event-ID on next SSE attempt)', async () => {
+    // Hermes round-1 blocker: a 401 mid-handoff used to fall through to
+    // the next SSE attempt carrying the truncated page-* cursor as
+    // Last-Event-ID. That risked `ready` firing on a partial baseline
+    // when the server tolerated the resume. The fix: clear `cursor` (and
+    // `pendingPagingCursor`) on paging failure so the next attempt is a
+    // true cold-start.
+    const bag = newBag();
+    const server = makeServer({
+      sseAttempts: [
+        // First connect: truncated snapshot. cursor would have been
+        // PAGE_1 under the old bug.
+        {
+          frames: [
+            {
+              event: 'snapshot',
+              id: 'PAGE_1',
+              data: snapshotBody({ cursor: 'PAGE_1', truncated: true }),
+            },
+          ],
+        },
+        // Second connect (after REST 401 + cold-restart): full snapshot
+        // + ready. Server would 400 INVALID_CURSOR on a `k='page-*'`
+        // Last-Event-ID so the SDK MUST omit it here.
+        {
+          frames: [
+            {
+              event: 'snapshot',
+              id: 'LIVE',
+              data: snapshotBody({ cursor: 'LIVE' }),
+            },
+            { event: 'ready', data: {} },
+          ],
+        },
+      ],
+      restSnapshotPages: [
+        {
+          status: 401,
+          body: {
+            error: 'Stream token rejected: expired.',
+            code: 'AUTH_TOKEN_EXPIRED',
+          },
+        },
+      ],
+    });
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      captureHandlers(bag),
+    );
+    await waitFor(() => bag.ready > 0);
+    await sub.unsubscribe();
+
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls).toHaveLength(2);
+    // First connect: no Last-Event-ID (cold-start).
+    expect(sseCalls[0]!.headers.get('Last-Event-ID')).toBeNull();
+    // Second connect: also no Last-Event-ID — the truncated PAGE_1
+    // cursor MUST have been dropped after the REST 401.
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBeNull();
+    // The 401 was surfaced via onError.
+    expect(
+      bag.errors.some(
+        (e) => e.reason === 'connection_failed' && e.status === 401,
+      ),
+    ).toBe(true);
+    // Eventually ready fires (on the second connect).
+    expect(bag.ready).toBe(1);
+  });
+
   it('fires a fatal-style error when REST paging exceeds the defensive bound', async () => {
     // Build 50 truncated REST pages — exceeds MAX_SNAPSHOT_PAGES (50).
     const truncatedPages = Array.from({ length: 60 }, (_, i) => ({
@@ -496,6 +574,121 @@ describe('subscribeToOwnState — truncated snapshot REST paging', () => {
     const fatal = bag.errors.find((e) => e.reason === 'fatal')!;
     expect(fatal.message).toMatch(/truncated-snapshot paging/i);
   });
+});
+
+describe('subscribeToOwnState — REST paging error surface', () => {
+  it('surfaces a malformed REST snapshot body via onError and cold-restarts', async () => {
+    // Hermes round-1 B2: a malformed wire body used to throw inside
+    // decodeSnapshot OUTSIDE pageRestUntilLive's try-catch — silently
+    // killing the subscriber. After the fix the decoder failure is
+    // caught, surfaced via onError, and the loop cold-restarts.
+    const bag = newBag();
+    const server = makeServer({
+      sseAttempts: [
+        {
+          frames: [
+            {
+              event: 'snapshot',
+              id: 'PAGE_1',
+              data: snapshotBody({ cursor: 'PAGE_1', truncated: true }),
+            },
+          ],
+        },
+        {
+          frames: [
+            {
+              event: 'snapshot',
+              id: 'LIVE',
+              data: snapshotBody({ cursor: 'LIVE' }),
+            },
+            { event: 'ready', data: {} },
+          ],
+        },
+      ],
+      // First REST page is malformed — missing `commitments` field will
+      // crash the decoder on `body.commitments.map(...)`.
+      restSnapshotPages: [
+        {
+          // The wire is structurally invalid as OwnerStateSnapshotBody,
+          // but the JSON parses — exactly the case we want.
+          body: { cursor: 'PAGE_2' } as unknown as OwnerStateSnapshotBody,
+        },
+      ],
+    });
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      captureHandlers(bag),
+    );
+    await waitFor(() => bag.ready > 0);
+    await sub.unsubscribe();
+
+    // Subscriber survived the decoder crash AND recovered via cold-start.
+    expect(bag.ready).toBe(1);
+    // The decoder failure surfaced explicitly.
+    expect(
+      bag.errors.some((e) =>
+        e.message.toLowerCase().includes('failed to decode snapshot body'),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('subscribeToOwnState — persistent-failure threshold', () => {
+  it('promotes reconnecting → degraded after consecutive failed SSE connects', async () => {
+    // Hermes round-1 B3: the public docs claim `degraded` covers both
+    // server-signaled partial visibility AND SDK persistent reconnect
+    // failures, but the implementation only fired degraded for the
+    // server signal. The fix: after `PERSISTENT_FAILURE_THRESHOLD = 3`
+    // consecutive failed attempts, status flips to `degraded` instead
+    // of `reconnecting` — the docs now match.
+    const bag = newBag();
+    const server = makeServer({
+      sseAttempts: [
+        // Three consecutive transient failures (500s).
+        { status: 500 },
+        { status: 500 },
+        { status: 500 },
+        // Fourth: real success.
+        {
+          frames: [
+            { event: 'snapshot', id: 'LIVE', data: snapshotBody() },
+            { event: 'ready', data: {} },
+          ],
+        },
+      ],
+    });
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      captureHandlers(bag),
+    );
+    // Long timeout — backoff includes full-jitter up to 2-4 s after
+    // three failures. The test gates on the bag content rather than a
+    // wall-clock bound.
+    await waitFor(() => bag.statuses.includes('degraded'), 15_000);
+    await waitFor(() => bag.ready > 0, 15_000);
+    await sub.unsubscribe();
+
+    // The status sequence reached `degraded` before the eventual
+    // recovery to `connected`.
+    const firstDegradedAt = bag.statuses.indexOf('degraded');
+    const firstConnectedAt = bag.statuses.indexOf('connected');
+    expect(firstDegradedAt).toBeGreaterThanOrEqual(0);
+    expect(firstConnectedAt).toBeGreaterThan(firstDegradedAt);
+  }, 30_000);
 });
 
 describe('subscribeToOwnState — resume + resync + degraded', () => {

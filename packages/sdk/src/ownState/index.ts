@@ -3,13 +3,12 @@
  * §2.4). The SDK boundary for the M3+M4 backend pieces (token mint +
  * snapshot REST + composite SSE stream).
  *
- * PR3b lands the REST surface (snapshot + getCommitment); PR3c will add
- * `subscribe(handlers)` on the same class without changing the existing
- * methods' signatures. Each method is a one-shot call — a fresh token
- * mint per snapshot/getCommitment is the explicit trade-off (see
- * `auth.ts` JSDoc); the subscribe path owns the proactive-refresh state
- * machine because that's the only place a long-lived token actually
- * matters for cost.
+ * `snapshot` + `getCommitment` are one-shot REST calls — a fresh token
+ * mint per call is the explicit trade-off (see `auth.ts` JSDoc).
+ * `subscribe` (M5/PR3c) owns the proactive-refresh state machine
+ * because that's the only place a long-lived token actually matters
+ * for cost; the cached bearer survives across reconnects and refreshes
+ * ~120 s before expiry.
  *
  * The address argument is INTENTIONAL on every method: `client.ownState`
  * is bound to the configured signer, but spec §2.4 takes `{address}` so

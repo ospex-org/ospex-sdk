@@ -276,9 +276,11 @@ export type OwnerStateDegradedReason = 'positionsTruncated' | string;
  *
  *   connected    — stream is open and `ready` has fired; live deltas flowing.
  *   reconnecting — transient drop; SDK is backing off + retrying.
- *   degraded     — server signaled partial visibility (e.g. positionsTruncated),
- *                  OR SDK persistently failing reconnects; consumers should
- *                  enter quote-hold per spec §2.6.
+ *   degraded     — server signaled partial visibility (e.g. positionsTruncated)
+ *                  OR the SDK has crossed its persistent-failure threshold
+ *                  (3 consecutive failed reconnect attempts); transport keeps
+ *                  retrying but consumers should enter quote-hold per spec §2.6
+ *                  until the next `connected`.
  *   resync       — server told the SDK to drop its cursor and re-snapshot;
  *                  next connection is a cold-start.
  */

@@ -92,6 +92,16 @@ const REFRESH_LEAD_SEC = 120;
  * rather than a real book size).
  */
 const MAX_SNAPSHOT_PAGES = 50;
+/**
+ * Consecutive failed-reconnect attempts before status flips from
+ * `reconnecting` to `degraded`. The transport keeps retrying past this
+ * threshold — the status change is a signal to consumers that the
+ * baseline has been unreachable long enough to warrant quote-hold per
+ * spec §2.6, even though we never gave up. Mirrors `POLL_FALLBACK_THRESHOLD`
+ * in `realtime/stream.ts` (3) so the two protocol surfaces present a
+ * consistent degraded model.
+ */
+const PERSISTENT_FAILURE_THRESHOLD = 3;
 
 export interface SubscribeArgs {
   api: ApiClient;
@@ -191,8 +201,27 @@ export function subscribeToOwnState(
     const ownStateApi = new OwnStateApi(args.api);
     for (let i = 0; i < MAX_SNAPSHOT_PAGES; i += 1) {
       if (closed) return null;
-      const token = await getValidToken();
+
+      // Token mint must be wrapped — `mintStreamToken` can throw on
+      // signer / challenge-mint failure, and a throw mid-paging used to
+      // propagate out as an unhandled rejection and kill the subscriber
+      // silently. Surface via onError and signal "paging failed" so the
+      // outer loop clears state and cold-starts.
+      let token: string | null;
+      try {
+        token = await getValidToken();
+      } catch (err) {
+        if (closed) return null;
+        emitError(
+          'connection_failed',
+          'own-state REST paging: token mint failed.',
+          undefined,
+          err,
+        );
+        return null;
+      }
       if (token === null || closed) return null;
+
       let wire: OwnerStateSnapshotBody;
       try {
         wire = await ownStateApi.snapshot(token, { cursor: pageCursor });
@@ -215,7 +244,23 @@ export function subscribeToOwnState(
         return null;
       }
       if (closed) return null;
-      const decoded = decodeSnapshot(wire);
+
+      // Decoder may throw on malformed wire (missing fields, BigInt of
+      // junk, etc.). Same recovery as a transport failure — clear state
+      // and let the outer loop cold-start.
+      let decoded;
+      try {
+        decoded = decodeSnapshot(wire);
+      } catch (err) {
+        if (closed) return null;
+        emitError(
+          'connection_failed',
+          'own-state REST paging: failed to decode snapshot body.',
+          undefined,
+          err,
+        );
+        return null;
+      }
       try {
         handlers.onSnapshot?.(decoded);
       } catch {
@@ -324,12 +369,23 @@ export function subscribeToOwnState(
               } catch {
                 /* ignore */
               }
-              if (frame.id !== undefined) cursor = frame.id;
               if (decoded.truncated) {
-                // Server will end the connection. Stash the cursor; the
-                // outer reconnect loop will page REST before the next SSE
-                // open.
+                // CRITICAL: do NOT advance the running cursor on a
+                // truncated snapshot frame. The frame's `id:` is a
+                // `k='page-*'` cursor (server's response cursor when
+                // commitments saturated the per-page bound), NOT a
+                // `k='live'` cursor — and the stream handler explicitly
+                // 400s on non-live cursors as `Last-Event-ID`. Worse:
+                // resuming SSE from a partial baseline (page 1 only)
+                // would let `ready` fire with omitted commitments /
+                // positions the consumer never saw, breaking the
+                // contract in `OwnerStateSubscribeHandlers.onReady`.
+                // The REST paging path below promotes `cursor` to the
+                // final k='live' value only AFTER `truncated:false`
+                // arrives.
                 pendingPagingCursor = decoded.cursor;
+              } else {
+                if (frame.id !== undefined) cursor = frame.id;
               }
               // Note: positionsTruncated may be true. Server will emit
               // `event: degraded` next; we let that drive the status
@@ -531,59 +587,100 @@ export function subscribeToOwnState(
     return 'ended';
   };
 
+  // Compute the next-reconnect status. Once the consecutive failed
+  // attempts cross the persistent-failure threshold, we promote
+  // `reconnecting` → `degraded` so consumers know the baseline has
+  // been unreachable long enough to warrant quote-hold per spec §2.6.
+  // Reset to `connected` on a successful `ready`.
+  const nextRetryStatus = (): OwnerStateSubscribeStatus =>
+    attempt + 1 >= PERSISTENT_FAILURE_THRESHOLD ? 'degraded' : 'reconnecting';
+
   // ── reconnect loop ──────────────────────────────────────────────────────
   void (async (): Promise<void> => {
-    while (!closed) {
-      // Drain pending REST paging FIRST (cold-start truncation handoff).
-      if (pendingPagingCursor !== undefined) {
-        const startCursor = pendingPagingCursor;
-        pendingPagingCursor = undefined;
-        let resumeCursor: string | null;
-        try {
-          resumeCursor = await pageRestUntilLive(startCursor);
-        } catch (err) {
-          if (err instanceof OspexOwnStateError) {
-            // Persistent server-side truncation. Surface as a fatal-ish
-            // error and stop — we don't have a recovery story here.
+    try {
+      while (!closed) {
+        // Drain pending REST paging FIRST (cold-start truncation handoff).
+        if (pendingPagingCursor !== undefined) {
+          const startCursor = pendingPagingCursor;
+          pendingPagingCursor = undefined;
+          let resumeCursor: string | null;
+          try {
+            resumeCursor = await pageRestUntilLive(startCursor);
+          } catch (err) {
+            if (closed) break;
+            if (err instanceof OspexOwnStateError) {
+              // Persistent server-side truncation. Surface as a fatal-ish
+              // error and stop — we don't have a recovery story here.
+              emitError(
+                'fatal',
+                'own-state truncated-snapshot paging exceeded its page bound; subscription stopping.',
+                undefined,
+                err,
+              );
+              closed = true;
+              break;
+            }
+            // Any other throw out of REST paging (signer / decoder /
+            // unexpected) — surface as a transport error and fall
+            // through to clear state + cold-restart, instead of
+            // escaping the loop as an unhandled rejection.
             emitError(
-              'fatal',
-              'own-state truncated-snapshot paging exceeded its page bound; subscription stopping.',
+              'connection_failed',
+              'own-state REST paging crashed unexpectedly.',
               undefined,
               err,
             );
-            closed = true;
-            break;
+            resumeCursor = null;
           }
-          throw err;
-        }
-        if (closed) break;
-        if (resumeCursor === null) {
-          // Paging failed mid-flight (auth or transport). Fall through
-          // to backoff + reconnect; the cold-start will fire again.
-          emitStatus('reconnecting');
-          await abortableSleep(backoffDelay(attempt), lifecycle.signal);
-          attempt += 1;
+          if (closed) break;
+          if (resumeCursor === null) {
+            // Paging failed mid-flight (auth / transport / decoder /
+            // mint). MUST clear `cursor` too — leaving it set to the
+            // truncated page-* cursor would (a) get 400 INVALID_CURSOR
+            // on the next SSE attempt's Last-Event-ID, AND (b) risk
+            // `ready` firing on a partial baseline if the server's
+            // resume path tolerated it. Force a clean cold-start.
+            cursor = undefined;
+            emitStatus(nextRetryStatus());
+            await abortableSleep(backoffDelay(attempt), lifecycle.signal);
+            attempt += 1;
+            continue;
+          }
+          cursor = resumeCursor;
+          // Loop back to reconnect with the new cursor as Last-Event-ID.
           continue;
         }
-        cursor = resumeCursor;
-        // Loop back to reconnect with the new cursor as Last-Event-ID.
-        continue;
-      }
 
-      const outcome = await connectOnce();
-      if (closed || outcome === 'fatal') break;
-      if (outcome === 'resync') {
-        attempt = 0;
-        // Cursor already cleared synchronously at the resync branch.
-        continue;
+        const outcome = await connectOnce();
+        if (closed || outcome === 'fatal') break;
+        if (outcome === 'resync') {
+          attempt = 0;
+          // Cursor already cleared synchronously at the resync branch.
+          continue;
+        }
+        // outcome === 'ended'. If a snapshot was truncated this round, the
+        // pendingPagingCursor is set and the next loop iteration drains
+        // REST before reconnecting — handled at the top of the loop.
+        if (pendingPagingCursor === undefined) {
+          emitStatus(nextRetryStatus());
+          await abortableSleep(backoffDelay(attempt), lifecycle.signal);
+          attempt += 1;
+        }
       }
-      // outcome === 'ended'. If a snapshot was truncated this round, the
-      // pendingPagingCursor is set and the next loop iteration drains
-      // REST before reconnecting — handled at the top of the loop.
-      if (pendingPagingCursor === undefined) {
-        emitStatus('reconnecting');
-        await abortableSleep(backoffDelay(attempt), lifecycle.signal);
-        attempt += 1;
+    } catch (err) {
+      // Top-level safety net: any unhandled throw from the loop becomes
+      // an `onError(fatal)` instead of escaping as an unhandled
+      // rejection (which Node may print as an UnhandledPromiseRejection
+      // warning AND leaves the subscription silently dead). Per
+      // [[feedback_async_lifecycle_invariant]] — guard every async exit.
+      if (!closed) {
+        emitError(
+          'fatal',
+          'own-state subscribe loop crashed unexpectedly; stopping.',
+          undefined,
+          err,
+        );
+        closed = true;
       }
     }
   })();
