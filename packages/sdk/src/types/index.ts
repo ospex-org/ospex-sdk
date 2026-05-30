@@ -21,6 +21,13 @@ export type {
   OwnerCommitment,
   OwnerPosition,
   OwnerStateSnapshot,
+  PositionLifecycle,
+  PositionStatusEvent,
+  OwnerStateSubscribeHandlers,
+  OwnerStateSubscribeStatus,
+  OwnerStateResyncReason,
+  OwnerStateDegradedReason,
+  OwnStateSubscribeOptions,
 } from './ownState.js';
 export type {
   Position,

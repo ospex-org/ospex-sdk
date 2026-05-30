@@ -19,7 +19,9 @@
  */
 
 import type { CommitmentStatus, StoredCommitmentStatus } from './commitment.js';
+import type { Fill } from './fill.js';
 import type { MarketType } from './odds.js';
+import type { Hex } from './signer.js';
 
 /**
  * Owner-authenticated commitment — full matchable payload regardless of
@@ -175,4 +177,180 @@ export interface OwnerStateSnapshot {
   positions: OwnerPosition[];
   truncated: boolean;
   positionsTruncated: boolean;
+}
+
+/**
+ * Canonical position-status enum for {@link PositionStatusEvent}. Wider
+ * than the {@link OwnerPosition} discriminator: includes terminal-lost
+ * (`settledLost`) and voided (`void`) states the snapshot intentionally
+ * drops (zero-payout rows) but the SSE stream emits as first-class
+ * transitions so consumers close local lifecycle cleanly.
+ *
+ * Forward-rank for the SDK reducer's backwards-transition guard (spec
+ * §2.5.1):
+ *
+ *   active        → 1
+ *   pendingSettle → 2
+ *   claimable     → 3
+ *   claimed | settledLost | void → 4   (terminal — equally far forward)
+ */
+export type PositionLifecycle =
+  | 'active'
+  | 'pendingSettle'
+  | 'claimable'
+  | 'claimed'
+  | 'settledLost'
+  | 'void';
+
+/**
+ * Position-status event body delivered on `event: positionStatus` (spec
+ * §2.1.3). Each event represents a transition for one `(address,
+ * speculationId, positionType)` triple.
+ *
+ * Dedup key per spec §2.1.2 — `(address, speculationId, positionType,
+ * status, sourceUpdatedAt)`. Cursors can re-emit on overlap replay, so
+ * consumer reducers MUST dedup by this semantic key, not by SSE cursor.
+ *
+ * `status` (== `to`) is CANONICAL — reducers act on it. `from` is
+ * advisory only — the server may not know the client's local prior; use
+ * a locally-tracked prior status if the reducer needs precise
+ * from-to telemetry.
+ */
+export interface PositionStatusEvent {
+  /** Wallet that owns the position. Lower-case hex. */
+  address: string;
+  speculationId: string;
+  positionType: 0 | 1;
+  /** Canonical lifecycle state at the transition. */
+  status: PositionLifecycle;
+  /**
+   * Server's advisory prior state. Omitted when the server has no
+   * authoritative prior (e.g. fresh visibility on stream connect).
+   * Reducers should rely on locally-tracked state, not this field.
+   */
+  from?: PositionLifecycle;
+  /**
+   * Categorical result, set on `pendingSettle` / `claimable` / `settledLost`
+   * / `void`. Omitted on `active`.
+   */
+  result?: 'won' | 'lost' | 'push' | 'void';
+  /**
+   * Wei6 claimable amount when the position has a non-zero payout
+   * (`pendingSettle` won/push, `claimable`, `void`). Absent on `active`,
+   * `claimed`, and zero-payout terminal states.
+   */
+  claimableAmount?: string;
+  /**
+   * `max(positions.row_updated_at, speculations.row_updated_at,
+   * contests.row_updated_at)` — microsecond-precise ISO timestamp.
+   * Half of the dedup key.
+   */
+  sourceUpdatedAt: string;
+}
+
+/**
+ * Server-emitted resync reason on `event: resync`. The SDK surfaces
+ * resync via `onStatus('resync')`; consumers don't typically branch
+ * on the reason — it's informational for observability.
+ */
+export type OwnerStateResyncReason =
+  | 'handoff_raced'
+  | 'snapshot_failed'
+  | 'catchup_failed'
+  | 'backlog_too_large'
+  | 'server_shutdown'
+  | 'internal_error'
+  | string;
+
+/**
+ * Server-emitted degraded reason on `event: degraded`. Currently the only
+ * locked reason is `positionsTruncated`; future degradations (queue
+ * overflow, transport stale) may extend it.
+ */
+export type OwnerStateDegradedReason = 'positionsTruncated' | string;
+
+/**
+ * Transport-level status delivered by `client.ownState.subscribe`'s
+ * `onStatus` handler. Distinct from `PositionLifecycle` (the per-position
+ * domain state); this is the connection's health.
+ *
+ *   connected    — stream is open and `ready` has fired; live deltas flowing.
+ *   reconnecting — transient drop; SDK is backing off + retrying.
+ *   degraded     — server signaled partial visibility (e.g. positionsTruncated),
+ *                  OR SDK persistently failing reconnects; consumers should
+ *                  enter quote-hold per spec §2.6.
+ *   resync       — server told the SDK to drop its cursor and re-snapshot;
+ *                  next connection is a cold-start.
+ */
+export type OwnerStateSubscribeStatus =
+  | 'connected'
+  | 'reconnecting'
+  | 'degraded'
+  | 'resync';
+
+/**
+ * Handler set for `client.ownState.subscribe`. Each handler is optional —
+ * consumers wire only what they care about. The SDK NEVER calls a handler
+ * after `unsubscribe()` has been invoked (per
+ * [[feedback_async_lifecycle_invariant]] — every re-entry point re-checks
+ * the closed flag before dispatch).
+ */
+export interface OwnerStateSubscribeHandlers {
+  /**
+   * Fires for every snapshot page delivered. The first page comes inline
+   * from the SSE cold-connect; if `truncated:true`, subsequent pages come
+   * from REST `/v1/own-state/snapshot?cursor=` and fire here too. Each
+   * call's `truncated` flag tells you whether more pages are coming.
+   * After the final untruncated page, `onReady` fires.
+   */
+  onSnapshot?: (snapshot: OwnerStateSnapshot) => void;
+  /**
+   * Fires AFTER the final untruncated snapshot page (cold-start) OR after
+   * server catchup completes (resume reconnect). The signal "safe to
+   * resume trading"; before this fires, callers should hold quoting per
+   * spec §2.6.
+   */
+  onReady?: () => void;
+  /**
+   * Per-commitment lifecycle delta (insert / status change / fill /
+   * cancel) for any commitment in the maker's book. Full owner-auth
+   * payload regardless of `book_visible`.
+   */
+  onCommitment?: (commitment: OwnerCommitment) => void;
+  /**
+   * Per-fill append-only event, both maker-side and taker-side
+   * (counterparty's wallet may be the maker's address). Dedup key per
+   * spec §2.1.2 is `(txHash, logIndex)`.
+   */
+  onFill?: (fill: Fill) => void;
+  /**
+   * Per-position transition event. Wider enum than the snapshot's
+   * `OwnerPosition.status` — includes terminal-lost (`settledLost`) and
+   * voided (`void`) states so consumers close local lifecycle cleanly.
+   * Dedup key per spec §2.1.2 is `(address, speculationId, positionType,
+   * status, sourceUpdatedAt)`.
+   */
+  onPositionStatus?: (event: PositionStatusEvent) => void;
+  /** Transport status changes — see {@link OwnerStateSubscribeStatus}. */
+  onStatus?: (status: OwnerStateSubscribeStatus) => void;
+  /**
+   * Non-fatal transport errors. The SDK does NOT throw on a transient
+   * drop — it surfaces the error here and continues reconnect/backoff
+   * unless the failure is fatal (terminal `OspexStreamError` with
+   * `reason: 'fatal'` — e.g. 400 INVALID_CURSOR on a server-changed
+   * cursor format).
+   */
+  onError?: (error: import('../errors.js').OspexStreamError) => void;
+}
+
+/** Options for `client.ownState.subscribe`. */
+export interface OwnStateSubscribeOptions {
+  /**
+   * Wallet address the subscription is scoped to. Server-side
+   * verification asserts the bearer token's claims match; the signer
+   * configured on `OspexClient` MUST own this address (otherwise
+   * `mintStreamToken` recovers a different signer and the token mint
+   * fails with `AUTH_SIGNATURE_INVALID`).
+   */
+  address: Hex;
 }

@@ -89,6 +89,13 @@ export type {
   OwnerCommitment,
   OwnerPosition,
   OwnerStateSnapshot,
+  PositionLifecycle,
+  PositionStatusEvent,
+  OwnerStateSubscribeHandlers,
+  OwnerStateSubscribeStatus,
+  OwnerStateResyncReason,
+  OwnerStateDegradedReason,
+  OwnStateSubscribeOptions,
   // position
   Position,
   PositionTotals,
