@@ -373,8 +373,11 @@ async function tryFetchExistingOpenRisk(
         // one error a funding guard must never make. Degrade to `unknown`
         // (caller surfaces `EXISTING_OPEN_RISK_UNDETERMINED`) so the verdict is
         // honest. The maker recovers a definite verdict by re-running with the
-        // owner-auth own-state surface (M5/PR3 `client.ownState.list*`), which
-        // delivers the full payload for their own hidden rows.
+        // owner-auth own-state surface (`client.ownState.snapshot({address})`),
+        // which delivers the full payload for the maker's own hidden rows in
+        // the active + recently-terminal scope (sufficient for fundability
+        // accounting; older terminal hidden rows have remainingRisk == 0 and
+        // don't contribute to existing open risk).
         if (r.redacted === true) return null;
         const remaining = BigInt(r.remainingRiskAmount);
         if (remaining > 0n) {

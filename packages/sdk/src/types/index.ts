@@ -18,6 +18,11 @@ export type {
 } from './commitment.js';
 export { isVisibleCommitment, isHiddenCommitment } from './commitment.js';
 export type {
+  OwnerCommitment,
+  OwnerPosition,
+  OwnerStateSnapshot,
+} from './ownState.js';
+export type {
   Position,
   PositionTotals,
   PositionStatus,

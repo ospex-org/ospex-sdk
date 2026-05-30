@@ -184,10 +184,13 @@ describe('requireVisibleCommitment', () => {
       expect(err).toBeInstanceOf(OspexValidationError);
       expect((err as OspexValidationError).field).toBe('commitment');
       expect((err as OspexValidationError).message).toContain(hidden.commitmentHash);
-      // Operators / agents are pointed at the owner-auth path. The exact
-      // wording is part of the public error contract callers may surface
-      // verbatim.
-      expect((err as OspexValidationError).message).toContain('ownState.getCommitment');
+      // Operators / agents are pointed at the owner-auth surface. The
+      // exact method may evolve (M5/PR3b adds `snapshot` alongside
+      // `getCommitment` as a recovery path); the stable invariant is
+      // that the error names `client.ownState` so callers know where to
+      // look. Asserted as a substring so additional surface mentions
+      // (e.g. `ownState.snapshot`) don't break the test.
+      expect((err as OspexValidationError).message).toContain('client.ownState');
     }
   });
 

@@ -12,9 +12,12 @@
  * calling this same primitive. Neither auto-computes `newMinNonce`:
  * the caller supplies it explicitly because anonymous reads cannot
  * enumerate a maker's book-hidden commitments and any default would
- * silently leave latent exposure live (own-state SSE plan §M2; M5/PR3
- * will reintroduce a hidden-safe default once owner-auth own-state
- * recovery ships).
+ * silently leave latent exposure live (own-state SSE plan §M2). The
+ * M5/PR3b owner-auth `client.ownState.snapshot({address})` surface now
+ * delivers the full book (visible + hidden + recently-terminal) so a
+ * hidden-safe nonce-floor can be derived externally; reintroducing an
+ * auto-default that CONSUMES that surface is a future enhancement —
+ * the explicit-argument contract here is the safe present default.
  *
  * Reverts mapped:
  *   `MatchingModule__NonceMustIncrease` →

@@ -187,9 +187,21 @@ export interface PublicVisibleCommitment {
  * The field set is the locked PUBLIC HIDDEN ALLOW-LIST (own-state SSE plan §2.3).
  * Anything in `MatchingModule.matchCommitment`'s struct — signature, nonce,
  * riskAmount, oddsTick, scorer, lineTicks, the on-chain `speculationKey` — is
- * NEVER present here. A maker wanting the full payload back authenticates via
- * `client.ownState.getCommitment(hash)` (M5/PR3); third parties cannot recover
- * it by any combination of public endpoints.
+ * NEVER present here.
+ *
+ * A maker recovering their own full payload authenticates via the
+ * owner-auth own-state surface (M5/PR3b+):
+ *   - `client.ownState.snapshot({address})` returns every commitment in
+ *     scope (active + recently-terminal-since-cursor) with full payload;
+ *   - `client.ownState.getCommitment({address, hash})` is a convenience
+ *     wrapper that pages the same snapshot looking for one hash and
+ *     returns `OwnerCommitment | null` — `null` MEANS "not in the snapshot
+ *     scope", NOT "doesn't exist".
+ * For hashes outside that scope (e.g. a commitment whose only terminal
+ * transition is a long-past passive expiry), a dedicated
+ * `/v1/own-state/commitments/:hash` endpoint is the right primitive — TBD,
+ * not in M5. Third parties cannot recover the payload by any combination
+ * of public endpoints regardless.
  *
  * Discriminate from {@link PublicVisibleCommitment} via `visibility === 'hidden'`
  * or `redacted === true`. Either narrows correctly.
@@ -235,9 +247,9 @@ export interface PublicHiddenCommitment {
  * matchable payload.
  *
  * For the maker's own view of their full book — including hidden but still
- * on-chain-matchable rows — authenticate via `client.ownState.*` (M5/PR3) and
- * read `OwnerCommitment` instead. The maker-authenticated body always carries
- * the full payload regardless of `book_visible`.
+ * on-chain-matchable rows — authenticate via `client.ownState.*` (M5/PR3b+)
+ * and read `OwnerCommitment` instead. The maker-authenticated body always
+ * carries the full payload regardless of `book_visible`.
  */
 export type Commitment = PublicVisibleCommitment | PublicHiddenCommitment;
 
