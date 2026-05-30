@@ -59,12 +59,16 @@ export class OwnState {
   constructor(private readonly ctx: OwnStateContext) {}
 
   /**
-   * Fetch one page of the maker's owner-auth state snapshot. Mints a fresh
-   * bearer token per call. When `OwnerStateSnapshot.truncated === true`,
-   * call again with `{cursor: result.cursor}` to drain remaining pages.
+   * Fetch ONE PAGE of the maker's owner-auth state snapshot. Mints a fresh
+   * bearer token per call. When `result.truncated === true`, call again
+   * with `{cursor: result.cursor}` to drain remaining pages — callers
+   * that need the FULL commitment set MUST loop until `truncated:false`
+   * (a single-page read can leave higher-nonce hidden commitments off
+   * the result; see {@link OwnerStateSnapshot} for the canonical loop).
    *
-   * Returns: full owner commitments (visible + hidden + recently-terminal-
-   * since-cursor), categorized positions (active / pendingSettle / claimable
+   * Returns: owner commitments on this page (visible + hidden + recently-
+   * terminal-since-cursor, with full payload regardless of `book_visible`),
+   * the page's categorized positions (active / pendingSettle / claimable
    * / claimed), and the cursor for the next page (or for the next
    * subscribe-reconnect via `Last-Event-ID`).
    */
@@ -84,14 +88,20 @@ export class OwnState {
   /**
    * Owner-authenticated low-frequency recovery helper. Returns the full
    * {@link OwnerCommitment} for `hash` IF it's in the maker's own-state
-   * snapshot scope (active + recently-terminal-since-prior-cursor),
-   * OR `null` when out of scope.
+   * snapshot scope (active + recently-terminal-since-prior-cursor), OR
+   * `null` when the snapshot fully drained without containing it.
    *
-   * **`null` is NOT "doesn't exist"** — it's "outside the snapshot's
-   * recovery window". For arbitrary owner-auth-by-hash lookup over the
-   * full maker history, a dedicated `/v1/own-state/commitments/:hash`
-   * endpoint is the future answer (not in this PR). Pages the snapshot
-   * internally up to a defensive cap; mints exactly one bearer token.
+   * **`null` is NOT "doesn't exist"** — it's "outside the drained
+   * snapshot scope". For arbitrary owner-auth-by-hash over the full
+   * maker history, a dedicated `/v1/own-state/commitments/:hash`
+   * endpoint is the future answer (not in this PR).
+   *
+   * Throws `OspexOwnStateError({reason: 'scan_limit_exceeded'})` when
+   * the defensive page bound is reached and the server is still
+   * returning `truncated:true` — the result is UNKNOWN, not `null`.
+   *
+   * Pages the snapshot internally up to a defensive cap; mints exactly
+   * one bearer token regardless of page count.
    */
   async getCommitment(
     options: OwnStateGetCommitmentOptions,

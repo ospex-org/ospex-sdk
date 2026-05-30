@@ -132,16 +132,32 @@ export type OwnerPosition =
     });
 
 /**
- * Owner-authenticated complete state snapshot. The wire body for
+ * One PAGE of the owner-authenticated state snapshot. Wire body for
  * `GET /v1/own-state/snapshot?cursor=` and the inline `snapshot` event
  * emitted on cold-connect of the M4b composite SSE stream (PR3c).
+ *
+ * **`client.ownState.snapshot({address, cursor?})` returns ONE page.**
+ * To consume the full commitment set, the caller MUST loop while
+ * `truncated === true`, passing the returned `cursor` back on each call:
+ *
+ *   let cursor: string | undefined;
+ *   const all: OwnerCommitment[] = [];
+ *   for (;;) {
+ *     const page = await client.ownState.snapshot({ address, cursor });
+ *     all.push(...page.commitments);
+ *     if (!page.truncated) break;
+ *     cursor = page.cursor;
+ *   }
+ *
+ * This matters for nonce-floor / cancel-all derivation: computing
+ * `max(nonce) + 1` from only the FIRST page can leave higher-nonce hidden
+ * commitments live. Drain to `truncated:false` first.
  *
  * Pagination contract (spec §6.2):
  *
  *   - `truncated:true`  — commitments saturated the per-page bound; pass
- *                         `cursor` back to `snapshot({cursor})` until
- *                         `truncated:false`. The SDK reducer dedupes per
- *                         commitmentHash; ordering across pages is by
+ *                         `cursor` back to drain. The SDK reducer dedupes
+ *                         per commitmentHash; ordering across pages is by
  *                         (row_updated_at, id).
  *   - `positionsTruncated:true` — actionable population hit the 200-row
  *                         cap. No paging exists for this within the

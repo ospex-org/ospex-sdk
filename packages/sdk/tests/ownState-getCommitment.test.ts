@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ApiClient } from '../src/api/client.js';
-import { OspexValidationError } from '../src/errors.js';
+import { OspexOwnStateError, OspexValidationError } from '../src/errors.js';
 import { getOwnerCommitment } from '../src/ownState/getCommitment.js';
 import { KeystoreSigner } from '../src/signers/keystore.js';
 import type {
@@ -253,6 +253,80 @@ describe('getOwnerCommitment — found and not-found', () => {
     });
     expect(result).not.toBeNull();
     expect(result!.commitmentHash.toLowerCase()).toBe(HASH_A);
+  });
+});
+
+describe('getOwnerCommitment — page-cap exhaustion is UNKNOWN, not null', () => {
+  it('throws OspexOwnStateError({reason: "scan_limit_exceeded"}) after 50 truncated pages without finding the hash', async () => {
+    // Simulate a pathological server that keeps returning truncated:true
+    // forever. The helper's defensive page bound (MAX_SNAPSHOT_PAGES=50)
+    // must fire — but instead of returning `null` (which would mis-classify
+    // the unknown verdict as "outside snapshot scope" and let an MM
+    // cancel path act on the wrong assumption), it MUST throw a typed
+    // OspexOwnStateError so the caller has to make a deliberate choice.
+    const TRUNCATED_FOREVER: OwnerStateSnapshotBody = {
+      cursor: 'NEVER_DRAINS',
+      // No matching hash anywhere — but each page reports truncated:true.
+      commitments: [commitment(HASH_A)],
+      positions: [],
+      truncated: true,
+      positionsTruncated: false,
+    };
+    let tokenMints = 0;
+    let snapshotCalls = 0;
+    const challenge = freshChallenge();
+    const fakeFetch: typeof globalThis.fetch = async (url, init) => {
+      const u = String(url);
+      if (u.endsWith('/v1/auth/stream-challenge')) {
+        return new Response(
+          JSON.stringify({ challenge, expiresAt: challenge.expiresAt }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (u.endsWith('/v1/auth/stream-token')) {
+        tokenMints += 1;
+        return new Response(
+          JSON.stringify({ token: 'BEARER', expiresAt: challenge.issuedAt + 900 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (u.includes('/v1/own-state/snapshot')) {
+        snapshotCalls += 1;
+        return new Response(JSON.stringify(TRUNCATED_FOREVER), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      // Mark the init parameter as intentionally unused.
+      void init;
+      return new Response(JSON.stringify({ error: 'unexpected', code: 'INTERNAL_ERROR' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const api = new ApiClient({ apiUrl: 'https://api.test', fetch: fakeFetch });
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+
+    let thrown: unknown;
+    try {
+      await getOwnerCommitment({
+        api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+        hash: HASH_MISSING,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(OspexOwnStateError);
+    expect((thrown as OspexOwnStateError).reason).toBe('scan_limit_exceeded');
+    expect((thrown as OspexOwnStateError).pagesScanned).toBe(50);
+    // EXACTLY one token mint across the 50-page scan.
+    expect(tokenMints).toBe(1);
+    // The scan walked the full 50-page bound before throwing.
+    expect(snapshotCalls).toBe(50);
   });
 });
 

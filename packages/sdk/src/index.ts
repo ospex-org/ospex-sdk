@@ -24,6 +24,7 @@ export {
   OspexSignerResolutionError,
   OspexSubscriptionError,
   OspexStreamError,
+  OspexOwnStateError,
 } from './errors.js';
 export type {
   OspexErrorCode,
@@ -31,6 +32,7 @@ export type {
   OspexSignerResolutionReason,
   OspexSubscriptionReason,
   OspexStreamReason,
+  OspexOwnStateReason,
 } from './errors.js';
 
 // Typed PositionModule revert classifiers — decode a caught claim error
@@ -83,6 +85,10 @@ export type {
   CommitmentsListOptions,
   CommitmentFillability,
   MakerFundingStatus,
+  // own-state (owner-auth maker view)
+  OwnerCommitment,
+  OwnerPosition,
+  OwnerStateSnapshot,
   // position
   Position,
   PositionTotals,
@@ -147,6 +153,15 @@ export type {
 } from './types/index.js';
 
 export { isVisibleCommitment, isHiddenCommitment } from './types/index.js';
+
+// Own-state method option types — siblings of the public `OwnerCommitment` /
+// `OwnerStateSnapshot` types. Re-exported from the root so a consumer
+// writing helper wrappers around `client.ownState.{snapshot, getCommitment}`
+// can name the argument shapes without reaching into subpath modules.
+export type {
+  OwnStateSnapshotOptions,
+  OwnStateGetCommitmentOptions,
+} from './ownState/index.js';
 
 // Resolver-layer surface — preview model + high-level submit args + the
 // resolver primitives. CLI and external agents render text from

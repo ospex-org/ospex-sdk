@@ -13,11 +13,15 @@
  * the caller supplies it explicitly because anonymous reads cannot
  * enumerate a maker's book-hidden commitments and any default would
  * silently leave latent exposure live (own-state SSE plan §M2). The
- * M5/PR3b owner-auth `client.ownState.snapshot({address})` surface now
- * delivers the full book (visible + hidden + recently-terminal) so a
- * hidden-safe nonce-floor can be derived externally; reintroducing an
- * auto-default that CONSUMES that surface is a future enhancement —
- * the explicit-argument contract here is the safe present default.
+ * M5/PR3b owner-auth `client.ownState.snapshot({address, cursor?})`
+ * surface now delivers the full book (visible + hidden + recently-
+ * terminal) so a hidden-safe nonce-floor can be derived externally;
+ * **callers consuming the surface MUST drain every page (loop while
+ * `truncated:true`, passing back the returned cursor) before computing
+ * `max(nonce) + 1` — a single-page read can leave higher-nonce hidden
+ * commitments live.** Reintroducing an auto-default that CONSUMES that
+ * surface is a future enhancement — the explicit-argument contract
+ * here is the safe present default.
  *
  * Reverts mapped:
  *   `MatchingModule__NonceMustIncrease` →

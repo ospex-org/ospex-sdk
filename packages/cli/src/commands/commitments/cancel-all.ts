@@ -14,10 +14,12 @@
  * read the current on-chain floor via `ospex commitments nonce-floor
  * --maker <addr> --contest-id <id> --scorer <addr> --line <ticks>`,
  * add any headroom you need for cross-process signatures, and pass the
- * result here. M5/PR3b ships `client.ownState.snapshot({address})` which
- * can enumerate the maker's full book (visible + hidden) for an
- * externally-derived hidden-safe floor; an SDK-side auto-default that
- * consumes it is a future enhancement.
+ * result here. M5/PR3b ships `client.ownState.snapshot({address, cursor?})`
+ * which can enumerate the maker's full book (visible + hidden) for an
+ * externally-derived hidden-safe floor; **callers MUST drain every page
+ * (loop while `truncated:true`) before computing `max(nonce) + 1` — a
+ * single-page read can leave higher-nonce hidden commitments live.** An
+ * SDK-side auto-default that consumes it is a future enhancement.
  *
  * `--dry-run` previews `invalidatedCount` for the given `--new-min-nonce`
  * without sending a tx — useful for sanity-checking before the gas
