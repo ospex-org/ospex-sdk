@@ -490,9 +490,13 @@ export interface SubmitPreviewEnvelope {
  * `submitPrepared` may grow new return fields over time (v0.5.1 added
  * `signedPayload`) that the legacy CLI `--json` runtime path does NOT emit; the
  * `Pick` keeps the wire schema and the typed shape aligned so typed legacy
- * consumers don't see fields the CLI never writes. Reach for `signedPayload`
- * (or any future addition) via the in-memory `SubmitResult` returned from the
- * SDK, or via the v2 `AgentEnvelope`.
+ * consumers don't see fields the CLI never writes. The current v2
+ * `AgentEnvelope` execute payload (`SubmitExecutePayload.result` in
+ * `packages/cli/src/commands/commitments/submit.ts`) is independently pinned
+ * to the same `{ hash, commitment }` subset by its own literal type — so
+ * neither JSON envelope (legacy or v2) carries `signedPayload`. Reach for
+ * `signedPayload` (or any future addition) via the in-memory `SubmitResult`
+ * returned from the SDK, NOT via either JSON envelope.
  */
 export interface SubmitJsonResult {
   schemaVersion: 1;

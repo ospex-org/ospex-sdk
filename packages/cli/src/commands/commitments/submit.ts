@@ -726,7 +726,17 @@ export function toSubmitExecuteEnvelope(
   ];
   const payload: SubmitExecutePayload = {
     preview,
-    result,
+    // Defensively project to the {hash, commitment} subset. The parameter
+    // type narrows the static shape, but TypeScript does NOT strip runtime
+    // fields — a caller passing a structurally-wider object (e.g. the full
+    // in-memory `SubmitResult`, which carries `signedPayload` from v0.5.1
+    // onward) would otherwise leak those extra fields into the envelope's
+    // JSON output. Explicit projection enforces the v2-envelope contract:
+    // `payload.result` is ALWAYS the `{ hash, commitment }` subset, NEVER
+    // the wider `SubmitResult`. See `docs/AGENT_CONTRACT.md` §"Payload
+    // TypeScript shapes" — consumers needing canonical signed payload
+    // reach for the SDK return value, not CLI JSON.
+    result: { hash: result.hash, commitment: result.commitment },
     fundability,
   };
   if (args.preflightFundability !== undefined) {
