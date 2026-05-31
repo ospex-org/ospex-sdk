@@ -4,6 +4,12 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.5.1] — 2026-05-30
+
+Additive surface change to support `ospex-market-maker` M6 (own-state SSE plan §M6): `commitments.submitRaw` / `commitments.submitPrepared` now return the canonical `SignedCommitmentPayload` on `SubmitResult` so callers (notably market-makers) can persist the signed bundle locally and feed `commitments.cancelOnchainSigned` without reconstructing from `PublicVisibleCommitment`. Pre-existing JSON envelope shapes — the deprecated `SubmitJsonResult` and the current v2 `AgentEnvelope` execute payload — are both explicitly pinned to the v0.5.0 `{ hash, commitment }` subset so the new field stays on the in-memory SDK return and out of CLI JSON. Patch bump — no breaking runtime changes; the legacy-type narrowing fixes the typed shape to match what the CLI actually emits.
+
 ### SDK (`@ospex/sdk`)
 
 - **`commitments.submitRaw` / `commitments.submitPrepared` now surface a `signedPayload: SignedCommitmentPayload` field on `SubmitResult`** — the three-piece canonical authenticated unit (`commitmentHash`, the 9-field `OspexCommitmentMessage`, and the maker `signature`) is now returned alongside the existing `hash` + `commitment` (the API-decoded `PublicVisibleCommitment`). Additive — existing callers ignoring the new field compile unchanged; downstream consumers (notably `ospex-market-maker` in M6 of the own-state SSE plan) can now persist the canonical typed shape and hand it directly to `commitments.cancelOnchainSigned(payload)` without reconstructing from `PublicVisibleCommitment` (which would mean conversions like `BigInt(c.contestId)` in caller code and a dependency on the public-row schema). Equivalent in content to the fields already on `commitment`, but in the canonical typed shape `cancelOnchainSigned` expects (bigint, not decimal-string). On a `NONCE_TOO_LOW` retry, the returned `signedPayload` reflects the retry's signed bundle (commitmentHash, struct, AND signature all rebuilt with the new nonce — the original is discarded by design, no longer matches the persisted server row).
@@ -317,7 +323,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.0
 [0.4.8]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.8
 [0.4.7]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.7
