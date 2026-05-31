@@ -248,6 +248,41 @@ describe('toSubmitExecuteEnvelope', () => {
     expect(env.effects.every((e) => e.ok === true)).toBe(true);
   });
 
+  // Hermes v0.5.1 round 2: the v2 execute envelope's `payload.result` is
+  // pinned to the `{ hash, commitment }` subset. Even when a caller passes
+  // a structurally-wider object (e.g. the full SDK `SubmitResult` which
+  // carries `signedPayload` from v0.5.1 onward), `toSubmitExecuteEnvelope`
+  // must defensively project so the extra fields never reach the
+  // envelope's JSON output. Without this, a future refactor that drops the
+  // explicit projection at the CLI call site (submit.ts:514) would silently
+  // leak signed material into CLI JSON. The adversarial test mirrors the
+  // doc claim in docs/AGENT_CONTRACT.md §"Payload TypeScript shapes".
+  it('payload.result is the {hash, commitment} subset — wider SubmitResult-like inputs do NOT leak (signedPayload, future fields)', () => {
+    const widerLike = {
+      hash: '0xdead' as Hex,
+      commitment: stubCommitment,
+      // Stand-ins for the v0.5.1 SubmitResult.signedPayload + any
+      // hypothetical future SubmitResult addition. Cast through unknown
+      // because the function signature deliberately narrows them away —
+      // we're simulating a future refactor that lost the call-site
+      // projection.
+      signedPayload: {
+        commitmentHash: '0xdead',
+        commitment: { foo: 'bar' },
+        signature: '0xsig',
+      },
+      hypotheticalFutureField: 'must-not-leak',
+    };
+    const env = toSubmitExecuteEnvelope(
+      preview,
+      widerLike as unknown as { hash: Hex; commitment: Commitment },
+      { chainId: POLYGON },
+    );
+    expect(env.payload.result).toEqual({ hash: '0xdead', commitment: stubCommitment });
+    expect((env.payload.result as Record<string, unknown>).signedPayload).toBeUndefined();
+    expect((env.payload.result as Record<string, unknown>).hypotheticalFutureField).toBeUndefined();
+  });
+
   // Hermes PR-69 review: when `commitments submit --yes --json` runs
   // approve txs before the final submit, those txs MUST appear in
   // effects[] — agents need the tx hash/status, not just stderr text.

@@ -703,6 +703,69 @@ describe('submitPrepared — NONCE_TOO_LOW propagation', () => {
   });
 });
 
+describe('submitPrepared — happy path returns signedPayload', () => {
+  it('result carries SignedCommitmentPayload that round-trips to result.hash', async () => {
+    const ctx = buildContext({ allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs());
+
+    // Stub api.request to echo a minimum-viable CommitmentBody for the
+    // preview's raw fields. `requireVisibleCommitment` only narrows on
+    // discriminators; the body just needs to decode as visible (no
+    // `bookVisible: false`).
+    ctx.api = {
+      request: vi.fn(async () => ({
+        commitmentHash: preview.raw.speculationKey, // overwritten by toCommitment — placeholder
+        maker: preview.raw.maker,
+        contestId: preview.raw.contestId,
+        scorer: preview.raw.scorer,
+        lineTicks: preview.raw.lineTicks,
+        positionType: preview.raw.positionType,
+        oddsTick: preview.raw.oddsTick,
+        marketType: 'moneyline',
+        riskAmount: preview.raw.riskAmount,
+        filledRiskAmount: '0',
+        remainingRiskAmount: preview.raw.riskAmount,
+        nonce: preview.raw.nonce,
+        expiry: new Date(Number(preview.raw.expiry) * 1000).toISOString(),
+        speculationKey: preview.raw.speculationKey,
+        signature: '0x'.padEnd(132, 's'),
+        status: 'open',
+        source: 'agent',
+        network: 'polygon',
+        nonceInvalidated: false,
+        createdAt: new Date().toISOString(),
+      })),
+    } as unknown as CommitmentsContext['api'];
+
+    const result = await submitPrepared(ctx, preview);
+
+    // The canonical typed payload is present on the happy path.
+    expect(result.signedPayload).toBeDefined();
+    // The hash on the payload is the same hash on the result envelope —
+    // both are the SDK's locally-computed `hashCommitment(domain, message)`.
+    expect(result.signedPayload.commitmentHash).toBe(result.hash);
+    // The signature on the payload is what the test signer returned —
+    // the SDK does NOT mutate it before persisting on the payload.
+    expect(result.signedPayload.signature).toBe('0x'.padEnd(132, 's'));
+    // The commitment struct on the payload matches the preview's `raw`
+    // (in bigint form), so a caller can hand it straight to
+    // `cancelOnchainSigned(payload)` without reconstruction.
+    expect(result.signedPayload.commitment.maker.toLowerCase()).toBe(
+      preview.raw.maker.toLowerCase(),
+    );
+    expect(result.signedPayload.commitment.contestId).toBe(BigInt(preview.raw.contestId));
+    expect(result.signedPayload.commitment.scorer.toLowerCase()).toBe(
+      preview.raw.scorer.toLowerCase(),
+    );
+    expect(result.signedPayload.commitment.lineTicks).toBe(preview.raw.lineTicks);
+    expect(result.signedPayload.commitment.positionType).toBe(preview.raw.positionType);
+    expect(result.signedPayload.commitment.oddsTick).toBe(preview.raw.oddsTick);
+    expect(result.signedPayload.commitment.riskAmount).toBe(BigInt(preview.raw.riskAmount));
+    expect(result.signedPayload.commitment.nonce).toBe(BigInt(preview.raw.nonce));
+    expect(result.signedPayload.commitment.expiry).toBe(BigInt(preview.raw.expiry));
+  });
+});
+
 // ── Expiry: defaults, durations, matchTime guard, source annotation ──
 
 describe('prepareSubmit — expiry defaults (no --expiry passed)', () => {
