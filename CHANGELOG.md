@@ -8,9 +8,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [0.5.2] — TBD
 
-<!-- Release prepped; set the date above to the publish date before tagging.
-     PUBLISH ONLY AFTER the core-api PR0b deploy (the enrichment + /v1/health/own-state
-     fields are REQUIRED by these schemas), then walk docs/MANUAL_INTEGRATION_TESTING.md. -->
+<!-- Release prepped. core-api PR0b is deployed (Heroku v38) + verified, so the
+     deploy gate is cleared. Before tagging: set the date above to the publish
+     date, run docs/MANUAL_INTEGRATION_TESTING.md, then delete this comment. -->
 
 Phase 3 cutover prerequisite for `ospex-market-maker` (own-state SSE plan §Phase 3). Additive surface on `client.ownState.subscribe`, plus a load-bearing dispatch-model change and a move to declarative (zod) wire-body validation. Backwards-compatible at the call site — pre-existing 1-arg handlers continue to compile and run; the new `meta` argument is positional-and-ignored on the existing form. `Subscription.unsubscribe()` is unchanged (`Promise<void>`). Also adds the **own-state body enrichment** (owner commitments + positions now carry contest context, the canonical `speculationId`, authoritative wei6 amounts, a freshness timestamp, and — on commitments — the full `signedPayload`) and a new public **`client.ownState.health()`** indexer-lag probe. The enrichment + health fields require the matching core-api deploy (own-state SSE plan PR0b); cutting this release before that deploy would make the SDK reject the older, un-enriched bodies.
 
