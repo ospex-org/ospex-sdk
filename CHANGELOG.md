@@ -4,6 +4,14 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.5.2] — TBD
+
+<!-- Release prepped; set the date above to the publish date before tagging.
+     PUBLISH ONLY AFTER the core-api PR0b deploy (the enrichment + /v1/health/own-state
+     fields are REQUIRED by these schemas), then walk docs/MANUAL_INTEGRATION_TESTING.md. -->
+
 Phase 3 cutover prerequisite for `ospex-market-maker` (own-state SSE plan §Phase 3). Additive surface on `client.ownState.subscribe`, plus a load-bearing dispatch-model change and a move to declarative (zod) wire-body validation. Backwards-compatible at the call site — pre-existing 1-arg handlers continue to compile and run; the new `meta` argument is positional-and-ignored on the existing form. `Subscription.unsubscribe()` is unchanged (`Promise<void>`). Also adds the **own-state body enrichment** (owner commitments + positions now carry contest context, the canonical `speculationId`, authoritative wei6 amounts, a freshness timestamp, and — on commitments — the full `signedPayload`) and a new public **`client.ownState.health()`** indexer-lag probe. The enrichment + health fields require the matching core-api deploy (own-state SSE plan PR0b); cutting this release before that deploy would make the SDK reject the older, un-enriched bodies.
 
 ### SDK (`@ospex/sdk`)
@@ -336,7 +344,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.2
 [0.5.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.0
 [0.4.8]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.8
