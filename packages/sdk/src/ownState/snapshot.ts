@@ -175,14 +175,65 @@ export async function loadOwnStateSnapshot(
  * Decode the wire body into the public surface. Exported so PR3c's SSE
  * consumer can reuse it for the inline `event: snapshot` frame on
  * cold-connect (the wire body shape is identical).
+ *
+ * **Validates the top-level snapshot shape** — `body` non-null object;
+ * `cursor` non-empty string; `commitments` array; `positions` array;
+ * `truncated` boolean; `positionsTruncated` boolean. Throws
+ * {@link OspexValidationError} on any failure. Pre-v0.5.2-round-6 the
+ * top-level fields were copied without checks, so a malformed body like
+ * `{cursor: 123}` or `{truncated: "false"}` propagated through to
+ * cursor-promotion / paging logic where the wrong type caused either
+ * silent corruption (a numeric `cursor` becomes the next `Last-Event-ID`)
+ * or branch mis-routing (a truthy-string `truncated` triggered paging
+ * even when the server meant `false`). Round 6 closes the
+ * structural-decode contract symmetrically — leaves (toOwnerCommitment /
+ * toOwnerPosition / decodePositionStatusEvent / decodeFill) AND composite
+ * top-level shape both validated, all throws routed through the SSE
+ * subscribe path's `frameAborted` discipline (round 2/3).
  */
 export function decodeSnapshot(body: OwnerStateSnapshotBody): OwnerStateSnapshot {
+  if (typeof body !== 'object' || body === null) {
+    throw new OspexValidationError(
+      'OwnerStateSnapshot body must be a non-null object',
+      { field: 'body' },
+    );
+  }
+  const b = body as unknown as Record<string, unknown>;
+  const cursor = requireString(
+    b,
+    'cursor',
+    'OwnerStateSnapshot body is missing or has invalid `cursor`',
+  );
+  if (!Array.isArray(b.commitments)) {
+    throw new OspexValidationError(
+      'OwnerStateSnapshot body is missing or has invalid `commitments` (must be an array)',
+      { field: 'commitments' },
+    );
+  }
+  if (!Array.isArray(b.positions)) {
+    throw new OspexValidationError(
+      'OwnerStateSnapshot body is missing or has invalid `positions` (must be an array)',
+      { field: 'positions' },
+    );
+  }
+  if (typeof b.truncated !== 'boolean') {
+    throw new OspexValidationError(
+      'OwnerStateSnapshot body is missing or has invalid `truncated`',
+      { field: 'truncated' },
+    );
+  }
+  if (typeof b.positionsTruncated !== 'boolean') {
+    throw new OspexValidationError(
+      'OwnerStateSnapshot body is missing or has invalid `positionsTruncated`',
+      { field: 'positionsTruncated' },
+    );
+  }
   return {
-    cursor: body.cursor,
-    commitments: body.commitments.map(toOwnerCommitment),
-    positions: body.positions.map(toOwnerPosition),
-    truncated: body.truncated,
-    positionsTruncated: body.positionsTruncated,
+    cursor,
+    commitments: (b.commitments as OwnerCommitmentBody[]).map(toOwnerCommitment),
+    positions: (b.positions as OwnerPositionBody[]).map(toOwnerPosition),
+    truncated: b.truncated,
+    positionsTruncated: b.positionsTruncated,
   };
 }
 
