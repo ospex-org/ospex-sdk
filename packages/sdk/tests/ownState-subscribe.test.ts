@@ -1201,6 +1201,265 @@ describe('subscribeToOwnState — v0.5.2 dispatch model (PR0a)', () => {
   });
 });
 
+describe('subscribeToOwnState — v0.5.2 dispatch model (PR0a round 2 — post-throw cursor safety)', () => {
+  it('does NOT advance cursor when a LATER successful commitment follows a thrown one on the SAME connection (Hermes regression probe)', async () => {
+    // This is the exact regression Hermes flagged: pre-round-2, after a
+    // handler throw the SDK kept processing the same SSE connection and
+    // a subsequent successful event advanced cursor PAST the failed one.
+    // Round 2 abandons the connection on dispatch failure so no further
+    // frame can advance cursor; the reconnect resumes from pre-throw.
+    const server = makeServer({
+      sseAttempts: [
+        {
+          frames: [
+            { event: 'snapshot', id: 'CUR-SNAP', data: snapshotBody() },
+            { event: 'ready', id: 'CUR-READY', data: {} },
+            {
+              event: 'commitment',
+              id: 'CUR-BAD',
+              data: commitmentBody(HASH_A),
+            },
+            {
+              event: 'commitment',
+              id: 'CUR-GOOD',
+              data: commitmentBody(
+                '0xbbbb222222222222222222222222222222222222222222222222222222222222',
+                { nonce: '2' },
+              ),
+            },
+          ],
+        },
+        {
+          frames: [{ event: 'ready', id: 'CUR-READY-2', data: {} }],
+        },
+      ],
+    });
+    const errors: OspexStreamError[] = [];
+    let commitmentsSeen: string[] = [];
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onSnapshot: () => undefined,
+        onReady: () => undefined,
+        onCommitment: (c) => {
+          commitmentsSeen.push(c.commitmentHash);
+          if (c.commitmentHash === HASH_A) {
+            throw new Error('handler bug — simulated throw on CUR-BAD');
+          }
+        },
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    await waitFor(() => errors.some((e) => e.phase === 'dispatch'));
+    await waitFor(
+      () => server.calls.filter((c) => c.url.includes('/v1/stream/own-state')).length >= 2,
+    );
+    await sub.unsubscribe();
+
+    // The thrown handler IS dispatched (we don't suppress, just abort
+    // the rest of the connection after surfacing onError).
+    expect(commitmentsSeen).toContain(HASH_A);
+
+    // The SECOND SSE attempt's Last-Event-ID is `CUR-READY` — the last
+    // SUCCESSFULLY APPLIED cursor — NOT `CUR-GOOD`. The CUR-GOOD frame
+    // must have been ABANDONED (the connection aborted before it could
+    // be processed). Pre-round-2 would have seen `CUR-GOOD` here.
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBe('CUR-READY');
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).not.toBe('CUR-GOOD');
+
+    // CUR-GOOD was NOT dispatched on the failed connection — the abort
+    // stopped further frames.
+    expect(commitmentsSeen).not.toContain(
+      '0xbbbb222222222222222222222222222222222222222222222222222222222222',
+    );
+  });
+
+  it('does NOT emit `connected` AND does NOT advance cursor when onReady throws (still reconnects)', async () => {
+    const server = makeServer({
+      sseAttempts: [
+        {
+          frames: [
+            { event: 'snapshot', id: 'CUR-SNAP', data: snapshotBody() },
+            { event: 'ready', id: 'CUR-READY-THROWS', data: {} },
+            // This commitment must NEVER be dispatched on attempt 1 —
+            // the onReady throw aborts the connection.
+            {
+              event: 'commitment',
+              id: 'CUR-AFTER-BAD-READY',
+              data: commitmentBody(HASH_A),
+            },
+          ],
+        },
+        {
+          frames: [{ event: 'ready', id: 'CUR-READY-2', data: {} }],
+        },
+      ],
+    });
+    const statuses: OwnerStateSubscribeStatus[] = [];
+    const errors: OspexStreamError[] = [];
+    let commitmentsSeen: string[] = [];
+    let readyHits = 0;
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onReady: () => {
+          readyHits += 1;
+          if (readyHits === 1) throw new Error('baseline swap failed — simulated');
+        },
+        onCommitment: (c) => commitmentsSeen.push(c.commitmentHash),
+        onStatus: (s) => statuses.push(s),
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    await waitFor(() => errors.some((e) => e.phase === 'dispatch'));
+    await waitFor(
+      () => server.calls.filter((c) => c.url.includes('/v1/stream/own-state')).length >= 2,
+    );
+    await sub.unsubscribe();
+
+    // The downstream commitment must NOT have been processed on attempt 1
+    // (the connection aborted after the onReady throw).
+    expect(commitmentsSeen).not.toContain(HASH_A);
+
+    // Critically: no 'connected' status was emitted on attempt 1
+    // (consumer's onReady threw → baseline swap incomplete → consumer
+    // is NOT connected from its own perspective). The reconnect after
+    // backoff would emit 'reconnecting'/'degraded' first, then
+    // 'connected' on the SECOND attempt (second ready succeeded).
+    //
+    // We can't assert "never connected" cleanly because attempt 2's
+    // onReady DOES succeed and emits 'connected'. What we CAN assert:
+    // by the time we observed the dispatch error, no 'connected' had
+    // landed yet on attempt 1. Position in the array tells us:
+    const dispatchErrIdx = errors.findIndex((e) => e.phase === 'dispatch');
+    expect(dispatchErrIdx).toBeGreaterThanOrEqual(0);
+    // 'connected' is at the end of statuses (from attempt 2's ready); it
+    // must NOT appear BEFORE the dispatch error fired. Easiest proxy:
+    // the dispatch-error position in time precedes any 'connected'.
+    // We can't get a timestamp ordering across the two arrays directly,
+    // so we assert the surrogate: attempt 1 SSE call has no 'connected'
+    // status in the statuses array at the time of the first dispatch
+    // error. Since 'connected' is one-shot per session (the
+    // `lastStatus === s` guard), if attempt 1's onReady never emitted
+    // 'connected' we'll see EXACTLY ONE 'connected' in statuses — from
+    // attempt 2.
+    const connectedCount = statuses.filter((s) => s === 'connected').length;
+    expect(connectedCount).toBe(1);
+
+    // Pre-round-2: 'connected' would have fired TWICE (once per ready),
+    // but the lastStatus dedup would mask it. The real bug we're
+    // guarding here is: pre-round-2 emitted 'connected' even when
+    // onReady threw, lying to the consumer's health gate. With round 2,
+    // we only see 'connected' once — and it's from attempt 2.
+
+    // The SECOND SSE attempt's Last-Event-ID is the CURSOR BEFORE THE
+    // FAILED ready. Since no snapshot frame and no ready had advanced
+    // cursor, that's `CUR-SNAP` (the untruncated snapshot's id
+    // succeeded with the no-op onSnapshot stub).
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBe('CUR-SNAP');
+  });
+
+  it('REST snapshot page handler throwing aborts paging and forces cold restart', async () => {
+    // Cold-start delivers a truncated SSE snapshot. REST paging fetches
+    // page 1 — handler throws. Outer loop must clear cursor +
+    // pendingPagingCursor → next SSE attempt has NO Last-Event-ID
+    // (cold restart).
+    let snapshotHits = 0;
+    const server = makeServer({
+      sseAttempts: [
+        {
+          frames: [
+            {
+              event: 'snapshot',
+              id: 'CUR-PAGE-TRUNCATED',
+              data: snapshotBody({
+                cursor: 'PAGE-1-REST',
+                truncated: true,
+              }),
+            },
+          ],
+        },
+        // Reconnect: cold restart (no Last-Event-ID).
+        {
+          frames: [
+            { event: 'snapshot', id: 'CUR-SNAP-RECOVERY', data: snapshotBody() },
+            { event: 'ready', id: 'CUR-READY-RECOVERY', data: {} },
+          ],
+        },
+      ],
+      restSnapshotPages: [
+        {
+          // Page 1: the consumer's handler throws on this page.
+          body: snapshotBody({ cursor: 'PAGE-2-REST', truncated: true }),
+        },
+      ],
+    });
+    let readyHit = false;
+    const errors: OspexStreamError[] = [];
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onSnapshot: (s) => {
+          snapshotHits += 1;
+          // Throw on the FIRST REST page (the SSE-inline truncated page
+          // came first; this throw is on the REST page).
+          if (snapshotHits === 2) {
+            throw new Error('REST page handler bug — simulated');
+          }
+        },
+        onReady: () => {
+          readyHit = true;
+        },
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    await waitFor(() => readyHit);
+    await sub.unsubscribe();
+
+    // The dispatch error from REST paging was surfaced.
+    expect(errors.some((e) => e.phase === 'dispatch')).toBe(true);
+
+    // The SECOND SSE attempt must have NO Last-Event-ID — REST paging
+    // failure forced a cold restart per the outer loop's "paging failed"
+    // branch (cursor cleared).
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls.length).toBeGreaterThanOrEqual(2);
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBeNull();
+  });
+});
+
 describe('subscribeToOwnState — v0.5.2 error.phase (PR0a)', () => {
   it('classifies a 401 mid-stream as phase: token-refresh', async () => {
     // First SSE attempt connects fine, gets a ready, then 401s. Second

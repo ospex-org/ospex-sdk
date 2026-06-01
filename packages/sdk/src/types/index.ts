@@ -28,6 +28,8 @@ export type {
   OwnerStateResyncReason,
   OwnerStateDegradedReason,
   OwnStateSubscribeOptions,
+  OwnStateEventMeta,
+  OwnStateFrameMeta,
 } from './ownState.js';
 export type {
   Position,

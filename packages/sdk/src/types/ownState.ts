@@ -353,9 +353,17 @@ export interface OwnStateFrameMeta {
  *   2. Surfaces via {@link onError} as
  *      `OspexStreamError({reason: 'connection_failed', phase: 'dispatch'})`
  *      (instead of being silently swallowed — pre-v0.5.2 behavior).
- *   3. Does NOT abort the connection; the SDK continues processing
- *      subsequent frames. Server-side overlap on next reconnect re-delivers
- *      the failed event.
+ *   3. **Abandons the rest of the SSE connection** — no further frame on
+ *      the same connection can advance the running cursor (which would
+ *      silently skip the failed event on the next reconnect's
+ *      `Last-Event-ID` resume). The reconnect loop resumes from the
+ *      pre-throw cursor; server-side overlap re-delivers the failed event.
+ *      For REST snapshot paging (truncated cold-start handoff), the
+ *      mirror discipline aborts paging and forces a cold restart so a
+ *      partial REST drain can't leave the consumer in an inconsistent
+ *      state. For `onReady` throws, `'connected'` is NOT emitted — the
+ *      consumer's baseline swap didn't complete, so the SDK does not
+ *      lie to the consumer's composite-health gate.
  */
 export interface OwnerStateSubscribeHandlers {
   /**

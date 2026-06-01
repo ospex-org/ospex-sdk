@@ -32,6 +32,7 @@ export type {
   OspexSignerResolutionReason,
   OspexSubscriptionReason,
   OspexStreamReason,
+  OspexStreamErrorPhase,
   OspexOwnStateReason,
 } from './errors.js';
 
@@ -96,6 +97,8 @@ export type {
   OwnerStateResyncReason,
   OwnerStateDegradedReason,
   OwnStateSubscribeOptions,
+  OwnStateEventMeta,
+  OwnStateFrameMeta,
   // position
   Position,
   PositionTotals,
