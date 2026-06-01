@@ -47,13 +47,17 @@ import {
   OwnerStateSnapshotBodySchema,
   PositionStatusEventSchema,
   type OwnerCommitmentBodyParsed,
+  type SignedCommitmentPayloadWireParsed,
 } from './schemas.js';
 import type {
   OwnerCommitment,
   OwnerStateSnapshot,
   PositionStatusEvent,
 } from '../types/ownState.js';
-import type { StoredCommitmentStatus } from '../types/commitment.js';
+import type {
+  SignedCommitmentPayload,
+  StoredCommitmentStatus,
+} from '../types/commitment.js';
 import type { ChainId } from '../types/protocol.js';
 import type { Hex, Signer } from '../types/signer.js';
 
@@ -166,6 +170,40 @@ function toOwnerCommitmentFromParsed(body: OwnerCommitmentBodyParsed): OwnerComm
     nonceInvalidated: body.nonceInvalidated,
     isLive: computeOwnerIsLive(body),
     createdAt: body.createdAt,
+    // PR0b enrichment — pass-through, plus the signed-payload coercion.
+    speculationId: body.speculationId,
+    sport: body.sport,
+    awayTeam: body.awayTeam,
+    homeTeam: body.homeTeam,
+    updatedAtUnixSec: body.updatedAtUnixSec,
+    signedPayload: body.signedPayload === null ? null : coerceSignedPayload(body.signedPayload),
+  };
+}
+
+/**
+ * Coerce the validated signed-payload WIRE body (bigint struct fields as
+ * decimal strings) into the SDK's {@link SignedCommitmentPayload} (bigint).
+ * The `UINT256_STRING` schema guard guarantees the `BigInt(...)` calls can't
+ * throw. Hex fields are cast — they're validated as non-empty strings and
+ * `Hex` is a nominal brand; `cancelOnchainSigned` re-derives + asserts the
+ * hash before any on-chain action, so a malformed hex never causes an
+ * unguarded cancel.
+ */
+function coerceSignedPayload(wire: SignedCommitmentPayloadWireParsed): SignedCommitmentPayload {
+  return {
+    commitmentHash: wire.commitmentHash as Hex,
+    commitment: {
+      maker: wire.commitment.maker as Hex,
+      contestId: BigInt(wire.commitment.contestId),
+      scorer: wire.commitment.scorer as Hex,
+      lineTicks: wire.commitment.lineTicks,
+      positionType: wire.commitment.positionType,
+      oddsTick: wire.commitment.oddsTick,
+      riskAmount: BigInt(wire.commitment.riskAmount),
+      nonce: BigInt(wire.commitment.nonce),
+      expiry: BigInt(wire.commitment.expiry),
+    },
+    signature: wire.signature as Hex,
   };
 }
 

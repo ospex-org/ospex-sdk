@@ -18,7 +18,7 @@
 
 import { OspexValidationError } from '../errors.js';
 import type { ApiClient } from './client.js';
-import type { OwnerStateSnapshotBody } from './types.js';
+import type { OwnerStateSnapshotBody, OwnStateHealthBody } from './types.js';
 
 export interface OwnerStateSnapshotQuery {
   /**
@@ -69,6 +69,19 @@ export class OwnStateApi {
       method: 'GET',
       query: requestQuery,
       headers: { Authorization: `Bearer ${token}` },
+    });
+  }
+
+  /**
+   * Fetch the PUBLIC indexer-lag probe (`GET /v1/health/own-state`, PR0b §3.3).
+   * No bearer — indexer lag is a global, wallet-independent signal, so this
+   * takes no token (and no `?address`). The market-maker polls it (~10 s) and
+   * folds `indexerLagSeconds` into its stream-health gate.
+   */
+  async health(): Promise<OwnStateHealthBody> {
+    return this.client.request<OwnStateHealthBody>('/v1/health/own-state', {
+      method: 'GET',
+      query: {},
     });
   }
 }

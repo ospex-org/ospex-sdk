@@ -18,7 +18,11 @@
  * for positions — `client.positions.*` covers full history out-of-band.
  */
 
-import type { CommitmentStatus, StoredCommitmentStatus } from './commitment.js';
+import type {
+  CommitmentStatus,
+  SignedCommitmentPayload,
+  StoredCommitmentStatus,
+} from './commitment.js';
 import type { Fill } from './fill.js';
 import type { MarketType } from './odds.js';
 import type { Hex } from './signer.js';
@@ -79,6 +83,31 @@ export interface OwnerCommitment {
    */
   isLive: boolean;
   createdAt: string;
+  /**
+   * Canonical numeric speculation id. Null until the commitment's speculation
+   * exists on-chain (a still-unmatched commitment).
+   */
+  speculationId: string | null;
+  /**
+   * Sport slug (e.g. `'americanfootball_nfl'`). Empty string when the contest
+   * context is unavailable.
+   */
+  sport: string;
+  /** Absolute away team (distinct from the maker-relative side). Empty when unavailable. */
+  awayTeam: string;
+  /** Absolute home team. Empty when unavailable. */
+  homeTeam: string;
+  /** `row_updated_at` as whole unix seconds — a freshness signal for consumers. */
+  updatedAtUnixSec: number;
+  /**
+   * The canonical signed payload for this commitment, ready to hand to
+   * {@link Commitments.cancelOnchainSigned} — the load-bearing piece for
+   * authoritatively cancelling a row taken off the public book. Null on
+   * indexer-discovered rows that carry no signature. `cancelOnchainSigned`
+   * asserts the struct hashes back to `commitmentHash` before broadcasting,
+   * so a drifted payload can never cancel the wrong on-chain slot.
+   */
+  signedPayload: SignedCommitmentPayload | null;
 }
 
 interface OwnerPositionBase {
@@ -95,6 +124,23 @@ interface OwnerPositionBase {
   oddsDecimal: number | null;
   riskAmountUSDC: number;
   profitAmountUSDC: number;
+  /**
+   * Parent contest numeric id. Empty string on `claimed` rows (terminal,
+   * recovery-only) that carry no contest join.
+   */
+  contestId: string;
+  /** Sport slug. Empty when unavailable (`claimed` rows). */
+  sport: string;
+  /** Absolute away team (distinct from the maker-relative `team`). Empty on `claimed`. */
+  awayTeam: string;
+  /** Absolute home team. Empty on `claimed`. */
+  homeTeam: string;
+  /** Authoritative wei6 stake (your risk); `riskAmountUSDC` is the float view. */
+  riskAmountWei6: string;
+  /** Authoritative wei6 counterparty stake (= your profit in a zero-vig pair). */
+  counterpartyRiskWei6: string;
+  /** `max(position, speculation, contest)` row_updated_at as unix seconds. */
+  updatedAtUnixSec: number;
 }
 
 /**
@@ -177,6 +223,26 @@ export interface OwnerStateSnapshot {
   positions: OwnerPosition[];
   truncated: boolean;
   positionsTruncated: boolean;
+}
+
+/**
+ * Indexer-lag health for the own-state surface — `client.ownState.health()`
+ * (own-state SSE plan §2.6 + §3.3). The market-maker polls this (~10 s) and
+ * folds `indexerLagSeconds < INDEXER_LAG_MAX` into its composite stream-health
+ * gate, holding quoting when the indexer falls behind.
+ *
+ * This is a GLOBAL, wallet-independent signal — no signer / token required.
+ * `lagSource` names the signal backing the number (currently `'sync_state'`,
+ * the indexer's per-block processed-watermark, which advances on every block
+ * so a quiet no-activity window does NOT read as lag).
+ */
+export interface OwnStateHealth {
+  /** Whole seconds since the indexer last advanced its processed-block watermark. */
+  indexerLagSeconds: number;
+  /** ISO-8601 timestamp of that watermark. */
+  lastIndexedAt: string;
+  /** The signal backing the lag measurement (e.g. `'sync_state'`). */
+  lagSource: string;
 }
 
 /**
