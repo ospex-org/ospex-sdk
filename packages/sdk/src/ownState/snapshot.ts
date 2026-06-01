@@ -4,7 +4,7 @@
  *
  * Pipeline:
  *   1. Mint a fresh stream-auth bearer (one mint per call — token caching
- *      is a higher-layer concern owned by PR3c's subscribe loop; one-shot
+ *      is a higher-layer concern owned by the subscribe loop; one-shot
  *      callers pay the mint cost up front).
  *   2. GET the snapshot with `Authorization: Bearer <token>`.
  *   3. Decode the wire body into the public {@link OwnerStateSnapshot},
@@ -12,9 +12,17 @@
  *      `visibility` from `bookVisible` and computes the `isLive`
  *      predicate at decode time (mirrors `toCommitment` in `api/commitments.ts`).
  *
+ * Structural validation is declarative: every wire body is parsed against a
+ * zod schema in `schemas.ts` and a structural failure surfaces as
+ * {@link OspexValidationError} (via `parseWire`), so a malformed body throws
+ * at the decode boundary rather than producing a mostly-`undefined` object.
+ * The SSE subscribe path relies on this throw to abort the connection
+ * (`frameAborted` discipline) so the cursor never advances past an undecoded
+ * frame.
+ *
  * Errors mirror `commitments.list/get`:
  *   - `OspexAPIError` for HTTP 4xx/5xx (apiCode preserved);
- *   - `OspexValidationError` for bad inputs (malformed address / cursor);
+ *   - `OspexValidationError` for bad inputs / malformed wire bodies;
  *   - `OspexSigningError` propagated from the signer if EIP-712 fails.
  *
  * Pagination: this is NOT recursive — one snapshot call = one page. The
@@ -32,9 +40,19 @@
 
 import { OwnStateApi } from '../api/ownState.js';
 import type { ApiClient } from '../api/client.js';
-import type { OwnerCommitmentBody, OwnerPositionBody, OwnerStateSnapshotBody } from '../api/types.js';
 import { mintStreamToken } from './auth.js';
-import type { OwnerCommitment, OwnerPosition, OwnerStateSnapshot } from '../types/ownState.js';
+import { parseWire } from '../wireSchema.js';
+import {
+  OwnerCommitmentBodySchema,
+  OwnerStateSnapshotBodySchema,
+  PositionStatusEventSchema,
+  type OwnerCommitmentBodyParsed,
+} from './schemas.js';
+import type {
+  OwnerCommitment,
+  OwnerStateSnapshot,
+  PositionStatusEvent,
+} from '../types/ownState.js';
 import type { StoredCommitmentStatus } from '../types/commitment.js';
 import type { ChainId } from '../types/protocol.js';
 import type { Hex, Signer } from '../types/signer.js';
@@ -72,17 +90,29 @@ export async function loadOwnStateSnapshot(
 }
 
 /**
- * Decode the wire body into the public surface. Exported so PR3c's SSE
+ * Decode the wire body into the public surface. Exported so the SSE
  * consumer can reuse it for the inline `event: snapshot` frame on
  * cold-connect (the wire body shape is identical).
+ *
+ * Validates the composite shape AND every leaf in ONE parse against
+ * {@link OwnerStateSnapshotBodySchema}: top-level (`cursor` non-empty string;
+ * `commitments` / `positions` arrays; `truncated` / `positionsTruncated`
+ * booleans) plus each inner commitment and position. A malformed body —
+ * `{cursor: 123}`, `{truncated: "false"}`, `{positions: [{}]}` — throws
+ * {@link OspexValidationError} at the decode boundary, before any
+ * cursor-promotion / paging branch could act on a wrong-typed value. The
+ * snapshot's `positions[]` enum is narrower than {@link PositionLifecycle}
+ * (terminal `settledLost` / `void` are dropped per spec §6.1), so a position
+ * mis-labelled with a terminal status is rejected by the discriminated union.
  */
-export function decodeSnapshot(body: OwnerStateSnapshotBody): OwnerStateSnapshot {
+export function decodeSnapshot(body: unknown): OwnerStateSnapshot {
+  const parsed = parseWire(OwnerStateSnapshotBodySchema, body);
   return {
-    cursor: body.cursor,
-    commitments: body.commitments.map(toOwnerCommitment),
-    positions: body.positions.map(toOwnerPosition),
-    truncated: body.truncated,
-    positionsTruncated: body.positionsTruncated,
+    cursor: parsed.cursor,
+    commitments: parsed.commitments.map(toOwnerCommitmentFromParsed),
+    positions: parsed.positions,
+    truncated: parsed.truncated,
+    positionsTruncated: parsed.positionsTruncated,
   };
 }
 
@@ -94,8 +124,19 @@ export function decodeSnapshot(body: OwnerStateSnapshotBody): OwnerStateSnapshot
  * `isLive` is computed at decode time — same predicate as
  * `PublicVisibleCommitment.isLive` so a maker can reuse the same
  * matchability check regardless of which type the row came back as.
+ *
+ * Validates the wire body against {@link OwnerCommitmentBodySchema} (required
+ * identity fields are non-empty strings, `status` is a valid enum, etc.) and
+ * throws {@link OspexValidationError} on a malformed body. Used directly by
+ * the SSE `commitment` frame path; the snapshot path goes through
+ * {@link decodeSnapshot} which validates commitments inline.
  */
-export function toOwnerCommitment(body: OwnerCommitmentBody): OwnerCommitment {
+export function toOwnerCommitment(body: unknown): OwnerCommitment {
+  return toOwnerCommitmentFromParsed(parseWire(OwnerCommitmentBodySchema, body));
+}
+
+/** Apply the wire→public transform to an already-validated commitment body. */
+function toOwnerCommitmentFromParsed(body: OwnerCommitmentBodyParsed): OwnerCommitment {
   const visibility: 'visible' | 'hidden' = body.bookVisible === false ? 'hidden' : 'visible';
   return {
     ownerAuthorized: true,
@@ -129,6 +170,34 @@ export function toOwnerCommitment(body: OwnerCommitmentBody): OwnerCommitment {
 }
 
 /**
+ * Wire → public {@link PositionStatusEvent} mapper for SSE
+ * `event: positionStatus` frames. Validates the required dedup-key fields
+ * (address, speculationId, positionType, status, sourceUpdatedAt) + the
+ * `status` enum, and the optional `from` / `result` / `claimableAmount`
+ * when present, against {@link PositionStatusEventSchema}. Throws
+ * {@link OspexValidationError} on a malformed body — the SSE subscribe path
+ * catches and triggers `frameAborted` teardown so cursor never advances past
+ * an undecoded frame.
+ */
+export function decodePositionStatusEvent(body: unknown): PositionStatusEvent {
+  const p = parseWire(PositionStatusEventSchema, body);
+  // Map the validated body into the public shape. The optional fields are
+  // added only when present so the result satisfies `exactOptionalPropertyTypes`
+  // (an absent key, never an explicit `undefined` value).
+  const out: PositionStatusEvent = {
+    address: p.address,
+    speculationId: p.speculationId,
+    positionType: p.positionType,
+    status: p.status,
+    sourceUpdatedAt: p.sourceUpdatedAt,
+  };
+  if (p.from !== undefined) out.from = p.from;
+  if (p.result !== undefined) out.result = p.result;
+  if (p.claimableAmount !== undefined) out.claimableAmount = p.claimableAmount;
+  return out;
+}
+
+/**
  * Mirrors the `MatchingModule.matchCommitment` precondition set the same
  * way `api/commitments.ts:computeIsLive` does for public visible bodies:
  *   1. raw stored status is `open` or `partially_filled`;
@@ -138,7 +207,7 @@ export function toOwnerCommitment(body: OwnerCommitmentBody): OwnerCommitment {
  * Hidden bodies (`visibility === 'hidden'`) still report `isLive` honestly —
  * they remain matchable on chain until they reach a terminal state.
  */
-function computeOwnerIsLive(body: OwnerCommitmentBody): boolean {
+function computeOwnerIsLive(body: OwnerCommitmentBodyParsed): boolean {
   const lifecycle = body.storedStatus ?? body.status;
   if (lifecycle !== 'open' && lifecycle !== 'partially_filled') return false;
   if (body.nonceInvalidated) return false;
@@ -147,20 +216,4 @@ function computeOwnerIsLive(body: OwnerCommitmentBody): boolean {
   const expiryMs = Date.parse(body.expiry);
   if (!Number.isFinite(expiryMs) || expiryMs <= Date.now()) return false;
   return true;
-}
-
-function toOwnerPosition(body: OwnerPositionBody): OwnerPosition {
-  // The wire body is already a discriminated union by `status` matching the
-  // public type, so this is a structural pass-through. Switch is exhaustive;
-  // the default never hits if the server adheres to the wire contract.
-  switch (body.status) {
-    case 'active':
-      return { ...body };
-    case 'pendingSettle':
-      return { ...body };
-    case 'claimable':
-      return { ...body };
-    case 'claimed':
-      return { ...body };
-  }
 }

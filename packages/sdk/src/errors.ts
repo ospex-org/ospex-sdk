@@ -289,20 +289,60 @@ export class OspexSubscriptionError extends OspexError {
 export type OspexStreamReason = 'connection_failed' | 'capacity_exceeded' | 'fatal';
 
 /**
+ * Optional phase discriminator on {@link OspexStreamError}. Set on
+ * own-state-subscribe errors so consumers building composite health gates
+ * (per own-state SSE plan §2.6) can latch on a specific failure phase
+ * without parsing messages. Other resource streams (`odds`, etc.) may leave
+ * `phase` undefined.
+ *
+ *   token-mint     — minting a fresh stream-auth bearer failed
+ *                    (challenge/sign/exchange path)
+ *   token-refresh  — re-mint during an active subscription (same path,
+ *                    different latch — the health gate may treat
+ *                    refresh-in-flight failures differently from
+ *                    initial-connect failures)
+ *   connect        — opening the SSE connection failed (HTTP non-2xx
+ *                    or transport error)
+ *   snapshot-page  — REST snapshot paging during the truncated cold-start
+ *                    handoff failed (auth / transport / decode)
+ *   decode         — a wire-level frame couldn't be parsed
+ *   dispatch       — a consumer handler threw during event delivery
+ */
+export type OspexStreamErrorPhase =
+  | 'token-mint'
+  | 'token-refresh'
+  | 'connect'
+  | 'snapshot-page'
+  | 'decode'
+  | 'dispatch';
+
+/**
  * A failure on an Ospex SSE stream. Delivered to a subscription's `onError`
  * handler. `reason` discriminates retry-vs-stop; `status` carries the HTTP
  * status when the failure was an HTTP response (otherwise undefined for
- * transport-level failures).
+ * transport-level failures); `phase` (optional) discriminates the
+ * subscriber-side phase the failure occurred in — populated by the
+ * own-state subscribe path for composite-health-gate consumers.
  */
 export class OspexStreamError extends OspexError {
   readonly reason: OspexStreamReason;
   readonly status: number | undefined;
+  readonly phase: OspexStreamErrorPhase | undefined;
 
-  constructor(message: string, init: { reason: OspexStreamReason; status?: number; cause?: unknown }) {
+  constructor(
+    message: string,
+    init: {
+      reason: OspexStreamReason;
+      status?: number;
+      phase?: OspexStreamErrorPhase;
+      cause?: unknown;
+    },
+  ) {
     super('STREAM_ERROR', message, init.cause !== undefined ? { cause: init.cause } : undefined);
     this.name = 'OspexStreamError';
     this.reason = init.reason;
     this.status = init.status;
+    this.phase = init.phase;
   }
 }
 

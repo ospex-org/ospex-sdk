@@ -291,11 +291,84 @@ export type OwnerStateSubscribeStatus =
   | 'resync';
 
 /**
+ * Per-event cursor metadata delivered alongside each event/snapshot/ready
+ * dispatch. `cursor` is the opaque SSE-level cursor (Last-Event-ID) AFTER
+ * the event the meta accompanies — i.e. the value to persist for restart
+ * resume if the consumer has just successfully applied the event.
+ *
+ * Consumers that persist cursors (e.g. the market-maker per own-state SSE
+ * plan §6.3) MUST persist the meta's cursor only AFTER the event has been
+ * applied and flushed; persisting earlier risks promoting a cursor for an
+ * event still in the consumer's queue. The SDK enforces the in-process
+ * mirror of this invariant: a handler that throws does NOT advance the
+ * SDK's internal cursor; on next reconnect, server-side overlap re-delivers
+ * the failed event.
+ *
+ * Truncated snapshot frames carry `cursor` too, but consumers MUST NOT
+ * persist it as the restart cursor — the meta reflects the SSE-frame id of
+ * the truncated page, which is not a `Last-Event-ID`-resumable position.
+ * Persist only the cursor that lands on `onReady` (final baseline complete)
+ * or on a delta event.
+ */
+export interface OwnStateEventMeta {
+  /**
+   * Opaque cursor AFTER this event. Empty string allowed on the very first
+   * cold-start frame if the server omitted an id; consumers should treat
+   * an empty string the same as "no prior cursor known."
+   */
+  cursor: string;
+}
+
+/**
+ * Wire-level frame meta delivered to {@link OwnerStateSubscribeHandlers.onFrame}.
+ * Fires for EVERY parsed frame including SSE heartbeat comments — consumers
+ * derive a `transportFresh` predicate from `receivedAtMs` without depending
+ * on domain-event arrival (which a quiet wallet would never produce).
+ */
+export interface OwnStateFrameMeta {
+  /** `Date.now()` at the moment the SDK parsed the frame. */
+  receivedAtMs: number;
+  /**
+   *   `event`     — a domain event frame (snapshot/ready/commitment/fill/
+   *                 positionStatus/resync/degraded/unknown).
+   *   `heartbeat` — an SSE comment-only frame (`: hb`) the server sends to
+   *                 keep the connection idle-watchdog-fresh.
+   */
+  kind: 'event' | 'heartbeat';
+}
+
+/**
  * Handler set for `client.ownState.subscribe`. Each handler is optional —
  * consumers wire only what they care about. The SDK NEVER calls a handler
  * after `unsubscribe()` has been invoked (per
  * [[feedback_async_lifecycle_invariant]] — every re-entry point re-checks
  * the closed flag before dispatch).
+ *
+ * **Cursor advancement contract (v0.5.2+).** Each event-dispatch handler
+ * receives an {@link OwnStateEventMeta} second argument; the SDK advances
+ * its internal cursor only AFTER the handler returns successfully. A
+ * thrown handler — OR a frame that fails to decode (malformed wire body,
+ * decoder throws) — is treated identically: both are events that did NOT
+ * land successfully on the consumer, so both trigger the same
+ * abort-the-connection discipline:
+ *
+ *   1. Leaves the SDK's running cursor at the prior position.
+ *   2. Surfaces via {@link onError} as
+ *      `OspexStreamError({reason: 'connection_failed', phase: 'dispatch' | 'decode'})`
+ *      (instead of being silently swallowed — pre-v0.5.2 behavior).
+ *   3. **Abandons the rest of the SSE connection** — no further frame on
+ *      the same connection can advance the running cursor (which would
+ *      silently skip the failed event on the next reconnect's
+ *      `Last-Event-ID` resume), AND no later `event: ready` can fire
+ *      `onReady` after a failed cold-start snapshot (which would signal
+ *      a false baseline). The reconnect loop resumes from the prior
+ *      cursor; server-side overlap re-delivers the failed event.
+ *      For REST snapshot paging (truncated cold-start handoff), the
+ *      mirror discipline aborts paging and forces a cold restart so a
+ *      partial REST drain can't leave the consumer in an inconsistent
+ *      state. For `onReady` throws, `'connected'` is NOT emitted — the
+ *      consumer's baseline swap didn't complete, so the SDK does not
+ *      lie to the consumer's composite-health gate.
  */
 export interface OwnerStateSubscribeHandlers {
   /**
@@ -304,27 +377,35 @@ export interface OwnerStateSubscribeHandlers {
    * from REST `/v1/own-state/snapshot?cursor=` and fire here too. Each
    * call's `truncated` flag tells you whether more pages are coming.
    * After the final untruncated page, `onReady` fires.
+   *
+   * `meta.cursor` carries the SSE-frame id (inline SSE pages) or empty
+   * string for REST pages (which have no SSE cursor). Consumers MUST NOT
+   * persist the cursor from a truncated page — the restart-resumable
+   * cursor is the one delivered to `onReady`.
    */
-  onSnapshot?: (snapshot: OwnerStateSnapshot) => void;
+  onSnapshot?: (snapshot: OwnerStateSnapshot, meta: OwnStateEventMeta) => void;
   /**
    * Fires AFTER the final untruncated snapshot page (cold-start) OR after
    * server catchup completes (resume reconnect). The signal "safe to
    * resume trading"; before this fires, callers should hold quoting per
    * spec §2.6.
+   *
+   * `meta.cursor` is the FIRST cursor safe to persist for restart resume —
+   * the baseline has been delivered in full.
    */
-  onReady?: () => void;
+  onReady?: (meta: OwnStateEventMeta) => void;
   /**
    * Per-commitment lifecycle delta (insert / status change / fill /
    * cancel) for any commitment in the maker's book. Full owner-auth
    * payload regardless of `book_visible`.
    */
-  onCommitment?: (commitment: OwnerCommitment) => void;
+  onCommitment?: (commitment: OwnerCommitment, meta: OwnStateEventMeta) => void;
   /**
    * Per-fill append-only event, both maker-side and taker-side
    * (counterparty's wallet may be the maker's address). Dedup key per
    * spec §2.1.2 is `(txHash, logIndex)`.
    */
-  onFill?: (fill: Fill) => void;
+  onFill?: (fill: Fill, meta: OwnStateEventMeta) => void;
   /**
    * Per-position transition event. Wider enum than the snapshot's
    * `OwnerPosition.status` — includes terminal-lost (`settledLost`) and
@@ -332,15 +413,30 @@ export interface OwnerStateSubscribeHandlers {
    * Dedup key per spec §2.1.2 is `(address, speculationId, positionType,
    * status, sourceUpdatedAt)`.
    */
-  onPositionStatus?: (event: PositionStatusEvent) => void;
+  onPositionStatus?: (event: PositionStatusEvent, meta: OwnStateEventMeta) => void;
   /** Transport status changes — see {@link OwnerStateSubscribeStatus}. */
   onStatus?: (status: OwnerStateSubscribeStatus) => void;
+  /**
+   * Wire-level frame visibility. Fires for EVERY parsed frame including
+   * SSE heartbeat comments (`: hb`). Consumers derive a `transportFresh`
+   * health predicate from `receivedAtMs` — heartbeats keep the predicate
+   * fresh even on a quiet wallet that produces no domain events.
+   *
+   * NOT subject to the cursor-advancement contract — `onFrame` fires
+   * BEFORE any per-event dispatch (so it always observes the frame even
+   * if the typed handler throws), and a throw here is logged via
+   * `onError({phase: 'dispatch'})` but does NOT block other handlers.
+   */
+  onFrame?: (meta: OwnStateFrameMeta) => void;
   /**
    * Non-fatal transport errors. The SDK does NOT throw on a transient
    * drop — it surfaces the error here and continues reconnect/backoff
    * unless the failure is fatal (terminal `OspexStreamError` with
    * `reason: 'fatal'` — e.g. 400 INVALID_CURSOR on a server-changed
    * cursor format).
+   *
+   * v0.5.2+ also surfaces consumer-handler throws here with
+   * `phase: 'dispatch'`. See {@link OwnerStateSubscribeHandlers} doc.
    */
   onError?: (error: import('../errors.js').OspexStreamError) => void;
 }
@@ -355,4 +451,16 @@ export interface OwnStateSubscribeOptions {
    * fails with `AUTH_SIGNATURE_INVALID`).
    */
   address: Hex;
+  /**
+   * Persisted cursor from a prior session (the consumer's last successfully
+   * applied + flushed `OwnStateEventMeta.cursor`). Sent as `Last-Event-ID`
+   * on the FIRST connect attempt; the server replays from there with
+   * server-side overlap. Omit on first-ever connect — the SDK does a cold
+   * snapshot instead.
+   *
+   * If the server rejects the cursor (400 INVALID_CURSOR), the SDK drops
+   * it, emits `onStatus('resync')`, and reconnects cold. Consumers should
+   * clear their persisted cursor on `onStatus('resync')` to mirror.
+   */
+  initialCursor?: string;
 }

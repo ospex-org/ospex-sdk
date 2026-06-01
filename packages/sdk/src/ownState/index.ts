@@ -156,15 +156,16 @@ export class OwnState {
     handlers: OwnerStateSubscribeHandlers,
   ): Subscription {
     const { matchingModule } = this.ctx.getAddresses();
-    return subscribeToOwnState(
-      {
-        api: this.ctx.api,
-        signer: this.ctx.requireSigner(),
-        address: options.address,
-        chainId: this.ctx.getChainId(),
-        matchingModule,
-      },
-      handlers,
-    );
+    const args: Parameters<typeof subscribeToOwnState>[0] = {
+      api: this.ctx.api,
+      signer: this.ctx.requireSigner(),
+      address: options.address,
+      chainId: this.ctx.getChainId(),
+      matchingModule,
+    };
+    if (options.initialCursor !== undefined) {
+      args.initialCursor = options.initialCursor;
+    }
+    return subscribeToOwnState(args, handlers);
   }
 }
