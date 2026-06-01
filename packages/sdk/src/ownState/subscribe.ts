@@ -73,6 +73,7 @@ import type {
   OwnerStateSnapshotBody,
 } from '../api/types.js';
 import type {
+  OwnStateEventMeta,
   OwnerStateSubscribeHandlers,
   OwnerStateSubscribeStatus,
   PositionStatusEvent,
@@ -81,6 +82,7 @@ import type { Subscription } from '../types/odds.js';
 import type { ChainId } from '../types/protocol.js';
 import type { Fill } from '../types/fill.js';
 import type { Hex, Signer } from '../types/signer.js';
+import type { OspexStreamErrorPhase } from '../errors.js';
 
 /** Refresh the stream-auth token this many seconds before its `expiresAt`. */
 const REFRESH_LEAD_SEC = 120;
@@ -109,6 +111,13 @@ export interface SubscribeArgs {
   address: Hex;
   chainId: ChainId;
   matchingModule: Hex;
+  /**
+   * Persisted cursor from a prior session — sent as `Last-Event-ID` on the
+   * FIRST connect attempt. Lets a consumer (e.g. the market-maker) resume
+   * server-side replay after a process restart without losing events.
+   * Omit on first-ever connect.
+   */
+  initialCursor?: string;
 }
 
 export type ConnectOutcome = 'ended' | 'resync' | 'fatal';
@@ -118,10 +127,25 @@ export function subscribeToOwnState(
   handlers: OwnerStateSubscribeHandlers,
 ): Subscription {
   let closed = false;
-  /** Opaque cursor — set when a `id:` lands on a delivered event. */
-  let cursor: string | undefined;
+  /**
+   * Opaque cursor — advances AFTER successful handler dispatch on each
+   * event delivery (v0.5.2 dispatch model: decode → meta → invoke →
+   * advance-only-after-success). Seeded with the consumer-provided
+   * `initialCursor` so the first connect carries the persisted resume
+   * position as `Last-Event-ID`.
+   */
+  let cursor: string | undefined = args.initialCursor;
   let attempt = 0;
   let lastStatus: OwnerStateSubscribeStatus | undefined;
+  /**
+   * Set after the first successful `event: ready` of the lifetime of this
+   * subscription. Used to disambiguate `phase: 'token-mint'` (initial mint
+   * before any successful baseline) from `phase: 'token-refresh'` (re-mint
+   * during an active subscription) for consumer health gates that latch
+   * differently on each — per own-state SSE plan §2.6 + Hermes Phase 3
+   * v2-feedback amendment 3.
+   */
+  let hasEverConnected = false;
   /** Cached bearer; refreshed proactively or after 401. */
   let cachedToken: { token: string; expiresAt: number } | undefined;
   /**
@@ -146,8 +170,9 @@ export function subscribeToOwnState(
   const emitError = (
     reason: import('../errors.js').OspexStreamReason,
     message: string,
-    status?: number,
-    cause?: unknown,
+    status: number | undefined,
+    cause: unknown,
+    phase: OspexStreamErrorPhase | undefined,
   ): void => {
     if (closed) return;
     try {
@@ -156,10 +181,64 @@ export function subscribeToOwnState(
           reason,
           ...(status !== undefined ? { status } : {}),
           ...(cause !== undefined ? { cause } : {}),
+          ...(phase !== undefined ? { phase } : {}),
         }),
       );
     } catch {
       /* ignore */
+    }
+  };
+
+  /**
+   * Dispatch a typed handler with cursor-advance-on-success semantics
+   * (v0.5.2 dispatch model). Returns `true` if the handler succeeded (or
+   * was absent — same effect), `false` if it threw. Callers gate the
+   * cursor-advance on the return value so a thrown handler leaves the
+   * running cursor at the prior position; on next reconnect the server
+   * replays from there via Last-Event-ID overlap.
+   */
+  const dispatchTyped = <T>(
+    handler: ((body: T, meta: OwnStateEventMeta) => void) | undefined,
+    body: T,
+    meta: OwnStateEventMeta,
+    kindLabel: string,
+  ): boolean => {
+    if (handler === undefined) return true;
+    try {
+      handler(body, meta);
+      return true;
+    } catch (err) {
+      emitError(
+        'connection_failed',
+        `own-state ${kindLabel} handler threw; cursor not advanced.`,
+        undefined,
+        err,
+        'dispatch',
+      );
+      return false;
+    }
+  };
+
+  /**
+   * Fire `onFrame` for every parsed frame including SSE heartbeats. Caller
+   * passes `kind` so a quiet wallet's heartbeats still drive the
+   * `transportFresh` health predicate consumers like the market-maker
+   * derive from `receivedAtMs`. A throw inside the consumer's `onFrame`
+   * is surfaced via `onError({phase: 'dispatch'})` but does NOT block the
+   * downstream typed-event dispatch.
+   */
+  const fireFrame = (kind: 'event' | 'heartbeat'): void => {
+    if (handlers.onFrame === undefined) return;
+    try {
+      handlers.onFrame({ receivedAtMs: Date.now(), kind });
+    } catch (err) {
+      emitError(
+        'connection_failed',
+        'own-state onFrame handler threw.',
+        undefined,
+        err,
+        'dispatch',
+      );
     }
   };
 
@@ -212,11 +291,16 @@ export function subscribeToOwnState(
         token = await getValidToken();
       } catch (err) {
         if (closed) return null;
+        // Mid-paging token mint failure — classify as token-mint per
+        // [[feedback_failure_envelope_mirror_success]]: the consumer's
+        // health gate latches on `phase: 'token-mint'` whether the failure
+        // happened on initial connect or mid-paging.
         emitError(
           'connection_failed',
           'own-state REST paging: token mint failed.',
           undefined,
           err,
+          'token-mint',
         );
         return null;
       }
@@ -232,7 +316,13 @@ export function subscribeToOwnState(
           cachedToken = undefined;
           // Don't retry indefinitely; surface this loop as failed so the
           // outer reconnect can decide.
-          emitError('connection_failed', 'own-state REST paging auth failed.', 401, err);
+          emitError(
+            'connection_failed',
+            'own-state REST paging auth failed.',
+            401,
+            err,
+            'snapshot-page',
+          );
           return null;
         }
         emitError(
@@ -240,6 +330,7 @@ export function subscribeToOwnState(
           'own-state REST paging failed.',
           err instanceof OspexAPIError ? err.status : undefined,
           err,
+          'snapshot-page',
         );
         return null;
       }
@@ -258,14 +349,22 @@ export function subscribeToOwnState(
           'own-state REST paging: failed to decode snapshot body.',
           undefined,
           err,
+          'decode',
         );
         return null;
       }
-      try {
-        handlers.onSnapshot?.(decoded);
-      } catch {
-        /* ignore */
-      }
+      // REST snapshot pages have no SSE-level cursor — pass empty string
+      // so consumers know not to use this meta.cursor as a Last-Event-ID
+      // resume point. The SSE-level resume cursor is the running `cursor`
+      // (last advanced AT a delivered SSE event/ready), not this REST page
+      // boundary.
+      //
+      // v0.5.2 dispatch model: cursor-advance-on-success doesn't apply to
+      // REST pages (no SSE cursor to advance), but a thrown consumer
+      // handler still surfaces via onError({phase: 'dispatch'}) so the
+      // consumer can latch a dispatch-failure health predicate.
+      const restMeta: OwnStateEventMeta = { cursor: '' };
+      dispatchTyped(handlers.onSnapshot, decoded, restMeta, 'REST snapshot');
       if (closed) return null;
       if (!decoded.truncated) return decoded.cursor;
       pageCursor = decoded.cursor;
@@ -294,14 +393,35 @@ export function subscribeToOwnState(
     };
 
     try {
-      const token = await getValidToken();
+      // Wrap the token resolution so we can classify a throw with the
+      // right phase (mint vs refresh). Pre-first-ready throws are
+      // 'token-mint'; post-ready throws are 'token-refresh' so the
+      // consumer's health gate latches `tokenRefreshFailureInFlight`
+      // only on the latter (per spec §2.6).
+      let token: string | null;
+      try {
+        token = await getValidToken();
+      } catch (err) {
+        cleanupAbortListener();
+        if (closed) return 'ended';
+        if (lastStatus !== 'degraded') {
+          emitError(
+            'connection_failed',
+            'own-state stream: token resolution failed.',
+            undefined,
+            err,
+            hasEverConnected ? 'token-refresh' : 'token-mint',
+          );
+        }
+        return 'ended';
+      }
       if (closed) {
         cleanupAbortListener();
         return 'ended';
       }
       if (token === null) {
-        // mintStreamToken threw — should already be caught below; this
-        // branch is defensive for the closed-during-mint case.
+        // getValidToken returned null because `closed` was set during
+        // the await — the connection is shutting down. Defensive.
         cleanupAbortListener();
         return 'ended';
       }
@@ -350,7 +470,25 @@ export function subscribeToOwnState(
         )) {
           if (closed) break;
           armIdle();
-          if (frame.kind === 'comment') continue;
+          // `onFrame` fires for EVERY parsed frame including heartbeat
+          // comments — the consumer's `transportFresh` health predicate
+          // needs to stay fresh on a quiet wallet that produces no domain
+          // events. Per-frame surfacing landed in v0.5.2.
+          if (frame.kind === 'comment') {
+            fireFrame('heartbeat');
+            continue;
+          }
+          fireFrame('event');
+
+          // v0.5.2 dispatch model — decode → meta → invoke → advance only
+          // after successful handler return. A thrown handler does NOT
+          // advance the running cursor; on next reconnect the server
+          // replays from the prior cursor via Last-Event-ID overlap.
+          // Pre-v0.5.2 advanced cursor BEFORE the handler and swallowed
+          // throws — that combination silently dropped an event from the
+          // SDK's restart-safety guarantee.
+          const candidateCursor = frame.id;
+          const meta: OwnStateEventMeta = { cursor: candidateCursor ?? cursor ?? '' };
 
           switch (frame.event) {
             case 'snapshot': {
@@ -359,16 +497,16 @@ export function subscribeToOwnState(
                 emitError(
                   'connection_failed',
                   'own-state stream: failed to decode snapshot frame.',
+                  undefined,
+                  undefined,
+                  'decode',
                 );
                 break;
               }
               const decoded = decodeSnapshot(wire);
               if (closed) break;
-              try {
-                handlers.onSnapshot?.(decoded);
-              } catch {
-                /* ignore */
-              }
+              const ok = dispatchTyped(handlers.onSnapshot, decoded, meta, 'snapshot');
+              if (!ok) break; // handler threw — leave cursor at prior position
               if (decoded.truncated) {
                 // CRITICAL: do NOT advance the running cursor on a
                 // truncated snapshot frame. The frame's `id:` is a
@@ -380,12 +518,12 @@ export function subscribeToOwnState(
                 // would let `ready` fire with omitted commitments /
                 // positions the consumer never saw, breaking the
                 // contract in `OwnerStateSubscribeHandlers.onReady`.
-                // The REST paging path below promotes `cursor` to the
+                // The REST paging path above promotes `cursor` to the
                 // final k='live' value only AFTER `truncated:false`
                 // arrives.
                 pendingPagingCursor = decoded.cursor;
               } else {
-                if (frame.id !== undefined) cursor = frame.id;
+                if (candidateCursor !== undefined) cursor = candidateCursor;
               }
               // Note: positionsTruncated may be true. Server will emit
               // `event: degraded` next; we let that drive the status
@@ -395,12 +533,23 @@ export function subscribeToOwnState(
             case 'ready': {
               if (closed) break;
               attempt = 0;
-              try {
-                handlers.onReady?.();
-              } catch {
-                /* ignore */
-              }
+              hasEverConnected = true;
+              // onReady runs through the same dispatch helper for
+              // throw-discipline parity, even though there's no body to
+              // decode. A throw here surfaces via onError({phase:
+              // 'dispatch'}); the cursor advance is gated on success so a
+              // consumer that performs the baseline-swap inside onReady
+              // (per MM PR1 §4.3) gets the advance ↔ swap atomicity.
+              const okReady = dispatchTyped<undefined>(
+                handlers.onReady === undefined
+                  ? undefined
+                  : (_body, m) => handlers.onReady!(m),
+                undefined,
+                meta,
+                'ready',
+              );
               emitStatus('connected');
+              if (okReady && candidateCursor !== undefined) cursor = candidateCursor;
               break;
             }
             case 'commitment': {
@@ -409,17 +558,16 @@ export function subscribeToOwnState(
                 emitError(
                   'connection_failed',
                   'own-state stream: failed to decode commitment frame.',
+                  undefined,
+                  undefined,
+                  'decode',
                 );
                 break;
               }
               if (closed) break;
               const decoded = toOwnerCommitment(wire);
-              if (frame.id !== undefined) cursor = frame.id;
-              try {
-                handlers.onCommitment?.(decoded);
-              } catch {
-                /* ignore */
-              }
+              const ok = dispatchTyped(handlers.onCommitment, decoded, meta, 'commitment');
+              if (ok && candidateCursor !== undefined) cursor = candidateCursor;
               break;
             }
             case 'fill': {
@@ -428,6 +576,9 @@ export function subscribeToOwnState(
                 emitError(
                   'connection_failed',
                   'own-state stream: failed to decode fill frame.',
+                  undefined,
+                  undefined,
+                  'decode',
                 );
                 break;
               }
@@ -441,15 +592,12 @@ export function subscribeToOwnState(
                   'own-state stream: failed to decode fill body.',
                   undefined,
                   err,
+                  'decode',
                 );
                 break;
               }
-              if (frame.id !== undefined) cursor = frame.id;
-              try {
-                handlers.onFill?.(decoded);
-              } catch {
-                /* ignore */
-              }
+              const ok = dispatchTyped(handlers.onFill, decoded, meta, 'fill');
+              if (ok && candidateCursor !== undefined) cursor = candidateCursor;
               break;
             }
             case 'positionStatus': {
@@ -458,6 +606,9 @@ export function subscribeToOwnState(
                 emitError(
                   'connection_failed',
                   'own-state stream: failed to decode positionStatus frame.',
+                  undefined,
+                  undefined,
+                  'decode',
                 );
                 break;
               }
@@ -465,12 +616,13 @@ export function subscribeToOwnState(
               // The wire body shape matches PositionStatusEvent 1:1
               // (core-api `positionStatus.ts:derivePositionStatus` emits
               // exactly this projection). No transformation needed.
-              if (frame.id !== undefined) cursor = frame.id;
-              try {
-                handlers.onPositionStatus?.(wire as PositionStatusEvent);
-              } catch {
-                /* ignore */
-              }
+              const ok = dispatchTyped(
+                handlers.onPositionStatus,
+                wire as PositionStatusEvent,
+                meta,
+                'positionStatus',
+              );
+              if (ok && candidateCursor !== undefined) cursor = candidateCursor;
               break;
             }
             case 'resync': {
@@ -500,6 +652,7 @@ export function subscribeToOwnState(
             'own-state stream dropped.',
             undefined,
             err,
+            'connect',
           );
         }
       } finally {
@@ -520,6 +673,9 @@ export function subscribeToOwnState(
       const status = err.status;
       if (status === 401) {
         // Bearer rejected. Drop the cached token so the next attempt re-mints.
+        // Phase = token-refresh: we had a cached token + had already minted
+        // at least once; this is a refresh path failure (the consumer's
+        // health gate latches `tokenRefreshFailureInFlight` on it).
         cachedToken = undefined;
         if (lastStatus !== 'degraded') {
           emitError(
@@ -527,6 +683,7 @@ export function subscribeToOwnState(
             'own-state stream auth failed (token rejected).',
             401,
             err,
+            'token-refresh',
           );
         }
         return 'ended';
@@ -537,6 +694,7 @@ export function subscribeToOwnState(
           'own-state stream capacity reached.',
           status,
           err,
+          'connect',
         );
         return 'ended';
       }
@@ -553,6 +711,7 @@ export function subscribeToOwnState(
           'own-state stream not available (404). Verify core-api version.',
           status,
           err,
+          'connect',
         );
         closed = true;
         return 'fatal';
@@ -567,6 +726,7 @@ export function subscribeToOwnState(
             'own-state stream not ready (503).',
             status,
             err,
+            'connect',
           );
         }
         return 'ended';
@@ -577,12 +737,19 @@ export function subscribeToOwnState(
           `own-state stream connect failed (${status ?? 'unknown'}).`,
           status,
           err,
+          'connect',
         );
       }
       return 'ended';
     }
     if (lastStatus !== 'degraded') {
-      emitError('connection_failed', 'own-state stream connect failed.', undefined, err);
+      emitError(
+        'connection_failed',
+        'own-state stream connect failed.',
+        undefined,
+        err,
+        'connect',
+      );
     }
     return 'ended';
   };
@@ -616,6 +783,7 @@ export function subscribeToOwnState(
                 'own-state truncated-snapshot paging exceeded its page bound; subscription stopping.',
                 undefined,
                 err,
+                'snapshot-page',
               );
               closed = true;
               break;
@@ -629,6 +797,7 @@ export function subscribeToOwnState(
               'own-state REST paging crashed unexpectedly.',
               undefined,
               err,
+              'snapshot-page',
             );
             resumeCursor = null;
           }
@@ -679,6 +848,7 @@ export function subscribeToOwnState(
           'own-state subscribe loop crashed unexpectedly; stopping.',
           undefined,
           err,
+          'connect',
         );
         closed = true;
       }

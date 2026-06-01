@@ -946,3 +946,327 @@ describe('subscribeToOwnState — lifecycle invariant', () => {
     await new Promise((r) => setTimeout(r, 100));
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// v0.5.2 PR0a — cursor surface + dispatch model + onFrame + error.phase
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('subscribeToOwnState — v0.5.2 cursor surface (PR0a)', () => {
+  it('passes initialCursor as Last-Event-ID on the FIRST SSE connect', async () => {
+    const bag = newBag();
+    const server = makeServer({
+      sseAttempts: [
+        {
+          frames: [
+            { event: 'ready', id: 'CUR-READY-1', data: {} },
+          ],
+        },
+      ],
+    });
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+        initialCursor: 'CUR-RESUME-FROM-PRIOR-SESSION',
+      },
+      captureHandlers(bag),
+    );
+    await waitFor(() => bag.ready > 0);
+    await sub.unsubscribe();
+
+    const sseCall = server.calls.find((c) => c.url.includes('/v1/stream/own-state'))!;
+    expect(sseCall.headers.get('Last-Event-ID')).toBe('CUR-RESUME-FROM-PRIOR-SESSION');
+  });
+
+  it('delivers OwnStateEventMeta.cursor on every event/snapshot/ready handler', async () => {
+    interface MetaCapture {
+      kind: string;
+      cursor: string;
+    }
+    const captured: MetaCapture[] = [];
+    const server = makeServer({
+      sseAttempts: [
+        {
+          frames: [
+            {
+              event: 'snapshot',
+              id: 'CUR-SNAP',
+              data: snapshotBody({
+                cursor: 'LIVE',
+                commitments: [commitmentBody(HASH_A)],
+              }),
+            },
+            { event: 'ready', id: 'CUR-READY', data: {} },
+            {
+              event: 'commitment',
+              id: 'CUR-COMM',
+              data: commitmentBody(HASH_A, { nonce: '2' }),
+            },
+          ],
+        },
+      ],
+    });
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onSnapshot: (_s, meta) => captured.push({ kind: 'snapshot', cursor: meta.cursor }),
+        onReady: (meta) => captured.push({ kind: 'ready', cursor: meta.cursor }),
+        onCommitment: (_c, meta) => captured.push({ kind: 'commitment', cursor: meta.cursor }),
+      },
+    );
+
+    await waitFor(() => captured.length >= 3);
+    await sub.unsubscribe();
+
+    expect(captured).toEqual([
+      { kind: 'snapshot', cursor: 'CUR-SNAP' },
+      { kind: 'ready', cursor: 'CUR-READY' },
+      { kind: 'commitment', cursor: 'CUR-COMM' },
+    ]);
+  });
+
+  it('onFrame fires for every parsed frame including heartbeats', async () => {
+    const frames: Array<{ kind: 'event' | 'heartbeat' }> = [];
+    // Custom SSE body: multiple heartbeats interleaved with events.
+    const sseBody =
+      ': hb\n\n' +
+      'event: snapshot\nid: CUR-SNAP\ndata: ' +
+      JSON.stringify(snapshotBody()) +
+      '\n\n' +
+      ': hb\n\n' +
+      'event: ready\nid: CUR-READY\ndata: {}\n\n' +
+      ': hb\n\n';
+    const server = makeServer({
+      sseAttempts: [{ body: sseBody }],
+    });
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    let readyHit = false;
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onReady: () => {
+          readyHit = true;
+        },
+        onFrame: (meta) => frames.push({ kind: meta.kind }),
+      },
+    );
+    await waitFor(() => readyHit);
+    await sub.unsubscribe();
+
+    // 3 heartbeats + 1 snapshot + 1 ready = 5 frames.
+    expect(frames).toHaveLength(5);
+    expect(frames.filter((f) => f.kind === 'heartbeat')).toHaveLength(3);
+    expect(frames.filter((f) => f.kind === 'event')).toHaveLength(2);
+  });
+});
+
+describe('subscribeToOwnState — v0.5.2 dispatch model (PR0a)', () => {
+  it('does NOT advance internal cursor when onCommitment throws', async () => {
+    // Two SSE attempts: first delivers a snapshot + ready + a commitment
+    // whose handler throws. We then trigger a reconnect by ending the
+    // first attempt and asserting the second connect's Last-Event-ID
+    // header reflects the PRE-throw cursor (the ready cursor), not the
+    // post-throw commitment cursor.
+    const server = makeServer({
+      sseAttempts: [
+        {
+          frames: [
+            { event: 'snapshot', id: 'CUR-SNAP', data: snapshotBody() },
+            { event: 'ready', id: 'CUR-READY', data: {} },
+            {
+              event: 'commitment',
+              id: 'CUR-COMM-THROWING',
+              data: commitmentBody(HASH_A),
+            },
+          ],
+        },
+        {
+          frames: [{ event: 'ready', id: 'CUR-READY-2', data: {} }],
+        },
+      ],
+    });
+    const errors: OspexStreamError[] = [];
+    let commitmentHits = 0;
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onSnapshot: () => undefined,
+        onReady: () => undefined,
+        onCommitment: () => {
+          commitmentHits += 1;
+          throw new Error('handler bug — simulated');
+        },
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    // Wait for the throw to surface via onError AND the reconnect to land.
+    await waitFor(() => errors.some((e) => e.phase === 'dispatch'));
+    // Wait for the second SSE attempt's headers to be captured.
+    await waitFor(
+      () => server.calls.filter((c) => c.url.includes('/v1/stream/own-state')).length >= 2,
+    );
+    await sub.unsubscribe();
+
+    // The handler DID get called (we don't suppress dispatch on throw —
+    // just don't advance the cursor).
+    expect(commitmentHits).toBe(1);
+    // The throw is surfaced via onError with phase: 'dispatch'.
+    const dispatchErr = errors.find((e) => e.phase === 'dispatch')!;
+    expect(dispatchErr.reason).toBe('connection_failed');
+    expect(dispatchErr.phase).toBe('dispatch');
+
+    // The SECOND SSE attempt's Last-Event-ID is the LAST SUCCESSFULLY
+    // applied cursor — `CUR-READY`, not `CUR-COMM-THROWING`. This is the
+    // load-bearing invariant of the v0.5.2 dispatch model.
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls.length).toBeGreaterThanOrEqual(2);
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBe('CUR-READY');
+  });
+
+  it('does NOT advance cursor on a truncated snapshot frame', async () => {
+    // Truncated snapshot → REST paging → final non-truncated page →
+    // SSE reconnect. The reconnect's Last-Event-ID must be the FINAL
+    // REST page's `cursor` (k='live'), not the truncated SSE frame's id.
+    const server = makeServer({
+      sseAttempts: [
+        {
+          frames: [
+            {
+              event: 'snapshot',
+              id: 'k=page-INTERIM', // truncated page SSE id — MUST NOT be Last-Event-ID
+              data: snapshotBody({ cursor: 'PAGE-1-REST', truncated: true }),
+            },
+          ],
+        },
+        {
+          frames: [{ event: 'ready', id: 'CUR-READY-FINAL', data: {} }],
+        },
+      ],
+      restSnapshotPages: [
+        {
+          body: snapshotBody({ cursor: 'CUR-LIVE-FROM-REST', truncated: false }),
+        },
+      ],
+    });
+    const bag = newBag();
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      captureHandlers(bag),
+    );
+    await waitFor(() => bag.ready > 0);
+    await sub.unsubscribe();
+
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls.length).toBeGreaterThanOrEqual(2);
+    // The truncated page's id (k=page-*) must NOT have leaked into
+    // Last-Event-ID. The final cursor from REST paging is what gets used.
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBe('CUR-LIVE-FROM-REST');
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).not.toBe('k=page-INTERIM');
+  });
+});
+
+describe('subscribeToOwnState — v0.5.2 error.phase (PR0a)', () => {
+  it('classifies a 401 mid-stream as phase: token-refresh', async () => {
+    // First SSE attempt connects fine, gets a ready, then 401s. Second
+    // attempt is a 401 too (cached token rejected at connect-time).
+    const server = makeServer({
+      sseAttempts: [
+        {
+          frames: [
+            { event: 'snapshot', id: 'CUR-SNAP', data: snapshotBody() },
+            { event: 'ready', id: 'CUR-READY', data: {} },
+          ],
+        },
+        // 401 on the next connect — bearer rejected.
+        { status: 401 },
+      ],
+    });
+    const errors: OspexStreamError[] = [];
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onReady: () => undefined,
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    await waitFor(() => errors.some((e) => e.status === 401));
+    await sub.unsubscribe();
+
+    const authErr = errors.find((e) => e.status === 401)!;
+    expect(authErr.phase).toBe('token-refresh');
+  });
+
+  it('classifies a decode failure as phase: decode', async () => {
+    // Hand-craft an SSE body with malformed snapshot JSON. Decode failure
+    // surfaces via onError({phase: 'decode'}) without crashing the
+    // subscription — the for-await loop continues.
+    const sseBody =
+      ': hb\n\n' +
+      'event: snapshot\nid: CUR-SNAP\ndata: not-valid-json{\n\n';
+    const server = makeServer({ sseAttempts: [{ body: sseBody }] });
+    const errors: OspexStreamError[] = [];
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    await waitFor(() => errors.some((e) => e.phase === 'decode'));
+    await sub.unsubscribe();
+
+    const decodeErr = errors.find((e) => e.phase === 'decode')!;
+    expect(decodeErr.reason).toBe('connection_failed');
+  });
+});
