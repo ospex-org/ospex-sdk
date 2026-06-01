@@ -106,6 +106,13 @@ function commitment(hash: Hex, overrides: Partial<OwnerCommitmentBody> = {}): Ow
     nonceInvalidated: false,
     bookVisible: true,
     createdAt: new Date().toISOString(),
+    // PR0b enrichment
+    speculationId: '1',
+    sport: 'americanfootball_nfl',
+    awayTeam: 'Away',
+    homeTeam: 'Home',
+    updatedAtUnixSec: 1735700000,
+    signedPayload: null,
     ...overrides,
   };
 }

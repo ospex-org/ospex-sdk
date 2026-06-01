@@ -30,6 +30,7 @@ export type {
   OwnStateSubscribeOptions,
   OwnStateEventMeta,
   OwnStateFrameMeta,
+  OwnStateHealth,
 } from './ownState.js';
 export type {
   Position,

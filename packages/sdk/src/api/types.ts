@@ -111,6 +111,35 @@ export interface OwnerCommitmentBody {
   /** May be `true` (still on the public book) or `false` (off-chain hidden). */
   bookVisible?: boolean;
   createdAt: string;
+  // ── PR0b owner-state enrichment (§3.1) ──────────────────────────────────
+  speculationId: string | null;
+  sport: string;
+  awayTeam: string;
+  homeTeam: string;
+  updatedAtUnixSec: number;
+  signedPayload: SignedCommitmentPayloadBody | null;
+}
+
+/**
+ * Wire shape of the canonical signed payload carried on owner commitments
+ * (PR0b §3.1). bigint EIP-712 struct fields (`contestId` / `riskAmount` /
+ * `nonce` / `expiry`) are decimal strings on the wire; `toOwnerCommitment`
+ * coerces them to bigint to produce the SDK's `SignedCommitmentPayload`.
+ */
+export interface SignedCommitmentPayloadBody {
+  commitmentHash: string;
+  commitment: {
+    maker: string;
+    contestId: string;
+    scorer: string;
+    lineTicks: number;
+    positionType: 0 | 1;
+    oddsTick: number;
+    riskAmount: string;
+    nonce: string;
+    expiry: string;
+  };
+  signature: string;
 }
 
 /** Wire body for an owner-auth position row. Discriminated by `status`. */
@@ -124,6 +153,14 @@ interface OwnerPositionBaseBody {
   oddsDecimal: number | null;
   riskAmountUSDC: number;
   profitAmountUSDC: number;
+  // ── PR0b owner-state enrichment (§3.2) ──────────────────────────────────
+  contestId: string;
+  sport: string;
+  awayTeam: string;
+  homeTeam: string;
+  riskAmountWei6: string;
+  counterpartyRiskWei6: string;
+  updatedAtUnixSec: number;
 }
 
 export type OwnerPositionBody =
@@ -153,6 +190,13 @@ export interface OwnerStateSnapshotBody {
   positions: OwnerPositionBody[];
   truncated: boolean;
   positionsTruncated: boolean;
+}
+
+/** Wire body for `GET /v1/health/own-state` (PR0b §3.3 — indexer-lag probe). */
+export interface OwnStateHealthBody {
+  indexerLagSeconds: number;
+  lastIndexedAt: string;
+  lagSource: string;
 }
 
 export interface AuthDomainBody {

@@ -111,6 +111,13 @@ function visibleCommitmentBody(
     nonceInvalidated: false,
     bookVisible: true,
     createdAt: new Date().toISOString(),
+    // PR0b enrichment
+    speculationId: '7',
+    sport: 'americanfootball_nfl',
+    awayTeam: 'Away',
+    homeTeam: 'Home',
+    updatedAtUnixSec: 1735700000,
+    signedPayload: null,
     ...overrides,
   };
 }
@@ -264,7 +271,89 @@ describe('decodeSnapshot — wire → public', () => {
     expect(out.commitments[0]!.storedStatus).toBe('open');
   });
 
+  it('passes through the commitment enrichment fields (sport / teams / speculationId / updatedAtUnixSec)', () => {
+    const body = snapshotResponse({ commitments: [visibleCommitmentBody()] });
+    const c = decodeSnapshot(body).commitments[0]!;
+    expect(c.speculationId).toBe('7');
+    expect(c.sport).toBe('americanfootball_nfl');
+    expect(c.awayTeam).toBe('Away');
+    expect(c.homeTeam).toBe('Home');
+    expect(c.updatedAtUnixSec).toBe(1735700000);
+  });
+
+  it('decodes signedPayload, coercing the wire decimal-string struct to a bigint SignedCommitmentPayload', () => {
+    const wireSigned = {
+      commitmentHash: '0x' + 'cd'.repeat(32),
+      commitment: {
+        maker: TEST_ADDRESS,
+        contestId: '42',
+        scorer: '0x2222222222222222222222222222222222222222',
+        lineTicks: 0,
+        positionType: 0 as const,
+        oddsTick: 200,
+        riskAmount: '10000000',
+        nonce: '7',
+        expiry: '1799999999',
+      },
+      signature: '0x' + 'bb'.repeat(65),
+    };
+    const body = snapshotResponse({
+      commitments: [visibleCommitmentBody({ signedPayload: wireSigned })],
+    });
+    const sp = decodeSnapshot(body).commitments[0]!.signedPayload!;
+    expect(sp).not.toBeNull();
+    expect(sp.commitmentHash).toBe(wireSigned.commitmentHash);
+    expect(sp.signature).toBe(wireSigned.signature);
+    // bigint coercion of the uint256 struct fields; numbers stay numbers.
+    expect(sp.commitment.contestId).toBe(42n);
+    expect(sp.commitment.riskAmount).toBe(10_000_000n);
+    expect(sp.commitment.nonce).toBe(7n);
+    expect(sp.commitment.expiry).toBe(1_799_999_999n);
+    expect(sp.commitment.lineTicks).toBe(0);
+    expect(sp.commitment.positionType).toBe(0);
+    expect(sp.commitment.maker).toBe(TEST_ADDRESS);
+  });
+
+  it('leaves signedPayload null when the wire body carries null (indexer-discovered row)', () => {
+    const body = snapshotResponse({
+      commitments: [visibleCommitmentBody({ signedPayload: null })],
+    });
+    expect(decodeSnapshot(body).commitments[0]!.signedPayload).toBeNull();
+  });
+
+  it('rejects a signedPayload whose uint256 struct field is not a decimal string', () => {
+    const badSigned = {
+      commitmentHash: '0x' + 'cd'.repeat(32),
+      commitment: {
+        maker: TEST_ADDRESS,
+        contestId: 'not-a-number',
+        scorer: '0x2222222222222222222222222222222222222222',
+        lineTicks: 0,
+        positionType: 0 as const,
+        oddsTick: 200,
+        riskAmount: '10000000',
+        nonce: '7',
+        expiry: '1799999999',
+      },
+      signature: '0x' + 'bb'.repeat(65),
+    };
+    const body = snapshotResponse({
+      commitments: [visibleCommitmentBody({ signedPayload: badSigned })],
+    });
+    expect(() => decodeSnapshot(body)).toThrow(OspexValidationError);
+  });
+
   it('decodes each OwnerPosition status branch with full discriminant fields', () => {
+    // PR0b enrichment fields shared across the discriminants.
+    const enr = {
+      contestId: '42',
+      sport: 'americanfootball_nfl',
+      awayTeam: 'Away',
+      homeTeam: 'Home',
+      riskAmountWei6: '1000000',
+      counterpartyRiskWei6: '1000000',
+      updatedAtUnixSec: 1735700000,
+    };
     const positions: OwnerPositionBody[] = [
       {
         status: 'active',
@@ -277,6 +366,7 @@ describe('decodeSnapshot — wire → public', () => {
         oddsDecimal: 2,
         riskAmountUSDC: 10,
         profitAmountUSDC: 10,
+        ...enr,
       },
       {
         status: 'pendingSettle',
@@ -293,6 +383,7 @@ describe('decodeSnapshot — wire → public', () => {
         predictedWinSide: 'home',
         estimatedPayoutUSDC: 9.55,
         estimatedPayoutWei6: '9550000',
+        ...enr,
       },
       {
         status: 'claimable',
@@ -308,6 +399,7 @@ describe('decodeSnapshot — wire → public', () => {
         result: 'push',
         estimatedPayoutUSDC: 1,
         estimatedPayoutWei6: '1000000',
+        ...enr,
       },
       {
         status: 'claimed',
@@ -321,6 +413,7 @@ describe('decodeSnapshot — wire → public', () => {
         riskAmountUSDC: 1,
         profitAmountUSDC: 1,
         claimedAt: '2025-01-01T00:00:00Z',
+        ...enr,
       },
     ];
     const body = snapshotResponse({ positions });
@@ -337,6 +430,16 @@ describe('decodeSnapshot — wire → public', () => {
     expect(out.positions.find((p) => p.status === 'claimed')?.claimedAt).toBe(
       '2025-01-01T00:00:00Z',
     );
+    // PR0b enrichment passes through on every position discriminant.
+    for (const p of out.positions) {
+      expect(p.contestId).toBe('42');
+      expect(p.sport).toBe('americanfootball_nfl');
+      expect(p.awayTeam).toBe('Away');
+      expect(p.homeTeam).toBe('Home');
+      expect(p.riskAmountWei6).toBe('1000000');
+      expect(p.counterpartyRiskWei6).toBe('1000000');
+      expect(p.updatedAtUnixSec).toBe(1735700000);
+    }
   });
 });
 

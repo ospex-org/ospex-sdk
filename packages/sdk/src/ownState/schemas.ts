@@ -57,6 +57,33 @@ const POSITION_LIFECYCLE = z.enum([
 ]);
 const POSITION_RESULT = z.enum(['won', 'push', 'void']);
 const PREDICTED_WIN_SIDE = z.enum(['away', 'home', 'over', 'under', 'push']);
+/** A uint256 on the wire — a non-empty decimal string. `.regex` guarantees a
+ *  later `BigInt(...)` coercion can't throw on a non-numeric value. */
+const UINT256_STRING = z.string().regex(/^\d+$/, 'must be a decimal uint256 string');
+
+/**
+ * Wire shape of the canonical signed payload carried on owner commitments
+ * (PR0b §3.1 / A6). The EIP-712 struct's bigint fields arrive as decimal
+ * strings (JSON has no bigint); the decoder coerces them to bigint to produce
+ * the SDK's {@link SignedCommitmentPayload}. Structural-only here — the
+ * hash↔struct round-trip is asserted by `cancelOnchainSigned` at cancel time,
+ * not at decode time.
+ */
+export const SignedCommitmentPayloadWireSchema = z.object({
+  commitmentHash: z.string().min(1),
+  commitment: z.object({
+    maker: z.string().min(1),
+    contestId: UINT256_STRING,
+    scorer: z.string().min(1),
+    lineTicks: z.number().int(),
+    positionType: POSITION_TYPE,
+    oddsTick: z.number().int(),
+    riskAmount: UINT256_STRING,
+    nonce: UINT256_STRING,
+    expiry: UINT256_STRING,
+  }),
+  signature: z.string().min(1),
+});
 
 /**
  * One commitment in the owner-auth snapshot / `commitment` SSE frame. The
@@ -88,6 +115,19 @@ export const OwnerCommitmentBodySchema = z.object({
   nonceInvalidated: z.boolean(),
   bookVisible: z.boolean().optional(),
   createdAt: z.string().min(1),
+  // ── PR0b enrichment (§3.1) ──────────────────────────────────────────────
+  // `sport` / `awayTeam` / `homeTeam` are plain `z.string()` (NOT `.min(1)`):
+  // the server emits `''` when the contest context is unavailable (e.g. a
+  // contest row not yet populated), so requiring non-empty would reject a body
+  // the server legitimately produces. `speculationId` is null until the
+  // commitment's speculation exists. `signedPayload` is null on
+  // indexer-discovered (signature-less) rows.
+  speculationId: z.string().nullable(),
+  sport: z.string(),
+  awayTeam: z.string(),
+  homeTeam: z.string(),
+  updatedAtUnixSec: z.number(),
+  signedPayload: SignedCommitmentPayloadWireSchema.nullable(),
 });
 
 const ownerPositionBase = {
@@ -100,6 +140,17 @@ const ownerPositionBase = {
   oddsDecimal: z.number().finite().nullable(),
   riskAmountUSDC: z.number().finite(),
   profitAmountUSDC: z.number().finite(),
+  // ── PR0b enrichment (§3.2) ──────────────────────────────────────────────
+  // `contestId` / `sport` / `awayTeam` / `homeTeam` are plain `z.string()`:
+  // `claimed` rows (terminal, recovery-only) emit `''` for these by design.
+  // The wei6 fields are always non-empty decimal strings (`BigInt(...).toString()`).
+  contestId: z.string(),
+  sport: z.string(),
+  awayTeam: z.string(),
+  homeTeam: z.string(),
+  riskAmountWei6: z.string().min(1),
+  counterpartyRiskWei6: z.string().min(1),
+  updatedAtUnixSec: z.number(),
 };
 
 /**
@@ -162,5 +213,17 @@ export const OwnerStateSnapshotBodySchema = z.object({
   positionsTruncated: z.boolean(),
 });
 
+/**
+ * `GET /v1/health/own-state` body (PR0b §3.3 / A4) — the indexer-lag probe the
+ * stream-health gate polls. `lagSource` is left a free string (not a literal
+ * union) so the SDK tolerates the server adding lag sources without a bump.
+ */
+export const OwnStateHealthSchema = z.object({
+  indexerLagSeconds: z.number(),
+  lastIndexedAt: z.string().min(1),
+  lagSource: z.string().min(1),
+});
+
 export type OwnerCommitmentBodyParsed = z.infer<typeof OwnerCommitmentBodySchema>;
 export type OwnerStateSnapshotBodyParsed = z.infer<typeof OwnerStateSnapshotBodySchema>;
+export type SignedCommitmentPayloadWireParsed = z.infer<typeof SignedCommitmentPayloadWireSchema>;

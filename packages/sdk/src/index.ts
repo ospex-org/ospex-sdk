@@ -99,6 +99,7 @@ export type {
   OwnStateSubscribeOptions,
   OwnStateEventMeta,
   OwnStateFrameMeta,
+  OwnStateHealth,
   // position
   Position,
   PositionTotals,

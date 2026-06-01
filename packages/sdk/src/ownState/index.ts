@@ -26,11 +26,13 @@ import type {
   OwnerCommitment,
   OwnerStateSnapshot,
   OwnerStateSubscribeHandlers,
+  OwnStateHealth,
   OwnStateSubscribeOptions,
 } from '../types/ownState.js';
 import type { Subscription } from '../types/odds.js';
 import { loadOwnStateSnapshot } from './snapshot.js';
 import { getOwnerCommitment } from './getCommitment.js';
+import { loadOwnStateHealth } from './health.js';
 import { subscribeToOwnState } from './subscribe.js';
 
 export interface OwnStateContext {
@@ -151,6 +153,17 @@ export class OwnState {
    * The returned `Subscription.unsubscribe()` is the ONLY way to close
    * — handlers NEVER fire after `await sub.unsubscribe()` returns.
    */
+  /**
+   * Fetch the protocol's current indexer-lag health for the own-state surface
+   * (own-state SSE plan §2.6 + §3.3). PUBLIC — no signer / token, takes no
+   * arguments: lag is a global, wallet-independent signal. Consumers building
+   * a stream-health gate poll this (~10 s) and hold quoting when
+   * `indexerLagSeconds` crosses their threshold.
+   */
+  async health(): Promise<OwnStateHealth> {
+    return loadOwnStateHealth(this.ctx.api);
+  }
+
   subscribe(
     options: OwnStateSubscribeOptions,
     handlers: OwnerStateSubscribeHandlers,
