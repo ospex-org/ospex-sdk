@@ -43,6 +43,7 @@ import type {
   PositionStatusEvent,
 } from '../types/ownState.js';
 import type { CommitmentStatus, StoredCommitmentStatus } from '../types/commitment.js';
+import type { MarketType } from '../types/odds.js';
 import type { ChainId } from '../types/protocol.js';
 import type { Hex, Signer } from '../types/signer.js';
 
@@ -62,6 +63,33 @@ const POSITION_LIFECYCLES: ReadonlySet<PositionLifecycle> = new Set([
   'settledLost',
   'void',
 ]);
+
+/**
+ * Owner snapshot positions are NARROWER than {@link PositionLifecycle}:
+ * the snapshot helper drops zero-payout terminal rows, so `settledLost` /
+ * `void` only appear on `positionStatus` SSE events, never in the
+ * `positions[]` array. Validating against this narrower set rejects a
+ * wire body that mis-labels a terminal-lost position as `'settledLost'`
+ * in the snapshot — which would be a server contract violation.
+ */
+const OWNER_POSITION_STATUSES: ReadonlySet<'active' | 'pendingSettle' | 'claimable' | 'claimed'> =
+  new Set(['active', 'pendingSettle', 'claimable', 'claimed'] as const);
+
+const MARKET_TYPES: ReadonlySet<MarketType> = new Set([
+  'moneyline',
+  'spread',
+  'total',
+] as MarketType[]);
+
+const PENDING_SETTLE_PREDICTED_WIN_SIDES: ReadonlySet<string> = new Set([
+  'away',
+  'home',
+  'over',
+  'under',
+  'push',
+]);
+
+const POSITION_RESULTS: ReadonlySet<string> = new Set(['won', 'push', 'void']);
 
 function requireString(
   obj: Record<string, unknown>,
@@ -94,6 +122,18 @@ function requirePositionType(
 ): 0 | 1 {
   const v = obj[field];
   if (v !== 0 && v !== 1) {
+    throw new OspexValidationError(message, { field });
+  }
+  return v;
+}
+
+function requireNumber(
+  obj: Record<string, unknown>,
+  field: string,
+  message: string,
+): number {
+  const v = obj[field];
+  if (typeof v !== 'number' || !Number.isFinite(v)) {
     throw new OspexValidationError(message, { field });
   }
   return v;
@@ -362,18 +402,194 @@ function computeOwnerIsLive(body: OwnerCommitmentBody): boolean {
   return true;
 }
 
+/**
+ * Wire → public {@link OwnerPosition} mapper. Validates the discriminating
+ * `status` (must be one of the snapshot's narrower set — terminal lost /
+ * void rows never appear here per spec §6.1), the common identity fields,
+ * AND the status-specific fields per discriminator. Throws
+ * {@link OspexValidationError} on a malformed wire body.
+ *
+ * Pre-v0.5.2-round-5 this was a non-exhaustive switch with no validation
+ * — a missing or unknown `status` fell through ALL `case` returns and the
+ * function returned `undefined` despite being typed `OwnerPosition`.
+ * `decodeSnapshot({positions: [{}]})` therefore silently produced
+ * `positions: [undefined]` — Hermes Phase 3 PR0a round-4 review flagged
+ * this as a sibling structural-decode hole of the `positionStatus` /
+ * `commitment` / `fill` pass-throughs fixed in round 4.
+ */
 function toOwnerPosition(body: OwnerPositionBody): OwnerPosition {
-  // The wire body is already a discriminated union by `status` matching the
-  // public type, so this is a structural pass-through. Switch is exhaustive;
-  // the default never hits if the server adheres to the wire contract.
-  switch (body.status) {
+  if (typeof body !== 'object' || body === null) {
+    throw new OspexValidationError(
+      'OwnerPosition body must be a non-null object',
+      { field: 'body' },
+    );
+  }
+  const b = body as unknown as Record<string, unknown>;
+  const statusRaw = b.status;
+  if (
+    typeof statusRaw !== 'string' ||
+    !OWNER_POSITION_STATUSES.has(statusRaw as 'active' | 'pendingSettle' | 'claimable' | 'claimed')
+  ) {
+    throw new OspexValidationError(
+      'OwnerPosition body is missing or has invalid `status`',
+      { field: 'status' },
+    );
+  }
+  const status = statusRaw as 'active' | 'pendingSettle' | 'claimable' | 'claimed';
+
+  // Common identity / dedup fields — every status carries these.
+  const positionId = requireString(
+    b,
+    'positionId',
+    'OwnerPosition body is missing or has invalid `positionId`',
+  );
+  const speculationId = requireString(
+    b,
+    'speculationId',
+    'OwnerPosition body is missing or has invalid `speculationId`',
+  );
+  const positionType = requirePositionType(
+    b,
+    'positionType',
+    'OwnerPosition body is missing or has invalid `positionType`',
+  );
+  const team = requireString(
+    b,
+    'team',
+    'OwnerPosition body is missing or has invalid `team`',
+  );
+  const opponent = requireString(
+    b,
+    'opponent',
+    'OwnerPosition body is missing or has invalid `opponent`',
+  );
+  const marketRaw = b.market;
+  if (typeof marketRaw !== 'string' || !MARKET_TYPES.has(marketRaw as MarketType)) {
+    throw new OspexValidationError(
+      'OwnerPosition body is missing or has invalid `market`',
+      { field: 'market' },
+    );
+  }
+  const market = marketRaw as MarketType;
+  // `oddsDecimal` is nullable per the type — validate ONLY if present-and-not-null.
+  let oddsDecimal: number | null;
+  if (b.oddsDecimal === null) {
+    oddsDecimal = null;
+  } else {
+    oddsDecimal = requireNumber(
+      b,
+      'oddsDecimal',
+      'OwnerPosition body has invalid `oddsDecimal`',
+    );
+  }
+  const riskAmountUSDC = requireNumber(
+    b,
+    'riskAmountUSDC',
+    'OwnerPosition body is missing or has invalid `riskAmountUSDC`',
+  );
+  const profitAmountUSDC = requireNumber(
+    b,
+    'profitAmountUSDC',
+    'OwnerPosition body is missing or has invalid `profitAmountUSDC`',
+  );
+
+  const baseFields = {
+    positionId,
+    speculationId,
+    positionType,
+    team,
+    opponent,
+    market,
+    oddsDecimal,
+    riskAmountUSDC,
+    profitAmountUSDC,
+  };
+
+  // Status-specific fields. Each discriminator brings its own required
+  // payout / claimedAt metadata; validate them rather than relying on the
+  // server contract alone (a malformed body that says `status: 'pendingSettle'`
+  // but is missing `result` / `estimatedPayoutWei6` would otherwise produce
+  // a `pendingSettle` row with mostly-undefined fields).
+  switch (status) {
     case 'active':
-      return { ...body };
-    case 'pendingSettle':
-      return { ...body };
-    case 'claimable':
-      return { ...body };
-    case 'claimed':
-      return { ...body };
+      return { ...baseFields, status: 'active' };
+    case 'pendingSettle': {
+      const resultRaw = b.result;
+      if (typeof resultRaw !== 'string' || !POSITION_RESULTS.has(resultRaw)) {
+        throw new OspexValidationError(
+          'OwnerPosition (pendingSettle) body is missing or has invalid `result`',
+          { field: 'result' },
+        );
+      }
+      const predictedWinSideRaw = b.predictedWinSide;
+      if (
+        typeof predictedWinSideRaw !== 'string' ||
+        !PENDING_SETTLE_PREDICTED_WIN_SIDES.has(predictedWinSideRaw)
+      ) {
+        throw new OspexValidationError(
+          'OwnerPosition (pendingSettle) body is missing or has invalid `predictedWinSide`',
+          { field: 'predictedWinSide' },
+        );
+      }
+      const estimatedPayoutUSDC = requireNumber(
+        b,
+        'estimatedPayoutUSDC',
+        'OwnerPosition (pendingSettle) body is missing or has invalid `estimatedPayoutUSDC`',
+      );
+      const estimatedPayoutWei6 = requireString(
+        b,
+        'estimatedPayoutWei6',
+        'OwnerPosition (pendingSettle) body is missing or has invalid `estimatedPayoutWei6`',
+      );
+      return {
+        ...baseFields,
+        status: 'pendingSettle',
+        result: resultRaw as 'won' | 'push' | 'void',
+        predictedWinSide: predictedWinSideRaw as 'away' | 'home' | 'over' | 'under' | 'push',
+        estimatedPayoutUSDC,
+        estimatedPayoutWei6,
+      };
+    }
+    case 'claimable': {
+      const resultRaw = b.result;
+      if (typeof resultRaw !== 'string' || !POSITION_RESULTS.has(resultRaw)) {
+        throw new OspexValidationError(
+          'OwnerPosition (claimable) body is missing or has invalid `result`',
+          { field: 'result' },
+        );
+      }
+      const estimatedPayoutUSDC = requireNumber(
+        b,
+        'estimatedPayoutUSDC',
+        'OwnerPosition (claimable) body is missing or has invalid `estimatedPayoutUSDC`',
+      );
+      const estimatedPayoutWei6 = requireString(
+        b,
+        'estimatedPayoutWei6',
+        'OwnerPosition (claimable) body is missing or has invalid `estimatedPayoutWei6`',
+      );
+      return {
+        ...baseFields,
+        status: 'claimable',
+        result: resultRaw as 'won' | 'push' | 'void',
+        estimatedPayoutUSDC,
+        estimatedPayoutWei6,
+      };
+    }
+    case 'claimed': {
+      // `claimedAt` is nullable per the type — allow null OR a non-empty string.
+      let claimedAt: string | null;
+      if (b.claimedAt === null) {
+        claimedAt = null;
+      } else if (typeof b.claimedAt === 'string' && b.claimedAt.length > 0) {
+        claimedAt = b.claimedAt;
+      } else {
+        throw new OspexValidationError(
+          'OwnerPosition (claimed) body has invalid `claimedAt` (must be string or null)',
+          { field: 'claimedAt' },
+        );
+      }
+      return { ...baseFields, status: 'claimed', claimedAt };
+    }
   }
 }

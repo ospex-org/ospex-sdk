@@ -26,7 +26,9 @@
 import { describe, expect, it } from 'vitest';
 import { ApiClient } from '../src/api/client.js';
 import { subscribeToOwnState } from '../src/ownState/subscribe.js';
+import { decodeSnapshot } from '../src/ownState/snapshot.js';
 import { KeystoreSigner } from '../src/signers/keystore.js';
+import { OspexValidationError } from '../src/errors.js';
 import type {
   OwnerCommitmentBody,
   OwnerStateSnapshotBody,
@@ -1806,6 +1808,239 @@ describe('subscribeToOwnState — v0.5.2 typed-frame structural decode (PR0a rou
       c.url.includes('/v1/stream/own-state'),
     );
     expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBe('CUR-READY');
+  });
+});
+
+describe('subscribeToOwnState — v0.5.2 toOwnerPosition strict validator (PR0a round 5)', () => {
+  it('decodeSnapshot({positions: [{}]}) throws OspexValidationError (unit-level — Hermes regression probe)', () => {
+    // Hermes round-5 regression probe: pre-round-5 toOwnerPosition was
+    // a non-exhaustive switch that fell through to `undefined` for a
+    // missing/unknown status, so a snapshot with `positions: [{}]`
+    // silently produced `positions: [undefined]`. Round 5 makes it
+    // throw at the unit-decoder boundary; the subscribe path's
+    // try/catch then triggers `frameAborted` teardown.
+    expect(() =>
+      decodeSnapshot({
+        cursor: 'CUR-SNAP',
+        commitments: [],
+        // The body cast here is the same any-shape cast a server-side
+        // bug or wire corruption would produce in the wild.
+        positions: [{} as never],
+        truncated: false,
+        positionsTruncated: false,
+      }),
+    ).toThrow(OspexValidationError);
+  });
+
+  it('decodeSnapshot rejects positions with unknown status (terminal lost / void must come via positionStatus events, not the snapshot)', () => {
+    // The snapshot's positions[] only carries the four
+    // narrower-than-PositionLifecycle statuses (active / pendingSettle /
+    // claimable / claimed). `settledLost` / `void` are intentionally
+    // absent from the snapshot (zero-payout terminal rows are dropped);
+    // a wire body that violates that contract is malformed and must
+    // throw.
+    expect(() =>
+      decodeSnapshot({
+        cursor: 'CUR-SNAP',
+        commitments: [],
+        positions: [
+          {
+            positionId: 'p1',
+            speculationId: 's1',
+            positionType: 0,
+            team: 'A',
+            opponent: 'B',
+            market: 'moneyline',
+            oddsDecimal: 1.5,
+            riskAmountUSDC: 1,
+            profitAmountUSDC: 0.5,
+            status: 'settledLost' as never,
+          },
+        ],
+        truncated: false,
+        positionsTruncated: false,
+      }),
+    ).toThrow(OspexValidationError);
+  });
+
+  it('SSE cold-start snapshot with positions: [{}] aborts the connection (no onReady, no `connected`, reconnect is a cold start)', async () => {
+    // Same shape as the round-3 malformed-snapshot probe but the
+    // malformed-ness is HIDDEN inside `positions[0]` — valid top-level
+    // JSON, valid top-level snapshot fields, malformed inner position.
+    // Pre-round-5 decodeSnapshot would have returned positions:[undefined]
+    // silently and onSnapshot would have fired with an arrayful of
+    // undefined, then onReady → 'connected' → false baseline.
+    const sseBody =
+      ': hb\n\n' +
+      'event: snapshot\nid: CUR-BAD-SNAP\ndata: ' +
+      JSON.stringify({
+        cursor: 'CUR-BAD-SNAP',
+        commitments: [],
+        positions: [{}],
+        truncated: false,
+        positionsTruncated: false,
+      }) +
+      '\n\n' +
+      'event: ready\nid: CUR-READY-AFTER-BAD-SNAP\ndata: {}\n\n';
+    const server = makeServer({
+      sseAttempts: [
+        { body: sseBody },
+        {
+          frames: [
+            { event: 'snapshot', id: 'CUR-RECOVERY-SNAP', data: snapshotBody() },
+            { event: 'ready', id: 'CUR-RECOVERY-READY', data: {} },
+          ],
+        },
+      ],
+    });
+    let snapshotHits = 0;
+    let readyHits = 0;
+    let connectedSeen = 0;
+    const errors: OspexStreamError[] = [];
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onSnapshot: () => {
+          snapshotHits += 1;
+        },
+        onReady: () => {
+          readyHits += 1;
+        },
+        onStatus: (s) => {
+          if (s === 'connected') connectedSeen += 1;
+        },
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    await waitFor(() => readyHits >= 1);
+    await sub.unsubscribe();
+
+    // The decode error MUST have surfaced — `decodeSnapshot` throws on
+    // the malformed position, and the SSE path's try/catch routes it
+    // through `frameAborted` discipline with phase: 'decode'.
+    expect(errors.some((e) => e.phase === 'decode')).toBe(true);
+
+    // The malformed snapshot must NOT have been dispatched to the
+    // consumer (the decoder threw BEFORE dispatchTyped was reached).
+    // Only the recovery snapshot on attempt 2 fires onSnapshot.
+    expect(snapshotHits).toBe(1);
+
+    // Same as round-3: exactly ONE 'connected' (from attempt 2's
+    // successful ready), NOT two (which would be a false 'connected'
+    // on attempt 1).
+    expect(readyHits).toBe(1);
+    expect(connectedSeen).toBe(1);
+
+    // The second SSE attempt is a COLD START — the malformed snapshot
+    // never advanced cursor, so there's no Last-Event-ID.
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls.length).toBeGreaterThanOrEqual(2);
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBeNull();
+  });
+
+  it('REST snapshot page with positions: [{}] surfaces phase: decode and forces cold restart (not a partial baseline)', async () => {
+    // Cold-start delivers a truncated SSE snapshot (valid). REST paging
+    // fetches page 2 which has a malformed position. Outer loop must
+    // clear cursor + pendingPagingCursor → next SSE attempt has NO
+    // Last-Event-ID (cold restart). The consumer must NOT see a partial
+    // baseline.
+    let restSnapshotHits = 0;
+    const server = makeServer({
+      sseAttempts: [
+        {
+          frames: [
+            {
+              event: 'snapshot',
+              id: 'CUR-PAGE-TRUNCATED',
+              data: snapshotBody({
+                cursor: 'PAGE-1-REST',
+                truncated: true,
+              }),
+            },
+          ],
+        },
+        // Reconnect: cold restart (no Last-Event-ID).
+        {
+          frames: [
+            { event: 'snapshot', id: 'CUR-SNAP-RECOVERY', data: snapshotBody() },
+            { event: 'ready', id: 'CUR-READY-RECOVERY', data: {} },
+          ],
+        },
+      ],
+      restSnapshotPages: [
+        {
+          body: {
+            cursor: 'PAGE-2-REST',
+            commitments: [],
+            // Malformed position hiding inside an otherwise-valid REST
+            // page. Pre-round-5 toOwnerPosition would have produced
+            // [undefined]; the REST onSnapshot would have fired with
+            // that garbage; truncated:false would have promoted
+            // `cursor` to PAGE-2-REST as `Last-Event-ID` for resume.
+            positions: [{}],
+            truncated: false,
+            positionsTruncated: false,
+          } as unknown as OwnerStateSnapshotBody,
+        },
+      ],
+    });
+    let readyHit = false;
+    const errors: OspexStreamError[] = [];
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onSnapshot: () => {
+          restSnapshotHits += 1;
+        },
+        onReady: () => {
+          readyHit = true;
+        },
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    await waitFor(() => readyHit);
+    await sub.unsubscribe();
+
+    // The REST page's malformed position raised a decode error from the
+    // decoder; the REST paging path surfaces it as phase: 'decode' via
+    // `pageRestUntilLive` (the decoded snapshot decoder throws, which
+    // its outer try/catch maps to onError with phase: 'decode').
+    expect(errors.some((e) => e.phase === 'decode')).toBe(true);
+
+    // The malformed REST page must NOT have been delivered to
+    // onSnapshot — the decoder threw BEFORE dispatchTyped reached the
+    // consumer. Only the recovery snapshot on attempt 2 fires
+    // onSnapshot (the first SSE attempt's truncated snapshot DID fire
+    // onSnapshot once + the recovery fires once = 2 total; the bad REST
+    // page in between fires NONE).
+    expect(restSnapshotHits).toBe(2);
+
+    // The SECOND SSE attempt must have NO Last-Event-ID — REST paging
+    // failure (decode error) forced cold restart per the "paging failed"
+    // branch (cursor cleared).
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls.length).toBeGreaterThanOrEqual(2);
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBeNull();
   });
 });
 
