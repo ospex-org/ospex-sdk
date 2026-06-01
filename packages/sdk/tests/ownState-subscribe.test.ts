@@ -1460,6 +1460,147 @@ describe('subscribeToOwnState — v0.5.2 dispatch model (PR0a round 2 — post-t
   });
 });
 
+describe('subscribeToOwnState — v0.5.2 decode-failure abort discipline (PR0a round 3)', () => {
+  it('does NOT fire onReady when a malformed cold-start snapshot is followed by ready on the same connection (Hermes regression probe)', async () => {
+    // Hermes's exact probe: a malformed snapshot frame followed by a ready
+    // frame on the same connection. Pre-round-3 the decode error broke
+    // only the switch — the for-await loop kept going — and the next
+    // ready fired onReady + onStatus('connected'), signaling a false
+    // baseline to a consumer that never got a snapshot.
+    const sseBody =
+      ': hb\n\n' +
+      'event: snapshot\nid: CUR-BAD-SNAPSHOT\ndata: not-valid-json{\n\n' +
+      'event: ready\nid: CUR-READY-AFTER-BAD-SNAPSHOT\ndata: {}\n\n';
+    const server = makeServer({
+      sseAttempts: [
+        { body: sseBody },
+        {
+          frames: [
+            { event: 'snapshot', id: 'CUR-RECOVERY-SNAP', data: snapshotBody() },
+            { event: 'ready', id: 'CUR-RECOVERY-READY', data: {} },
+          ],
+        },
+      ],
+    });
+    let readyHits = 0;
+    let connectedSeen = 0;
+    const errors: OspexStreamError[] = [];
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onSnapshot: () => undefined,
+        onReady: () => {
+          readyHits += 1;
+        },
+        onStatus: (s) => {
+          if (s === 'connected') connectedSeen += 1;
+        },
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    // Wait for the SECOND SSE attempt's ready (the recovery one) to land —
+    // proves the recovery path completed.
+    await waitFor(() => readyHits >= 1);
+    await sub.unsubscribe();
+
+    // The decode error MUST have surfaced.
+    expect(errors.some((e) => e.phase === 'decode')).toBe(true);
+
+    // Hermes-flagged: pre-round-3, this would have been 2 (false-ready on
+    // attempt 1 + real ready on attempt 2). Round 3 makes it exactly 1.
+    expect(readyHits).toBe(1);
+
+    // Same invariant on 'connected': exactly ONE (from attempt 2). The
+    // lastStatus dedup guard masks a second redundant emit, but the
+    // first attempt's onReady never fired so no 'connected' emit
+    // happened on attempt 1 in the first place.
+    expect(connectedSeen).toBe(1);
+
+    // Hermes-flagged: the SECOND SSE attempt is a COLD START — the
+    // malformed snapshot never advanced cursor, so there's no
+    // Last-Event-ID. (If round-3 had erroneously promoted the SSE-level
+    // cursor on decode failure, Last-Event-ID would equal
+    // CUR-BAD-SNAPSHOT, and the server would replay from there.)
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls.length).toBeGreaterThanOrEqual(2);
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBeNull();
+  });
+
+  it('does NOT advance cursor when a LATER successful commitment follows a malformed one on the same connection', async () => {
+    // Same-connection pattern as the dispatch-throw regression, but the
+    // first failure is a DECODE failure, not a handler throw. Pre-round-3
+    // the SDK kept processing after the decode error and the next
+    // commitment advanced cursor past the malformed one — same data-loss
+    // mode, different trigger.
+    const sseBody =
+      ': hb\n\n' +
+      'event: snapshot\nid: CUR-SNAP\ndata: ' +
+      JSON.stringify(snapshotBody()) +
+      '\n\n' +
+      'event: ready\nid: CUR-READY\ndata: {}\n\n' +
+      'event: commitment\nid: CUR-BAD-COMMITMENT\ndata: not-valid-json{\n\n' +
+      'event: commitment\nid: CUR-GOOD-COMMITMENT\ndata: ' +
+      JSON.stringify(commitmentBody(HASH_A, { nonce: '2' })) +
+      '\n\n';
+    const server = makeServer({
+      sseAttempts: [
+        { body: sseBody },
+        {
+          frames: [{ event: 'ready', id: 'CUR-READY-RECOVERY', data: {} }],
+        },
+      ],
+    });
+    const errors: OspexStreamError[] = [];
+    let commitmentsSeen: string[] = [];
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onSnapshot: () => undefined,
+        onReady: () => undefined,
+        onCommitment: (c) => commitmentsSeen.push(c.commitmentHash),
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    await waitFor(() => errors.some((e) => e.phase === 'decode'));
+    await waitFor(
+      () => server.calls.filter((c) => c.url.includes('/v1/stream/own-state')).length >= 2,
+    );
+    await sub.unsubscribe();
+
+    // The good commitment must NOT have been dispatched on attempt 1 —
+    // the decode-induced abort stopped further frames.
+    expect(commitmentsSeen).not.toContain(HASH_A);
+
+    // Reconnect from the LAST successfully-applied cursor — `CUR-READY`,
+    // NOT `CUR-GOOD-COMMITMENT`. Pre-round-3 this would have been
+    // CUR-GOOD-COMMITMENT, silently skipping the malformed event on
+    // resume.
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBe('CUR-READY');
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).not.toBe('CUR-GOOD-COMMITMENT');
+  });
+});
+
 describe('subscribeToOwnState — v0.5.2 error.phase (PR0a)', () => {
   it('classifies a 401 mid-stream as phase: token-refresh', async () => {
     // First SSE attempt connects fine, gets a ready, then 401s. Second

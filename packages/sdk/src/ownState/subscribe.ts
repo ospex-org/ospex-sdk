@@ -365,7 +365,7 @@ export function subscribeToOwnState(
       // "paging failed" recovery (clears `cursor`, cold-restarts), so a
       // partial REST drain can't leave the consumer in an inconsistent
       // state where some pages applied and others were lost. This is the
-      // REST mirror of the SSE-side `dispatchAborted` discipline.
+      // REST mirror of the SSE-side `frameAborted` discipline.
       const restMeta: OwnStateEventMeta = { cursor: '' };
       const restOk = dispatchTyped(
         handlers.onSnapshot,
@@ -474,21 +474,30 @@ export function subscribeToOwnState(
 
       let outcome: ConnectOutcome = 'ended';
       /**
-       * Set when a typed handler throws. Once latched, the SDK abandons
-       * this SSE connection — no further frame on the same connection can
-       * advance the running cursor (which would silently skip the failed
-       * event on the next reconnect's `Last-Event-ID` resume, defeating
-       * the v0.5.2 dispatch-model contract). The outer reconnect loop
-       * resumes from the pre-throw cursor; server-side overlap re-delivers
-       * the failed event.
+       * Set when a typed frame fails to apply — EITHER decode-side
+       * (malformed wire body, decoder throws) OR dispatch-side (consumer
+       * handler throws). Once latched, the SDK abandons this SSE
+       * connection — no further frame on the same connection can advance
+       * the running cursor (which would silently skip the unapplied event
+       * on the next reconnect's `Last-Event-ID` resume, defeating the
+       * v0.5.2 dispatch-model contract). The outer reconnect loop resumes
+       * from the prior cursor; server-side overlap re-delivers the
+       * failed event.
        *
-       * Hermes-locked invariant (Phase 3 PR0a round 2): "a later successful
-       * frame must NOT advance cursor past a failed event on the same
-       * connection." The pre-round-2 code only prevented the failed
-       * event's own cursor advance — a subsequent successful event then
-       * advanced the cursor past it. This flag closes that gap.
+       * Hermes-locked invariant: "a later successful frame must NOT
+       * advance cursor past an unapplied event on the same connection,
+       * AND `onReady` must NOT fire after a failed cold-start snapshot."
+       *
+       * Round 2 (PR0a Hermes #1) covered DISPATCH failures (consumer
+       * handler throws). Round 3 (PR0a Hermes #2) extends it to DECODE
+       * failures — pre-round-3 a malformed snapshot frame emitted an
+       * onError but a subsequent `event: ready` still fired `onReady` +
+       * `onStatus('connected')`, signaling a false baseline to the
+       * consumer. The single `frameAborted` flag covers both failure
+       * modes; the post-switch check + `ctrl.abort()` handles teardown
+       * uniformly.
        */
-      let dispatchAborted = false;
+      let frameAborted = false;
       try {
         for await (const frame of parseSseStream(
           res.body as ReadableStream<Uint8Array>,
@@ -508,7 +517,7 @@ export function subscribeToOwnState(
           // v0.5.2 dispatch model — decode → meta → invoke → advance only
           // after successful handler return. A thrown handler does NOT
           // advance the running cursor AND abandons the rest of this SSE
-          // connection (the `dispatchAborted` latch + the post-switch
+          // connection (the `frameAborted` latch + the post-switch
           // abort below). On next reconnect the server replays from the
           // prior cursor via Last-Event-ID overlap. Pre-v0.5.2 advanced
           // cursor BEFORE the handler and swallowed throws — that
@@ -528,13 +537,27 @@ export function subscribeToOwnState(
                   undefined,
                   'decode',
                 );
+                frameAborted = true;
                 break;
               }
-              const decoded = decodeSnapshot(wire);
+              let decoded;
+              try {
+                decoded = decodeSnapshot(wire);
+              } catch (err) {
+                emitError(
+                  'connection_failed',
+                  'own-state stream: failed to decode snapshot body.',
+                  undefined,
+                  err,
+                  'decode',
+                );
+                frameAborted = true;
+                break;
+              }
               if (closed) break;
               const ok = dispatchTyped(handlers.onSnapshot, decoded, meta, 'snapshot');
               if (!ok) {
-                dispatchAborted = true;
+                frameAborted = true;
                 break;
               }
               if (decoded.truncated) {
@@ -587,7 +610,7 @@ export function subscribeToOwnState(
                 emitStatus('connected');
                 if (candidateCursor !== undefined) cursor = candidateCursor;
               } else {
-                dispatchAborted = true;
+                frameAborted = true;
               }
               break;
             }
@@ -601,15 +624,29 @@ export function subscribeToOwnState(
                   undefined,
                   'decode',
                 );
+                frameAborted = true;
                 break;
               }
               if (closed) break;
-              const decoded = toOwnerCommitment(wire);
+              let decoded;
+              try {
+                decoded = toOwnerCommitment(wire);
+              } catch (err) {
+                emitError(
+                  'connection_failed',
+                  'own-state stream: failed to decode commitment body.',
+                  undefined,
+                  err,
+                  'decode',
+                );
+                frameAborted = true;
+                break;
+              }
               const ok = dispatchTyped(handlers.onCommitment, decoded, meta, 'commitment');
               if (ok) {
                 if (candidateCursor !== undefined) cursor = candidateCursor;
               } else {
-                dispatchAborted = true;
+                frameAborted = true;
               }
               break;
             }
@@ -623,6 +660,7 @@ export function subscribeToOwnState(
                   undefined,
                   'decode',
                 );
+                frameAborted = true;
                 break;
               }
               if (closed) break;
@@ -637,13 +675,14 @@ export function subscribeToOwnState(
                   err,
                   'decode',
                 );
+                frameAborted = true;
                 break;
               }
               const ok = dispatchTyped(handlers.onFill, decoded, meta, 'fill');
               if (ok) {
                 if (candidateCursor !== undefined) cursor = candidateCursor;
               } else {
-                dispatchAborted = true;
+                frameAborted = true;
               }
               break;
             }
@@ -657,6 +696,7 @@ export function subscribeToOwnState(
                   undefined,
                   'decode',
                 );
+                frameAborted = true;
                 break;
               }
               if (closed) break;
@@ -672,7 +712,7 @@ export function subscribeToOwnState(
               if (ok) {
                 if (candidateCursor !== undefined) cursor = candidateCursor;
               } else {
-                dispatchAborted = true;
+                frameAborted = true;
               }
               break;
             }
@@ -695,7 +735,7 @@ export function subscribeToOwnState(
               break;
           }
           if (outcome === 'resync') break;
-          if (dispatchAborted) {
+          if (frameAborted) {
             // A typed handler threw inside this iteration. Abandon the
             // SSE connection entirely so no subsequent frame on this
             // connection can advance `cursor` past the failed event.
@@ -709,10 +749,10 @@ export function subscribeToOwnState(
         if (
           !closed &&
           outcome !== 'resync' &&
-          !dispatchAborted &&
+          !frameAborted &&
           lastStatus !== 'degraded'
         ) {
-          // dispatchAborted suppresses this — the abort we issued is an
+          // frameAborted suppresses this — the abort we issued is an
           // intentional teardown, not a transport drop. Emitting
           // 'connection_failed' here would double-report the failure
           // (we already emitted phase:'dispatch' for the handler throw).

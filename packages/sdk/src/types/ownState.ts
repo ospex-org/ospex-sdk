@@ -347,17 +347,22 @@ export interface OwnStateFrameMeta {
  * **Cursor advancement contract (v0.5.2+).** Each event-dispatch handler
  * receives an {@link OwnStateEventMeta} second argument; the SDK advances
  * its internal cursor only AFTER the handler returns successfully. A
- * thrown handler:
+ * thrown handler — OR a frame that fails to decode (malformed wire body,
+ * decoder throws) — is treated identically: both are events that did NOT
+ * land successfully on the consumer, so both trigger the same
+ * abort-the-connection discipline:
  *
  *   1. Leaves the SDK's running cursor at the prior position.
  *   2. Surfaces via {@link onError} as
- *      `OspexStreamError({reason: 'connection_failed', phase: 'dispatch'})`
+ *      `OspexStreamError({reason: 'connection_failed', phase: 'dispatch' | 'decode'})`
  *      (instead of being silently swallowed — pre-v0.5.2 behavior).
  *   3. **Abandons the rest of the SSE connection** — no further frame on
  *      the same connection can advance the running cursor (which would
  *      silently skip the failed event on the next reconnect's
- *      `Last-Event-ID` resume). The reconnect loop resumes from the
- *      pre-throw cursor; server-side overlap re-delivers the failed event.
+ *      `Last-Event-ID` resume), AND no later `event: ready` can fire
+ *      `onReady` after a failed cold-start snapshot (which would signal
+ *      a false baseline). The reconnect loop resumes from the prior
+ *      cursor; server-side overlap re-delivers the failed event.
  *      For REST snapshot paging (truncated cold-start handoff), the
  *      mirror discipline aborts paging and forces a cold restart so a
  *      partial REST drain can't leave the consumer in an inconsistent
