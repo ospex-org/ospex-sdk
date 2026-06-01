@@ -59,7 +59,7 @@
 import { OspexAPIError, OspexOwnStateError, OspexStreamError } from '../errors.js';
 import { mintStreamToken } from './auth.js';
 import { OwnStateApi } from '../api/ownState.js';
-import { decodeSnapshot, toOwnerCommitment } from './snapshot.js';
+import { decodePositionStatusEvent, decodeSnapshot, toOwnerCommitment } from './snapshot.js';
 import { decodeFill } from '../realtime/decoders.js';
 import {
   IDLE_TIMEOUT_MS,
@@ -700,12 +700,30 @@ export function subscribeToOwnState(
                 break;
               }
               if (closed) break;
-              // The wire body shape matches PositionStatusEvent 1:1
-              // (core-api `positionStatus.ts:derivePositionStatus` emits
-              // exactly this projection). No transformation needed.
+              // Round-4: validate the structural shape (required dedup-key
+              // fields + status enum) rather than blindly casting. A
+              // valid-JSON but structurally-malformed body (e.g. `{}`)
+              // throws OspexValidationError and we abort the connection
+              // so the malformed event can't ride forward as a "successful"
+              // dispatch. Pre-round-4 the cast let `{}` through and
+              // advanced cursor.
+              let decoded: PositionStatusEvent;
+              try {
+                decoded = decodePositionStatusEvent(wire);
+              } catch (err) {
+                emitError(
+                  'connection_failed',
+                  'own-state stream: failed to decode positionStatus body.',
+                  undefined,
+                  err,
+                  'decode',
+                );
+                frameAborted = true;
+                break;
+              }
               const ok = dispatchTyped(
                 handlers.onPositionStatus,
-                wire as PositionStatusEvent,
+                decoded,
                 meta,
                 'positionStatus',
               );

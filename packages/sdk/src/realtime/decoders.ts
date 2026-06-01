@@ -13,6 +13,7 @@
 import type { Contest, ContestUpdate } from '../types/contest.js';
 import type { Fill } from '../types/fill.js';
 import type { Position } from '../types/position.js';
+import { OspexValidationError } from '../errors.js';
 
 /** core-api positions recovery/stream body — `Position` plus the owner address
  *  and claim time the address-scoped REST read omits. */
@@ -60,25 +61,90 @@ export function decodeContestUpdate(body: unknown): ContestUpdate {
   };
 }
 
+/**
+ * Decode a `fill` SSE frame body into the public {@link Fill} type. Pre-
+ * v0.5.2-round-4 this was a structural pass-through that silently
+ * produced a Fill of mostly-undefined fields on a malformed wire body
+ * (e.g. `{}` or a partial body missing required fields). Round-4 hardens
+ * it: every required field is validated and a malformed body throws
+ * {@link OspexValidationError}. The own-state SSE subscribe path catches
+ * and triggers `frameAborted` teardown so cursor never advances past an
+ * undecoded frame.
+ */
 export function decodeFill(body: unknown): Fill {
-  const b = body as Fill;
+  if (typeof body !== 'object' || body === null) {
+    throw new OspexValidationError('Fill body must be a non-null object', { field: 'body' });
+  }
+  const b = body as Record<string, unknown>;
+  const requireFillString = (field: string): string => {
+    const v = b[field];
+    if (typeof v !== 'string' || v.length === 0) {
+      throw new OspexValidationError(
+        `Fill body is missing or has invalid \`${field}\``,
+        { field },
+      );
+    }
+    return v;
+  };
+  const requireFillNumber = (field: string): number => {
+    const v = b[field];
+    if (typeof v !== 'number' || !Number.isFinite(v)) {
+      throw new OspexValidationError(
+        `Fill body is missing or has invalid \`${field}\``,
+        { field },
+      );
+    }
+    return v;
+  };
+  const requireFillPositionType = (field: string): 0 | 1 => {
+    const v = b[field];
+    if (v !== 0 && v !== 1) {
+      throw new OspexValidationError(
+        `Fill body is missing or has invalid \`${field}\``,
+        { field },
+      );
+    }
+    return v;
+  };
+  const speculationId = requireFillString('speculationId');
+  const contestId = requireFillString('contestId');
+  const commitmentHash = requireFillString('commitmentHash');
+  const maker = requireFillString('maker');
+  const taker = requireFillString('taker');
+  const makerPositionType = requireFillPositionType('makerPositionType');
+  const takerPositionType = requireFillPositionType('takerPositionType');
+  const makerRiskAmount = requireFillString('makerRiskAmount');
+  const takerRiskAmount = requireFillString('takerRiskAmount');
+  const makerRiskUSDC = requireFillNumber('makerRiskUSDC');
+  const takerRiskUSDC = requireFillNumber('takerRiskUSDC');
+  const oddsTick = requireFillNumber('oddsTick');
+  const filledAt = requireFillString('filledAt');
+  if (typeof b.contestStarted !== 'boolean') {
+    throw new OspexValidationError(
+      'Fill body is missing or has invalid `contestStarted`',
+      { field: 'contestStarted' },
+    );
+  }
+  const contestStarted = b.contestStarted;
+  const txHash = requireFillString('txHash');
+  const logIndex = requireFillNumber('logIndex');
   return {
-    speculationId: b.speculationId,
-    contestId: b.contestId,
-    commitmentHash: b.commitmentHash,
-    maker: b.maker,
-    taker: b.taker,
-    makerPositionType: b.makerPositionType,
-    takerPositionType: b.takerPositionType,
-    makerRiskAmount: b.makerRiskAmount,
-    takerRiskAmount: b.takerRiskAmount,
-    makerRiskUSDC: b.makerRiskUSDC,
-    takerRiskUSDC: b.takerRiskUSDC,
-    oddsTick: b.oddsTick,
-    filledAt: b.filledAt,
-    contestStarted: b.contestStarted,
-    txHash: b.txHash,
-    logIndex: b.logIndex,
+    speculationId,
+    contestId,
+    commitmentHash,
+    maker,
+    taker,
+    makerPositionType,
+    takerPositionType,
+    makerRiskAmount,
+    takerRiskAmount,
+    makerRiskUSDC,
+    takerRiskUSDC,
+    oddsTick,
+    filledAt,
+    contestStarted,
+    txHash,
+    logIndex,
   };
 }
 

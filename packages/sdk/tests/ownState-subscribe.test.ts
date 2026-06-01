@@ -1601,6 +1601,214 @@ describe('subscribeToOwnState — v0.5.2 decode-failure abort discipline (PR0a r
   });
 });
 
+describe('subscribeToOwnState — v0.5.2 typed-frame structural decode (PR0a round 4)', () => {
+  it('aborts the connection when a positionStatus body is valid JSON but structurally malformed (e.g. {})', async () => {
+    // Hermes round-4 regression: pre-round-4 the positionStatus case did
+    // safeParseJson + `wire as PositionStatusEvent` with no validation,
+    // so `{}` was dispatched as a "successful" event and cursor advanced.
+    // Round-4 adds `decodePositionStatusEvent` that validates required
+    // dedup-key fields + the status enum and throws on a malformed body.
+    const sseBody =
+      ': hb\n\n' +
+      'event: snapshot\nid: CUR-SNAP\ndata: ' +
+      JSON.stringify(snapshotBody()) +
+      '\n\n' +
+      'event: ready\nid: CUR-READY\ndata: {}\n\n' +
+      'event: positionStatus\nid: CUR-BAD-POSITION\ndata: {}\n\n' +
+      'event: commitment\nid: CUR-GOOD-COMMITMENT\ndata: ' +
+      JSON.stringify(commitmentBody(HASH_A, { nonce: '2' })) +
+      '\n\n';
+    const server = makeServer({
+      sseAttempts: [
+        { body: sseBody },
+        {
+          frames: [{ event: 'ready', id: 'CUR-READY-RECOVERY', data: {} }],
+        },
+      ],
+    });
+    const errors: OspexStreamError[] = [];
+    const positionEvents: PositionStatusEvent[] = [];
+    const commitmentsSeen: string[] = [];
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onSnapshot: () => undefined,
+        onReady: () => undefined,
+        onPositionStatus: (p) => positionEvents.push(p),
+        onCommitment: (c) => commitmentsSeen.push(c.commitmentHash),
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    await waitFor(() => errors.some((e) => e.phase === 'decode'));
+    await waitFor(
+      () => server.calls.filter((c) => c.url.includes('/v1/stream/own-state')).length >= 2,
+    );
+    await sub.unsubscribe();
+
+    // The malformed positionStatus body must NOT have been delivered as
+    // an empty object. Round-4 throws on missing required fields.
+    expect(positionEvents).toEqual([]);
+
+    // The good commitment after the malformed positionStatus must NOT
+    // have been processed — the abort discipline stops further frames.
+    expect(commitmentsSeen).not.toContain(HASH_A);
+
+    // The decode error surfaces with phase: 'decode'.
+    expect(errors.some((e) => e.phase === 'decode')).toBe(true);
+
+    // The SECOND SSE attempt's Last-Event-ID is `CUR-READY` (the last
+    // successfully-applied cursor), NOT `CUR-BAD-POSITION` and NOT
+    // `CUR-GOOD-COMMITMENT`. Pre-round-4 this would have been
+    // `CUR-GOOD-COMMITMENT` — the empty {} would have dispatched,
+    // advanced cursor, then the good commitment after would have
+    // advanced further.
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls.length).toBeGreaterThanOrEqual(2);
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBe('CUR-READY');
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).not.toBe('CUR-BAD-POSITION');
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).not.toBe('CUR-GOOD-COMMITMENT');
+  });
+
+  it('aborts the connection when a commitment body is valid JSON but structurally malformed', async () => {
+    // Same sibling-site coverage for commitment frames — pre-round-4
+    // toOwnerCommitment was a structural pass-through that silently
+    // produced an OwnerCommitment of mostly-undefined fields on `{}`.
+    // Round-4 validates required identity fields (commitmentHash,
+    // maker, nonce, riskAmount*, status, createdAt, nonceInvalidated).
+    const sseBody =
+      ': hb\n\n' +
+      'event: snapshot\nid: CUR-SNAP\ndata: ' +
+      JSON.stringify(snapshotBody()) +
+      '\n\n' +
+      'event: ready\nid: CUR-READY\ndata: {}\n\n' +
+      'event: commitment\nid: CUR-BAD-COMMITMENT\ndata: {}\n\n' +
+      'event: fill\nid: CUR-GOOD-FILL\ndata: ' +
+      JSON.stringify({
+        speculationId: '7',
+        contestId: '1',
+        commitmentHash: HASH_A,
+        maker: TEST_ADDRESS,
+        taker: TEST_ADDRESS,
+        makerPositionType: 0,
+        takerPositionType: 1,
+        makerRiskAmount: '100',
+        takerRiskAmount: '200',
+        makerRiskUSDC: 0.0001,
+        takerRiskUSDC: 0.0002,
+        oddsTick: 220,
+        filledAt: 't',
+        contestStarted: false,
+        txHash: '0xtx',
+        logIndex: 3,
+      }) +
+      '\n\n';
+    const server = makeServer({
+      sseAttempts: [
+        { body: sseBody },
+        {
+          frames: [{ event: 'ready', id: 'CUR-READY-RECOVERY', data: {} }],
+        },
+      ],
+    });
+    const errors: OspexStreamError[] = [];
+    const commitmentsSeen: OwnerCommitment[] = [];
+    const fillsSeen: Fill[] = [];
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onSnapshot: () => undefined,
+        onReady: () => undefined,
+        onCommitment: (c) => commitmentsSeen.push(c),
+        onFill: (f) => fillsSeen.push(f),
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    await waitFor(() => errors.some((e) => e.phase === 'decode'));
+    await waitFor(
+      () => server.calls.filter((c) => c.url.includes('/v1/stream/own-state')).length >= 2,
+    );
+    await sub.unsubscribe();
+
+    expect(commitmentsSeen).toEqual([]);
+    expect(fillsSeen).toEqual([]); // good fill after the bad commitment was ALSO abandoned
+    expect(errors.some((e) => e.phase === 'decode')).toBe(true);
+
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBe('CUR-READY');
+  });
+
+  it('aborts the connection when a fill body is valid JSON but structurally malformed', async () => {
+    // Same sibling-site coverage for fill frames.
+    const sseBody =
+      ': hb\n\n' +
+      'event: snapshot\nid: CUR-SNAP\ndata: ' +
+      JSON.stringify(snapshotBody()) +
+      '\n\n' +
+      'event: ready\nid: CUR-READY\ndata: {}\n\n' +
+      'event: fill\nid: CUR-BAD-FILL\ndata: {}\n\n';
+    const server = makeServer({
+      sseAttempts: [
+        { body: sseBody },
+        {
+          frames: [{ event: 'ready', id: 'CUR-READY-RECOVERY', data: {} }],
+        },
+      ],
+    });
+    const errors: OspexStreamError[] = [];
+    const fillsSeen: Fill[] = [];
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      {
+        onSnapshot: () => undefined,
+        onReady: () => undefined,
+        onFill: (f) => fillsSeen.push(f),
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    await waitFor(() => errors.some((e) => e.phase === 'decode'));
+    await waitFor(
+      () => server.calls.filter((c) => c.url.includes('/v1/stream/own-state')).length >= 2,
+    );
+    await sub.unsubscribe();
+
+    expect(fillsSeen).toEqual([]);
+    expect(errors.some((e) => e.phase === 'decode')).toBe(true);
+
+    const sseCalls = server.calls.filter((c) =>
+      c.url.includes('/v1/stream/own-state'),
+    );
+    expect(sseCalls[1]!.headers.get('Last-Event-ID')).toBe('CUR-READY');
+  });
+});
+
 describe('subscribeToOwnState — v0.5.2 error.phase (PR0a)', () => {
   it('classifies a 401 mid-stream as phase: token-refresh', async () => {
     // First SSE attempt connects fine, gets a ready, then 401s. Second
