@@ -39,7 +39,7 @@ import { OspexOwnStateError, OspexValidationError } from '../errors.js';
 import { OwnStateApi } from '../api/ownState.js';
 import type { ApiClient } from '../api/client.js';
 import { mintStreamToken } from './auth.js';
-import { toOwnerCommitment } from './snapshot.js';
+import { decodeSnapshot } from './snapshot.js';
 import type { OwnerCommitment } from '../types/ownState.js';
 import type { ChainId } from '../types/protocol.js';
 import type { Hex, Signer } from '../types/signer.js';
@@ -106,13 +106,20 @@ export async function getOwnerCommitment(
       token,
       cursor !== undefined ? { cursor } : {},
     );
-    for (const body of wire.commitments) {
-      if (body.commitmentHash.toLowerCase() === target) {
-        return toOwnerCommitment(body);
-      }
-    }
-    if (!wire.truncated) return null;
-    cursor = wire.cursor;
+    // Route through decodeSnapshot so the page's full structural shape
+    // (top-level fields + every commitment + every position) is validated
+    // before any field is trusted: a malformed page fails closed with
+    // OspexValidationError rather than a raw TypeError on `.toLowerCase()`
+    // or a silently-wrong `truncated` / `cursor`. (Hermes Phase 3 PR0a
+    // round-7 site — this helper previously read `wire.commitments` raw,
+    // bypassing decodeSnapshot's validation.)
+    const decoded = decodeSnapshot(wire);
+    const match = decoded.commitments.find(
+      (c) => c.commitmentHash.toLowerCase() === target,
+    );
+    if (match !== undefined) return match;
+    if (!decoded.truncated) return null;
+    cursor = decoded.cursor;
   }
   // Page cap reached AND server still reports `truncated:true`. This is
   // UNKNOWN — a bounded helper hit its bound without seeing a page that

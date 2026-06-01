@@ -10,6 +10,8 @@
  * can't leak onto the public type — same discipline as the `api/*` mappers.
  */
 
+import { z } from 'zod';
+import { parseWire } from '../wireSchema.js';
 import type { Contest, ContestUpdate } from '../types/contest.js';
 import type { Fill } from '../types/fill.js';
 import type { Position } from '../types/position.js';
@@ -60,26 +62,39 @@ export function decodeContestUpdate(body: unknown): ContestUpdate {
   };
 }
 
+/**
+ * Structural schema for a `fill` SSE frame body — the 16 `Fill` fields,
+ * all required. Unknown extra fields are stripped (zod default), so the
+ * decoded value carries only the public `Fill` shape.
+ */
+const FillSchema = z.object({
+  speculationId: z.string().min(1),
+  contestId: z.string().min(1),
+  commitmentHash: z.string().min(1),
+  maker: z.string().min(1),
+  taker: z.string().min(1),
+  makerPositionType: z.union([z.literal(0), z.literal(1)]),
+  takerPositionType: z.union([z.literal(0), z.literal(1)]),
+  makerRiskAmount: z.string().min(1),
+  takerRiskAmount: z.string().min(1),
+  makerRiskUSDC: z.number().finite(),
+  takerRiskUSDC: z.number().finite(),
+  oddsTick: z.number().finite(),
+  filledAt: z.string().min(1),
+  contestStarted: z.boolean(),
+  txHash: z.string().min(1),
+  logIndex: z.number().finite(),
+});
+
+/**
+ * Decode a `fill` SSE frame body into the public {@link Fill} type. Every
+ * required field is validated against {@link FillSchema}; a malformed body
+ * (e.g. `{}` or a partial body) throws {@link OspexValidationError}. The
+ * own-state SSE subscribe path catches and triggers `frameAborted` teardown
+ * so cursor never advances past an undecoded frame.
+ */
 export function decodeFill(body: unknown): Fill {
-  const b = body as Fill;
-  return {
-    speculationId: b.speculationId,
-    contestId: b.contestId,
-    commitmentHash: b.commitmentHash,
-    maker: b.maker,
-    taker: b.taker,
-    makerPositionType: b.makerPositionType,
-    takerPositionType: b.takerPositionType,
-    makerRiskAmount: b.makerRiskAmount,
-    takerRiskAmount: b.takerRiskAmount,
-    makerRiskUSDC: b.makerRiskUSDC,
-    takerRiskUSDC: b.takerRiskUSDC,
-    oddsTick: b.oddsTick,
-    filledAt: b.filledAt,
-    contestStarted: b.contestStarted,
-    txHash: b.txHash,
-    logIndex: b.logIndex,
-  };
+  return parseWire(FillSchema, body);
 }
 
 /**
