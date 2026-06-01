@@ -4,11 +4,19 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.5.2] — TBD
+
+<!-- Release prepped. core-api PR0b is deployed (Heroku v38) + verified, so the
+     deploy gate is cleared. Before tagging: set the date above to the publish
+     date, run docs/MANUAL_INTEGRATION_TESTING.md, then delete this comment. -->
+
 Phase 3 cutover prerequisite for `ospex-market-maker` (own-state SSE plan §Phase 3). Additive surface on `client.ownState.subscribe`, plus a load-bearing dispatch-model change and a move to declarative (zod) wire-body validation. Backwards-compatible at the call site — pre-existing 1-arg handlers continue to compile and run; the new `meta` argument is positional-and-ignored on the existing form. `Subscription.unsubscribe()` is unchanged (`Promise<void>`). Also adds the **own-state body enrichment** (owner commitments + positions now carry contest context, the canonical `speculationId`, authoritative wei6 amounts, a freshness timestamp, and — on commitments — the full `signedPayload`) and a new public **`client.ownState.health()`** indexer-lag probe. The enrichment + health fields require the matching core-api deploy (own-state SSE plan PR0b); cutting this release before that deploy would make the SDK reject the older, un-enriched bodies.
 
 ### SDK (`@ospex/sdk`)
 
-- **`client.ownState.subscribe` handlers now receive an `OwnStateEventMeta { cursor }` second argument** on `onSnapshot` / `onReady` / `onCommitment` / `onFill` / `onPositionStatus` — the opaque SSE-level cursor AFTER the event the meta accompanies. Consumers persisting cursors for restart resume MUST persist the meta cursor only AFTER the event has been applied AND flushed; persisting earlier risks promoting a cursor for an event still in the consumer's queue. Truncated snapshot frames carry meta too, but the cursor inside is a `k='page-*'` value that is NOT a `Last-Event-ID`-resumable position — persist only the cursor delivered to `onReady` (final baseline complete) or to a delta event. REST snapshot pages deliver `meta.cursor = ''` (no SSE-level cursor).
+- **`client.ownState.subscribe` handlers now receive an `OwnStateEventMeta { cursor }`** — the opaque SSE-level cursor AFTER the event the meta accompanies — as a **second argument** on `onSnapshot` / `onCommitment` / `onFill` / `onPositionStatus`, and as the **only argument** on `onReady` (which carries no body). Consumers persisting cursors for restart resume MUST persist the meta cursor only AFTER the event has been applied AND flushed; persisting earlier risks promoting a cursor for an event still in the consumer's queue. Truncated snapshot frames carry meta too, but the cursor inside is a `k='page-*'` value that is NOT a `Last-Event-ID`-resumable position — persist only the cursor delivered to `onReady` (final baseline complete) or to a delta event. REST snapshot pages deliver `meta.cursor = ''` (no SSE-level cursor).
 - **`OwnStateSubscribeOptions.initialCursor?: string`** resumes server-side replay across a process restart by sending the persisted cursor as `Last-Event-ID` on the FIRST connect. Omit on first-ever connect (cold snapshot). If the server rejects the cursor (400 INVALID_CURSOR) the SDK drops it, emits `onStatus('resync')`, and reconnects cold; consumers should clear their persisted cursor on `onStatus('resync')` to mirror.
 - **New `OwnerStateSubscribeHandlers.onFrame?({ receivedAtMs, kind: 'event' | 'heartbeat' })`** fires for EVERY parsed frame including SSE heartbeat comments (`: hb`), so a `transportFresh` health predicate stays fresh on a quiet wallet that produces no domain events. Fires BEFORE per-event dispatch; a throw inside `onFrame` surfaces via `onError({ phase: 'dispatch' })` but does NOT block downstream dispatch, and `onFrame` is NOT subject to the cursor-advancement contract.
 - **New `OspexStreamError.phase?: 'token-mint' | 'token-refresh' | 'connect' | 'snapshot-page' | 'decode' | 'dispatch'`** discriminator, populated by `client.ownState.subscribe` so composite-health-gate consumers can latch on the failure phase without parsing messages (`token-mint` for bearer-resolution failures BEFORE the first successful `event: ready` of the subscription, `token-refresh` for re-mint failures AFTER it; `connect` for SSE-open failures; `snapshot-page` for truncated-handoff REST paging failures; `decode` for wire-parse failures; `dispatch` for consumer-handler throws). Other resource streams leave it undefined.
@@ -336,7 +344,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.2
 [0.5.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.0
 [0.4.8]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.4.8
