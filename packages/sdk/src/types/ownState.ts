@@ -410,9 +410,11 @@ export interface OwnStateFrameMeta {
  * [[feedback_async_lifecycle_invariant]] — every re-entry point re-checks
  * the closed flag before dispatch).
  *
- * **Cursor advancement contract (v0.5.2+).** Each event-dispatch handler
- * receives an {@link OwnStateEventMeta} second argument; the SDK advances
- * its internal cursor only AFTER the handler returns successfully. A
+ * **Cursor advancement contract (v0.5.2+).** Each handler receives an
+ * {@link OwnStateEventMeta} carrying the cursor — the second argument on
+ * `onSnapshot` / `onCommitment` / `onFill` / `onPositionStatus`, the only
+ * argument on `onReady` (which carries no body); the SDK advances its
+ * internal cursor only AFTER the handler returns successfully. A
  * thrown handler — OR a frame that fails to decode (malformed wire body,
  * decoder throws) — is treated identically: both are events that did NOT
  * land successfully on the consumer, so both trigger the same
