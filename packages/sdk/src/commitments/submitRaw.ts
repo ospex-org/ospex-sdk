@@ -87,7 +87,9 @@ export interface RawSubmitArgs {
    * returns a thenable, `submitRaw` throws
    * `OspexValidationError({ field: 'beforePost' })` WITHOUT posting, rather than
    * ignoring the Promise and posting (the `() => void` type accepts an `async`
-   * function under TS's void-return rule, so the guard is the real boundary).
+   * function under TS's void-return rule, so the guard is the real boundary). The
+   * misused thenable's eventual settlement is swallowed, so a rejecting async hook
+   * can't surface as an `unhandledRejection` / crash the host process.
    * Called before BOTH the initial POST and the `NONCE_TOO_LOW` retry POST. By the
    * time it runs the nonce has been allocated and the payload signed, so aborting
    * simply leaves a (harmless) skipped nonce.
@@ -203,6 +205,12 @@ export async function submitRaw(
     // a thenable, reject it BEFORE the POST rather than proceed.
     const verdict: unknown = (args.beforePost as undefined | (() => unknown))?.();
     if (verdict != null && typeof (verdict as { then?: unknown }).then === 'function') {
+      // Swallow the misused promise's eventual settlement BEFORE throwing — a
+      // rejecting async hook would otherwise surface as an `unhandledRejection`
+      // and can crash the host process (fail-closed for the POST, but not safe
+      // for the process). We refuse the submit regardless of how it settles, so
+      // its outcome is discarded. `Promise.resolve(...)` normalizes any thenable.
+      void Promise.resolve(verdict).catch(() => {});
       throw new OspexValidationError(
         'beforePost must be synchronous: it returned a thenable. An async precondition cannot fail-close before the POST — make it synchronous and throw to abort.',
         { field: 'beforePost' },

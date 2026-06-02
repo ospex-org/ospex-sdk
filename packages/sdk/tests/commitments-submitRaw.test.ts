@@ -234,6 +234,41 @@ describe('submitRaw — beforePost precondition (just-in-time fail-closed gate)'
     expect(postCount).toBe(0); // never posted — the async-hook misuse failed closed
   });
 
+  it('a rejecting async hook fails closed WITHOUT an unhandledRejection (no POST, submitRaw rejects)', async () => {
+    let postCount = 0;
+    const ctx = fakeContext({
+      apiResponder: async () => {
+        postCount += 1;
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+    });
+
+    // The dangerous misuse: an async hook that REJECTS after yielding. The SDK
+    // must (a) refuse the submit, and (b) NOT let the hook's rejection surface as
+    // an unhandledRejection (which can crash the host process). Capture any
+    // unhandled rejection for the duration of this test to prove it doesn't fire.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await expect(
+        submitRaw(ctx, {
+          ...ARGS,
+          beforePost: async () => { await Promise.resolve(); throw new Error('async hook rejected after yielding'); },
+        }),
+      ).rejects.toBeInstanceOf(OspexValidationError);
+      expect(postCount).toBe(0); // never posted — fail-closed for the side effect
+      // Drain microtasks (where the hook's rejection would settle) + one macrotask
+      // (where Node would emit unhandledRejection) before asserting none fired.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toHaveLength(0); // safe for the process — the rejection was swallowed
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('guards the NONCE_TOO_LOW retry POST too — a degradation between the initial POST and the retry aborts the retry', async () => {
     let beforePostCount = 0;
     let postCount = 0;
