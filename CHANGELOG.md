@@ -4,6 +4,12 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.5.3] — 2026-06-02
+
+A synchronous `beforePost` fail-closed precondition on `commitments.submitRaw` — the just-in-time boundary the `ospex-market-maker` own-state posting gate needs at the actual `POST /v1/commitments`, since the caller's go/no-go condition can change while `submitRaw` awaits the chain reads + the signature (those awaits yield to the event loop, so a call-site check can't close the window). Additive + backward-compatible.
+
 ### SDK (`@ospex/sdk`)
 
 - **`commitments.submitRaw` accepts an optional synchronous `beforePost?: () => void`** precondition, re-checked immediately before the irreversible `POST /v1/commitments` (after `getAddress` / allowance / nonce / signing complete) and again before the `NONCE_TOO_LOW` retry POST. Throwing aborts WITHOUT posting and propagates the error unchanged. This is the just-in-time fail-closed seam for automated callers (e.g. `ospex-market-maker`) whose go/no-go condition can flip while `submitRaw` awaits the chain reads + signature — a call-site check alone cannot close that window, since those awaits yield to the event loop. Must be synchronous (an `async` hook would re-introduce a yield before the POST and defeat the guarantee) — and this is ENFORCED fail-closed: if the hook returns a thenable, `submitRaw` throws `OspexValidationError({ field: 'beforePost' })` WITHOUT posting, rather than ignoring the Promise and posting (the `() => void` type accepts an `async` function under TS's void-return rule, so the runtime guard is the real boundary). The misused thenable's settlement is swallowed, so a rejecting async hook fails closed without surfacing an `unhandledRejection`. Additive + backward-compatible (omitted ⇒ unchanged behavior); aborting leaves a harmless skipped nonce.
