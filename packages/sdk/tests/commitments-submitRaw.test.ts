@@ -177,6 +177,71 @@ describe('submitRaw — happy path returns signedPayload', () => {
   });
 });
 
+describe('submitRaw — beforePost precondition (just-in-time fail-closed gate)', () => {
+  it('runs synchronously immediately before the POST', async () => {
+    const calls: string[] = [];
+    const ctx = fakeContext({
+      apiResponder: async () => {
+        calls.push('post');
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+    });
+
+    await submitRaw(ctx, { ...ARGS, beforePost: () => calls.push('beforePost') });
+
+    // beforePost fires, then the POST — proving the hook is the last thing
+    // before the irreversible request (no await between them).
+    expect(calls).toEqual(['beforePost', 'post']);
+  });
+
+  it('throwing aborts WITHOUT posting and propagates the exact error', async () => {
+    let postCount = 0;
+    const ctx = fakeContext({
+      apiResponder: async () => {
+        postCount += 1;
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+    });
+
+    const boom = new Error('own-state degraded after signing');
+    await expect(
+      submitRaw(ctx, { ...ARGS, beforePost: () => { throw boom; } }),
+    ).rejects.toBe(boom);
+    expect(postCount).toBe(0); // the POST never happened — fail-closed at the side-effect boundary
+  });
+
+  it('guards the NONCE_TOO_LOW retry POST too — a degradation between the initial POST and the retry aborts the retry', async () => {
+    let beforePostCount = 0;
+    let postCount = 0;
+    const ctx = fakeContext({
+      apiResponder: async (callIndex) => {
+        postCount += 1;
+        if (callIndex === 0) {
+          throw new OspexAPIError('nonce too low', { apiCode: 'NONCE_TOO_LOW', status: 409 });
+        }
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n, 5_000_000_000n],
+      signatureSeq: [SIG_ORIGINAL, SIG_RETRY],
+    });
+
+    const boom = new Error('degraded during the retry re-sign');
+    await expect(
+      submitRaw(ctx, {
+        ...ARGS,
+        // healthy before the initial POST, degraded before the retry POST
+        beforePost: () => { beforePostCount += 1; if (beforePostCount === 2) throw boom; },
+      }),
+    ).rejects.toBe(boom);
+    expect(beforePostCount).toBe(2); // called before the initial POST AND before the retry POST
+    expect(postCount).toBe(1); // only the initial POST fired (→ NONCE_TOO_LOW); the retry POST was aborted by beforePost
+  });
+});
+
 describe('submitRaw — NONCE_TOO_LOW retry path returns the retry signedPayload (not the original)', () => {
   it('returned signedPayload reflects the retry struct, hash, and signature — original is discarded', async () => {
     // The retry path: first POST throws NONCE_TOO_LOW, SDK re-reads the

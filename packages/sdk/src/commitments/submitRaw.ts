@@ -16,8 +16,9 @@
  *   3. eth_call MatchingModule.s_minNonces (canonical floor)
  *   4. Pick nonce per the SDK's strategy (or use override)
  *   5. Build typed data, sign via Signer, hash locally
- *   6. POST /v1/commitments with `Idempotency-Key: <hash>` header
- *   7. On NONCE_TOO_LOW, refetch floor and retry once
+ *   6. Run the optional synchronous `beforePost` precondition (throw → abort)
+ *   7. POST /v1/commitments with `Idempotency-Key: <hash>` header
+ *   8. On NONCE_TOO_LOW, refetch floor and retry once (re-running `beforePost`)
  */
 
 import { OspexAPIError, OspexValidationError } from '../errors.js';
@@ -68,6 +69,25 @@ export interface RawSubmitArgs {
    * omitted, the SDK uses `max(floor, lastInProcess + 1, unixSec)`.
    */
   nonce?: bigint;
+  /**
+   * Optional SYNCHRONOUS precondition, re-checked by the SDK immediately before
+   * the irreversible `POST /v1/commitments` — after `getAddress`, the allowance
+   * read, the nonce-floor read, and signing have all completed. Throw to abort
+   * WITHOUT posting; the thrown error propagates out of `submitRaw` unchanged.
+   *
+   * This is the just-in-time fail-closed seam for automated callers (e.g. a
+   * market-maker) whose own go/no-go condition can change DURING those async
+   * steps: a check at the call site is not sufficient, because state can flip
+   * while the SDK awaits the chain reads and the signature. The hook runs on the
+   * same synchronous tick as the POST (no `await` between it and the request), so
+   * it closes that window.
+   *
+   * MUST be synchronous — an `async` hook would re-introduce a yield before the
+   * POST and defeat the guarantee. Called before BOTH the initial POST and the
+   * `NONCE_TOO_LOW` retry POST. By the time it runs the nonce has been allocated
+   * and the payload signed, so aborting simply leaves a (harmless) skipped nonce.
+   */
+  beforePost?: () => void;
 }
 
 export interface SubmitResult {
@@ -166,6 +186,10 @@ export async function submitRaw(
     sig: Hex,
     hashHex: Hex,
   ): Promise<PublicVisibleCommitment> => {
+    // Just-in-time fail-closed precondition, synchronously immediately before the
+    // irreversible POST (no `await` in between). Throwing aborts without posting;
+    // the error propagates out of submitRaw. Runs before the retry POST too.
+    args.beforePost?.();
     const body = await ctx.api.request<CommitmentBody>('/v1/commitments', {
       method: 'POST',
       headers: { 'Idempotency-Key': hashHex },
