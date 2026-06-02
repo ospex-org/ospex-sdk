@@ -83,9 +83,14 @@ export interface RawSubmitArgs {
    * it closes that window.
    *
    * MUST be synchronous — an `async` hook would re-introduce a yield before the
-   * POST and defeat the guarantee. Called before BOTH the initial POST and the
-   * `NONCE_TOO_LOW` retry POST. By the time it runs the nonce has been allocated
-   * and the payload signed, so aborting simply leaves a (harmless) skipped nonce.
+   * POST and defeat the guarantee. The SDK ENFORCES this fail-closed: if the hook
+   * returns a thenable, `submitRaw` throws
+   * `OspexValidationError({ field: 'beforePost' })` WITHOUT posting, rather than
+   * ignoring the Promise and posting (the `() => void` type accepts an `async`
+   * function under TS's void-return rule, so the guard is the real boundary).
+   * Called before BOTH the initial POST and the `NONCE_TOO_LOW` retry POST. By the
+   * time it runs the nonce has been allocated and the payload signed, so aborting
+   * simply leaves a (harmless) skipped nonce.
    */
   beforePost?: () => void;
 }
@@ -186,10 +191,23 @@ export async function submitRaw(
     sig: Hex,
     hashHex: Hex,
   ): Promise<PublicVisibleCommitment> => {
-    // Just-in-time fail-closed precondition, synchronously immediately before the
-    // irreversible POST (no `await` in between). Throwing aborts without posting;
-    // the error propagates out of submitRaw. Runs before the retry POST too.
-    args.beforePost?.();
+    // Just-in-time fail-closed precondition, run synchronously immediately before
+    // the irreversible POST (no `await` in between). A sync throw aborts without
+    // posting and propagates out of submitRaw; runs before the retry POST too.
+    //
+    // ENFORCE the synchronous contract at runtime: the `() => void` type accepts
+    // an `async` function (TS's void-return rule) and JS / `as any` callers bypass
+    // it entirely. An async hook CANNOT fail-close — it returns a pending Promise
+    // the SDK would otherwise ignore and POST anyway (fail-OPEN; the hook might
+    // reject only after the request is already in flight). So if the hook returns
+    // a thenable, reject it BEFORE the POST rather than proceed.
+    const verdict: unknown = (args.beforePost as undefined | (() => unknown))?.();
+    if (verdict != null && typeof (verdict as { then?: unknown }).then === 'function') {
+      throw new OspexValidationError(
+        'beforePost must be synchronous: it returned a thenable. An async precondition cannot fail-close before the POST — make it synchronous and throw to abort.',
+        { field: 'beforePost' },
+      );
+    }
     const body = await ctx.api.request<CommitmentBody>('/v1/commitments', {
       method: 'POST',
       headers: { 'Idempotency-Key': hashHex },

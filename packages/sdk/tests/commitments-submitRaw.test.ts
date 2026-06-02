@@ -16,7 +16,7 @@ import type { PublicClient } from 'viem';
 import { submitRaw } from '../src/commitments/submitRaw.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import { buildDomain, hashCommitment } from '../src/chain/eip712.js';
-import { OspexAPIError } from '../src/errors.js';
+import { OspexAPIError, OspexValidationError } from '../src/errors.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
 import type { CommitmentBody } from '../src/api/types.js';
 import type { Signer } from '../src/types/signer.js';
@@ -212,6 +212,26 @@ describe('submitRaw — beforePost precondition (just-in-time fail-closed gate)'
       submitRaw(ctx, { ...ARGS, beforePost: () => { throw boom; } }),
     ).rejects.toBe(boom);
     expect(postCount).toBe(0); // the POST never happened — fail-closed at the side-effect boundary
+  });
+
+  it('rejects an async (thenable-returning) hook fail-closed — does NOT post', async () => {
+    let postCount = 0;
+    const ctx = fakeContext({
+      apiResponder: async () => {
+        postCount += 1;
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+    });
+
+    // An async hook typechecks against `() => void` (TS's void-return rule) but
+    // cannot fail-close — the SDK would otherwise ignore the returned Promise and
+    // POST anyway. The runtime guard must reject it BEFORE posting (fail-closed).
+    await expect(
+      submitRaw(ctx, { ...ARGS, beforePost: () => Promise.resolve() }),
+    ).rejects.toBeInstanceOf(OspexValidationError);
+    expect(postCount).toBe(0); // never posted — the async-hook misuse failed closed
   });
 
   it('guards the NONCE_TOO_LOW retry POST too — a degradation between the initial POST and the retry aborts the retry', async () => {
