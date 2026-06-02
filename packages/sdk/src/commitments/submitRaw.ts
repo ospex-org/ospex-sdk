@@ -16,8 +16,9 @@
  *   3. eth_call MatchingModule.s_minNonces (canonical floor)
  *   4. Pick nonce per the SDK's strategy (or use override)
  *   5. Build typed data, sign via Signer, hash locally
- *   6. POST /v1/commitments with `Idempotency-Key: <hash>` header
- *   7. On NONCE_TOO_LOW, refetch floor and retry once
+ *   6. Run the optional synchronous `beforePost` precondition (throw → abort)
+ *   7. POST /v1/commitments with `Idempotency-Key: <hash>` header
+ *   8. On NONCE_TOO_LOW, refetch floor and retry once (re-running `beforePost`)
  */
 
 import { OspexAPIError, OspexValidationError } from '../errors.js';
@@ -68,6 +69,32 @@ export interface RawSubmitArgs {
    * omitted, the SDK uses `max(floor, lastInProcess + 1, unixSec)`.
    */
   nonce?: bigint;
+  /**
+   * Optional SYNCHRONOUS precondition, re-checked by the SDK immediately before
+   * the irreversible `POST /v1/commitments` — after `getAddress`, the allowance
+   * read, the nonce-floor read, and signing have all completed. Throw to abort
+   * WITHOUT posting; the thrown error propagates out of `submitRaw` unchanged.
+   *
+   * This is the just-in-time fail-closed seam for automated callers (e.g. a
+   * market-maker) whose own go/no-go condition can change DURING those async
+   * steps: a check at the call site is not sufficient, because state can flip
+   * while the SDK awaits the chain reads and the signature. The hook runs on the
+   * same synchronous tick as the POST (no `await` between it and the request), so
+   * it closes that window.
+   *
+   * MUST be synchronous — an `async` hook would re-introduce a yield before the
+   * POST and defeat the guarantee. The SDK ENFORCES this fail-closed: if the hook
+   * returns a thenable, `submitRaw` throws
+   * `OspexValidationError({ field: 'beforePost' })` WITHOUT posting, rather than
+   * ignoring the Promise and posting (the `() => void` type accepts an `async`
+   * function under TS's void-return rule, so the guard is the real boundary). The
+   * misused thenable's eventual settlement is swallowed, so a rejecting async hook
+   * can't surface as an `unhandledRejection` / crash the host process.
+   * Called before BOTH the initial POST and the `NONCE_TOO_LOW` retry POST. By the
+   * time it runs the nonce has been allocated and the payload signed, so aborting
+   * simply leaves a (harmless) skipped nonce.
+   */
+  beforePost?: () => void;
 }
 
 export interface SubmitResult {
@@ -166,6 +193,29 @@ export async function submitRaw(
     sig: Hex,
     hashHex: Hex,
   ): Promise<PublicVisibleCommitment> => {
+    // Just-in-time fail-closed precondition, run synchronously immediately before
+    // the irreversible POST (no `await` in between). A sync throw aborts without
+    // posting and propagates out of submitRaw; runs before the retry POST too.
+    //
+    // ENFORCE the synchronous contract at runtime: the `() => void` type accepts
+    // an `async` function (TS's void-return rule) and JS / `as any` callers bypass
+    // it entirely. An async hook CANNOT fail-close — it returns a pending Promise
+    // the SDK would otherwise ignore and POST anyway (fail-OPEN; the hook might
+    // reject only after the request is already in flight). So if the hook returns
+    // a thenable, reject it BEFORE the POST rather than proceed.
+    const verdict: unknown = (args.beforePost as undefined | (() => unknown))?.();
+    if (verdict != null && typeof (verdict as { then?: unknown }).then === 'function') {
+      // Swallow the misused promise's eventual settlement BEFORE throwing — a
+      // rejecting async hook would otherwise surface as an `unhandledRejection`
+      // and can crash the host process (fail-closed for the POST, but not safe
+      // for the process). We refuse the submit regardless of how it settles, so
+      // its outcome is discarded. `Promise.resolve(...)` normalizes any thenable.
+      void Promise.resolve(verdict).catch(() => {});
+      throw new OspexValidationError(
+        'beforePost must be synchronous: it returned a thenable. An async precondition cannot fail-close before the POST — make it synchronous and throw to abort.',
+        { field: 'beforePost' },
+      );
+    }
     const body = await ctx.api.request<CommitmentBody>('/v1/commitments', {
       method: 'POST',
       headers: { 'Idempotency-Key': hashHex },

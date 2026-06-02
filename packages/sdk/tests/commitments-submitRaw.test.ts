@@ -16,7 +16,7 @@ import type { PublicClient } from 'viem';
 import { submitRaw } from '../src/commitments/submitRaw.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import { buildDomain, hashCommitment } from '../src/chain/eip712.js';
-import { OspexAPIError } from '../src/errors.js';
+import { OspexAPIError, OspexValidationError } from '../src/errors.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
 import type { CommitmentBody } from '../src/api/types.js';
 import type { Signer } from '../src/types/signer.js';
@@ -174,6 +174,126 @@ describe('submitRaw — happy path returns signedPayload', () => {
     // domain — proves the payload is "act-on-able" without re-fetching.
     const domain = buildDomain(CHAIN_ID, MATCHING_MODULE);
     expect(hashCommitment(domain, result.signedPayload.commitment)).toBe(result.hash);
+  });
+});
+
+describe('submitRaw — beforePost precondition (just-in-time fail-closed gate)', () => {
+  it('runs synchronously immediately before the POST', async () => {
+    const calls: string[] = [];
+    const ctx = fakeContext({
+      apiResponder: async () => {
+        calls.push('post');
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+    });
+
+    await submitRaw(ctx, { ...ARGS, beforePost: () => calls.push('beforePost') });
+
+    // beforePost fires, then the POST — proving the hook is the last thing
+    // before the irreversible request (no await between them).
+    expect(calls).toEqual(['beforePost', 'post']);
+  });
+
+  it('throwing aborts WITHOUT posting and propagates the exact error', async () => {
+    let postCount = 0;
+    const ctx = fakeContext({
+      apiResponder: async () => {
+        postCount += 1;
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+    });
+
+    const boom = new Error('own-state degraded after signing');
+    await expect(
+      submitRaw(ctx, { ...ARGS, beforePost: () => { throw boom; } }),
+    ).rejects.toBe(boom);
+    expect(postCount).toBe(0); // the POST never happened — fail-closed at the side-effect boundary
+  });
+
+  it('rejects an async (thenable-returning) hook fail-closed — does NOT post', async () => {
+    let postCount = 0;
+    const ctx = fakeContext({
+      apiResponder: async () => {
+        postCount += 1;
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+    });
+
+    // An async hook typechecks against `() => void` (TS's void-return rule) but
+    // cannot fail-close — the SDK would otherwise ignore the returned Promise and
+    // POST anyway. The runtime guard must reject it BEFORE posting (fail-closed).
+    await expect(
+      submitRaw(ctx, { ...ARGS, beforePost: () => Promise.resolve() }),
+    ).rejects.toBeInstanceOf(OspexValidationError);
+    expect(postCount).toBe(0); // never posted — the async-hook misuse failed closed
+  });
+
+  it('a rejecting async hook fails closed WITHOUT an unhandledRejection (no POST, submitRaw rejects)', async () => {
+    let postCount = 0;
+    const ctx = fakeContext({
+      apiResponder: async () => {
+        postCount += 1;
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+    });
+
+    // The dangerous misuse: an async hook that REJECTS after yielding. The SDK
+    // must (a) refuse the submit, and (b) NOT let the hook's rejection surface as
+    // an unhandledRejection (which can crash the host process). Capture any
+    // unhandled rejection for the duration of this test to prove it doesn't fire.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await expect(
+        submitRaw(ctx, {
+          ...ARGS,
+          beforePost: async () => { await Promise.resolve(); throw new Error('async hook rejected after yielding'); },
+        }),
+      ).rejects.toBeInstanceOf(OspexValidationError);
+      expect(postCount).toBe(0); // never posted — fail-closed for the side effect
+      // Drain microtasks (where the hook's rejection would settle) + one macrotask
+      // (where Node would emit unhandledRejection) before asserting none fired.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toHaveLength(0); // safe for the process — the rejection was swallowed
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('guards the NONCE_TOO_LOW retry POST too — a degradation between the initial POST and the retry aborts the retry', async () => {
+    let beforePostCount = 0;
+    let postCount = 0;
+    const ctx = fakeContext({
+      apiResponder: async (callIndex) => {
+        postCount += 1;
+        if (callIndex === 0) {
+          throw new OspexAPIError('nonce too low', { apiCode: 'NONCE_TOO_LOW', status: 409 });
+        }
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n, 5_000_000_000n],
+      signatureSeq: [SIG_ORIGINAL, SIG_RETRY],
+    });
+
+    const boom = new Error('degraded during the retry re-sign');
+    await expect(
+      submitRaw(ctx, {
+        ...ARGS,
+        // healthy before the initial POST, degraded before the retry POST
+        beforePost: () => { beforePostCount += 1; if (beforePostCount === 2) throw boom; },
+      }),
+    ).rejects.toBe(boom);
+    expect(beforePostCount).toBe(2); // called before the initial POST AND before the retry POST
+    expect(postCount).toBe(1); // only the initial POST fired (→ NONCE_TOO_LOW); the retry POST was aborted by beforePost
   });
 });
 
