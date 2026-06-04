@@ -30,6 +30,8 @@ Rationale: npm is overwhelmingly a developer-productivity ecosystem; a sports-be
 - **Errors are typed.** Throw `OspexAPIError`, `OspexConfigError`, `OspexValidationError`, `OspexSigningError`, `OspexAllowanceError`, `OspexChainError`, `OspexScriptApprovalError`, or `OspexSubscriptionError` — never strings.
 - **Contest creation fee → TreasuryModule, not PositionModule.** `OspexAllowanceError.spender` for M4 contest writes is `TreasuryModule` (USDC) or `OracleModule` (LINK) — distinct from M2's USDC→PositionModule path. The CLI's `handleContestAllowance` distinguishes by comparing `err.spender` to `getAddresses(chainId).oracleModule`.
 - **All I/O is async.** No mixed sync/async surfaces.
+- **Wire bodies are validated with zod — one schema per type, at one boundary.** Every decoder that parses an untrusted wire body routes through `parseWire()` in `src/wireSchema.ts`, which runs the type's zod schema and throws `OspexValidationError` (the `ZodError` attached as `cause`) on mismatch — consumers never see a raw `ZodError`. Never hand-write `if`/`typeof` field checks at a decode boundary: the zod schema is the single source of truth for shape, and the type comes from `z.infer`. (Own-state schemas live in `src/ownState/schemas.ts`; the boundary helper is `src/wireSchema.ts`.) This rule exists because the pre-zod own-state decoder failed review seven times, each round surfacing one more wire site that trusted upstream JSON shape.
+- **Bounded helpers throw a typed UNKNOWN — never a sentinel.** A page-cap / retry-limit / scan-bound that is hit *without* a definitive answer MUST throw a typed error carrying the bound discriminator (e.g. `OspexOwnStateError({ reason: 'scan_limit_exceeded' })`), never return `null`/empty/`false` that a caller can read as a verdict (an MM cancel path reading `null` as "no live exposure" is a real footgun). Relatedly, **never promote a resume cursor from a recovery-incomplete frame** — a truncated / `page-*` cursor is not a `Last-Event-ID`; on recovery failure, clear it and cold-restart.
 
 ## Build & dependency gotchas
 
@@ -51,6 +53,8 @@ yarn workspace @ospex/cli test
 yarn typecheck                               # both packages
 node packages/cli/dist/index.js <command>    # run CLI without linking
 ```
+
+> **`yarn typecheck` does NOT cover `packages/sdk/tests/integration/`.** Both `packages/{sdk,cli}/tsconfig.json` set `exclude: ["node_modules", "dist", "tests"]`, so `tsc --noEmit` skips the whole `tests/` tree — a green typecheck is **not** proof that the integration suite still compiles. For any signature change that touches `tests/integration/`, run a standalone `tsc` against that path, and sweep for stale call sites with a **negation grep** (match any `name(` call that does NOT fit the new shape) — positive greps for the known-good pattern miss sites that use a different identifier.
 
 ## What lives where (when in doubt)
 
