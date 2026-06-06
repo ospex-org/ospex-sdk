@@ -4,7 +4,12 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+Validation hardening on the own-state decode + stream-auth boundaries — each closes a gap where a malformed wire value would surface as a raw `SyntaxError` or flow in unvalidated instead of the documented `OspexValidationError`. No change for valid bodies.
+
+### SDK (`@ospex/sdk`)
+
+- **Own-state owner-commitment uint256 fields (`riskAmount`, `filledRiskAmount`, `remainingRiskAmount`, `nonce`) are validated as decimal `uint256` strings** (`/^\d+$/`, the same `UINT256_STRING` guard the signed-payload struct already uses) at decode time. A non-decimal value now fails closed with `OspexValidationError` at `decodeSnapshot` / `client.ownState.snapshot()` / `client.ownState.getCommitment()` instead of throwing a raw `BigInt(...)` `SyntaxError` downstream (e.g. in the `isLive` derivation). core-api always emits these as decimal strings, so valid bodies are unchanged.
+- **The stream-auth token-exchange response is validated at the `exchangeToken` boundary** — a missing `token` or a non-safe-integer `expiresAt` surfaces `OspexValidationError` instead of flowing in unvalidated through the response cast (the `expiresAt` drives the bearer's ~120 s-ahead refresh predicate). Mirrors the existing challenge-field `Number.isSafeInteger` guard.
 
 ## [0.5.3] — 2026-06-02
 

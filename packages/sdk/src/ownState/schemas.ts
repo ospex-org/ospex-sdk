@@ -101,10 +101,18 @@ export const OwnerCommitmentBodySchema = z.object({
   positionType: POSITION_TYPE.nullable(),
   oddsTick: z.number().int().nullable(),
   marketType: MARKET_TYPE.nullable(),
-  riskAmount: z.string().min(1),
-  filledRiskAmount: z.string().min(1),
-  remainingRiskAmount: z.string().min(1),
-  nonce: z.string().min(1),
+  // uint256 wire amounts/nonce: `UINT256_STRING` (`/^\d+$/`), not a bare
+  // non-empty string, so a non-decimal value is rejected with
+  // `OspexValidationError` at decode time rather than throwing a raw
+  // `SyntaxError` from a downstream `BigInt(...)` coercion (e.g.
+  // `computeOwnerIsLive`'s `BigInt(remainingRiskAmount)`, or any SDK consumer
+  // that coerces these on the decoded `OwnerCommitment`). Mirrors the
+  // signed-payload struct's `riskAmount` / `nonce` guards above. core-api
+  // always emits these as decimal strings, so no change for valid bodies.
+  riskAmount: UINT256_STRING,
+  filledRiskAmount: UINT256_STRING,
+  remainingRiskAmount: UINT256_STRING,
+  nonce: UINT256_STRING,
   expiry: z.string().nullable(),
   speculationKey: z.string().nullable(),
   signature: z.string().nullable(),

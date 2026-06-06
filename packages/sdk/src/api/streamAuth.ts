@@ -78,9 +78,28 @@ export class StreamAuthApi {
         { field: 'signature' },
       );
     }
-    return this.client.request<StreamTokenResponseBody>('/v1/auth/stream-token', {
+    const res = await this.client.request<StreamTokenResponseBody>('/v1/auth/stream-token', {
       method: 'POST',
       body: { challenge, signature },
     });
+    // `client.request` is a blind `response.json() as T` cast. Validate the two
+    // fields downstream code trusts — the bearer `token` and the `expiresAt`
+    // that drives the freshness predicate (`nowSec + REFRESH_LEAD_SEC <
+    // expiresAt`) — so a malformed token body surfaces `OspexValidationError`
+    // here instead of flowing in unvalidated. Mirrors the challenge guard in
+    // `ownState/auth.ts` (`Number.isSafeInteger(issuedAt/expiresAt)`).
+    if (typeof res.token !== 'string' || res.token.length === 0) {
+      throw new OspexValidationError(
+        'Stream-auth token response is missing a token.',
+        { field: 'token' },
+      );
+    }
+    if (!Number.isSafeInteger(res.expiresAt)) {
+      throw new OspexValidationError(
+        'Stream-auth token response has a malformed expiresAt (must be a safe integer of unix seconds).',
+        { field: 'expiresAt' },
+      );
+    }
+    return res;
   }
 }

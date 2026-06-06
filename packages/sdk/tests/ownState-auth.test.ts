@@ -356,4 +356,38 @@ describe('ownState/auth.mintStreamToken — defensive refusals', () => {
     ).rejects.toBeInstanceOf(OspexValidationError);
     expect(calls.length).toBe(0);
   });
+
+  // F8 — the token-exchange response is validated at the `exchangeToken`
+  // boundary (the bearer `token` + the `expiresAt` the refresh predicate
+  // trusts), so a malformed token body surfaces OspexValidationError instead of
+  // flowing in unvalidated through the blind `response.json() as T` cast.
+  it('rejects a token response with a malformed expiresAt (OspexValidationError, field expiresAt)', async () => {
+    const challenge = freshChallenge();
+    const { api } = makeApi((call) => {
+      if (call.url.endsWith('/v1/auth/stream-challenge')) {
+        return { status: 200, body: { challenge, expiresAt: challenge.expiresAt } };
+      }
+      // A bearer minted with a non-safe-integer expiresAt (here a stringified
+      // number — the classic shape that slips through a blind JSON cast).
+      return { status: 200, body: { token: 'PAYLOAD.SIG', expiresAt: '900' } };
+    });
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    await expect(
+      mintStreamToken({ api, signer, address: TEST_ADDRESS, chainId: CHAIN_ID, matchingModule: MATCHING_MODULE }),
+    ).rejects.toMatchObject({ name: 'OspexValidationError', field: 'expiresAt' });
+  });
+
+  it('rejects a token response missing the token field (OspexValidationError, field token)', async () => {
+    const challenge = freshChallenge();
+    const { api } = makeApi((call) => {
+      if (call.url.endsWith('/v1/auth/stream-challenge')) {
+        return { status: 200, body: { challenge, expiresAt: challenge.expiresAt } };
+      }
+      return { status: 200, body: { expiresAt: challenge.issuedAt + 900 } };
+    });
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    await expect(
+      mintStreamToken({ api, signer, address: TEST_ADDRESS, chainId: CHAIN_ID, matchingModule: MATCHING_MODULE }),
+    ).rejects.toMatchObject({ name: 'OspexValidationError', field: 'token' });
+  });
 });
