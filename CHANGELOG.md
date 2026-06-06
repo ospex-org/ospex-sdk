@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.5.4] — 2026-06-06
+
 Validation hardening on the own-state decode + stream-auth boundaries — each closes a gap where a malformed wire value would surface as a raw `SyntaxError` or flow in unvalidated instead of the documented `OspexValidationError`. No change for valid bodies.
 
 ### SDK (`@ospex/sdk`)
@@ -353,7 +357,9 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.4
+[0.5.3]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.3
 [0.5.2]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.2
 [0.5.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.0
