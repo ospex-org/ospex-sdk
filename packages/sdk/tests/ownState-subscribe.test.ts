@@ -876,6 +876,26 @@ describe('subscribeToOwnState — lifecycle invariant', () => {
               { event: 'snapshot', id: 'LIVE', data: snapshotBody() },
               { event: 'ready', data: {} },
               { event: 'commitment', id: 'CUR-1', data: commitmentBody(HASH_A) },
+              {
+                event: 'fill', id: 'CUR-2',
+                data: {
+                  speculationId: '1', contestId: '42', commitmentHash: HASH_A,
+                  maker: TEST_ADDRESS, taker: '0x' + '11'.repeat(20),
+                  makerPositionType: 0, takerPositionType: 1,
+                  makerRiskAmount: '5000000', takerRiskAmount: '5000000',
+                  makerRiskUSDC: 5, takerRiskUSDC: 5, oddsTick: 200,
+                  filledAt: new Date().toISOString(), contestStarted: false,
+                  txHash: '0x' + 'aa'.repeat(32), logIndex: 0,
+                },
+              },
+              {
+                event: 'positionStatus', id: 'CUR-3',
+                data: {
+                  address: TEST_ADDRESS, speculationId: '1', positionType: 0,
+                  status: 'pendingSettle', result: 'won', claimableAmount: '9500000',
+                  sourceUpdatedAt: '2026-01-01T00:00:00.000000Z',
+                } satisfies PositionStatusEvent,
+              },
             ]),
           ),
         );
@@ -907,52 +927,58 @@ describe('subscribeToOwnState — lifecycle invariant', () => {
     };
     const api = new ApiClient({ apiUrl: 'https://api.test', fetch: fakeFetch });
 
-    const throwingHandlers: OwnerStateSubscribeHandlers = {
-      onSnapshot: () => {
-        throw new Error('onSnapshot fired after unsubscribe');
-      },
-      onReady: () => {
-        throw new Error('onReady fired after unsubscribe');
-      },
-      onCommitment: () => {
-        throw new Error('onCommitment fired after unsubscribe');
-      },
-      onFill: () => {
-        throw new Error('onFill fired after unsubscribe');
-      },
-      onPositionStatus: () => {
-        throw new Error('onPositionStatus fired after unsubscribe');
-      },
+    // Record EVERY handler invocation once close is initiated. The data handlers
+    // also THROW (the adversarial "throw-if-touched"); the record is captured
+    // BEFORE the throw, so even a swallowed throw is detected. onStatus / onError
+    // are closed-guarded in the SDK (emitStatus / emitError early-return), and
+    // onFrame is guarded by the frame-loop's top `if (closed) break` — so NONE may
+    // fire post-close.
+    let closeInitiated = false;
+    const firedAfterClose: string[] = [];
+    const rec = (name: string): void => {
+      if (closeInitiated) firedAfterClose.push(name);
     };
-    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
-    const sub = subscribeToOwnState(
-      {
-        api,
-        signer,
-        address: TEST_ADDRESS,
-        chainId: CHAIN_ID,
-        matchingModule: MATCHING_MODULE,
-      },
-      throwingHandlers,
-    );
+    const throwingHandlers: OwnerStateSubscribeHandlers = {
+      onSnapshot: () => { rec('onSnapshot'); throw new Error('onSnapshot fired after unsubscribe'); },
+      onReady: () => { rec('onReady'); throw new Error('onReady fired after unsubscribe'); },
+      onCommitment: () => { rec('onCommitment'); throw new Error('onCommitment fired after unsubscribe'); },
+      onFill: () => { rec('onFill'); throw new Error('onFill fired after unsubscribe'); },
+      onPositionStatus: () => { rec('onPositionStatus'); throw new Error('onPositionStatus fired after unsubscribe'); },
+      onStatus: () => { rec('onStatus'); },
+      onError: () => { rec('onError'); },
+      onFrame: () => { rec('onFrame'); },
+    };
 
-    // Wait for the heartbeat to land (connection established).
-    await new Promise((r) => setTimeout(r, 50));
-    // Unsubscribe BEFORE releasing the frames.
-    await sub.unsubscribe();
-    // Now let the frames out — handlers MUST NOT fire (the throws would
-    // not crash the subscriber transport, but the SDK's internal handler
-    // dispatch guards them anyway; we get there by never reaching the
-    // throw because closed=true is checked before dispatch).
-    release?.();
-    // Give the body time to drain. If a throw fires, it would be
-    // swallowed by the transport's try/catch — but the test invariant
-    // is that NO handler was called. We re-assert by passing a noop
-    // alternative... actually simpler: rely on the bag of throws never
-    // having latched. The test is "no exception escapes; subscription
-    // is silent post-close" — proved by it completing without unhandled
-    // rejection.
-    await new Promise((r) => setTimeout(r, 100));
+    // Explicitly capture any escaped rejection — the prior test only relied on the
+    // process not crashing, but the throws are swallowed by emitError's closed-guard,
+    // so that reliance was vacuous.
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+      const sub = subscribeToOwnState(
+        { api, signer, address: TEST_ADDRESS, chainId: CHAIN_ID, matchingModule: MATCHING_MODULE },
+        throwingHandlers,
+      );
+      // Heartbeat lands (connection established) — a PRE-close onFrame, not recorded.
+      await new Promise((r) => setTimeout(r, 50));
+      // Initiate close, THEN release the domain frames so they all arrive post-close.
+      closeInitiated = true;
+      await sub.unsubscribe();
+      release?.();
+      await new Promise((r) => setTimeout(r, 100)); // drain the body
+      await new Promise((r) => setTimeout(r, 0)); // flush any trailing microtask / rejection
+
+      // A closed subscription delivered NOTHING to ANY handler. (Dropping the
+      // frame-loop's `if (closed) break` surfaces post-close `onFrame`s → red.)
+      expect(firedAfterClose).toEqual([]);
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });
 
