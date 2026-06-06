@@ -343,6 +343,20 @@ describe('decodeSnapshot — wire → public', () => {
     expect(() => decodeSnapshot(body)).toThrow(OspexValidationError);
   });
 
+  // F6 — the owner body's uint256 amount/nonce fields are `UINT256_STRING`
+  // (`/^\d+$/`), so a non-decimal value is rejected with OspexValidationError at
+  // decode time rather than throwing a raw `SyntaxError` from a downstream
+  // `BigInt(...)` (e.g. `computeOwnerIsLive`'s `BigInt(remainingRiskAmount)`) or
+  // flowing through unvalidated. Mirrors the signedPayload rejection above.
+  for (const field of ['riskAmount', 'filledRiskAmount', 'remainingRiskAmount', 'nonce'] as const) {
+    it(`rejects a non-decimal ${field} with OspexValidationError (not a raw BigInt SyntaxError)`, () => {
+      const body = snapshotResponse({
+        commitments: [visibleCommitmentBody({ [field]: '1.5' } as Partial<OwnerCommitmentBody>)],
+      });
+      expect(() => decodeSnapshot(body)).toThrow(OspexValidationError);
+    });
+  }
+
   it('decodes each OwnerPosition status branch with full discriminant fields', () => {
     // PR0b enrichment fields shared across the discriminants.
     const enr = {
