@@ -4,6 +4,12 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.6.1] — 2026-06-09
+
+Patch: a runtime-correctness fix to the v0.6.0 `ospex own-state watch` operator CLI, surfaced by the own-state SSE retirement-gate soak. SDK library surface unchanged.
+
 ### CLI (`@ospex/cli`)
 
 - **`ospex own-state watch` now recomputes `liveCommitmentCount` from current commitment lifecycle against the wall clock** — at summary time and on every `heartbeat` line — instead of trusting the server's last-received `isLive` boolean. Commitment expiry is passive/time-based and emits no SSE delta, so a long-running watcher previously retained expired (and soft-cancelled-then-expired) rows as "live" forever until a terminal frame that never arrives; a fresh watcher recomputed correctly, so the two disagreed (the v0.6.0 own-state SSE retirement-gate soak hit exactly this: stale `liveCommitmentCount=8` while actual public/orderbook state was zero). The watcher now retains each row's `storedStatus` / `remainingRiskAmount` / `expiry` / `nonceInvalidated` and re-derives liveness on demand (`storedStatus ∈ {open, partially_filled}` AND not `nonceInvalidated` AND `remainingRiskAmount > 0` AND expiry is null-or-strictly-future), so a passively-expired row ages out of the count with no new event. `heartbeat` lines gain an additive `liveCommitmentCount` field so a long-running watch shows the count age to zero in real time without a reconnect or fresh snapshot. Unblocks the own-state SSE retirement gate's "long-running observer maintains correct state without a fresh snapshot" requirement.
