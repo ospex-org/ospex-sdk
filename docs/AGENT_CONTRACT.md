@@ -623,7 +623,7 @@ type OwnStateWatchLine =
   | { kind: 'positionStatus'; at: string; address: string; cursor: string; event: PositionStatusEvent }
   | { kind: 'status'; at: string; address: string;
       status: 'connected' | 'reconnecting' | 'degraded' | 'resync' }
-  | { kind: 'heartbeat'; at: string; address: string }                             // freshness pulse (~20s on a quiet wallet)
+  | { kind: 'heartbeat'; at: string; address: string; liveCommitmentCount: number } // freshness pulse (~20s); count recomputed vs the heartbeat clock
   | { kind: 'error'; at: string; address: string; reason: 'connection_failed' | 'capacity_exceeded' | 'fatal';
       phase: string | null; status: number | null; message: string }
   | { kind: 'summary'; at: string; address: string;
@@ -656,7 +656,7 @@ Every economic / lifecycle / identity field (`commitmentHash`, `maker`, `visibil
 | `--max-events <n>` | Exit `0` after N delta events (`commitment` / `fill` / `positionStatus`; snapshot/ready/status/heartbeat do not count). |
 | `--counts-only` | On `snapshot` lines, emit counts only — omit the `commitments` / `positions` arrays (terse runs). |
 
-With none of these, the command runs until SIGINT (Ctrl+C) / SIGTERM. On any clean exit it emits a final `summary` line (counts + the stream-observed `liveCommitmentCount`, an advisory tally of commitments last seen with `isLive: true`).
+With none of these, the command runs until SIGINT (Ctrl+C) / SIGTERM. On any clean exit it emits a final `summary` line (event counts + `liveCommitmentCount`). `liveCommitmentCount` is **recomputed against the current wall clock** — at summary time and on every `heartbeat` line — from each tracked row's `storedStatus` / `remainingRiskAmount` / `expiry` / `nonceInvalidated`, NOT from the server's last-received `isLive` boolean. Because commitment expiry is passive (no SSE delta crosses it), this is what lets a long-running watcher age a passively-expired row out of the count without a fresh snapshot or reconnect — watch the `heartbeat` lines' `liveCommitmentCount` fall to zero as short-lived quotes expire.
 
 #### Promises
 
@@ -668,7 +668,7 @@ With none of these, the command runs until SIGINT (Ctrl+C) / SIGTERM. On any cle
 #### Non-promises
 
 - **Not a v2 envelope.** This is NDJSON, like `odds watch` (`AGENT_ENVELOPE_SPEC.md §4.4`). Switch on `kind`; treat unknown `kind` / enum values as forward-compatible (log + ignore).
-- **Advisory `liveCommitmentCount`.** It is derived from the stream the watcher observed (snapshot pages + commitment deltas), not a reconciled chain/orderbook read — use `commitments list --maker` / the orderbook for an authoritative "open commitments == 0" gate.
+- **Advisory `liveCommitmentCount`.** It is recomputed against the wall clock from the lifecycle state the watcher has observed (snapshot pages + commitment deltas) — so it correctly ages out passively-expired rows — but it is still NOT a reconciled chain/orderbook read: a lifecycle change the indexer hasn't streamed yet (e.g. an on-chain cancel observed only after the fact) won't be reflected until its delta arrives. Use `commitments list --maker` / the orderbook for an authoritative "open commitments == 0" gate.
 - **No trading.** `own-state watch` is read-only observability; it never signs a transaction or mutates protocol state. (The owner-auth signer is used only for the stream-auth challenge.)
 
 ---

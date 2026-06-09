@@ -13,9 +13,13 @@
 import { describe, expect, it } from 'vitest';
 import { makeOwnStateCommand } from '../src/commands/own-state/index.js';
 import {
+  countLiveAt,
   formatWatchLine,
+  isLiveAt,
   projectCommitment,
   redactOwnerCommitment,
+  trackCommitment,
+  type TrackedCommitment,
   type WatchLine,
 } from '../src/commands/own-state/watch.js';
 import type { OwnerCommitment } from '@ospex/sdk';
@@ -175,5 +179,81 @@ describe('own-state watch — human line formatting', () => {
     expect(text).toMatch(/\[CMT\]/);
     expect(text).not.toContain(FAKE_SIG);
     expect(text).toContain('vis=hidden');
+  });
+});
+
+describe('own-state watch — passive-expiry live accounting (the v0.6.1 fix)', () => {
+  const EXPIRY = '2026-06-09T18:00:00.000Z';
+  const BEFORE = Date.parse('2026-06-09T17:59:59.000Z'); // 1s before expiry
+  const AFTER = Date.parse('2026-06-09T18:00:01.000Z'); // 1s after expiry
+  const AT = Date.parse(EXPIRY); // exactly at expiry
+
+  const trk = (over: Partial<TrackedCommitment> = {}): TrackedCommitment => ({
+    storedStatus: 'open',
+    remainingRiskAmount: '4000000',
+    expiry: EXPIRY,
+    nonceInvalidated: false,
+    ...over,
+  });
+
+  it('a live row ages out by the wall clock with NO terminal event (the bug)', () => {
+    const c = trk();
+    expect(isLiveAt(c, BEFORE)).toBe(true); // live before expiry
+    expect(isLiveAt(c, AT)).toBe(false); // expiry is strictly-future: == now is expired
+    expect(isLiveAt(c, AFTER)).toBe(false); // passively expired — no SSE delta needed
+  });
+
+  it('a soft-cancelled / book-hidden row (storedStatus open, future expiry) is live until it expires', () => {
+    // Effective status would be `cancelled`, but the raw on-chain row is still
+    // `open` and matchable until expiry — so it must read live before expiry…
+    const c = trk({ storedStatus: 'open' });
+    expect(isLiveAt(c, BEFORE)).toBe(true);
+    // …and age out by the clock after expiry.
+    expect(isLiveAt(c, AFTER)).toBe(false);
+  });
+
+  it('a null-expiry (legacy no-expiry) row never time-expires', () => {
+    const c = trk({ expiry: null });
+    expect(isLiveAt(c, BEFORE)).toBe(true);
+    expect(isLiveAt(c, AFTER)).toBe(true); // no expiry → clock never ages it out
+  });
+
+  it('non-live lifecycle states are not live regardless of clock', () => {
+    expect(isLiveAt(trk({ remainingRiskAmount: '0' }), BEFORE)).toBe(false);
+    expect(isLiveAt(trk({ nonceInvalidated: true }), BEFORE)).toBe(false);
+    expect(isLiveAt(trk({ storedStatus: 'filled' }), BEFORE)).toBe(false);
+    expect(isLiveAt(trk({ storedStatus: 'cancelled' }), BEFORE)).toBe(false);
+    expect(isLiveAt(trk({ storedStatus: 'partially_filled' }), BEFORE)).toBe(true);
+  });
+
+  it('an unparseable expiry is treated as non-expiring (never the more-dangerous drop-a-live-row bug)', () => {
+    const c = trk({ expiry: 'not-a-date' });
+    expect(isLiveAt(c, AFTER)).toBe(true);
+  });
+
+  it('countLiveAt decreases as the clock advances past each expiry — no new events (the regression scenario)', () => {
+    const E1 = '2026-06-09T18:00:00.000Z';
+    const E2 = '2026-06-09T18:05:00.000Z';
+    const map = new Map<string, TrackedCommitment>([
+      ['0xaaa', trk({ expiry: E1 })],
+      ['0xbbb', trk({ expiry: E2 })],
+    ]);
+    // Both live before either expiry.
+    expect(countLiveAt(map, Date.parse('2026-06-09T17:59:00.000Z'))).toBe(2);
+    // One aged out after E1 — without any SSE delta touching the map.
+    expect(countLiveAt(map, Date.parse('2026-06-09T18:02:00.000Z'))).toBe(1);
+    // Both aged out after E2 — the long-running watcher correctly reports zero.
+    expect(countLiveAt(map, Date.parse('2026-06-09T18:10:00.000Z'))).toBe(0);
+  });
+
+  it('trackCommitment extracts only the liveness-relevant slice (no isLive boolean retained)', () => {
+    const tracked = trackCommitment(makeOwnerCommitment());
+    expect(tracked).toEqual({
+      storedStatus: 'partially_filled',
+      remainingRiskAmount: '4000000',
+      expiry: '2026-06-10T00:00:00.000Z',
+      nonceInvalidated: false,
+    });
+    expect('isLive' in tracked).toBe(false);
   });
 });
