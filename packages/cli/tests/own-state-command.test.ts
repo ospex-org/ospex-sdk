@@ -22,7 +22,7 @@ import {
   type TrackedCommitment,
   type WatchLine,
 } from '../src/commands/own-state/watch.js';
-import type { OwnerCommitment } from '@ospex/sdk';
+import { isOwnerCommitmentLiveAt, type OwnerCommitment } from '@ospex/sdk';
 
 // Synthetic 65-byte signature (130 hex chars) — generated here, never a
 // real key. The redaction tests assert this exact string is unreachable.
@@ -182,7 +182,7 @@ describe('own-state watch — human line formatting', () => {
   });
 });
 
-describe('own-state watch — passive-expiry live accounting (the v0.6.1 fix)', () => {
+describe('own-state watch — live accounting vs the SDK liveness contract (passive expiry + null/invalid)', () => {
   const EXPIRY = '2026-06-09T18:00:00.000Z';
   const BEFORE = Date.parse('2026-06-09T17:59:59.000Z'); // 1s before expiry
   const AFTER = Date.parse('2026-06-09T18:00:01.000Z'); // 1s after expiry
@@ -212,10 +212,10 @@ describe('own-state watch — passive-expiry live accounting (the v0.6.1 fix)', 
     expect(isLiveAt(c, AFTER)).toBe(false);
   });
 
-  it('a null-expiry (legacy no-expiry) row never time-expires', () => {
+  it('a null expiry is NOT live — on chain it behaves as expiry==0 ⇒ expired (matches SDK decoder + core-api)', () => {
     const c = trk({ expiry: null });
-    expect(isLiveAt(c, BEFORE)).toBe(true);
-    expect(isLiveAt(c, AFTER)).toBe(true); // no expiry → clock never ages it out
+    expect(isLiveAt(c, BEFORE)).toBe(false);
+    expect(isLiveAt(c, AFTER)).toBe(false);
   });
 
   it('non-live lifecycle states are not live regardless of clock', () => {
@@ -226,9 +226,14 @@ describe('own-state watch — passive-expiry live accounting (the v0.6.1 fix)', 
     expect(isLiveAt(trk({ storedStatus: 'partially_filled' }), BEFORE)).toBe(true);
   });
 
-  it('an unparseable expiry is treated as non-expiring (never the more-dangerous drop-a-live-row bug)', () => {
+  it('an unparseable expiry is NOT live — treated as expired, matching the SDK decoder + core-api', () => {
     const c = trk({ expiry: 'not-a-date' });
-    expect(isLiveAt(c, AFTER)).toBe(true);
+    expect(isLiveAt(c, BEFORE)).toBe(false);
+    expect(isLiveAt(c, AFTER)).toBe(false);
+  });
+
+  it('CLI isLiveAt is the SDK shared predicate (no second copy to drift)', () => {
+    expect(isLiveAt).toBe(isOwnerCommitmentLiveAt);
   });
 
   it('countLiveAt decreases as the clock advances past each expiry — no new events (the regression scenario)', () => {

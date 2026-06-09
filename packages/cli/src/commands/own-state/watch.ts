@@ -51,6 +51,7 @@ import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import {
   OspexValidationError,
+  isOwnerCommitmentLiveAt,
   type Fill,
   type OwnerCommitment,
   type OwnerPosition,
@@ -58,8 +59,8 @@ import {
   type OwnerStateSubscribeStatus,
   type OwnStateEventMeta,
   type OwnStateFrameMeta,
+  type OwnerLivenessInput,
   type PositionStatusEvent,
-  type StoredCommitmentStatus,
   type Subscription,
 } from '@ospex/sdk';
 import type { OspexStreamError, OspexStreamErrorPhase, OspexStreamReason } from '@ospex/sdk';
@@ -138,15 +139,12 @@ export function projectCommitment(
  * (`storedStatus` / `remainingRiskAmount` / `nonceInvalidated`) DO change via
  * `commitment` deltas, so the last-received value is current for those; only
  * the expiry comparison must be re-evaluated against `now`.
+ *
+ * This is the SDK's {@link OwnerLivenessInput} — the SAME shape the snapshot
+ * decoder feeds to {@link isOwnerCommitmentLiveAt}, so the watcher and the
+ * decoder share ONE liveness definition.
  */
-export interface TrackedCommitment {
-  storedStatus: StoredCommitmentStatus;
-  /** wei6 decimal string. */
-  remainingRiskAmount: string;
-  /** ISO-8601, or null on a legacy row that never carried an expiry. */
-  expiry: string | null;
-  nonceInvalidated: boolean;
-}
+export type TrackedCommitment = OwnerLivenessInput;
 
 /** Extract the liveness-relevant slice of an owner commitment. */
 export function trackCommitment(c: OwnerCommitment): TrackedCommitment {
@@ -159,42 +157,24 @@ export function trackCommitment(c: OwnerCommitment): TrackedCommitment {
 }
 
 /**
- * Re-derive the canonical "still matchable on chain" predicate at time
- * `nowMs`, mirroring core-api's `OwnerCommitment.isLive` derivation but with
- * the expiry compared to the CURRENT clock — the whole point of the fix:
+ * The canonical "still matchable on chain" predicate at time `nowMs`. This is
+ * a direct ALIAS of the SDK's single shared {@link isOwnerCommitmentLiveAt}
+ * (the exact same function that stamps `OwnerCommitment.isLive` at decode
+ * time) — not a re-implementation — so the watcher's live count is, by
+ * construction, the identical predicate the decoder uses and cannot drift.
  *
- *   storedStatus ∈ {open, partially_filled}
- *   AND NOT nonceInvalidated
- *   AND remainingRiskAmount > 0
- *   AND (expiry is null OR expiry is strictly in the future)
- *
- * A null expiry is a legacy no-expiry row that never time-expires.
- * `Date.parse` (ms precision) is fine here — expiry is a coarse boundary,
- * not a cursor comparison. An UNPARSEABLE expiry is treated as non-expiring
- * (we never age a row out on a parse failure — that would be the opposite,
- * more-dangerous bug of dropping a still-live row).
+ * Contract (see `ownState/liveness.ts`): live iff `storedStatus ∈ {open,
+ * partially_filled}` AND not `nonceInvalidated` AND `remainingRiskAmount > 0`
+ * AND expiry is a PARSEABLE timestamp STRICTLY in the future. A `null` expiry,
+ * an unparseable expiry, and an expiry at/before `nowMs` are ALL **not live**
+ * (on chain a null/invalid expiry behaves as `expiry == 0` ⇒ expired).
  */
-export function isLiveAt(c: TrackedCommitment, nowMs: number): boolean {
-  if (c.storedStatus !== 'open' && c.storedStatus !== 'partially_filled') return false;
-  if (c.nonceInvalidated) return false;
-  let remaining: bigint;
-  try {
-    remaining = BigInt(c.remainingRiskAmount);
-  } catch {
-    return false; // unparseable remaining → not provably live
-  }
-  if (remaining <= 0n) return false;
-  if (c.expiry !== null) {
-    const expMs = Date.parse(c.expiry);
-    if (!Number.isNaN(expMs) && expMs <= nowMs) return false;
-  }
-  return true;
-}
+export const isLiveAt = isOwnerCommitmentLiveAt;
 
 /** Count tracked commitments that are live AS OF `nowMs`. */
 export function countLiveAt(map: Map<string, TrackedCommitment>, nowMs: number): number {
   let n = 0;
-  for (const c of map.values()) if (isLiveAt(c, nowMs)) n += 1;
+  for (const c of map.values()) if (isOwnerCommitmentLiveAt(c, nowMs)) n += 1;
   return n;
 }
 

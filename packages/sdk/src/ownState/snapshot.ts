@@ -41,6 +41,7 @@
 import { OwnStateApi } from '../api/ownState.js';
 import type { ApiClient } from '../api/client.js';
 import { mintStreamToken } from './auth.js';
+import { isOwnerCommitmentLiveAt } from './liveness.js';
 import { parseWire } from '../wireSchema.js';
 import {
   OwnerCommitmentBodySchema,
@@ -236,22 +237,22 @@ export function decodePositionStatusEvent(body: unknown): PositionStatusEvent {
 }
 
 /**
- * Mirrors the `MatchingModule.matchCommitment` precondition set the same
- * way `api/commitments.ts:computeIsLive` does for public visible bodies:
- *   1. raw stored status is `open` or `partially_filled`;
- *   2. not nonce-invalidated;
- *   3. remainingRiskAmount > 0;
- *   4. expiry is in the future.
- * Hidden bodies (`visibility === 'hidden'`) still report `isLive` honestly —
- * they remain matchable on chain until they reach a terminal state.
+ * Stamp `OwnerCommitment.isLive` at decode time. Delegates to the single
+ * shared predicate {@link isOwnerCommitmentLiveAt} (resolving the raw
+ * lifecycle via the `storedStatus ?? status` fallback for older API builds),
+ * evaluated against the current clock — so the decoder and every re-deriving
+ * consumer (e.g. the `ospex own-state watch` CLI) share ONE definition and
+ * cannot drift. See `ownState/liveness.ts` for the exact contract (null /
+ * unparseable / non-future expiry all read as not-live).
  */
 function computeOwnerIsLive(body: OwnerCommitmentBodyParsed): boolean {
-  const lifecycle = body.storedStatus ?? body.status;
-  if (lifecycle !== 'open' && lifecycle !== 'partially_filled') return false;
-  if (body.nonceInvalidated) return false;
-  if (BigInt(body.remainingRiskAmount) <= 0n) return false;
-  if (body.expiry === null) return false;
-  const expiryMs = Date.parse(body.expiry);
-  if (!Number.isFinite(expiryMs) || expiryMs <= Date.now()) return false;
-  return true;
+  return isOwnerCommitmentLiveAt(
+    {
+      storedStatus: body.storedStatus ?? body.status,
+      remainingRiskAmount: body.remainingRiskAmount,
+      expiry: body.expiry,
+      nonceInvalidated: body.nonceInvalidated,
+    },
+    Date.now(),
+  );
 }
