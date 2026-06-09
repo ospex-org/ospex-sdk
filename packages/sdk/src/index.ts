@@ -165,6 +165,13 @@ export type {
 
 export { isVisibleCommitment, isHiddenCommitment } from './types/index.js';
 
+// The single shared owner-commitment liveness predicate — used by the
+// own-state snapshot decoder to stamp `OwnerCommitment.isLive` AND by
+// consumers (e.g. the `ospex own-state watch` CLI) that re-derive liveness
+// against a different clock. One definition so the two cannot drift.
+export { isOwnerCommitmentLiveAt } from './ownState/liveness.js';
+export type { OwnerLivenessInput } from './ownState/liveness.js';
+
 // Own-state method option types — siblings of the public `OwnerCommitment` /
 // `OwnerStateSnapshot` types. Re-exported from the root so a consumer
 // writing helper wrappers around `client.ownState.{snapshot, getCommitment}`

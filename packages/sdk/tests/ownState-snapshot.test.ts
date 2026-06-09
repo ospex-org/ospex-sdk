@@ -261,6 +261,22 @@ describe('decodeSnapshot — wire → public', () => {
     expect(out.commitments[0]!.isLive).toBe(false);
   });
 
+  it('isLive=false on a null expiry even though storedStatus=open (expiry==0 ⇒ expired on chain)', () => {
+    const body = snapshotResponse({
+      commitments: [visibleCommitmentBody({ expiry: null })],
+    });
+    const out = decodeSnapshot(body);
+    expect(out.commitments[0]!.isLive).toBe(false);
+  });
+
+  it('isLive=false on an unparseable expiry even though storedStatus=open', () => {
+    const body = snapshotResponse({
+      commitments: [visibleCommitmentBody({ expiry: 'not-a-date' })],
+    });
+    const out = decodeSnapshot(body);
+    expect(out.commitments[0]!.isLive).toBe(false);
+  });
+
   it('falls back storedStatus to status on pre-effective-status core-api builds', () => {
     const body = snapshotResponse({
       commitments: [
