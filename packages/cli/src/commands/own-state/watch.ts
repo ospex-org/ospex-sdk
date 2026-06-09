@@ -59,6 +59,7 @@ import {
   type OwnStateEventMeta,
   type OwnStateFrameMeta,
   type PositionStatusEvent,
+  type StoredCommitmentStatus,
   type Subscription,
 } from '@ospex/sdk';
 import type { OspexStreamError, OspexStreamErrorPhase, OspexStreamReason } from '@ospex/sdk';
@@ -120,6 +121,84 @@ export function projectCommitment(
 }
 
 /* ------------------------------------------------------------------------- */
+/* Live-set accounting (passive-expiry-correct)                              */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The slice of an {@link OwnerCommitment} the watcher retains per hash so it
+ * can RECOMPUTE liveness against the current wall clock — at summary time and
+ * on each heartbeat — rather than trusting a cached boolean.
+ *
+ * We deliberately do NOT store the server's `isLive` flag. Commitment EXPIRY
+ * is passive and time-based: it crosses with NO SSE delta. A row received
+ * `isLive:true` with a future expiry would otherwise stay "live" in memory
+ * forever — past its actual expiry — until a terminal SSE frame that never
+ * arrives. (A fresh watcher recomputes from a current snapshot, which is why
+ * the same wallet read fresh correctly shows zero.) The non-time fields
+ * (`storedStatus` / `remainingRiskAmount` / `nonceInvalidated`) DO change via
+ * `commitment` deltas, so the last-received value is current for those; only
+ * the expiry comparison must be re-evaluated against `now`.
+ */
+export interface TrackedCommitment {
+  storedStatus: StoredCommitmentStatus;
+  /** wei6 decimal string. */
+  remainingRiskAmount: string;
+  /** ISO-8601, or null on a legacy row that never carried an expiry. */
+  expiry: string | null;
+  nonceInvalidated: boolean;
+}
+
+/** Extract the liveness-relevant slice of an owner commitment. */
+export function trackCommitment(c: OwnerCommitment): TrackedCommitment {
+  return {
+    storedStatus: c.storedStatus,
+    remainingRiskAmount: c.remainingRiskAmount,
+    expiry: c.expiry,
+    nonceInvalidated: c.nonceInvalidated,
+  };
+}
+
+/**
+ * Re-derive the canonical "still matchable on chain" predicate at time
+ * `nowMs`, mirroring core-api's `OwnerCommitment.isLive` derivation but with
+ * the expiry compared to the CURRENT clock — the whole point of the fix:
+ *
+ *   storedStatus ∈ {open, partially_filled}
+ *   AND NOT nonceInvalidated
+ *   AND remainingRiskAmount > 0
+ *   AND (expiry is null OR expiry is strictly in the future)
+ *
+ * A null expiry is a legacy no-expiry row that never time-expires.
+ * `Date.parse` (ms precision) is fine here — expiry is a coarse boundary,
+ * not a cursor comparison. An UNPARSEABLE expiry is treated as non-expiring
+ * (we never age a row out on a parse failure — that would be the opposite,
+ * more-dangerous bug of dropping a still-live row).
+ */
+export function isLiveAt(c: TrackedCommitment, nowMs: number): boolean {
+  if (c.storedStatus !== 'open' && c.storedStatus !== 'partially_filled') return false;
+  if (c.nonceInvalidated) return false;
+  let remaining: bigint;
+  try {
+    remaining = BigInt(c.remainingRiskAmount);
+  } catch {
+    return false; // unparseable remaining → not provably live
+  }
+  if (remaining <= 0n) return false;
+  if (c.expiry !== null) {
+    const expMs = Date.parse(c.expiry);
+    if (!Number.isNaN(expMs) && expMs <= nowMs) return false;
+  }
+  return true;
+}
+
+/** Count tracked commitments that are live AS OF `nowMs`. */
+export function countLiveAt(map: Map<string, TrackedCommitment>, nowMs: number): number {
+  let n = 0;
+  for (const c of map.values()) if (isLiveAt(c, nowMs)) n += 1;
+  return n;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Line shapes                                                               */
 /* ------------------------------------------------------------------------- */
 
@@ -172,7 +251,7 @@ export type WatchLine =
       event: PositionStatusEvent;
     }
   | { kind: 'status'; at: string; address: string; status: OwnerStateSubscribeStatus }
-  | { kind: 'heartbeat'; at: string; address: string }
+  | { kind: 'heartbeat'; at: string; address: string; liveCommitmentCount: number }
   | {
       kind: 'error';
       at: string;
@@ -242,7 +321,7 @@ export function formatWatchLine(line: WatchLine): string {
     case 'status':
       return `[STATUS] ${line.at} ${line.status}`;
     case 'heartbeat':
-      return `[hb]    ${line.at}`;
+      return `[hb]    ${line.at} liveCommitments=${line.liveCommitmentCount}`;
     case 'error':
       return (
         `[ERR]   ${line.at} ${line.reason}${line.phase !== null ? `/${line.phase}` : ''}` +
@@ -357,7 +436,7 @@ export const ownStateWatchCommand = addSignerOptions(
       heartbeat: 0,
       error: 0,
     };
-    const liveByHash = new Map<string, boolean>();
+    const liveByHash = new Map<string, TrackedCommitment>();
     let readyObserved = false;
     let lastStatus: OwnerStateSubscribeStatus | null = null;
     let lastCursor: string | null = null;
@@ -394,7 +473,7 @@ export const ownStateWatchCommand = addSignerOptions(
         exitReason,
         readyObserved,
         counts,
-        liveCommitmentCount: countLive(liveByHash),
+        liveCommitmentCount: countLiveAt(liveByHash, Date.now()),
         lastStatus,
         lastCursor,
       });
@@ -423,7 +502,9 @@ export const ownStateWatchCommand = addSignerOptions(
       {
         onSnapshot: (snapshot: OwnerStateSnapshot, meta: OwnStateEventMeta) => {
           counts.snapshot += 1;
-          for (const c of snapshot.commitments) liveByHash.set(c.commitmentHash, c.isLive);
+          for (const c of snapshot.commitments) {
+            liveByHash.set(c.commitmentHash, trackCommitment(c));
+          }
           recordCursor(meta);
           const line: Extract<WatchLine, { kind: 'snapshot' }> = {
             kind: 'snapshot',
@@ -456,7 +537,7 @@ export const ownStateWatchCommand = addSignerOptions(
         },
         onCommitment: (commitment: OwnerCommitment, meta: OwnStateEventMeta) => {
           counts.commitment += 1;
-          liveByHash.set(commitment.commitmentHash, commitment.isLive);
+          liveByHash.set(commitment.commitmentHash, trackCommitment(commitment));
           recordCursor(meta);
           emit({
             kind: 'commitment',
@@ -489,7 +570,15 @@ export const ownStateWatchCommand = addSignerOptions(
           // frames are already represented by their typed line.
           if (frame.kind !== 'heartbeat') return;
           counts.heartbeat += 1;
-          emit({ kind: 'heartbeat', at: new Date(frame.receivedAtMs).toISOString(), address });
+          // Recompute the live count against the heartbeat's wall clock so a
+          // long-running watcher SHOWS the count aging to zero as rows passively
+          // expire — without ever needing a fresh snapshot or a reconnect.
+          emit({
+            kind: 'heartbeat',
+            at: new Date(frame.receivedAtMs).toISOString(),
+            address,
+            liveCommitmentCount: countLiveAt(liveByHash, frame.receivedAtMs),
+          });
         },
         onError: (err: OspexStreamError) => {
           counts.error += 1;
@@ -536,12 +625,6 @@ export const ownStateWatchCommand = addSignerOptions(
 /* ------------------------------------------------------------------------- */
 /* Helpers                                                                   */
 /* ------------------------------------------------------------------------- */
-
-function countLive(map: Map<string, boolean>): number {
-  let n = 0;
-  for (const live of map.values()) if (live) n += 1;
-  return n;
-}
 
 /** BigInt-safe JSON replacer (defensive — own-state bodies are string/number). */
 function jsonReplacer(_key: string, value: unknown): unknown {
