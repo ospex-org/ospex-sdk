@@ -4,7 +4,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### CLI (`@ospex/cli`)
+
+- **New `ospex own-state watch [--address <wallet>]`** — the operator-/agent-facing streaming primitive over the owner-authenticated own-state SSE stream (`client.ownState.subscribe`; own-state SSE plan Phase 5). Emits one line per event: `snapshot`, `ready`, `commitment`, `fill`, `positionStatus`, `status` (`connected` / `reconnecting` / `degraded` / `resync`), `heartbeat` (the freshness pulse on a quiet wallet), `error`, and a terminal `summary` (event counts + stream-observed live-commitment tally). Line-delimited JSON under `--json` (one object per line, NDJSON — same streaming carve-out as `odds watch`; NOT a v2 envelope), compact text otherwise. The stream is owner-authenticated, so a signer is required and resolved non-interactively via the standard Foundry signer flag group; `--address` is the watch scope and defaults to the resolved signer — supplying an `--address` the signer does not own is refused up-front with `OspexValidationError({ field: 'address' })`. **Output is artifact-safe by default**: every owner commitment has its EIP-712 `signature` and `signedPayload` struct REDACTED (replaced with a `signedPayloadPresent` boolean + a `signatureRedacted: true` marker), preserving every economic / lifecycle / identity field; pass `--include-signed` to emit the full payload for local-only debugging (never feed that into a public artifact). Pass `--counts-only` to emit snapshot counts only (omit the commitment/position arrays) for terse runs. Bounded-run flags for artifact capture: `--until-ready` (exit 0 on the first `ready`, or exit 1 if none arrives within `--ready-timeout`, default 120 s), `--duration <seconds>`, and `--max-events <n>` (delta events: `commitment` / `fill` / `positionStatus`); with none, it runs until SIGINT / SIGTERM. Full per-line contract in [`docs/AGENT_CONTRACT.md` §5.2](./docs/AGENT_CONTRACT.md).
 
 ## [0.5.4] — 2026-06-06
 

@@ -377,7 +377,8 @@ Commands listed below adopt the wrapper. Anything not listed either does not hav
 
 ### 4.4 Not in scope (intentionally)
 
-- `odds watch` — NDJSON stream with its own per-line contract (the `{ kind, market, odds }` / `{ kind: 'status', … }` shape; see [`AGENT_CONTRACT.md` §5](./AGENT_CONTRACT.md)). Wrapping every line in the v2 envelope would balloon the stream pointlessly.
+- `odds watch` — NDJSON stream with its own per-line contract (the `{ kind, market, odds }` / `{ kind: 'status', … }` shape; see [`AGENT_CONTRACT.md` §5.1](./AGENT_CONTRACT.md)). Wrapping every line in the v2 envelope would balloon the stream pointlessly.
+- `own-state watch` — NDJSON stream with its own per-line contract (`{ kind: 'snapshot' | 'ready' | 'commitment' | 'fill' | 'positionStatus' | 'status' | 'heartbeat' | 'error' | 'summary', … }`; see [`AGENT_CONTRACT.md` §5.2](./AGENT_CONTRACT.md)). Same NDJSON carve-out rationale as `odds watch`. Owner-commitment lines are signature-redacted by default so the stream is safe to capture into a public artifact.
 - `init`, `wallet import`, `wallet unlock`, `wallet lock` — one-shot human config commands with no `--json` mode.
 - `auth use-foundry`, `auth clear-foundry` — one-shot config commands; their `schemaVersion: 1` envelope is preserved (agents do not run them in a loop).
 

@@ -43,6 +43,7 @@ import { positionsSettleCommand } from './commands/positions/settle.js';
 import { positionsHistoryCommand } from './commands/positions/history.js';
 import { leaderboardShowCommand } from './commands/leaderboard/show.js';
 import { makeOddsCommand } from './commands/odds/index.js';
+import { makeOwnStateCommand } from './commands/own-state/index.js';
 import { walletImportCommand } from './commands/wallet/import.js';
 import { walletUnlockCommand } from './commands/wallet/unlock.js';
 import { walletLockCommand } from './commands/wallet/lock.js';
@@ -108,6 +109,7 @@ export function makeProgram(): Command {
   program.addCommand(leaderboard);
 
   program.addCommand(makeOddsCommand());
+  program.addCommand(makeOwnStateCommand());
 
   const wallet = new Command('wallet').description('Manage the local keystore wallet.');
   wallet.addCommand(walletImportCommand);

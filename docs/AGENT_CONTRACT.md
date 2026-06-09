@@ -525,7 +525,11 @@ These are pure compositional pieces with no implicit env/config layering — the
 
 ---
 
-## 5. CLI: the streaming contract (`ospex odds watch`)
+## 5. CLI: the streaming contract (`odds watch` + `own-state watch`)
+
+Two CLI commands stream line-delimited JSON (NDJSON) under `--json` instead of a single v2 envelope: `odds watch` (public upstream odds) and `own-state watch` (owner-authenticated maker state). Both emit one independently-parseable JSON object per line, keep stdout reserved for the data lines (banners / status to stderr in human mode), and are deliberately outside the v2-envelope surface (`AGENT_ENVELOPE_SPEC.md §4.4`) — wrapping every line in the full envelope would balloon the stream.
+
+### 5.1 `ospex odds watch`
 
 `ospex odds watch <contestId> --json` is the agent-facing streaming primitive. It opens a core-api Server-Sent Events stream for each of the contest's three markets and emits one JSON object per line, NDJSON. The per-market `odds` shape is the same market-specific shape `ospex odds show` returns (authoritative source: [`packages/sdk/src/types/odds.ts`](../packages/sdk/src/types/odds.ts)) — provider-neutral, no upstream id.
 
@@ -597,6 +601,75 @@ interface OddsShowEnvelope {
 Each market entry uses an explicit, market-specific shape (over/under named directly for `total`; both labelled lines for `spread`). Authoritative source: [`packages/sdk/src/types/odds.ts`](../packages/sdk/src/types/odds.ts).
 
 Use `odds show` to decide a price *now*; use `odds watch` to react to changes over time.
+
+### 5.2 `ospex own-state watch`
+
+`ospex own-state watch [--address <wallet>] --json` is the owner-authenticated streaming primitive — the operator/agent view of a maker's own commitments, fills, and position transitions over the composite own-state SSE stream (`client.ownState.subscribe`; own-state SSE plan §2.4, Phase 5). It is the read-only observability companion to the market-maker's own subscription: same backend stream, but redacted and bounded for capture into a (public) artifact.
+
+**Auth + scope.** The stream is owner-authenticated (EIP-712 challenge → bearer token), so a signer is required. It resolves non-interactively via the standard Foundry signer flag group (§4). `--address` is the wallet the stream is scoped to and **defaults to the resolved signer address**; supplying an `--address` the signer does not own is refused up-front with `OspexValidationError({ field: 'address' })` (the server would reject the challenge anyway — failing fast is friendlier). The `--expected-address` guard from the signer flag group still applies to keystore resolution.
+
+#### Wire shape per line
+
+```ts
+type OwnStateWatchLine =
+  | { kind: 'snapshot'; at: string; address: string; cursor: string; truncated: boolean;
+      positionsTruncated: boolean; commitmentCount: number; positionCount: number;
+      // Omitted under --counts-only. Commitments are REDACTED by default (see below).
+      commitments?: Array<RedactedOwnerCommitment | OwnerCommitment>; positions?: OwnerPosition[]; }
+  | { kind: 'ready'; at: string; address: string; cursor: string }                 // "safe to trade" boundary
+  | { kind: 'commitment'; at: string; address: string; cursor: string;
+      commitment: RedactedOwnerCommitment | OwnerCommitment }
+  | { kind: 'fill'; at: string; address: string; cursor: string; fill: Fill }
+  | { kind: 'positionStatus'; at: string; address: string; cursor: string; event: PositionStatusEvent }
+  | { kind: 'status'; at: string; address: string;
+      status: 'connected' | 'reconnecting' | 'degraded' | 'resync' }
+  | { kind: 'heartbeat'; at: string; address: string }                             // freshness pulse (~20s on a quiet wallet)
+  | { kind: 'error'; at: string; address: string; reason: 'connection_failed' | 'capacity_exceeded' | 'fatal';
+      phase: string | null; status: number | null; message: string }
+  | { kind: 'summary'; at: string; address: string;
+      exitReason: 'until-ready' | 'ready-timeout' | 'duration' | 'max-events' | 'signal' | 'fatal';
+      readyObserved: boolean; counts: { snapshot; ready; commitment; fill; positionStatus; status; heartbeat; error };
+      liveCommitmentCount: number; lastStatus: string | null; lastCursor: string | null };
+```
+
+`at` is the CLI's ISO-8601 observation time on every line (the freshness signal; on a `heartbeat` line it is the SSE frame's receive time). `cursor` is the opaque own-state cursor AFTER the event (empty string on REST snapshot pages).
+
+#### Redaction (output is artifact-safe by default)
+
+Owner-auth bodies carry the maker's full matchable payload. By default, every owner commitment emitted by `own-state watch` has its EIP-712 **`signature`** and **`signedPayload`** struct removed — those are the only fields that would let a third party act on-chain against the maker's orders — and replaced with two markers:
+
+```ts
+type RedactedOwnerCommitment = Omit<OwnerCommitment, 'signature' | 'signedPayload' | 'redacted'> & {
+  signatureRedacted: true;       // the signing material was stripped from THIS output
+  signedPayloadPresent: boolean; // whether the owner row carried a cancel-ready signed payload
+};
+```
+
+Every economic / lifecycle / identity field (`commitmentHash`, `maker`, `visibility`, `status`, `storedStatus`, `riskAmount`, `filledRiskAmount`, `remainingRiskAmount`, `nonce`, `oddsTick`, `expiry`, `isLive`, `speculationId`, teams, …) is preserved, so the line is fully usable for soak validation. The struct fields that remain are inert without the signature. Pass **`--include-signed`** to emit the full unredacted `OwnerCommitment` (`signature` + `signedPayload`) for local-only debugging — **never** feed that output into a public artifact. `fill` and `positionStatus` bodies carry no signing material and pass through unchanged.
+
+#### Bounded run (for artifact capture)
+
+| Flag | Effect |
+|---|---|
+| `--until-ready` | Exit `0` after the first `ready` event. Pair with `--ready-timeout <seconds>` (default 120) — exit `1` if no `ready` arrives in that window. |
+| `--duration <seconds>` | Run for N seconds, then clean exit `0`. |
+| `--max-events <n>` | Exit `0` after N delta events (`commitment` / `fill` / `positionStatus`; snapshot/ready/status/heartbeat do not count). |
+| `--counts-only` | On `snapshot` lines, emit counts only — omit the `commitments` / `positions` arrays (terse runs). |
+
+With none of these, the command runs until SIGINT (Ctrl+C) / SIGTERM. On any clean exit it emits a final `summary` line (counts + the stream-observed `liveCommitmentCount`, an advisory tally of commitments last seen with `isLive: true`).
+
+#### Promises
+
+- **Each line is independently parseable JSON.** No multi-line objects. The `summary` line is always last.
+- `--json` writes **only** these lines to stdout; the "Watching own-state for …" banner and (in human mode) `status` / `heartbeat` / `error` / `summary` go to stderr.
+- The default (no `--include-signed`) output **never** contains an EIP-712 signature or a `signedPayload` struct — safe to capture into a public artifact.
+- Exit codes: `0` on a clean bounded exit or SIGINT; `1` on `--until-ready` timeout, a `fatal` stream error, or up-front validation failure (bad `--address`, signer mismatch).
+
+#### Non-promises
+
+- **Not a v2 envelope.** This is NDJSON, like `odds watch` (`AGENT_ENVELOPE_SPEC.md §4.4`). Switch on `kind`; treat unknown `kind` / enum values as forward-compatible (log + ignore).
+- **Advisory `liveCommitmentCount`.** It is derived from the stream the watcher observed (snapshot pages + commitment deltas), not a reconciled chain/orderbook read — use `commitments list --maker` / the orderbook for an authoritative "open commitments == 0" gate.
+- **No trading.** `own-state watch` is read-only observability; it never signs a transaction or mutates protocol state. (The owner-auth signer is used only for the stream-auth challenge.)
 
 ---
 
