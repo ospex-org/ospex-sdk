@@ -4,6 +4,12 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.6.2] — 2026-06-09
+
+Patch: corrects a residual liveness edge in the v0.6.1 `ospex own-state watch` fix (caught in review of #138) and consolidates the predicate so it can't recur. SDK library surface unchanged except one additive export (`isOwnerCommitmentLiveAt`).
+
 ### Fixed
 
 - **`ospex own-state watch` live accounting now treats a `null` or unparseable expiry as NOT live**, matching the SDK snapshot decoder (`OwnerCommitment.isLive`) and the core-api contract (`commitmentStatus.ts`: a null/invalid expiry behaves as `expiry == 0` ⇒ expired/unmatchable). v0.6.1 incorrectly treated those edges as non-expiring/live, so the watcher's `liveCommitmentCount` (summary + heartbeat) could over-count a maker holding a null- or invalid-expiry row. The liveness predicate is now a **single shared SDK function** — `isOwnerCommitmentLiveAt(input, nowMs)` (new barrel export) — used by BOTH the snapshot decoder (at decode time) AND `own-state watch` (at summary/heartbeat time), so the two can no longer diverge (the v0.6.1 bug was a second, prose-derived copy of the predicate). No change to the passive-time-expiry behavior fixed in v0.6.1: an `open`/`partially_filled` row with `remainingRiskAmount > 0` and a parseable expiry strictly in the future is live, and ages out by the wall clock once that expiry passes — with no SSE delta. Contract: live iff `storedStatus ∈ {open, partially_filled}` AND not `nonceInvalidated` AND `remainingRiskAmount > 0` AND expiry is a parseable timestamp strictly in the future.

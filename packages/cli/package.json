@@ -1,6 +1,6 @@
 {
   "name": "@ospex/cli",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Command-line interface for the Ospex protocol.",
   "license": "MIT",
   "type": "module",
