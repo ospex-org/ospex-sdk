@@ -393,6 +393,55 @@ describe('errorToAgentError', () => {
     expect(out.code).toBe('UNKNOWN_ERROR');
     expect(out.message).toBe('not even an error');
   });
+
+  // H1 regression: the credentialed RPC URL must be scrubbed from the
+  // TOP-LEVEL envelope message, not just details.causeChain. The SDK's
+  // formatPreSendErr joins viem metaMessages verbatim into the
+  // OspexChainError's OWN .message, so a transport 429/timeout puts the
+  // Alchemy `/v2/<key>` on the error message the envelope copies to stdout.
+  const ALCHEMY_KEY = 'AbCdEf0123456789xyzAbCdEf0123456789';
+
+  it('redacts a credentialed RPC URL embedded in the OspexChainError message (H1)', () => {
+    const err = new OspexChainError(
+      `Transaction broadcast or inclusion failed.\n\nURL: https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}\nStatus: 429`,
+    );
+    const out = errorToAgentError(err);
+    expect(out.code).toBe('CHAIN_ERROR');
+    expect(out.message).not.toContain(ALCHEMY_KEY);
+    expect(out.message).toContain('[redacted]');
+  });
+
+  it('redacts a credentialed URL in a native Error message (UNKNOWN_ERROR branch)', () => {
+    const out = errorToAgentError(new Error(`fetch failed: https://eth.example/v2/${ALCHEMY_KEY}`));
+    expect(out.code).toBe('UNKNOWN_ERROR');
+    expect(out.message).not.toContain(ALCHEMY_KEY);
+    expect(out.message).toContain('[redacted]');
+  });
+
+  it('redacts a credentialed URL in a non-Error thrown value (String(err) branch)', () => {
+    const out = errorToAgentError(`raw throw https://eth.example/v2/${ALCHEMY_KEY}`);
+    expect(out.code).toBe('UNKNOWN_ERROR');
+    expect(out.message).not.toContain(ALCHEMY_KEY);
+    expect(out.message).toContain('[redacted]');
+  });
+
+  it('leaves a credential-free OspexError message byte-identical (no over-redaction)', () => {
+    const out = errorToAgentError(new OspexValidationError('lineTicks must be a 32-bit integer'));
+    expect(out.message).toBe('lineTicks must be a 32-bit integer');
+  });
+
+  it('sanitizes a credentialed URL in details.revertReason (parity with causeChain)', () => {
+    // revertReason is a free-form string for legacy/unknown reverts; the
+    // detail path must scrub it exactly like the cause-chain walker does.
+    const err = new OspexChainError('reverted', {
+      revertReason: `execution reverted at https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+    });
+    const out = errorToAgentError(err);
+    const details = out.details as { revertReason?: string };
+    expect(details.revertReason).toBeDefined();
+    expect(details.revertReason).not.toContain(ALCHEMY_KEY);
+    expect(details.revertReason).toContain('[redacted]');
+  });
 });
 
 describe('errorToAgentError — cause-chain walk (CHAIN_ERROR observability)', () => {

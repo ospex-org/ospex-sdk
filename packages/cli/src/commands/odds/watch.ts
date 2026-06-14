@@ -25,6 +25,7 @@ import type {
   TotalOdds,
 } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
+import { sanitizeUntargetedMessage } from '../../lib/redact.js';
 
 const optionsSchema = z.object({
   json: z.boolean().optional(),
@@ -90,7 +91,9 @@ export const oddsWatchCommand = new Command('watch')
             : {}),
           onStatus: (status) => emitStatus(m, status),
           onError: (err) => {
-            console.error(`[${m}] stream error: ${err.message}`);
+            // Mirror own-state watch: scrub before logging in case a
+            // configured stream URL carries credentials (defense-in-depth).
+            console.error(`[${m}] stream error: ${sanitizeUntargetedMessage(err.message)}`);
           },
         },
       );

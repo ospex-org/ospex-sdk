@@ -14,6 +14,7 @@ import { Command } from '@commander-js/extra-typings';
 import { OspexError } from '@ospex/sdk';
 
 import { CLI_VERSION } from './lib/agentEnvelope.js';
+import { sanitizeUntargetedMessage } from './lib/redact.js';
 
 import { healthCommand } from './commands/health.js';
 import { initCommand } from './commands/init.js';
@@ -145,16 +146,16 @@ async function main(): Promise<void> {
     await program.parseAsync(process.argv);
   } catch (err) {
     if (err instanceof OspexError) {
-      process.stderr.write(`error (${err.code}): ${err.message}\n`);
+      process.stderr.write(`error (${err.code}): ${sanitizeUntargetedMessage(err.message)}\n`);
       writeCauseChain(err);
       process.exit(1);
     }
     if (err instanceof Error) {
-      process.stderr.write(`error: ${err.message}\n`);
+      process.stderr.write(`error: ${sanitizeUntargetedMessage(err.message)}\n`);
       writeCauseChain(err);
       process.exit(1);
     }
-    process.stderr.write(`error: ${String(err)}\n`);
+    process.stderr.write(`error: ${sanitizeUntargetedMessage(String(err))}\n`);
     process.exit(1);
   }
 }
@@ -166,6 +167,13 @@ async function main(): Promise<void> {
  * `metaMessages` — both are useful when an estimateGas reverts in
  * `contests create` and the cause is a custom error like
  * `OracleModule__InvalidScriptApproval`.
+ *
+ * Both `headline` and every `metaMessages` line are routed through
+ * `sanitizeUntargetedMessage` first: viem transport errors embed the
+ * request URL (including a credentialed Alchemy `/v2/<key>`) in
+ * `metaMessages[]`, and AGENT_ENVELOPE_SPEC §7 bans secrets on stderr
+ * as well as stdout. The sanitizer is a no-op on credential-free
+ * lines, so legitimate revert detail is preserved verbatim.
  */
 function writeCauseChain(err: unknown): void {
   let cur: unknown = (err as { cause?: unknown }).cause;
@@ -177,10 +185,10 @@ function writeCauseChain(err: unknown): void {
       metaMessages?: string[];
     };
     const headline = e.shortMessage ?? e.message;
-    process.stderr.write(`  caused by: ${headline}\n`);
+    process.stderr.write(`  caused by: ${sanitizeUntargetedMessage(headline)}\n`);
     if (e.metaMessages?.length) {
       for (const line of e.metaMessages) {
-        process.stderr.write(`    ${line}\n`);
+        process.stderr.write(`    ${sanitizeUntargetedMessage(line)}\n`);
       }
     }
     cur = (cur as { cause?: unknown }).cause;
