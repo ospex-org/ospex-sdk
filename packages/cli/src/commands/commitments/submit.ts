@@ -97,6 +97,7 @@ import {
   deriveRemediationNextCommands,
 } from '../../lib/nextCommandTemplates.js';
 import { getClient, resolvePreviewAddress } from '../../lib/client.js';
+import { sanitizeUntargetedMessage } from '../../lib/redact.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
 import { renderPreview } from '../../lib/previewRender.js';
@@ -452,7 +453,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
       } catch (err) {
         process.stderr.write(
           'Post-approval fundability re-check failed; proceeding with the submit. ' +
-            `(${err instanceof Error ? err.message : String(err)})\n`,
+            `(${sanitizeUntargetedMessage(err instanceof Error ? err.message : String(err))})\n`,
         );
         effectiveFundability = {
           ...preflightFundability,

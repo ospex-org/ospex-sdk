@@ -28,6 +28,7 @@ import {
 } from '../../lib/nextCommandTemplates.js';
 import { polygonscanTxUrl } from '../../lib/explorer.js';
 import { getClient } from '../../lib/client.js';
+import { sanitizeUntargetedMessage } from '../../lib/redact.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import type {
   AgentEffect,
@@ -120,7 +121,11 @@ export const commitmentsCancelCommand = addSignerOptions(
               : '') +
             'Off-chain DELETE already applied; the row is hidden from the relay but the taker is not blocked.\n',
         );
-        onChainError = { code: err.code, message: err.message };
+        // err.message can carry viem metaMessages with a credentialed RPC
+        // URL; this onChainError feeds both the envelope errors[] and the
+        // payload, so scrub at capture. (A later PR routes this through the
+        // shared causeChain path — M7 — which sanitizes structurally.)
+        onChainError = { code: err.code, message: sanitizeUntargetedMessage(err.message) };
       } else {
         throw err;
       }

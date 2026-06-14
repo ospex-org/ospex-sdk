@@ -85,6 +85,7 @@ import {
   deriveRemediationNextCommands,
 } from '../../lib/nextCommandTemplates.js';
 import { getClient, resolvePreviewAddress } from '../../lib/client.js';
+import { sanitizeUntargetedMessage } from '../../lib/redact.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
 import { renderMatchPreview } from '../../lib/matchPreviewRender.js';
@@ -412,7 +413,7 @@ export const commitmentsMatchCommand = addSignerOptions(
       } catch (err) {
         process.stderr.write(
           'Post-approval fillability re-check failed; proceeding with the match. ' +
-            `(${err instanceof Error ? err.message : String(err)})\n`,
+            `(${sanitizeUntargetedMessage(err instanceof Error ? err.message : String(err))})\n`,
         );
         effectiveFillability = {
           commitmentHash: preflightFillability.commitmentHash,

@@ -4,7 +4,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### Security
+
+- **`@ospex/cli`: every free-form error message now passes through the URL/credential redactor (`sanitizeUntargetedMessage`) before it reaches a `--json` envelope, stdout, or stderr** — closing a path where a credentialed RPC URL (e.g. an Alchemy `/v2/<key>`) could surface in agent-captured output. viem transport errors embed the request URL in `metaMessages[]`, and the SDK's pre-send error formatter joins those verbatim into `OspexChainError.message`; so an RPC 429 / 5xx / timeout during the pre-send reads of any write command (`commitments match`, `commitments submit`, `commitments cancel --also-onchain`, `positions claim-all`, plus every other write command via the shared mapper) previously emitted the operator's credentialed RPC URL on the exact stdout an agent logs and the artifacts pipeline ingests. The leak is now scrubbed at every output boundary: the top-level `message` in all three `errorToAgentError` branches, the `extractOspexErrorDetails` `revertReason` detail (now symmetric with the cause-chain walker), the per-entry `claim-all` errors (JSON payload + human line), the dual-cancel `onChainError` (envelope `errors[]` + payload), the post-approval re-check stderr lines in `submit`/`match`, the `odds watch` stream-error log (matching the already-redacted `own-state watch`), and the global stderr cause-chain printer + top-level catch in `index.ts`. The redactor is conservative — a credential-free message passes through byte-identical, so the stable `code` field and the revert/diagnostic detail agents route on are unchanged. (Review findings H1 + M12.)
 
 ## [0.6.2] — 2026-06-09
 

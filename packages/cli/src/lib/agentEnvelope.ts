@@ -378,23 +378,40 @@ export function emitJsonFailure(args: EmitJsonFailureArgs): void {
  * Without it, a wrapped `OspexChainError("Transaction broadcast or
  * inclusion failed.", { cause })` lands in the envelope as opaque text
  * with no breadcrumb back to "rate-limited" / "timeout" / "underpriced".
+ *
+ * The top-level `message` is ALSO routed through
+ * `sanitizeUntargetedMessage`: the SDK's `formatPreSendErr` joins viem
+ * `metaMessages[]` verbatim into `OspexChainError.message`, and viem
+ * transport errors embed the request URL — a credentialed Alchemy
+ * `/v2/<key>` survives basic-auth stripping. The envelope is the exact
+ * stdout an agent logs and the artifacts pipeline ingests, so every
+ * branch's message (not just the cause chain) must be scrubbed. The
+ * sanitizer is conservative — a credential-free message passes through
+ * byte-identical, so error codes and reasons agents route on are
+ * unaffected.
  */
 export function errorToAgentError(err: unknown): AgentError {
   if (err instanceof OspexError) {
     const details: Record<string, unknown> = { ...(extractOspexErrorDetails(err) ?? {}) };
     const causeChain = buildCauseChain(readCause(err));
     if (causeChain.length > 0) details.causeChain = causeChain;
-    const agentError: AgentError = { code: err.code, message: err.message };
+    const agentError: AgentError = {
+      code: err.code,
+      message: sanitizeUntargetedMessage(err.message),
+    };
     if (Object.keys(details).length > 0) agentError.details = details;
     return agentError;
   }
   if (err instanceof Error) {
-    const agentError: AgentError = { code: 'UNKNOWN_ERROR', message: err.message };
+    const agentError: AgentError = {
+      code: 'UNKNOWN_ERROR',
+      message: sanitizeUntargetedMessage(err.message),
+    };
     const causeChain = buildCauseChain(readCause(err));
     if (causeChain.length > 0) agentError.details = { causeChain };
     return agentError;
   }
-  return { code: 'UNKNOWN_ERROR', message: String(err) };
+  return { code: 'UNKNOWN_ERROR', message: sanitizeUntargetedMessage(String(err)) };
 }
 
 /* ------------------------------------------------------------------------- */
@@ -524,7 +541,16 @@ function extractOspexErrorDetails(err: OspexError): Record<string, unknown> | un
   };
   const out: Record<string, unknown> = {};
   if (typeof e.reason === 'string') out.reason = e.reason;
-  if (typeof e.revertReason === 'string') out.revertReason = e.revertReason;
+  // `revertReason` is a free-form string for legacy / unknown reverts
+  // (errors.ts) — the one detail field that can carry a viem-derived
+  // `URL: <rpc-url>`. Sanitize it here so this path matches the
+  // cause-chain walker (`causeEntryFor`), which already scrubs the same
+  // field; otherwise the two envelope detail paths diverge and a future
+  // populated `revertReason` would leak on stdout. (`reason` is a fixed
+  // enum, `path` is a relative endpoint — both safe as-is.)
+  if (typeof e.revertReason === 'string') {
+    out.revertReason = sanitizeUntargetedMessage(e.revertReason);
+  }
   if (typeof e.txHash === 'string') out.txHash = e.txHash;
   if (typeof e.field === 'string') out.field = e.field;
   if (typeof e.apiCode === 'string') out.apiCode = e.apiCode;

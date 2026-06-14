@@ -37,6 +37,7 @@ import {
   deriveRemediationNextCommands,
 } from '../../lib/nextCommandTemplates.js';
 import { getClient } from '../../lib/client.js';
+import { sanitizeUntargetedMessage } from '../../lib/redact.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 
 const optionsSchema = z.object({
@@ -115,7 +116,9 @@ export const positionsClaimAllCommand = addSignerOptions(
           `${tag} ✓ ${e.description} → payout ${payout} (txs: ${txList}${winSide})${stepNotes(e.steps)}\n`,
         );
       } else {
-        const reason = e.error?.message ?? 'unknown error';
+        const reason = e.error?.message
+          ? sanitizeUntargetedMessage(e.error.message)
+          : 'unknown error';
         const txList = e.txHashes.length > 0 ? ` (partial txs: ${e.txHashes.join(', ')})` : '';
         process.stdout.write(`${tag} ✗ ${e.description} → ${reason}${txList}\n`);
       }
@@ -283,7 +286,10 @@ export function toClaimAllAgentEnvelope(
         payoutUSDC: e.payoutUSDC,
         payoutWei6: e.payoutWei6,
         winSide: e.winSide,
-        error: e.error?.message,
+        // Per-entry SDK errors wrap viem/transport failures whose message
+        // can carry a credentialed RPC URL — scrub before it reaches the
+        // stdout envelope (H1). No-op on credential-free messages.
+        error: e.error !== undefined ? sanitizeUntargetedMessage(e.error.message) : undefined,
       })),
     },
   });
