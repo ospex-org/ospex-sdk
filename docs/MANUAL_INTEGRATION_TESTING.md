@@ -1,6 +1,6 @@
 # Manual integration testing — `@ospex/sdk` + `@ospex/cli`
 
-The canonical pre-release validation for the SDK + CLI. Walk every section in order before tagging an M2 release; total runtime is 15-20 minutes. Each section names a prerequisite, a command, the expected output, and what to investigate if it fails.
+The canonical pre-release validation for the SDK + CLI. Walk every section in order before tagging a release; total runtime is 15-20 minutes. Each section names a prerequisite, a command, the expected output, and what to investigate if it fails.
 
 Why manual: the integration surface spans on-chain testnet state, the upstream odds writer, and core-api streaming — three external systems whose state we don't own. A scripted suite that "passes" while one is degraded is worse than no suite. This playbook is also exactly what a third-party SDK consumer would use to verify their own setup.
 
@@ -29,7 +29,7 @@ A vitest harness lives at `packages/sdk/tests/integration/` (gated behind `OSPEX
 
 ---
 
-## Section 1 — M1 reads (no signer, no chain)
+## Section 1 — reads (no signer, no chain)
 
 All read endpoints. Run against the prod core-api by default; override with `OSPEX_API_URL` if testing a staging deployment.
 
@@ -52,7 +52,7 @@ All read endpoints. Run against the prod core-api by default; override with `OSP
 
 ---
 
-## Section 2 — M1 wallet lifecycle
+## Section 2 — wallet lifecycle
 
 Use a **fresh, throwaway test private key** — never a mainnet key.
 
@@ -92,7 +92,7 @@ Verifies the Foundry-native, agent-friendly signing surface (`auth use-foundry`,
 
 ---
 
-## Section 3 — M1 odds streaming
+## Section 3 — odds streaming
 
 | # | Step | Expected | Validates |
 |---|---|---|---|
@@ -105,7 +105,7 @@ If 3.2 produces nothing in 60s, check the upstream odds feed health and core-api
 
 ---
 
-## Section 4 — M2 single-wallet chain ops (Amoy)
+## Section 4 — single-wallet chain ops (Amoy)
 
 Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end before introducing a second wallet.
 
@@ -123,7 +123,7 @@ Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end bef
 
 ---
 
-## Section 5 — M2 two-wallet match (Amoy)
+## Section 5 — two-wallet match (Amoy)
 
 The flow that proves funds actually move.
 
@@ -146,7 +146,7 @@ The flow that proves funds actually move.
 
 ---
 
-## Section 6 — M2 partial fill + remaining-capacity match
+## Section 6 — partial fill + remaining-capacity match
 
 Verifies the SDK's takerRisk math against the contract's revert-or-exact-fill rule (MatchingModule.sol:268-270).
 
@@ -161,7 +161,7 @@ For other oddsTicks the math differs — work it through with `(takerDesired × 
 
 ---
 
-## Section 6.5 — M2 match preview + lazy creation fee
+## Section 6.5 — match preview + lazy creation fee
 
 Verifies the `commitments match` preview block, the lazy-creation-fee approval row, and the maker-allowance warning.
 
@@ -196,7 +196,7 @@ The error code is in `error (CODE): message` format — confirm both the message
 
 ---
 
-## Section 9 — M3 settle + claim flow
+## Section 9 — settle + claim flow
 
 Verifies position lifecycle: `settleSpeculation` (permissionless) followed by `claimPosition` (permissioned to the holder, but no allowance needed — payout flows OUT of PositionModule, never in).
 
@@ -214,11 +214,11 @@ This section needs an actual settled-or-pending-settle position on Amoy (or a pr
 
 **Case B — Need to create a pendingSettle position from scratch.**
 
-Requires the contest to be `Verified` and have `start_time` already in the past so `scoreContestFromOracle` is callable. The full create→submit→match→score→settle→claim cycle depends on contest creation (M4) and operator scoring access. If you have neither, document the run as "manual verification deferred" in the release ticket and revisit on the next operator scoring cycle.
+Requires the contest to be `Verified` and have `start_time` already in the past so `scoreContestFromOracle` is callable. The full create→submit→match→score→settle→claim cycle depends on contest creation and operator scoring access. If you have neither, document the run as "manual verification deferred" in the release ticket and revisit on the next operator scoring cycle.
 
 For partial verification right now:
 
-1. Use M2 to set up a matched position on a contest that is already scored on-chain. Confirm via `ospex contests show <contestId>` that the contest's `status` is `'scored'`.
+1. Use the commitment-match flow to set up a matched position on a contest that is already scored on-chain. Confirm via `ospex contests show <contestId>` that the contest's `status` is `'scored'`.
 2. Run 9A.2 then 9A.3.
 3. If the speculation is already settled, the entry will appear in the `claimable` bucket instead of `pendingSettle` — same flow, single tx per entry.
 
@@ -254,7 +254,7 @@ If the indexer already moved the row to `claimable`, you'll see the equivalent s
 
 ---
 
-## Section 10 — M2.5 on-chain cancel (mainnet or Amoy)
+## Section 10 — on-chain cancel (mainnet or Amoy)
 
 Validates `commitments.cancelOnchain`, `commitments.raiseMinNonce`, `commitments.cancelAllOnSpeculation`, and `commitments.getNonceFloor`. The contract has no `AlreadyCancelled` revert path, so re-cancelling is a *success* — that's a deliberate observation point in 10.4.
 
@@ -262,7 +262,7 @@ Prereq: a funded test wallet (gas + a few USDC for the submits) on the chosen ne
 
 | # | Step | Expected | Validates |
 |---|---|---|---|
-| 10.1 | `ospex commitments submit-raw <contestId> <scorer> <line> upper 250 1000` (any open speculation) — record the printed hash. | `hash`, `status='open'`. | M2 submit (smoke). |
+| 10.1 | `ospex commitments submit-raw <contestId> <scorer> <line> upper 250 1000` (any open speculation) — record the printed hash. | `hash`, `status='open'`. | Commitment submit (smoke). |
 | 10.2 | `ospex commitments cancel-onchain <hash>` | `txHash` printed; Polygonscan link; receipt status success. | `cancelOnchain` happy path. |
 | 10.3 | `ospex commitments show <hash>` (poll up to 30s) | `status: cancelled`. | Indexer `COMMITMENT_CANCELLED` projection latency. |
 | 10.4 | `ospex commitments cancel-onchain <hash>` (second time, same hash) | tx **succeeds** again — no `AlreadyCancelled` revert. | Idempotency expectation documented in `cancelOnchain` jsdoc. |
@@ -309,8 +309,8 @@ Copy this into the release ticket:
 [ ] Section 5 — Two-wallet match (Amoy)
 [ ] Section 6 — Partial fill
 [ ] Section 7 — Failure modes
-[ ] Section 9 — M3 settle + claim (or manual-verification-deferred note)
-[ ] Section 10 — M2.5 on-chain cancel (10.5 / 10.6 may defer to two-wallet cycle)
+[ ] Section 9 — settle + claim (or manual-verification-deferred note)
+[ ] Section 10 — on-chain cancel (10.5 / 10.6 may defer to two-wallet cycle)
 [ ] Section 8 — Cross-version smoke (post-publish only)
 
 Operator: ____________
