@@ -107,8 +107,9 @@ type ApprovalPurpose =
 
 ```ts
 interface EstimatedCosts {
-  // Gas: null unless --estimate-gas was passed (opt-in; adds an RPC roundtrip,
-  // may surface revert reasons earlier than execution).
+  // Gas: always null today. A future `--estimate-gas` opt-in (see §8) will
+  // populate this block; it adds an RPC roundtrip and may surface revert
+  // reasons earlier than execution.
   gas: {
     nativeToken: 'POL';                   // Polygon's native asset
     estimatedWei: string;                 // decimal string
@@ -408,7 +409,7 @@ Commands listed below adopt the wrapper. Anything not listed either does not hav
 
 ### 4.1 Reads
 
-`health`, `doctor`, `auth check`, `approvals show`, `wallet address`, `commitments list`, `commitments show`, `commitments nonce-floor`, `contests list`, `contests show`, `contests scripts`, `contests wait-verified`, `games list`, `leaderboard show`, `odds show`, `positions list`, `positions status`, `positions history`, `speculations list`, `speculations show`.
+`health`, `doctor`, `auth check`, `approvals show`, `wallet address`, `commitments list`, `commitments show`, `commitments fillability`, `commitments nonce-floor`, `contests list`, `contests show`, `contests scripts`, `contests wait-verified`, `games list`, `leaderboard show`, `odds show`, `positions list`, `positions status`, `positions history`, `speculations list`, `speculations show`.
 
 ### 4.2 Preview-bearing writes
 
@@ -472,6 +473,7 @@ Legend: `✓` populated · `∅` `null` / `[]` (does not apply) · `+` populated
 | `wallet address` | read | resolved/subject/∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | `{ address }` |
 | `commitments list` | read | filter (if `--maker`) or none | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ | `Commitment[]` |
 | `commitments show <hash>` | read | maker/subject/∅ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (e.g. `cancel`) | `Commitment` |
+| `commitments fillability <hash>` | read | taker/subject/∅ | ∅ | ∅ | ∅ | ∅ | ✓ (the maker commitment) | ∅ | ∅ | `CheckCommitmentFillabilityResult` |
 | `commitments nonce-floor` | read | maker/subject/∅ | ∅ | ∅ | ✓ | ✓ | ∅ | ✓ | ✓ | `{ maker, contestId, scorer, lineTicks, minNonce }` |
 | `contests list` | read | none | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ (e.g. `contests create`) | `Contest[]` |
 | `contests show <id>` | read | none | ∅ | ∅ | ✓ | ∅ | ∅ | ✓ | ✓ | `Contest` |
