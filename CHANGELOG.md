@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+### Added
+
+- **`@ospex/sdk`: `claimAll` totals now carry a settle-leg outcome breakdown** — `totals.{settledFresh, alreadySettled, recoveredAlreadySettled}`, mirroring the existing claim-leg `totals.{claimedFresh, alreadyClaimed, recoveredAlreadyClaimed}`. The settle leg is the multi-wallet-CONTENDED one (several wallets racing to settle the same speculation, where at most one settle tx lands and the rest skip/recover), so these counts let a repeated postgame sweep distinguish "I settled it this run" (`settledFresh`) from "a peer or prior run already had" (`alreadySettled` pre-flight skip / `recoveredAlreadySettled` race) without walking `entries[].steps`. Derived from the canonical `steps[]` so they can't drift from what executed; all zero on dry-run. Purely additive and forward-compatible — consumers that ignore unknown fields are unaffected. (`AGENT_CONTRACT.md` §9 updated.)
+
 ### Fixed
 
 - **`@ospex/cli`: `ospex claim-all` now exits non-zero when the result envelope is `ok: false`** — a partial or total per-entry failure (`totals.failed > 0`) returns exit `1` in both `--json` and human modes, conforming to `AGENT_ENVELOPE_SPEC.md` §6 ("exit code is non-zero when `ok: false`"). Previously claim-all isolated per-entry failures into the result rather than throwing (so the loop never aborts and every entry's outcome is reported), but the success-path branch wrote the `ok: false` envelope and returned **exit 0** — a shell-gating harness marked a failed sweep as swept and left USDC payouts unclaimed. Unchanged and explicitly non-failing: a multi-wallet sweep that finds everything already settled/claimed by peers (`totals.failed === 0`, `ok: true`, `info` warnings), live no-op sweeps, and dry-runs all stay exit `0`. The idempotent-postgame evidence this gates on (per-entry `steps[].outcome`, `totals.{claimedFresh,alreadyClaimed,recoveredAlreadyClaimed}`, and the `settle-skipped-already-settled` / `projection-lag-recovered` / `claim-skipped-already-claimed` / `claim-recovered-already-claimed` info warnings) is unchanged. (Review finding M4.)

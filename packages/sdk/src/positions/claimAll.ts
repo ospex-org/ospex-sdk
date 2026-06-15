@@ -180,13 +180,28 @@ export interface ClaimAllResult {
      * is a successful entry that sent no claim tx. */
     claimed: number;
     failed: number;
-    /** Claim-leg outcome breakdown (additive — sums to the number of
-     * claim steps across all entries). Lets a consumer distinguish "swept
+    /** Claim-leg outcome breakdown (additive — counts the sent / skipped /
+     * recovered claim outcomes; a genuinely-`failed` claim is uncounted and
+     * surfaces in `totals.failed` instead). Lets a consumer distinguish "swept
      * a fresh payout" from "was already claimed" without walking
      * `entries[].steps`. */
     claimedFresh: number;
     alreadyClaimed: number;
     recoveredAlreadyClaimed: number;
+    /** Settle-leg outcome breakdown (additive — counts the sent / skipped /
+     * recovered settle outcomes across the `pendingSettle` entries; a
+     * genuinely-`failed` settle is uncounted and surfaces in `totals.failed`
+     * instead, so the three need not sum to the `pendingSettle` count). The
+     * settle leg is the multi-wallet-CONTENDED one: when several wallets sweep
+     * the same speculation close together, at most one settle tx lands and the
+     * rest skip/recover. These counts let a consumer distinguish "I settled it
+     * this run" (`settledFresh`) from "a peer/prior run already had"
+     * (`alreadySettled` pre-flight skip, `recoveredAlreadySettled` race)
+     * without walking `entries[].steps`. Mirrors the claim-leg breakdown
+     * above. All zero on dry-run (no steps run). */
+    settledFresh: number;
+    alreadySettled: number;
+    recoveredAlreadySettled: number;
     /** Fresh successful claim payouts in THIS run only — never includes
      * already-claimed/recovered positions (the contract zeroes their
      * economic fields, and the SDK never fabricates a payout). On dry-run,
@@ -312,18 +327,26 @@ export async function claimAll(
   const claimed = entries.filter((e) => e.success).length;
   const failed = entries.length - claimed;
 
-  // Claim-leg outcome breakdown, derived from the canonical `steps[]` so
-  // it can't drift from what actually executed. Empty (all zero) on
-  // dry-run, where no steps run.
+  // Per-leg outcome breakdowns, derived from the canonical `steps[]` so they
+  // can't drift from what actually executed. Both empty (all zero) on dry-run,
+  // where no steps run.
   let claimedFresh = 0;
   let alreadyClaimed = 0;
   let recoveredAlreadyClaimed = 0;
+  let settledFresh = 0;
+  let alreadySettled = 0;
+  let recoveredAlreadySettled = 0;
   for (const e of entries) {
     for (const s of e.steps) {
-      if (s.name !== 'claimPosition') continue;
-      if (s.outcome === 'sent') claimedFresh += 1;
-      else if (s.outcome === 'skippedAlreadyClaimed') alreadyClaimed += 1;
-      else if (s.outcome === 'recoveredAlreadyClaimed') recoveredAlreadyClaimed += 1;
+      if (s.name === 'claimPosition') {
+        if (s.outcome === 'sent') claimedFresh += 1;
+        else if (s.outcome === 'skippedAlreadyClaimed') alreadyClaimed += 1;
+        else if (s.outcome === 'recoveredAlreadyClaimed') recoveredAlreadyClaimed += 1;
+      } else if (s.name === 'settleSpeculation') {
+        if (s.outcome === 'sent') settledFresh += 1;
+        else if (s.outcome === 'skippedAlreadySettled') alreadySettled += 1;
+        else if (s.outcome === 'recoveredAlreadySettled') recoveredAlreadySettled += 1;
+      }
     }
   }
 
@@ -337,6 +360,9 @@ export async function claimAll(
       claimedFresh,
       alreadyClaimed,
       recoveredAlreadyClaimed,
+      settledFresh,
+      alreadySettled,
+      recoveredAlreadySettled,
       totalPayoutWei6: totalPayoutWei6.toString(),
       totalPayoutUSDC: Number(totalPayoutWei6) / 1e6,
     },

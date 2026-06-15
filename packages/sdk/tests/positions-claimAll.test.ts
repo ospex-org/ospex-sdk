@@ -303,6 +303,11 @@ describe('positions.claimAll', () => {
       ['settleSpeculation', 'sent'],
       ['claimPosition', 'sent'],
     ]);
+    // Settle-leg totals breakdown: this run settled fresh.
+    expect(result.totals.settledFresh).toBe(1);
+    expect(result.totals.alreadySettled).toBe(0);
+    expect(result.totals.recoveredAlreadySettled).toBe(0);
+    expect(result.totals.claimedFresh).toBe(1);
   });
 
   it('skips an already-settled speculation and proceeds straight to claim', async () => {
@@ -356,6 +361,10 @@ describe('positions.claimAll', () => {
       ['settleSpeculation', 'skippedAlreadySettled'],
       ['claimPosition', 'sent'],
     ]);
+    // Settle-leg totals breakdown: a pre-flight read found it already settled.
+    expect(result.totals.settledFresh).toBe(0);
+    expect(result.totals.alreadySettled).toBe(1);
+    expect(result.totals.recoveredAlreadySettled).toBe(0);
   });
 
   it('recovers from a concurrent settle (revert + re-read closed) then claims', async () => {
@@ -413,6 +422,10 @@ describe('positions.claimAll', () => {
       ['settleSpeculation', 'recoveredAlreadySettled'],
       ['claimPosition', 'sent'],
     ]);
+    // Settle-leg totals breakdown: a concurrent settle won the race.
+    expect(result.totals.settledFresh).toBe(0);
+    expect(result.totals.alreadySettled).toBe(0);
+    expect(result.totals.recoveredAlreadySettled).toBe(1);
     // This wallet broadcast a settle that reverted on inclusion — keep
     // its hash on the recovered step, but NOT in the confirmed txHashes.
     const settleStep = entry.steps[0]!;
@@ -420,6 +433,88 @@ describe('positions.claimAll', () => {
     expect(settleStep.txHash).toBeDefined();
     expect(entry.txHashes).toEqual([claimStep.txHash]);
     expect(entry.txHashes).not.toContain(settleStep.txHash);
+  });
+
+  it('aggregates the settle-leg totals breakdown across a mixed multi-entry sweep', async () => {
+    // Three pendingSettle entries, one per settle outcome — proves the
+    // settle-leg counters SUM across entries (each single-entry test above
+    // only pins a count of 1). All three claim legs are fresh.
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `10_${SIGNER_ADDR}_0`,
+            speculationId: '10',
+            description: 'fresh settle',
+            bucket: 'pendingSettle',
+            result: 'won',
+            estimatedPayoutUSDC: 100,
+            estimatedPayoutWei6: '100000000',
+            txParams: [
+              { method: 'settleSpeculation', target: 'SpeculationModule', args: { speculationId: '10' } },
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '10', positionType: 0 } },
+            ],
+          },
+          {
+            positionId: `11_${SIGNER_ADDR}_0`,
+            speculationId: '11',
+            description: 'already settled (pre-flight closed)',
+            bucket: 'pendingSettle',
+            result: 'won',
+            estimatedPayoutUSDC: 50,
+            estimatedPayoutWei6: '50000000',
+            txParams: [
+              { method: 'settleSpeculation', target: 'SpeculationModule', args: { speculationId: '11' } },
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '11', positionType: 0 } },
+            ],
+          },
+          {
+            positionId: `12_${SIGNER_ADDR}_1`,
+            speculationId: '12',
+            description: 'recovered settle (race lost)',
+            bucket: 'pendingSettle',
+            result: 'won',
+            estimatedPayoutUSDC: 120,
+            estimatedPayoutWei6: '120000000',
+            txParams: [
+              { method: 'settleSpeculation', target: 'SpeculationModule', args: { speculationId: '12' } },
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '12', positionType: 1 } },
+            ],
+          },
+        ],
+      },
+      specStates: {
+        '10': [{ speculationStatus: 0, winSide: 0 }], // Open → settle sent (fresh)
+        '11': [{ speculationStatus: 1, winSide: 2 }], // Closed pre-flight → skipped
+        '12': [
+          { speculationStatus: 0, winSide: 0 }, // Open pre-flight
+          { speculationStatus: 1, winSide: 4 }, // Closed re-read after revert → recovered
+        ],
+      },
+      plannedTxs: [
+        { status: 'success', logs: [makeSettledLog(10n, 1)] }, // 10 settle
+        { status: 'success', logs: [makeClaimedLog(10n, SIGNER_ADDR as `0x${string}`, 0, 100_000_000n)] }, // 10 claim
+        { status: 'success', logs: [makeClaimedLog(11n, SIGNER_ADDR as `0x${string}`, 0, 50_000_000n)] }, // 11 claim (settle skipped)
+        { status: 'reverted', logs: [] }, // 12 settle lost the race
+        { status: 'success', logs: [makeClaimedLog(12n, SIGNER_ADDR as `0x${string}`, 1, 120_000_000n)] }, // 12 claim
+      ],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.success).toBe(true);
+    expect(result.totals.claimed).toBe(3);
+    expect(result.totals.failed).toBe(0);
+    // Settle-leg breakdown SUMS across the three entries (one of each outcome).
+    expect(result.totals.settledFresh).toBe(1);
+    expect(result.totals.alreadySettled).toBe(1);
+    expect(result.totals.recoveredAlreadySettled).toBe(1);
+    // All three claim legs were fresh; no already/recovered claims.
+    expect(result.totals.claimedFresh).toBe(3);
+    expect(result.totals.alreadyClaimed).toBe(0);
+    expect(result.totals.recoveredAlreadyClaimed).toBe(0);
+    // Fresh payout total = the three confirmed claims (100 + 50 + 120).
+    expect(result.totals.totalPayoutWei6).toBe('270000000');
   });
 
   it('still fails clearly on a genuine settle failure (re-read not settled)', async () => {
@@ -576,6 +671,14 @@ describe('positions.claimAll', () => {
     // non-zero predicted payout.
     expect(result.totals.totalPayoutWei6).toBe('50000000');
     expect(result.totals.totalPayoutUSDC).toBeCloseTo(50, 6);
+    // Per-leg outcome breakdowns are all zero on dry-run (no steps run) —
+    // both the claim leg and the new settle leg.
+    expect(result.totals.claimedFresh).toBe(0);
+    expect(result.totals.alreadyClaimed).toBe(0);
+    expect(result.totals.recoveredAlreadyClaimed).toBe(0);
+    expect(result.totals.settledFresh).toBe(0);
+    expect(result.totals.alreadySettled).toBe(0);
+    expect(result.totals.recoveredAlreadySettled).toBe(0);
   });
 
   it('dry-run stays read-only — no chain read even for a pendingSettle entry', async () => {

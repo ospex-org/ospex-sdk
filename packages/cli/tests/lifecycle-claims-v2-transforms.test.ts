@@ -657,6 +657,46 @@ describe('toClaimAllAgentEnvelope', () => {
     expect(env.payload.entries[1]?.error).toBe('boom');
   });
 
+  // Settle-leg totals breakdown (mirrors the claim-leg one) must reach the
+  // agent-facing payload verbatim — it's how a multi-wallet postgame sweep
+  // reads "I settled it" vs "a peer already had" without walking steps[].
+  it('passes the settle-leg totals breakdown (settledFresh/alreadySettled/recoveredAlreadySettled) through to the payload', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: true,
+        totals: {
+          claimed: 1,
+          failed: 0,
+          claimedFresh: 1,
+          alreadyClaimed: 0,
+          recoveredAlreadyClaimed: 0,
+          settledFresh: 0,
+          alreadySettled: 1,
+          recoveredAlreadySettled: 0,
+          totalPayoutWei6: '5000000',
+          totalPayoutUSDC: 5,
+        } as never,
+        entries: [
+          makeEntry({
+            bucket: 'pendingSettle',
+            txHashes: ['0xclaimonly'],
+            steps: [
+              { name: 'settleSpeculation', outcome: 'skippedAlreadySettled', winSide: 'home' },
+              { name: 'claimPosition', outcome: 'sent', txHash: '0xclaimonly', payoutWei6: '5000000', payoutUSDC: 5 },
+            ],
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.payload.totals.settledFresh).toBe(0);
+    expect(env.payload.totals.alreadySettled).toBe(1);
+    expect(env.payload.totals.recoveredAlreadySettled).toBe(0);
+    // Claim-leg breakdown still flows alongside it.
+    expect(env.payload.totals.claimedFresh).toBe(1);
+  });
+
   // Claim-leg idempotency (v0.4.3): an already-claimed claim sends NO tx and
   // is NOT a failure — it surfaces as a distinct claim-specific info warning,
   // never as a fake claim effect or a payout.
