@@ -307,8 +307,11 @@ export interface CancelDualInputs {
  *     `confirmed`) + txHash + blockNumber;
  *   - a txHash but no receipt (broadcast, receipt-wait timed out) →
  *     `status:'submitted'` + txHash (the tx MAY still confirm);
- *   - neither (pre-send revert / RPC error before broadcast) → no
- *     status, no txHash — nothing reverted on-chain.
+ *   - neither a receipt nor a txHash (a local preflight / `estimateGas`-local
+ *     failure, OR a `sendRawTransaction` broadcast round-trip that errored) →
+ *     no status, no txHash. An absent hash is NOT proof no tx was sent — a
+ *     failed broadcast round-trip may still have reached a node; agents apply
+ *     AGENT_CONTRACT §7's safe-retry rule rather than assuming nothing landed.
  */
 function onChainErrorEffect(err: OspexChainError): AgentEffect {
   const effect: AgentEffect = {

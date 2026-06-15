@@ -253,13 +253,13 @@ Per-effect `ok` lets multi-phase commands surface partial success cleanly. Examp
 
 `details.causeChain` is **not** present on a clean inclusion revert (the SDK attaches no `cause` to a reverted-receipt error). It appears when the underlying failure carried a cause — e.g. a pre-send RPC/transport error, or a decoded custom-error revert (`NotCommitmentMaker` / `NonceMustIncrease`), whose viem error is preserved on `cause` and walked into `causeChain[]`.
 
-The on-chain leg has three distinguishable failure shapes — the `transaction` effect's `status` (and `txHash` presence) tells them apart, so agents never blind-retry a tx that may have already moved funds:
+The on-chain leg has three envelope shapes — the `transaction` effect's `status` and `txHash` presence classify them; combined with the [`AGENT_CONTRACT.md` §7](./AGENT_CONTRACT.md) safe-retry rule, agents avoid blind-retrying a tx that may have already moved funds:
 
 | On-chain leg outcome | effect `status` | effect `txHash` | Notes |
 |---|---|---|---|
 | Reverted on inclusion | `reverted` | present | tx mined + reverted (gas spent). `errors[].details.receiptStatus: 'reverted'`. |
 | Broadcast, receipt-wait timed out | `submitted` | present | tx MAY still be mined — on-chain status UNKNOWN. No `receiptStatus`. Poll `txHash` before retrying. |
-| Pre-send failure (e.g. `NotCommitmentMaker` caught at gas estimation, RPC error before broadcast) | omitted | omitted | no tx was sent; nothing reverted on-chain. |
+| No tx hash observed — a local preflight / `estimateGas`-decoded revert (e.g. `NotCommitmentMaker`) / signing error, **or** a `sendRawTransaction` broadcast round-trip that errored | omitted | omitted | **An absent hash is NOT proof a tx was never sent.** A local preflight / `estimateGas`-local failure genuinely broadcast nothing, but a failed broadcast round-trip is ambiguous — the raw tx may have reached a node before the response was lost (and could still land / revert). Do **not** blind-retry: apply the [`AGENT_CONTRACT.md` §7](./AGENT_CONTRACT.md) safe-retry rule (cause-chain classifier + signer pending-nonce + target-state) first. |
 
 Top-level `ok` tracks the requested **domain outcome** — true when the command achieved what was asked. Exit code follows.
 
