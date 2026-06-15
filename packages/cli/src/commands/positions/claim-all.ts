@@ -80,13 +80,21 @@ export const positionsClaimAllCommand = addSignerOptions(
     });
 
     if (wantJson) {
-      writeAgentEnvelope(
-        toClaimAllAgentEnvelope(result, {
-          chainId,
-          signerAddress,
-          dryRun,
-        }),
-      );
+      const envelope = toClaimAllAgentEnvelope(result, {
+        chainId,
+        signerAddress,
+        dryRun,
+      });
+      writeAgentEnvelope(envelope);
+      // AGENT_ENVELOPE_SPEC §6: exit code is nonzero when ok:false, so a
+      // shell-gating harness catches a partially- or fully-failed sweep
+      // without parsing the envelope. claim-all is the one write whose
+      // SUCCESS-path envelope can be ok:false: the SDK isolates per-entry
+      // failures into entry.success rather than throwing, so the catch-path
+      // process.exit(1) below never fires for them — this is its success-path
+      // twin. process.exitCode (not process.exit) lets the already-written
+      // envelope flush and keeps the action return-clean (and unit-testable).
+      if (!envelope.ok) process.exitCode = 1;
       return;
     }
 
@@ -129,6 +137,11 @@ export const positionsClaimAllCommand = addSignerOptions(
       `\nSummary: ${result.totals.claimed} succeeded, ${result.totals.failed} failed, ` +
         `total payout ${result.totals.totalPayoutUSDC.toFixed(2)} USDC.\n`,
     );
+    // §6 parity for the human path: a sweep with any failed entry returns
+    // nonzero so shell pipelines catch it — the same predicate that drives
+    // envelope.ok in the --json branch. Skips/recoveries are not failures, so
+    // a multi-wallet sweep that finds everything already done by peers stays 0.
+    if (result.totals.failed > 0) process.exitCode = 1;
     } catch (err) {
       // Hermes PR-6 scope: when claimAll itself throws (e.g. API
       // fetch fails before any tx is dispatched), emit a failure
