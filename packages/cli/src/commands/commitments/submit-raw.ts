@@ -4,17 +4,31 @@
  * Protocol-level escape hatch — direct positional surface mirroring the
  * on-chain OspexCommitment struct (no speculationId — the contract
  * derives that from contestId+scorer+lineTicks). Most users should
- * reach for the high-level `ospex commitments submit` (lands in the
- * follow-up PR) which accepts domain-language inputs and renders an
- * explicit win/lose/push preview before signing.
+ * reach for the high-level `ospex commitments submit`, which accepts
+ * domain-language inputs and renders an explicit win/lose/push preview
+ * before signing.
  *
- * On `OspexAllowanceError` we offer to approve PositionModule and
- * retry once. Prints the EIP-712 commitment hash on success.
+ * Unlike `submit`/`match`, submit-raw has NO preview-only mode — it
+ * ALWAYS signs + posts immediately. `--json` is therefore output format
+ * only (it does NOT imply a dry run), and non-interactive runs require
+ * `--yes` (refused up front so the reactive approval prompt can't hang).
+ *
+ * On `OspexAllowanceError` we offer to approve PositionModule and retry
+ * once: interactive runs prompt (defaulting to the EXACT required amount,
+ * "max" for unlimited); `--yes` auto-approves the required amount, or
+ * unlimited with `--approve-max`. All approval diagnostics go to stderr so
+ * the `--json` payload on stdout stays parseable. Prints the EIP-712
+ * commitment hash on success.
  */
 
 import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
-import { OspexAllowanceError } from '@ospex/sdk';
+import {
+  OspexAllowanceError,
+  OspexValidationError,
+  usdcDecimalToWei6,
+  wei6ToDecimalUSDC,
+} from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import { getClient } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
@@ -26,6 +40,8 @@ const positionSchema = z.enum(['upper', 'lower', '0', '1']);
 const optionsSchema = z.object({
   expiry: z.string().optional(),
   nonce: z.string().regex(/^[0-9]+$/).optional(),
+  yes: z.boolean().optional(),
+  approveMax: z.boolean().optional(),
   json: z.boolean().optional(),
 });
 
@@ -59,11 +75,47 @@ export const commitmentsSubmitRawCommand = addSignerOptions(
     .argument('<riskAmount>', 'risk amount (USDC, 6 decimals; multiple of 100)')
     .option('--expiry <iso-or-unix>', 'expiry (default: 24h from now)')
     .option('--nonce <bigint>', 'override nonce strategy with an explicit value')
-    .addOption(new Option('--json').hideHelp(false)),
+    .option(
+      '--yes',
+      'run unattended: on a USDC allowance shortfall, auto-approve the exact required amount ' +
+        'without prompting. Required for non-interactive runs (submit-raw always signs + posts).',
+    )
+    .option(
+      '--approve-max',
+      'with --yes, approve unlimited USDC on a shortfall instead of the exact required amount. ' +
+        'Ignored in interactive mode — type "max" at the amount prompt to grant unlimited interactively.',
+    )
+    .addOption(
+      new Option(
+        '--json',
+        'machine-readable JSON output. NOTE: unlike `commitments submit`/`match`, submit-raw has ' +
+          'NO preview-only mode — it ALWAYS signs + posts. --json is output format only, does NOT ' +
+          'imply a dry run, and does NOT exempt the non-interactive --yes requirement.',
+      ).hideHelp(false),
+    ),
 )
   .action(async (contestIdArg, scorerArg, lineTicksArg, positionArg, oddsTickArg, riskAmountArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
     const signerIntent = parseSignerIntent(rawOpts);
+    const skipPrompt = opts.yes === true;
+    const approveMax = opts.approveMax === true;
+    const isInteractive = process.stdin.isTTY === true;
+
+    // submit-raw signs + posts immediately (it has NO preview-only mode) and
+    // may need an interactive USDC approval if allowance is short. Refuse
+    // non-interactive runs without --yes up front — BEFORE getClient unlocks
+    // the keystore — so the reactive allowance prompt can never hang on a
+    // stdin nobody can answer. Unlike `submit`/`match`, --json does NOT exempt
+    // this guard: there is no preview-only path here, so --json still executes.
+    if (!skipPrompt && !isInteractive) {
+      throw new OspexValidationError(
+        '--yes is required for non-interactive runs of `commitments submit-raw`. ' +
+          'It signs + posts immediately (no preview-only mode) and may need to approve USDC; ' +
+          'pass --yes to run unattended (add --approve-max to approve unlimited instead of the ' +
+          'exact required amount).',
+      );
+    }
+
     const args = {
       contestId: BigInt(contestIdArg),
       scorer: scorerArg as Hex,
@@ -84,7 +136,7 @@ export const commitmentsSubmitRawCommand = addSignerOptions(
       result = await trySubmit();
     } catch (err) {
       if (!(err instanceof OspexAllowanceError)) throw err;
-      const handled = await handleAllowance(client, err);
+      const handled = await handleAllowance(client, err, { skipPrompt, approveMax });
       if (!handled) throw err;
       result = await trySubmit();
     }
@@ -108,19 +160,61 @@ export const commitmentsSubmitRawCommand = addSignerOptions(
 async function handleAllowance(
   client: Awaited<ReturnType<typeof getClient>>,
   err: OspexAllowanceError,
+  opts: { skipPrompt: boolean; approveMax: boolean },
 ): Promise<boolean> {
-  process.stdout.write(
-    `\nInsufficient USDC allowance.\n` +
-      `  Required: ${err.required.toString()}\n` +
-      `  Current:  ${err.current.toString()}\n` +
+  // All diagnostics + prompts go to STDERR — stdout is reserved for the
+  // --json payload so `submit-raw … --json | jq .` stays parseable.
+  const requiredHuman = wei6ToDecimalUSDC(err.required);
+  const currentHuman = wei6ToDecimalUSDC(err.current);
+  process.stderr.write(
+    `\nUSDC approval needed (commitment risk).\n` +
+      `  Required: ${requiredHuman} USDC\n` +
+      `  Approved: ${currentHuman} USDC\n` +
       `  Spender:  ${err.spender} (PositionModule)\n` +
       `  Token:    ${err.token} (USDC)\n`,
   );
-  const ok = await promptYesNo('Approve PositionModule for USDC?', true);
-  if (!ok) return false;
-  const choice = await promptValue('Amount? (max | <usdc-units>)', 'max');
-  const approveAmount = choice === 'max' ? 'max' : BigInt(choice);
+
+  let approveAmount: bigint | 'max';
+  if (opts.skipPrompt) {
+    // Non-interactive (--yes): approve the EXACT required amount by default;
+    // --approve-max opts into unlimited. Never default to unlimited.
+    approveAmount = opts.approveMax ? 'max' : err.required;
+  } else {
+    const allow = await promptYesNo('Allow PositionModule to spend USDC from your wallet?', true);
+    if (!allow) {
+      process.stderr.write('Approval declined; submit-raw cancelled.\n');
+      return false;
+    }
+    // Amount is entered in human USDC units (e.g. "5" = 5 USDC), defaulting
+    // to the required amount on a bare Enter — NOT unlimited. "max" grants
+    // unlimited explicitly.
+    const choice = await promptValue('Amount in USDC (number, or "max" for unlimited)', requiredHuman);
+    if (choice.toLowerCase() === 'max') {
+      approveAmount = 'max';
+    } else {
+      let parsed: bigint;
+      try {
+        parsed = usdcDecimalToWei6(choice);
+      } catch {
+        process.stderr.write(`Could not parse "${choice}" as a USDC amount.\n`);
+        process.exit(1);
+      }
+      if (parsed < err.required) {
+        process.stderr.write(
+          `Amount ${choice} USDC is less than the required ${requiredHuman} USDC.\n`,
+        );
+        process.exit(1);
+      }
+      approveAmount = parsed;
+    }
+  }
+
+  const display =
+    approveAmount === 'max'
+      ? 'unlimited'
+      : `${wei6ToDecimalUSDC(approveAmount)} USDC (${approveAmount} wei6)`;
+  process.stderr.write(`Approving USDC → ${err.spender} (${display})...\n`);
   const tx = await client.commitments.approve(approveAmount);
-  process.stdout.write(`approve tx: ${tx.txHash} (status ${tx.receipt.status})\n`);
+  process.stderr.write(`approve tx: ${tx.txHash} (status ${tx.receipt.status})\n`);
   return true;
 }
