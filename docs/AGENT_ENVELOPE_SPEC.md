@@ -310,13 +310,15 @@ Examples:
   "safeToAutoRun": false
 }
 
-// After `claim-all --dry-run`
+// After `claim-all --dry-run` (re-run the sweep for real; the address is the
+// swept wallet from the dry-run). claim-all has no `--yes` flag — it never
+// prompts, so `--json` alone executes.
 {
-  "id": "execute-claim-all",
-  "description": "Execute the planned claim sweep",
+  "id": "complete-claim-all",
+  "description": "Execute the planned claim sweep.",
   "suggestedFor": "complete",
-  "command": "ospex claim-all --yes --json",
-  "argv": ["claim-all", "--yes", "--json"],
+  "command": "ospex claim-all --address 0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd --json",
+  "argv": ["claim-all", "--address", "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "--json"],
   "safeToAutoRun": false
 }
 ```
