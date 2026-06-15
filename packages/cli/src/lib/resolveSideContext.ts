@@ -11,7 +11,7 @@
  * resolved by the time these run; enrichment is post-hoc display metadata.
  * A fetch failure degrades the context honestly (team `unavailable` / role
  * `unknown`) and surfaces a `warning` — it must never propagate and cause a
- * successful settle/claim to be reported as failed (Hermes's hard rule).
+ * successful settle/claim to be reported as failed (a hard review rule).
  */
 
 import type { AgentWarning, MarketType, OspexClient } from '@ospex/sdk';

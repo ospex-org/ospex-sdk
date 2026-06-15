@@ -258,7 +258,7 @@ describe('toClaimAllAgentEnvelope', () => {
     };
   }
 
-  // Hermes PR-70 blocker 1: the SDK intentionally returns
+  // Review blocker 1: the SDK intentionally returns
   // `success: false` for dry-runs (because no live sweep happened),
   // but the v2 envelope's top-level `ok` is COMMAND/envelope success,
   // not domain-level "claimed at least one thing". Dry-runs and live
@@ -348,7 +348,7 @@ describe('toClaimAllAgentEnvelope', () => {
     expect(env.ok).toBe(true);
   });
 
-  // Hermes PR-70 blocker 2: recorded txHashes are confirmed-
+  // Review blocker 2: recorded txHashes are confirmed-
   // successful (SDK throws on revert before pushing). A partial
   // pendingSettle (settle landed, claim failed) MUST emit the settle
   // tx as confirmed and the claim as a separate failure effect, not
@@ -605,7 +605,7 @@ describe('toClaimAllAgentEnvelope', () => {
     expect(env.warnings[0]?.severity).toBe('info');
   });
 
-  // Hermes #93 blocker (related): a recovered inclusion-time race where
+  // Review blocker (related): a recovered inclusion-time race where
   // this wallet DID broadcast a settle that reverted must surface the
   // reverted tx — the entry recovered, but gas was spent.
   it('recovered settle that broadcast a reverted tx: reverted settle effect + claim effect + warning', () => {
@@ -645,7 +645,7 @@ describe('toClaimAllAgentEnvelope', () => {
     expect(env.warnings[0]?.code).toBe('projection-lag-recovered');
   });
 
-  // Hermes #93 blocker (primary): a genuine settle receipt revert must
+  // Review blocker (primary): a genuine settle receipt revert must
   // emit the settle tx hash with status:'reverted' — previously dropped
   // because the failed settle step didn't carry err.txHash.
   it('failed settle step with a revert tx hash emits a reverted settle-speculation effect', () => {
@@ -685,7 +685,7 @@ describe('toClaimAllAgentEnvelope', () => {
     expect(env.ok).toBe(false);
   });
 
-  // Hermes PR-70 blocker 3: payout shoulder must preserve exact
+  // Review blocker 3: payout shoulder must preserve exact
   // wei6 from the SDK's totals.totalPayoutWei6. Going through
   // totalPayoutUSDC (a JS number) loses precision past 2^53.
   it('payout shoulder uses exact totalPayoutWei6 (no number round-trip)', () => {

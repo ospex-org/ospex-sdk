@@ -1,5 +1,5 @@
 /**
- * Hermes PR 54 review #2 regression guard.
+ * Review #2 regression guard.
  *
  * The chain-read helpers (`readBalancesSafe`, `readApprovalsSafe`)
  * sit between the SDK's `client.{balances,approvals}.read(...)` and
@@ -113,13 +113,13 @@ describe('readApprovalsSafe — URL leak guard', () => {
   });
 });
 
-// Hermes's exact repro: an RPC that returns 200 OK for probe methods
+// A reviewer's exact repro: an RPC that returns 200 OK for probe methods
 // (eth_chainId / getBlockByNumber / getCode) but then fails on the
 // chain-read methods (eth_getBalance / eth_call). The probe-side
 // sanitisation didn't cover this — the SDK call path threw with the
 // URL inline. The doctor envelope MUST NOT contain the raw key for
 // any of the failure cases.
-describe('Hermes PR 54 review #2 — RPC probe ok but chain reads fail', () => {
+describe('review #2 — RPC probe ok but chain reads fail', () => {
   it('balance read error path strips the secret from the doctor-facing string', async () => {
     const url =
       'http://127.0.0.1:9/v2/anothersupersecret0123456789ab';

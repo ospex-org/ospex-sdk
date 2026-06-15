@@ -1,7 +1,7 @@
 /**
  * Tests for the `isMainModule` entry-point guard.
  *
- * Hermes PR-72 blocker regression: the naive
+ * Review blocker regression: the naive
  * `process.argv[1] === fileURLToPath(import.meta.url)` comparison
  * failed when the CLI was invoked via the npm/yarn `.bin` symlink
  * (argv[1] = node_modules/.bin/ospex; import.meta.url =
@@ -56,7 +56,7 @@ describe('isMainModule', () => {
     expect(isMainModule(path.join(tmpDir, 'does-not-exist'), metaUrl)).toBe(false);
   });
 
-  // Hermes PR-72 blocker regression — the .bin symlink case.
+  // Review blocker regression — the .bin symlink case.
   // Mirrors how npm/yarn create a bin symlink that points back
   // into the installed package directory.
   //

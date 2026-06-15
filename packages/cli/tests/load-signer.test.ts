@@ -1,6 +1,6 @@
 /**
  * Regression tests for the signer-resolution precedence in
- * `lib/client.ts:loadSigner`. Covers Hermes's PR 48 blockers:
+ * `lib/client.ts:loadSigner`. Covers the review blockers:
  *
  *   1. Explicit `--account` / `--keystore-path` must NOT fall back to
  *      the legacy session cache — even when a fresh session exists.
@@ -105,7 +105,7 @@ async function writeKeystoreFile(filename: string): Promise<string> {
 
 // ── Issue 1: explicit --account skips session cache ───────────────
 
-describe('loadSigner — Hermes PR 48 blocker #1 (explicit intent skips session)', () => {
+describe('loadSigner — review blocker #1 (explicit intent skips session)', () => {
   it('explicit --account does NOT fall back to the cached session signer', async () => {
     // Set up a fresh session for TEST_ADDRESS, then ask for an
     // account that doesn't exist. Before the fix this would silently
@@ -167,7 +167,7 @@ describe('loadSigner — Hermes PR 48 blocker #1 (explicit intent skips session)
 
 // ── Issue 2: expectedAddress validated on every path ──────────────
 
-describe('loadSigner — Hermes PR 48 blocker #2 (final expectedAddress guard)', () => {
+describe('loadSigner — review blocker #2 (final expectedAddress guard)', () => {
   it('throws address_mismatch when a cached session resolves to a different address than expectedAddress', async () => {
     // Session is for TEST_ADDRESS. expectedAddress is OTHER_ADDRESS.
     // Before the fix, expectedAddress was ignored on the session-cache
@@ -209,7 +209,7 @@ describe('loadSigner — Hermes PR 48 blocker #2 (final expectedAddress guard)',
 
 // ── Issue 3: env-only path works ──────────────────────────────────
 
-describe('loadSigner — Hermes PR 48 blocker #3 (env-only path)', () => {
+describe('loadSigner — review blocker #3 (env-only path)', () => {
   it('unlocks via OSPEX_KEYSTORE_PATH + OSPEX_PASSWORD_FILE with no intent supplied', async () => {
     // Before the fix, hasExplicitKeystoreSource saw OSPEX_KEYSTORE_PATH
     // but loadSignerNonInteractive passed undefined to fromKeystoreFile.

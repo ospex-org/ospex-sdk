@@ -83,7 +83,7 @@ describe('signerOptionsSchema — validation', () => {
     expect(parsed.account).toBe('maker-a');
   });
 
-  // Hermes PR 48 warning #4: mutual-exclusion documented in help but
+  // review warning #4: mutual-exclusion documented in help but
   // not enforced. Failing closed at parse time prevents the loader
   // from silently picking one of the two conflicting sources.
 

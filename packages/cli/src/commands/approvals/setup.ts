@@ -246,7 +246,7 @@ export const approvalsSetupCommand = addSignerOptions(
       `\nDone. Run \`ospex approvals show\` to verify the new state.\n`,
     );
     } catch (err) {
-      // Hermes PR-6 scope: mid-flight failure preserves any approve
+      // The failure-envelope scope: mid-flight failure preserves any approve
       // txs already landed in `results[]` as effects so agents see
       // exactly what was committed before the throw.
       if (wantJson) {

@@ -117,7 +117,7 @@ function deriveRole(
   }
 
   if (marketType === 'spread') {
-    // Spread role from the line sign first (Hermes guidance), odds as
+    // Spread role from the line sign first (review guidance), odds as
     // fallback. Negative line = favorite, positive = underdog, zero = even.
     const line = input.spreadLine;
     const myLine = line != null ? (alignment === 'away' ? line.away : line.home) : null;

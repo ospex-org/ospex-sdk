@@ -175,8 +175,8 @@ export const commitmentsMatchCommand = addSignerOptions(
 
     // ── 1. Lazy signer split (spec §17.2). ─────────────────────────
     // Preview-only mode (`--json` without `--yes`): compute the
-    // preview WITHOUT calling `loadSigner`. Hermes's hard
-    // requirement — agents should never get an interactive
+    // preview WITHOUT calling `loadSigner`. A hard review rule —
+    // agents should never get an interactive
     // passphrase prompt from a preview-only invocation. We resolve
     // the taker address via `resolvePreviewAddress`:
     //   1. `--expected-address` → use it directly, no I/O at all.
@@ -193,7 +193,7 @@ export const commitmentsMatchCommand = addSignerOptions(
       ? await getClient({ requiresChain: true })
       : await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
 
-    // Failure-envelope state (Hermes PR-6 scope) — wallet known once
+    // Failure-envelope state — wallet known once
     // prepareMatch sets preview.taker; approveEffects accumulates
     // during the approval loop. Catch at bottom emits a v2 failure
     // envelope that preserves any confirmed approve txs. `confirmedApprovalPurposes`
@@ -310,7 +310,7 @@ export const commitmentsMatchCommand = addSignerOptions(
     // commitment-risk → PositionModule (always present); lazy-creation-fee
     // → TreasuryModule (present iff speculation.mode === 'lazy').
     //
-    // Hermes PR-69 fix: each approve tx is recorded as an
+    // Review fix: each approve tx is recorded as an
     // AgentEffect (collected in `approveEffects`, declared at the
     // top of the action so the failure-envelope catch can also
     // surface already-confirmed approves on a mid-flight throw)
@@ -492,7 +492,7 @@ export const commitmentsMatchCommand = addSignerOptions(
       { json: false },
     );
     } catch (err) {
-      // Hermes PR-6 scope: --json failures emit a v2 failure envelope
+      // Failure-envelope scope: --json failures emit a v2 failure envelope
       // that preserves any approve txs already confirmed before the
       // throw. NONCE_TOO_LOW (or any other matchFromPreview revert)
       // would otherwise drop those approve tx hashes to stderr.
@@ -531,7 +531,7 @@ export const commitmentsMatchCommand = addSignerOptions(
 /**
  * `payload` shape for `commitments match --json` (preview-only).
  * Strips MatchPreview's inner `schemaVersion: 1` — the outer v2
- * envelope is the only schemaVersion marker (Hermes PR-67 contract,
+ * envelope is the only schemaVersion marker (review contract,
  * enforced by buildAgentEnvelope's payload guard).
  */
 export type MatchPreviewPayload = Omit<MatchPreview, 'schemaVersion'>;

@@ -37,7 +37,7 @@
  * **The walk MUST stay in lockstep with `loadSigner`'s
  * `materializeIntent` + `mergeIntentFromConfig` +
  * `resolveSignerByPrecedence`.** Any change to either path must be
- * mirrored on the other. Hermes's PR 50 round-1 review caught three
+ * mirrored on the other. Review round 1 caught three
  * divergences that the regression tests in
  * `tests/auth-check.test.ts` now lock in:
  *
@@ -67,7 +67,7 @@
  *      interactive and ignores any lifted `intent.passwordFile`.
  *      Only `session-cache` produces a real non-interactive unlock
  *      on the legacy path; everything else collapses to 'would
- *      prompt'. Hermes PR 50 round-2 caught the regression: a
+ *      prompt'. Review round 2 caught the regression: a
  *      legacy `config.keystorePath` + `config.passwordFile` (wallet A)
  *      with an active session (wallet B) had `auth check` unlocking
  *      A while real `loadSigner({})` returned B.
@@ -377,7 +377,7 @@ export async function buildEnvelope(args: BuildEnvelopeArgs): Promise<AuthCheckJ
   const { keystore, password, expectedAddress, foundryKeystoresDir } =
     await resolveAuthSources(intent, env, config);
 
-  // Hermes PR 50 blocker #2: a missing keystore file is not a fatal
+  // review blocker #2: a missing keystore file is not a fatal
   // error when the session cache is the unlock path. Real `loadSigner`
   // reaches the session-cache branch (path 2) before any attempt to
   // read the legacy default keystore (path 3), so `keystore.exists`
@@ -416,7 +416,7 @@ export async function buildEnvelope(args: BuildEnvelopeArgs): Promise<AuthCheckJ
   // available AND there are no upstream fatal errors yet. The session-
   // cache branch is the one case where `keystore.exists` is irrelevant
   // (path 2 of `loadSigner` uses session.privateKey without ever
-  // reading the keystore file — Hermes PR 50 blocker #2).
+  // reading the keystore file — review blocker #2).
   const canAttemptUnlock =
     errors.length === 0 &&
     (password.provenance === 'session-cache' ||

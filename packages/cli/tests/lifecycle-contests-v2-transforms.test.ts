@@ -115,7 +115,7 @@ describe('toContestCreateAgentEnvelope', () => {
   });
 });
 
-// Hermes PR-71 blocker: when waitForVerified throws AFTER the create
+// Review blocker: when waitForVerified throws AFTER the create
 // tx landed, the action's --json path used to emit TWO envelopes
 // (success then failure) AND the failure envelope omitted the
 // create-contest tx. Fix extracted `buildCreateContestEffect` so the

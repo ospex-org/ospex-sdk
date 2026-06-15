@@ -405,7 +405,7 @@ export function buildDoctorReport(inputs: DoctorReportInputs): JsonDoctorReport 
   // reflects every check — PR 1 (api/balances/allowances) AND PR 2+
   // (rpc/chain/contracts/signer). The exit code reads from
   // `ready.matchCommitments.ok`, so this guarantees the legacy guard
-  // agrees with the structured per-capability view. Hermes PR 53
+  // agrees with the structured per-capability view. Review
   // blocker #1: pre-fix `computeReadiness` only saw PR 1 conditions,
   // so a `network.contracts_deployed: fail` could leave the doctor
   // exiting 0 even though every other PR 2 surface said no.

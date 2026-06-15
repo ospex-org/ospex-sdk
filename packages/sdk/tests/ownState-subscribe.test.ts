@@ -466,7 +466,7 @@ describe('subscribeToOwnState — truncated snapshot REST paging', () => {
   });
 
   it('clears cursor + cold-starts on REST paging 401 (no Last-Event-ID on next SSE attempt)', async () => {
-    // Hermes round-1 blocker: a 401 mid-handoff used to fall through to
+    // review round 1 blocker: a 401 mid-handoff used to fall through to
     // the next SSE attempt carrying the truncated page-* cursor as
     // Last-Event-ID. That risked `ready` firing on a partial baseline
     // when the server tolerated the resume. The fix: clear `cursor` (and
@@ -587,7 +587,7 @@ describe('subscribeToOwnState — truncated snapshot REST paging', () => {
 
 describe('subscribeToOwnState — REST paging error surface', () => {
   it('surfaces a malformed REST snapshot body via onError and cold-restarts', async () => {
-    // Hermes round-1 B2: a malformed wire body used to throw inside
+    // review round 1 B2: a malformed wire body used to throw inside
     // decodeSnapshot OUTSIDE pageRestUntilLive's try-catch — silently
     // killing the subscriber. After the fix the decoder failure is
     // caught, surfaced via onError, and the loop cold-restarts.
@@ -651,7 +651,7 @@ describe('subscribeToOwnState — REST paging error surface', () => {
 
 describe('subscribeToOwnState — persistent-failure threshold', () => {
   it('promotes reconnecting → degraded after consecutive failed SSE connects', async () => {
-    // Hermes round-1 B3: the public docs claim `degraded` covers both
+    // review round 1 B3: the public docs claim `degraded` covers both
     // server-signaled partial visibility AND SDK persistent reconnect
     // failures, but the implementation only fired degraded for the
     // server signal. The fix: after `PERSISTENT_FAILURE_THRESHOLD = 3`
@@ -1237,8 +1237,8 @@ describe('subscribeToOwnState — v0.5.2 dispatch model (PR0a)', () => {
 });
 
 describe('subscribeToOwnState — v0.5.2 dispatch model (PR0a round 2 — post-throw cursor safety)', () => {
-  it('does NOT advance cursor when a LATER successful commitment follows a thrown one on the SAME connection (Hermes regression probe)', async () => {
-    // This is the exact regression Hermes flagged: pre-round-2, after a
+  it('does NOT advance cursor when a LATER successful commitment follows a thrown one on the SAME connection (regression probe)', async () => {
+    // This is the exact regression a reviewer flagged: pre-round-2, after a
     // handler throw the SDK kept processing the same SSE connection and
     // a subsequent successful event advanced cursor PAST the failed one.
     // Round 2 abandons the connection on dispatch failure so no further
@@ -1496,8 +1496,8 @@ describe('subscribeToOwnState — v0.5.2 dispatch model (PR0a round 2 — post-t
 });
 
 describe('subscribeToOwnState — v0.5.2 decode-failure abort discipline (PR0a round 3)', () => {
-  it('does NOT fire onReady when a malformed cold-start snapshot is followed by ready on the same connection (Hermes regression probe)', async () => {
-    // Hermes's exact probe: a malformed snapshot frame followed by a ready
+  it('does NOT fire onReady when a malformed cold-start snapshot is followed by ready on the same connection (regression probe)', async () => {
+    // The exact probe: a malformed snapshot frame followed by a ready
     // frame on the same connection. Pre-round-3 the decode error broke
     // only the switch — the for-await loop kept going — and the next
     // ready fired onReady + onStatus('connected'), signaling a false
@@ -1549,7 +1549,7 @@ describe('subscribeToOwnState — v0.5.2 decode-failure abort discipline (PR0a r
     // The decode error MUST have surfaced.
     expect(errors.some((e) => e.phase === 'decode')).toBe(true);
 
-    // Hermes-flagged: pre-round-3, this would have been 2 (false-ready on
+    // Review-flagged: pre-round-3, this would have been 2 (false-ready on
     // attempt 1 + real ready on attempt 2). Round 3 makes it exactly 1.
     expect(readyHits).toBe(1);
 
@@ -1559,7 +1559,7 @@ describe('subscribeToOwnState — v0.5.2 decode-failure abort discipline (PR0a r
     // happened on attempt 1 in the first place.
     expect(connectedSeen).toBe(1);
 
-    // Hermes-flagged: the SECOND SSE attempt is a COLD START — the
+    // Review-flagged: the SECOND SSE attempt is a COLD START — the
     // malformed snapshot never advanced cursor, so there's no
     // Last-Event-ID. (If round-3 had erroneously promoted the SSE-level
     // cursor on decode failure, Last-Event-ID would equal
@@ -1638,7 +1638,7 @@ describe('subscribeToOwnState — v0.5.2 decode-failure abort discipline (PR0a r
 
 describe('subscribeToOwnState — v0.5.2 typed-frame structural decode (PR0a round 4)', () => {
   it('aborts the connection when a positionStatus body is valid JSON but structurally malformed (e.g. {})', async () => {
-    // Hermes round-4 regression: pre-round-4 the positionStatus case did
+    // review round 4 regression: pre-round-4 the positionStatus case did
     // safeParseJson + `wire as PositionStatusEvent` with no validation,
     // so `{}` was dispatched as a "successful" event and cursor advanced.
     // Round-4 adds `decodePositionStatusEvent` that validates required
@@ -1845,8 +1845,8 @@ describe('subscribeToOwnState — v0.5.2 typed-frame structural decode (PR0a rou
 });
 
 describe('subscribeToOwnState — v0.5.2 toOwnerPosition strict validator (PR0a round 5)', () => {
-  it('decodeSnapshot({positions: [{}]}) throws OspexValidationError (unit-level — Hermes regression probe)', () => {
-    // Hermes round-5 regression probe: pre-round-5 toOwnerPosition was
+  it('decodeSnapshot({positions: [{}]}) throws OspexValidationError (unit-level — regression probe)', () => {
+    // review round 5 regression probe: pre-round-5 toOwnerPosition was
     // a non-exhaustive switch that fell through to `undefined` for a
     // missing/unknown status, so a snapshot with `positions: [{}]`
     // silently produced `positions: [undefined]`. Round 5 makes it
@@ -2217,7 +2217,7 @@ describe('subscribeToOwnState — v0.5.2 decodeSnapshot top-level shape (PR0a ro
       expectedField: 'positionsTruncated',
     },
   ])(
-    'decodeSnapshot throws OspexValidationError on $name (Hermes round-6 unit probes)',
+    'decodeSnapshot throws OspexValidationError on $name (review round 6 unit probes)',
     ({ body, expectedField }) => {
       let caught: unknown;
       try {

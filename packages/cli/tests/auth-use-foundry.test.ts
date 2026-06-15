@@ -188,7 +188,7 @@ describe('auth use-foundry — happy path with --keystore-path', () => {
   });
 });
 
-describe('auth use-foundry — Hermes PR 49 round 2 (stale foundryKeystoresDir)', () => {
+describe('auth use-foundry — review round 2 (stale foundryKeystoresDir)', () => {
   it('replaces a stale foundryKeystoresDir with the dir actually used during validation', async () => {
     // Seed config with a stale empty dir. Real keystore lives elsewhere
     // (in tmpDir/real). User re-runs use-foundry pointing at the real

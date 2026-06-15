@@ -248,7 +248,7 @@ describe('toSubmitExecuteEnvelope', () => {
     expect(env.effects.every((e) => e.ok === true)).toBe(true);
   });
 
-  // Hermes v0.5.1 round 2: the v2 execute envelope's `payload.result` is
+  // review round 2: the v2 execute envelope's `payload.result` is
   // pinned to the `{ hash, commitment }` subset. Even when a caller passes
   // a structurally-wider object (e.g. the full SDK `SubmitResult` which
   // carries `signedPayload` from v0.5.1 onward), `toSubmitExecuteEnvelope`
@@ -283,11 +283,11 @@ describe('toSubmitExecuteEnvelope', () => {
     expect((env.payload.result as Record<string, unknown>).hypotheticalFutureField).toBeUndefined();
   });
 
-  // Hermes PR-69 review: when `commitments submit --yes --json` runs
+  // Per review: when `commitments submit --yes --json` runs
   // approve txs before the final submit, those txs MUST appear in
   // effects[] — agents need the tx hash/status, not just stderr text.
-  // Regression tests cover 1- and 2-approval scenarios per Hermes's
-  // request.
+  // Regression tests cover 1- and 2-approval scenarios per the
+  // reviewer's request.
   it('prepends a single approve effect (commitment-risk only)', () => {
     const approve = approveEffect('0xa1');
     const env = toSubmitExecuteEnvelope(
@@ -451,7 +451,7 @@ describe('toMatchPreviewEnvelope', () => {
     expect(env.requiresTransaction).toBe(true);
   });
 
-  it('strips MatchPreview.schemaVersion from payload (Hermes PR-67 contract)', () => {
+  it('strips MatchPreview.schemaVersion from payload (review contract)', () => {
     const env = toMatchPreviewEnvelope(preview, { chainId: POLYGON });
     expect(preview.schemaVersion).toBe(1); // legacy marker on the source
     expect('schemaVersion' in (env.payload as Record<string, unknown>)).toBe(false);
@@ -585,7 +585,7 @@ describe('toMatchExecuteEnvelope', () => {
     expect(eff?.status).toBe('confirmed');
   });
 
-  // Hermes PR-69 review: when `commitments match --yes --json` runs
+  // Per review: when `commitments match --yes --json` runs
   // approve txs before the final match, those txs MUST appear in
   // effects[]. Regression tests cover 1- and 2-approval scenarios.
   it('prepends a single approve effect (commitment-risk only)', () => {

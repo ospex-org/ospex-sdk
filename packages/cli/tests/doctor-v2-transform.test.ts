@@ -1,7 +1,7 @@
 /**
  * Unit tests for `ospex doctor --json`'s v1 → v2 envelope transform.
  *
- * Pins the wire-contract fix Hermes flagged on PR-67:
+ * Pins the wire-contract fix flagged in review:
  *   - `payload.schemaVersion` MUST be absent (the outer v2 envelope
  *     is the only schemaVersion marker).
  *   - `ok` is hoisted from `report.ready.matchCommitments.ok` so the
@@ -67,7 +67,7 @@ function buildHappyReport(): ReturnType<typeof buildDoctorReport> {
 }
 
 describe('toAgentEnvelope (doctor v1 → v2)', () => {
-  it('does NOT retain payload.schemaVersion (Hermes PR-67 blocker)', () => {
+  it('does NOT retain payload.schemaVersion (review blocker)', () => {
     const report = buildHappyReport();
     expect(report.schemaVersion).toBe(1); // legacy marker present on the v1 report
     const v2 = toAgentEnvelope(report, { chainId: 137, wallet: OWNER });

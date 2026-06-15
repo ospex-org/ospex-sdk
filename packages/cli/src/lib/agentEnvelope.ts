@@ -134,7 +134,7 @@ export function buildAgentEnvelope<TPayload>(
   // Wire-contract guard: payload MUST NOT carry an inner
   // `schemaVersion`. The outer envelope is the only schemaVersion
   // marker; nesting a v1 marker under v2 gives agents two version
-  // signals (Hermes PR-67 review). Callers wrapping a legacy v1
+  // signals (per review). Callers wrapping a legacy v1
   // envelope (e.g. `JsonDoctorReport`) MUST destructure it out:
   //   const { schemaVersion: _legacy, ...payload } = report;
   //   buildAgentEnvelope({ ..., payload });
@@ -208,7 +208,7 @@ export interface BuildFailureEnvelopeArgs {
 
   /**
    * Effects that already completed before the failure. Critical for
-   * mid-flight failures (Hermes's PR-6 scope): if a `commitments
+   * mid-flight failures (the failure-envelope scope): if a `commitments
    * submit --yes --json` runs an approve tx that confirms and then
    * `submitPrepared` throws NONCE_TOO_LOW, the confirmed approve tx
    * MUST appear in the failure envelope's effects[] so agents see
@@ -309,7 +309,7 @@ export interface EmitJsonFailureArgs {
 
   /**
    * Completed on-chain / off-chain effects that landed BEFORE the
-   * failure. Preserved in the envelope per Hermes's PR-6 scope:
+   * failure. Preserved in the envelope per the failure-envelope scope:
    * "any already-completed effects[] when a command fails after
    * side effects." Empty / omitted when the failure happened before
    * any side effect.
@@ -453,7 +453,7 @@ export function errorToAgentError(err: unknown): AgentError {
 /**
  * Maximum depth the cause-chain walker descends. Bounded so a
  * self-referential or pathological chain can't bloat the envelope.
- * Matches the depth Hermes's diagnose-create.mjs uses as a working
+ * Matches the depth an internal diagnostic script uses as a working
  * reference; viem chains rarely exceed 2-3 levels in practice.
  */
 export const MAX_CAUSE_CHAIN_DEPTH = 4;

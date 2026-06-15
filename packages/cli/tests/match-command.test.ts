@@ -348,7 +348,7 @@ describe('commitments match — --raw spread / total line displays', () => {
 
 // ── Default (first-person) layout ─────────────────────────────────────
 //
-// The new default render — proven against Hermes's review item #3
+// The new default render — proven against review item #3
 // (`request.md`): maker/taker leakage and Upper/Lower terminology are
 // hidden; the executing party always reads as "You" and the maker
 // becomes "Counterparty". `--raw` (above) preserves the protocol-native
@@ -433,7 +433,7 @@ describe('commitments match — default first-person renderer', () => {
   });
 
   it('renders an explicit existing-mode Speculation/Action block (no creation fee)', () => {
-    // Hermes asked that the existing-mode case be EXPLICIT in the
+    // A reviewer asked that the existing-mode case be EXPLICIT in the
     // preview — not inferable from the absence of a fee block. The
     // existing-mode render is intentionally compact (two lines) so
     // normal trades stay quiet but the answer is still visible.
@@ -496,7 +496,7 @@ describe('commitments match — default renderer (self-match)', () => {
     expect(out).not.toMatch(/Counterparty:/);
   });
 
-  // Regression guard for Hermes PR #59 blocker (comment 4466248942).
+  // Regression guard for review blocker (comment 4466248942).
   // The default self-match render used to emit `you win` / `you lose`
   // rows from the taker-perspective outcomes block, but on a
   // self-match both positions belong to the same wallet — settlement
@@ -523,7 +523,7 @@ describe('commitments match — default renderer (self-match)', () => {
   // partial-fill) are shared across both layouts. Before this fix,
   // partial-fill lived only inside the non-self-match branch; a
   // self-match preview that partial-filled would have lost the
-  // warning. Hermes flagged this alongside the outcomes blocker.
+  // warning. A reviewer flagged this alongside the outcomes blocker.
   it('self-match + partial fill still surfaces the ⚠ partial-fill warning', () => {
     const preview = buildExisting({
       taker: MAKER,

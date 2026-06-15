@@ -187,7 +187,7 @@ export const commitmentsCancelCommand = addSignerOptions(
     };
     formatOutput(summary, { json: false });
     } catch (err) {
-      // Hermes PR-6 scope: catches the OFF-CHAIN failure case (when
+      // The failure-envelope scope: catches the OFF-CHAIN failure case (when
       // client.commitments.cancel itself throws). The on-chain
       // partial-success path is handled inline above via
       // toCancelDualAgentEnvelope which preserves the off-chain

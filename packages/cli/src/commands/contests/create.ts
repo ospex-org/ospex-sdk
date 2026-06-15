@@ -217,7 +217,7 @@ export const contestCreateCommand = addSignerOptions(
       // non-null assertion documents the invariant for type-narrowing
       // since the success path needs the Hex (not `Hex | null`) form.
       const signerForEnvelope = signerAddress as Hex;
-      // Hermes PR-71 blocker: when waitForVerified throws AFTER the
+      // review blocker: when waitForVerified throws AFTER the
       // create tx landed, we previously wrote the success envelope
       // and THEN threw — producing TWO JSON envelopes on stdout AND
       // a failure envelope that omitted the create tx (only had
@@ -267,7 +267,7 @@ export const contestCreateCommand = addSignerOptions(
     // throw is unreachable from the JSON path.)
     if (verificationError !== null) throw verificationError;
     } catch (err) {
-      // Hermes PR-6 scope: preserve any approve txs that succeeded
+      // The failure-envelope scope: preserve any approve txs that succeeded
       // before the create call threw. Without this, a wallet that
       // approves LINK successfully and then hits a Chainlink Functions
       // revert would lose the approve tx hash to stderr.
@@ -454,7 +454,7 @@ export function toContestCreateAgentEnvelope(
 
 /**
  * Build the create-contest AgentEffect from the SDK result. Extracted
- * so the failure-envelope path (Hermes PR-71 blocker: when
+ * so the failure-envelope path (review blocker: when
  * waitForVerified throws AFTER the create tx landed, the failure
  * envelope must preserve the create tx) can reuse the same shape.
  */

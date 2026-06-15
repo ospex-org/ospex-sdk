@@ -205,7 +205,7 @@ function writeCauseChain(err: unknown): void {
  * fails through the bin symlink: argv[1] points at
  * `node_modules/.bin/ospex` while import.meta.url resolves to
  * `node_modules/@ospex/cli/dist/index.js`, so main() never runs and
- * the installed CLI becomes a no-op (Hermes PR-72 blocker).
+ * the installed CLI becomes a no-op (review blocker).
  *
  * Fix: resolve BOTH paths via `realpathSync` so symlinks collapse
  * to their canonical targets before comparison. realpathSync can

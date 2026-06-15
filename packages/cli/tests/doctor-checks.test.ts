@@ -360,17 +360,17 @@ describe('buildSummary — rollup math', () => {
     expect(s.byCapability.matchCommitments.ok).toBe(false);
     expect(s.byCapability.createContests.ok).toBe(false);
     // summary.ok must also be false — skips must not silently pass the
-    // strict top-level gate (Hermes PR 52 blocker).
+    // strict top-level gate (review blocker).
     expect(s.ok).toBe(false);
   });
 
-  // Hermes PR 52 blocker. The exact repro scenario: `--address` set
+  // review blocker. The exact repro scenario: `--address` set
   // and RPC unreachable. The envelope has 2 ok (api + address known)
   // and 6 skips, no fails. Pre-fix summary.ok was true even though
   // every byCapability.ok was false and the process exited 1 — false
   // positive an AI-agent preflight would misread as "safe to act".
   // The strict semantic ties summary.ok to "every check ok".
-  it('skip-only envelope: summary.ok is false even with zero fails (Hermes PR 52)', () => {
+  it('skip-only envelope: summary.ok is false even with zero fails (review blocker)', () => {
     const checks = runDoctorChecks({
       apiOk: true,
       balances: null,
@@ -608,8 +608,8 @@ describe('PR 2: network.contracts_deployed check', () => {
 
   // Real-probe shape: a lookup that errored sets hasCode=null and
   // adds the name to `unknown` (NOT `missing`). The check must warn
-  // (lookup advisory) rather than fail (confirmed missing). Hermes
-  // PR 53 blocker #2 — the prior implementation collapsed both into
+  // (lookup advisory) rather than fail (confirmed missing). Review
+  // blocker #2 — the prior implementation collapsed both into
   // hasCode:false + missing[], so the real probe path always failed.
   it('warn when a lookup errored — distinguishes unknown from confirmed missing', () => {
     const checks = runDoctorChecks({
@@ -679,7 +679,7 @@ describe('PR 2: chain-mismatch cascade on balances + allowances', () => {
   });
 });
 
-// Hermes PR 53 blocker #1. The legacy `ready` matrix and the exit
+// review blocker #1. The legacy `ready` matrix and the exit
 // code must agree with `summary.byCapability` even when balances and
 // approvals are populated (happy snapshot path). Pre-fix the doctor
 // computed `ready` via the PR 1-only `computeReadiness`, which
@@ -974,7 +974,7 @@ describe('PR 4: signer.password_file_perms check', () => {
     expect(c.details).toMatch(/644/);
   });
 
-  // Hermes PR 52 / spec §15 PR 4: the legacy `--strict` early-exit
+  // review round / spec §15 PR 4: the legacy `--strict` early-exit
   // is gone; the structured check is the new source of truth. Under
   // --strict, loose perms become a hard fail that blocks every
   // capability, so the rollup drives the exit-1 outcome.
@@ -1190,7 +1190,7 @@ describe('PR 3: config.{apiUrl,rpcUrl} envelope field — UrlField with redactio
     );
     expect(report.config.rpcUrl?.host).toBe('polygon-mainnet.g.alchemy.com');
     // The raw value MUST NOT appear in the envelope (the credential
-    // leak Hermes flagged in v2 §10).
+    // leak the review flagged in v2 §10).
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain('abcdef0123456789abcdef0123456789');
   });

@@ -183,7 +183,7 @@ export async function resolveCliConfig(): Promise<ResolvedCliConfig> {
   // (which treats `''` as unset) AND breaks `getClient()` downstream:
   // it short-circuits on falsy `rpcUrl` but the bare string `''` is
   // falsy already, so the bug only surfaced for fields the SDK
-  // happened to forward verbatim. Hermes PR 54 blocker #3 — every
+  // happened to forward verbatim. Review blocker #3 — every
   // env var is normalised the same way both resolvers do.
   return {
     apiUrl: nonEmpty(process.env.OSPEX_API_URL) ?? file.apiUrl,

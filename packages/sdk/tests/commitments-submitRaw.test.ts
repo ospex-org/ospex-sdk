@@ -3,7 +3,7 @@
  * `SubmitResult.signedPayload` contract (v0.5.1).
  *
  * Closes the pre-existing coverage gap (`submitRaw` had no happy-path unit
- * test) and locks the retry-path invariant Hermes flagged in the v0.5.1
+ * test) and locks the retry-path invariant flagged in the v0.5.1
  * review: when the first POST hits NONCE_TOO_LOW, the returned
  * `signedPayload` MUST be the retry's bundle (commitmentHash + signature +
  * message all rebuilt with the new nonce), never the original's. Field-by-

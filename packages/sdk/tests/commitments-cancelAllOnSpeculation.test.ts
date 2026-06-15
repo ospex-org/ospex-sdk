@@ -180,7 +180,7 @@ describe('commitments.cancelAllOnSpeculation', () => {
     lineTicks: LINE_TICKS,
   };
 
-  // ── newMinNonce is REQUIRED (M5/PR1 — Hermes round 3) ──────────────────
+  // ── newMinNonce is REQUIRED (M5/PR1 — review round 3) ──────────────────
   // Auto-computing a default from the public list cannot be hidden-safe
   // (the list filters `book_visible=true` upstream; a maker's hidden book
   // is invisible to anonymous reads), so we removed the auto-default and

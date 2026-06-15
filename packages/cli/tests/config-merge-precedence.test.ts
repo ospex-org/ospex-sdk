@@ -240,9 +240,9 @@ describe('resolvePreviewAddress — config-pinned expectedAddress', () => {
   });
 });
 
-// ── Hermes PR 49 regression coverage ──────────────────────────────
+// ── PR 49 review regression coverage ──────────────────────────────
 
-describe('Hermes PR 49 blocker #1 — config-pinned foundryKeystorePath is sticky', () => {
+describe('Review blocker #1 — config-pinned foundryKeystorePath is sticky', () => {
   it('loadSigner: config foundryKeystorePath + passwordFile unlocks non-interactively', async () => {
     // The bug: writing keystorePath to config via auth use-foundry
     // landed in the legacy field, which `mergeIntentFromConfig`
@@ -282,7 +282,7 @@ describe('Hermes PR 49 blocker #1 — config-pinned foundryKeystorePath is stick
   });
 });
 
-describe('Hermes PR 49 blocker #3 — env foundry-keystores-dir beats config', () => {
+describe('Review blocker #3 — env foundry-keystores-dir beats config', () => {
   it('OSPEX_FOUNDRY_KEYSTORES_DIR env overrides config-pinned foundryKeystoresDir', async () => {
     // Config points at an empty dir; env points at the dir containing
     // maker-a. Before the fix, materializeIntent didn't lift the env
@@ -337,7 +337,7 @@ describe('Hermes PR 49 blocker #3 — env foundry-keystores-dir beats config', (
   });
 });
 
-describe('Hermes PR 49 blocker #4 — explicit per-invocation source beats config expectedAddress in preview', () => {
+describe('Review blocker #4 — explicit per-invocation source beats config expectedAddress in preview', () => {
   it('resolvePreviewAddress: flag --account + --password-file returns unlocked address, NOT config-pinned address', async () => {
     // Bug: config has expectedAddress for account-A. User runs a
     // preview with explicit --account B + password file. Before the

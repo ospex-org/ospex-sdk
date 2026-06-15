@@ -205,7 +205,7 @@ describe('CLI config', () => {
       expect(r.rpcUrl.source).toBe('unset');  // no config either
     });
 
-    // Hermes PR 54 blocker #3: both resolvers must agree on what
+    // Review blocker #3: both resolvers must agree on what
     // counts as "set". An empty-string `OSPEX_RPC_URL` was treated
     // as set by `resolveCliConfig` (via `??`) but as unset by
     // `resolveCliConfigDetailed`. Result was a split-brain doctor

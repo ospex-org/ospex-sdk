@@ -113,7 +113,7 @@ export const doctorCommand = new Command('doctor')
       authResolution.password,
     );
 
-    // PR 4 fix (Hermes PR 55 review): derive the wallet address from
+    // PR 4 fix (per review): derive the wallet address from
     // the walker resolution — NOT the legacy `~/.ospex/keystore.json`
     // path. With a config-pinned `foundryAccount` + `passwordFile` the
     // pre-fix code would say "no keystore at the default path" while
@@ -349,7 +349,7 @@ async function probeApiHealth(client: OspexClient | null): Promise<{ ok: boolean
   );
 }
 
-// Exported for regression tests — Hermes PR 54 review #2 specifically
+// Exported for regression tests — review round 2 specifically
 // targeted this leak surface, so the test asserts the sanitisation
 // happens here rather than higher up the stack.
 export async function readBalancesSafe(
@@ -361,7 +361,7 @@ export async function readBalancesSafe(
     const value = await client.balances.read({ owner });
     return { value };
   } catch (err) {
-    // Hermes PR 54 review #2: the probe path already sanitises its
+    // review round 2: the probe path already sanitises its
     // own errors, but viem's HttpRequestError thrown from the chain
     // read inside the OspexClient also includes the raw URL in
     // err.message. That message then lands in `checks[].details` via

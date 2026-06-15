@@ -142,7 +142,7 @@ export function subscribeToOwnState(
    * subscription. Used to disambiguate `phase: 'token-mint'` (initial mint
    * before any successful baseline) from `phase: 'token-refresh'` (re-mint
    * during an active subscription) for consumer health gates that latch
-   * differently on each — per own-state SSE plan §2.6 + Hermes Phase 3
+   * differently on each — per own-state SSE plan §2.6 + review round 3
    * v2-feedback amendment 3.
    */
   let hasEverConnected = false;
@@ -484,12 +484,12 @@ export function subscribeToOwnState(
        * from the prior cursor; server-side overlap re-delivers the
        * failed event.
        *
-       * Hermes-locked invariant: "a later successful frame must NOT
+       * Review-locked invariant: "a later successful frame must NOT
        * advance cursor past an unapplied event on the same connection,
        * AND `onReady` must NOT fire after a failed cold-start snapshot."
        *
-       * Round 2 (PR0a Hermes #1) covered DISPATCH failures (consumer
-       * handler throws). Round 3 (PR0a Hermes #2) extends it to DECODE
+       * Round 2 covered DISPATCH failures (consumer
+       * handler throws). Round 3 extends it to DECODE
        * failures — pre-round-3 a malformed snapshot frame emitted an
        * onError but a subsequent `event: ready` still fired `onReady` +
        * `onStatus('connected')`, signaling a false baseline to the
@@ -606,7 +606,7 @@ export function subscribeToOwnState(
                 // taken ownership of the ready signal. If onReady threw,
                 // the baseline swap (per MM PR1 §4.3) did not complete —
                 // surfacing 'connected' here would lie to the consumer's
-                // health gate. Hermes-locked round 2.
+                // health gate. Review-locked round 2.
                 emitStatus('connected');
                 if (candidateCursor !== undefined) cursor = candidateCursor;
               } else {
