@@ -361,6 +361,35 @@ export function emitJsonFailure(args: EmitJsonFailureArgs): void {
 }
 
 /**
+ * Success-path twin of {@link emitJsonFailure}: write an already-built v2
+ * envelope to stdout AND set the process exit code per AGENT_ENVELOPE_SPEC §6
+ * — nonzero exactly when `envelope.ok` is false.
+ *
+ * Use this instead of a raw `writeAgentEnvelope(...)` for any command whose
+ * success-path envelope can be `ok: false` WITHOUT throwing — i.e. the SDK
+ * isolates per-entry / per-phase failures into the result rather than aborting
+ * (`claim-all`, `commitments cancel --also-onchain`, `commitments cancel-all`).
+ * Routing the emit + exit through one call makes the §6 contract STRUCTURAL
+ * rather than per-command discipline — the gap that let the claim-all M4
+ * violation (ok:false envelope, exit 0) ship.
+ *
+ * Sets `process.exitCode` (NOT `process.exit()`): the written envelope flushes
+ * before the process exits, the action returns cleanly, and tests can assert
+ * the emitted envelope without intercepting a process-termination signal. (The
+ * failure path keeps `emitJsonFailure(...)` + an explicit `process.exit(1)` —
+ * it is always `ok: false` and wants to short-circuit immediately.)
+ *
+ * Commands whose success envelope is ALWAYS `ok: true` (genuine failures throw
+ * → caught → `emitJsonFailure` + exit 1) may also adopt this: the exit code is
+ * then a harmless `0`, and the command stays correct if it ever grows a
+ * non-throwing `ok: false` path.
+ */
+export function emitJsonSuccess(envelope: AgentEnvelope<unknown>): void {
+  writeAgentEnvelope(envelope);
+  process.exitCode = envelope.ok ? 0 : 1;
+}
+
+/**
  * Map an arbitrary thrown value into an AgentError. SDK errors
  * (`OspexError` subclasses) keep their `code` field — that's the
  * stable agent-routing surface per AGENT_CONTRACT.md §7. Native

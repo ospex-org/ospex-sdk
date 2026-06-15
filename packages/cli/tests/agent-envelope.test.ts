@@ -16,6 +16,7 @@ import {
   buildAgentEnvelope,
   buildFailureEnvelope,
   emitJsonFailure,
+  emitJsonSuccess,
   errorToAgentError,
   networkForChainId,
   writeAgentEnvelope,
@@ -759,5 +760,75 @@ describe('emitJsonFailure', () => {
     expect(parsed.errors[0]?.code).toBe('CHAIN_ERROR');
     expect(parsed.effects[0]?.purpose).toBe('approve-usdc');
     expect(parsed.effects[0]?.ok).toBe(true);
+  });
+});
+
+describe('emitJsonSuccess — writes envelope + sets the §6 exit code', () => {
+  // Captures stdout AND the exit code the helper sets, then restores both
+  // (so a leaked process.exitCode=1 can't fail the vitest run itself).
+  function run(envelope: AgentEnvelope<unknown>): { stdout: string; exitCode: number } {
+    const sink = new StringSink();
+    const writeOrig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Buffer) => {
+      sink.write(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    const origExitCode = process.exitCode;
+    process.exitCode = 0;
+    try {
+      emitJsonSuccess(envelope);
+      const exitCode = typeof process.exitCode === 'number' ? process.exitCode : 0;
+      return { stdout: sink.buf, exitCode };
+    } finally {
+      process.stdout.write = writeOrig;
+      process.exitCode = origExitCode;
+    }
+  }
+
+  it('ok:true → exit code 0 and the envelope is written to stdout', () => {
+    const env = buildAgentEnvelope({
+      ...BASE_REQUIRED,
+      ok: true,
+      action: 'claim-all',
+      stage: 'execute',
+      payload: { swept: true },
+    });
+    const { stdout, exitCode } = run(env);
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout.trim()) as { ok: boolean; action: string };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.action).toBe('claim-all');
+  });
+
+  it('ok:false → exit code 1, and the envelope is STILL written before exit (the §6 contract M4 violated)', () => {
+    const env = buildAgentEnvelope({
+      ...BASE_REQUIRED,
+      ok: false,
+      action: 'claim-all',
+      stage: 'execute',
+      payload: { failed: 1 },
+    });
+    const { stdout, exitCode } = run(env);
+    expect(exitCode).toBe(1);
+    // process.exitCode (not process.exit) ⇒ the envelope flushed first; an
+    // agent can still parse ok:false off stdout.
+    const parsed = JSON.parse(stdout.trim()) as { ok: boolean };
+    expect(parsed.ok).toBe(false);
+  });
+
+  it('sets the code as `ok ? 0 : 1` — an ok:true emit clears a prior non-zero code', () => {
+    // Pins that the helper assigns exitCode (not `if (!ok) exitCode = 1`),
+    // so a clean emit after a prior failure doesn't inherit the stale 1.
+    const writeOrig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    const origExitCode = process.exitCode;
+    process.exitCode = 1; // simulate a prior nonzero
+    try {
+      emitJsonSuccess(buildAgentEnvelope({ ...BASE_REQUIRED, ok: true }));
+      expect(process.exitCode).toBe(0);
+    } finally {
+      process.stdout.write = writeOrig;
+      process.exitCode = origExitCode;
+    }
   });
 });

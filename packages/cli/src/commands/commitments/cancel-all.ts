@@ -41,8 +41,8 @@ import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
   emitJsonFailure,
+  emitJsonSuccess,
   networkForChainId,
-  writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 import {
   COMPLETE_CANCEL_ALL,
@@ -144,7 +144,10 @@ export const commitmentsCancelAllCommand = addSignerOptions(
         .filter((c) => BigInt(c.nonce) < newMinNonce);
       const count = rows.length;
       if (opts.json === true) {
-        writeAgentEnvelope(
+        // emitJsonSuccess writes the envelope and sets the §6 exit code
+        // (nonzero iff ok:false) — see lib/agentEnvelope.ts. The dry-run
+        // envelope is always ok:true, so this exits 0.
+        emitJsonSuccess(
           toCancelAllDryRunEnvelope({
             chainId,
             signerAddress: maker,
@@ -201,7 +204,11 @@ export const commitmentsCancelAllCommand = addSignerOptions(
 
     const explorerUrl = polygonscanTxUrl(chainId, result.txHash);
     if (opts.json === true) {
-      writeAgentEnvelope(
+      // emitJsonSuccess writes the envelope and sets the §6 exit code
+      // (nonzero iff ok:false) — see lib/agentEnvelope.ts. A reverted tx
+      // throws in the SDK (→ caught below), so the execute envelope is
+      // ok:true here; the helper keeps the contract correct defensively.
+      emitJsonSuccess(
         toCancelAllExecuteEnvelope(result, {
           chainId,
           signerAddress: maker,
