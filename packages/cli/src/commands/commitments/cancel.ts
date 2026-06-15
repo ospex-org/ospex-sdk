@@ -19,6 +19,7 @@ import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
   emitJsonFailure,
+  errorToAgentError,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -109,31 +110,44 @@ export const commitmentsCancelCommand = addSignerOptions(
     // in effects[] and `ok: false`. We catch OspexChainError so we
     // can emit the envelope; other errors still re-throw.
     let onChainResult: Awaited<ReturnType<OspexClient['commitments']['cancelOnchain']>> | null = null;
-    let onChainError: { code: string; message: string } | null = null;
+    let onChainError: OspexChainError | null = null;
     try {
       onChainResult = await client.commitments.cancelOnchain({ hash });
     } catch (err) {
       if (err instanceof OspexChainError) {
+        // "did not confirm" covers all three failure shapes — a pre-send
+        // revert (e.g. NotCommitmentMaker, caught at estimateGas, no tx), an
+        // inclusion revert (tx broadcast, reverted), and a receipt-wait
+        // timeout (tx broadcast, may still land) — without over-claiming
+        // "reverted" on a tx that might still confirm.
         process.stderr.write(
-          'On-chain cancel reverted: ' +
+          'On-chain cancel did not confirm: ' +
             (err.reason === 'NotCommitmentMaker'
               ? 'signer is not the commitment maker. '
               : '') +
             'Off-chain DELETE already applied; the row is hidden from the relay but the taker is not blocked.\n',
         );
-        // err.message can carry viem metaMessages with a credentialed RPC
-        // URL; this onChainError feeds both the envelope errors[] and the
-        // payload, so scrub at capture. (A later PR routes this through the
-        // shared causeChain path — M7 — which sanitizes structurally.)
-        onChainError = { code: err.code, message: sanitizeUntargetedMessage(err.message) };
+        // Capture the FULL typed error. `toCancelDualAgentEnvelope` routes it
+        // through the shared `errorToAgentError` path (sanitizes the message,
+        // walks the cause chain, and surfaces txHash / receiptStatus), and
+        // derives the on-chain transaction effect from its txHash / receipt —
+        // so an inclusion-revert no longer loses its hash, receipt status, or
+        // cause chain (M7).
+        onChainError = err;
       } else {
         throw err;
       }
     }
 
+    // The on-chain leg may have landed a tx even when it failed (an inclusion
+    // revert, or a broadcast whose receipt wait timed out). Prefer the success
+    // result's hash, fall back to the error's, so the explorer link + payload
+    // point at the real tx in those cases.
+    const onChainTxHash = onChainResult?.txHash ?? onChainError?.txHash ?? null;
+
     if (wantJson) {
-      const explorerUrl = onChainResult !== null
-        ? polygonscanTxUrl(chainId, onChainResult.txHash)
+      const explorerUrl = onChainTxHash !== null
+        ? polygonscanTxUrl(chainId, onChainTxHash)
         : null;
       writeAgentEnvelope(
         toCancelDualAgentEnvelope(
@@ -153,9 +167,10 @@ export const commitmentsCancelCommand = addSignerOptions(
     }
 
     if (onChainResult === null) {
-      // Human mode: re-throw the original chain error so the user
-      // sees the standard error surface.
-      throw new OspexChainError(onChainError?.message ?? 'on-chain cancel failed');
+      // Human mode: re-throw the original typed chain error so the user
+      // sees the standard error surface (preserves txHash / receipt /
+      // reason / cause rather than flattening to a bare message).
+      throw onChainError ?? new OspexChainError('on-chain cancel failed');
     }
     const explorerUrl = polygonscanTxUrl(chainId, onChainResult.txHash);
     const summary = {
@@ -211,11 +226,12 @@ export interface CancelOffchainPayload {
 export interface CancelDualPayload {
   hash: Hex;
   offChainOk: boolean;
-  /** Present iff the on-chain leg landed (success or revert). */
+  /** Present whenever the on-chain leg broadcast a tx — confirmed, reverted, or broadcast-then-receipt-timeout. Null only on a pre-send failure. */
   txHash: string | null;
+  /** Block number when a receipt was observed (confirmed / reverted); null otherwise. */
   blockNumber: string | null;
   explorer: string | null;
-  /** Present iff the on-chain leg failed before sending a tx (rare). */
+  /** Present iff the on-chain leg failed. The full structured detail (txHash / receiptStatus / causeChain) lives in the envelope's `errors[]`. */
   onChainError: { code: string; message: string } | null;
 }
 
@@ -272,8 +288,46 @@ export function toCancelOffchainAgentEnvelope(
 export interface CancelDualInputs {
   offChainResult: CancelOffchainResult;
   onChainResult: CancelOnchainResult | null;
-  onChainError: { code: string; message: string } | null;
+  /**
+   * The full typed error from the on-chain leg, when it failed. Carries
+   * `txHash` / `receipt` / `cause` so the transaction effect and the
+   * `errors[]` entry can reflect what actually happened on-chain (M7) —
+   * an inclusion revert keeps its hash + `status:'reverted'`, a
+   * receipt-wait timeout surfaces as `status:'submitted'`, a pre-send
+   * failure carries neither.
+   */
+  onChainError: OspexChainError | null;
   explorer: string | null;
+}
+
+/**
+ * Build the on-chain transaction effect from the on-chain leg's error.
+ * Honest about what landed:
+ *   - a mined receipt → `status` from `receipt.status` (`reverted` /
+ *     `confirmed`) + txHash + blockNumber;
+ *   - a txHash but no receipt (broadcast, receipt-wait timed out) →
+ *     `status:'submitted'` + txHash (the tx MAY still confirm);
+ *   - neither a receipt nor a txHash (a local preflight / `estimateGas`-local
+ *     failure, OR a `sendRawTransaction` broadcast round-trip that errored) →
+ *     no status, no txHash. An absent hash is NOT proof no tx was sent — a
+ *     failed broadcast round-trip may still have reached a node; agents apply
+ *     AGENT_CONTRACT §7's safe-retry rule rather than assuming nothing landed.
+ */
+function onChainErrorEffect(err: OspexChainError): AgentEffect {
+  const effect: AgentEffect = {
+    type: 'transaction',
+    purpose: 'onchain-cancel',
+    ok: false,
+    errorCode: err.code,
+  };
+  if (typeof err.txHash === 'string') effect.txHash = err.txHash as Hex;
+  if (err.receipt) {
+    effect.blockNumber = err.receipt.blockNumber.toString();
+    effect.status = err.receipt.status === 'success' ? 'confirmed' : 'reverted';
+  } else if (typeof err.txHash === 'string') {
+    effect.status = 'submitted';
+  }
+  return effect;
 }
 
 export function toCancelDualAgentEnvelope(
@@ -307,15 +361,18 @@ export function toCancelDualAgentEnvelope(
           status: onTxOk ? 'confirmed' : 'reverted',
         }
       : inputs.onChainError !== null
-        ? {
-            type: 'transaction',
-            purpose: 'onchain-cancel',
-            ok: false,
-            errorCode: inputs.onChainError.code,
-          }
+        ? onChainErrorEffect(inputs.onChainError)
         : null;
   const effects: AgentEffect[] = [offSig, offWrite];
   if (onChainEffect !== null) effects.push(onChainEffect);
+  // Surface the on-chain tx the error left behind (inclusion revert /
+  // broadcast-then-timeout), falling back to null for a pre-send failure.
+  const errorTxHash =
+    typeof inputs.onChainError?.txHash === 'string' ? inputs.onChainError.txHash : null;
+  const errorBlockNumber =
+    inputs.onChainError?.receipt !== undefined
+      ? inputs.onChainError.receipt.blockNumber.toString()
+      : null;
   return buildAgentEnvelope<CancelDualPayload>({
     ok: effects.every((e) => e.ok),
     action: 'commitments.cancel',
@@ -326,20 +383,29 @@ export function toCancelDualAgentEnvelope(
     walletRole: 'signer',
     signer: args.signerAddress,
     commitment,
+    // Route through the shared mapper so the on-chain failure carries
+    // details.txHash / receiptStatus / causeChain — not a flattened
+    // {code,message} that drops the hash, receipt status, and cause (M7).
     errors:
       inputs.onChainError !== null
-        ? [inputs.onChainError]
+        ? [errorToAgentError(inputs.onChainError)]
         : [],
     effects,
     nextCommands: [VERIFY_COMMITMENT.build({ hash: args.hash })],
     payload: {
       hash: args.hash,
       offChainOk: offOk,
-      txHash: inputs.onChainResult?.txHash ?? null,
+      txHash: inputs.onChainResult?.txHash ?? errorTxHash,
       blockNumber:
-        inputs.onChainResult?.receipt.blockNumber.toString() ?? null,
+        inputs.onChainResult?.receipt.blockNumber.toString() ?? errorBlockNumber,
       explorer: inputs.explorer,
-      onChainError: inputs.onChainError,
+      onChainError:
+        inputs.onChainError !== null
+          ? {
+              code: inputs.onChainError.code,
+              message: sanitizeUntargetedMessage(inputs.onChainError.message),
+            }
+          : null,
     },
   });
 }

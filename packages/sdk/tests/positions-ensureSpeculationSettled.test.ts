@@ -84,6 +84,9 @@ function fakeCtx(opts: {
   /** When true, the post-revert `getTransactionReceipt` re-fetch throws —
    * exercises the graceful-degrade path (revertedTxHash kept, no receipt). */
   getReceiptFails?: boolean;
+  /** When true, `waitForTransactionReceipt` rejects AFTER a successful
+   * broadcast — the M2 receipt-wait-timeout shape (txHash, NO receipt). */
+  waitFails?: boolean;
 }): { ctx: PositionsContext; sendRaw: ReturnType<typeof vi.fn> } {
   let readIdx = 0;
   const sendRaw = vi.fn(async () => ('0x' + 'aa'.repeat(32)) as Hash);
@@ -111,7 +114,14 @@ function fakeCtx(opts: {
       return r;
     },
     sendRawTransaction: sendRaw,
-    waitForTransactionReceipt: async () => receipt,
+    waitForTransactionReceipt: async () => {
+      if (opts.waitFails) {
+        throw Object.assign(new Error('wait timed out'), {
+          name: 'WaitForTransactionReceiptTimeoutError',
+        });
+      }
+      return receipt;
+    },
     getTransactionReceipt: async () => {
       if (opts.getReceiptFails) throw new Error('receipt fetch failed');
       return revertedReceipt;
@@ -264,6 +274,31 @@ describe('positions.ensureSpeculationSettled', () => {
     expect(r.outcome).toBe('recovered');
     expect(r.revertedTxHash).toBe(('0x' + 'aa'.repeat(32)) as `0x${string}`);
     expect(r.revertedReceipt).toBeUndefined(); // fetch failed — gap, not a crash
+  });
+
+  it('7. recovers from a receipt-wait timeout (txHash, NO receipt) WITHOUT mislabeling the tx as reverted (M2 regression)', async () => {
+    // The settle tx was broadcast but the receipt wait timed out — the tx MAY
+    // have mined SUCCESSFULLY. A post-read shows the speculation closed, so we
+    // recover. Crucially, `revertedTxHash`/`revertedReceipt` must stay
+    // UNDEFINED: `revertTxHashOf` now keys on a proven `receipt.status ===
+    // 'reverted'`, not on bare txHash presence — otherwise a possibly-
+    // successful settle tx would be mis-accounted as reverted (the asymmetry
+    // M2's txHash preservation would otherwise expose, mirroring the claim
+    // side's `revertedReceiptOf`).
+    const { ctx, sendRaw } = fakeCtx({
+      reads: [
+        { speculationStatus: 0, winSide: 0 }, // pre-flight: Open
+        { speculationStatus: 1, winSide: 4 }, // re-read: Closed, under
+      ],
+      waitFails: true, // broadcast ok, receipt wait times out → txHash, no receipt
+    });
+    const r = await ensureSpeculationSettled(ctx, { speculationId: 42n });
+    expect(r.outcome).toBe('recovered');
+    expect(r.winSide).toBe('under');
+    expect(sendRaw).toHaveBeenCalledTimes(1); // the tx WAS broadcast
+    // Not proven reverted → must NOT be surfaced as a reverted tx.
+    expect(r.revertedTxHash).toBeUndefined();
+    expect(r.revertedReceipt).toBeUndefined();
   });
 
   it('rejects a non-positive speculationId before any chain work', async () => {

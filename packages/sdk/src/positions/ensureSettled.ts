@@ -47,11 +47,15 @@ export type EnsureSettledOutcome =
   | 'settled'
   /** A pre-flight read found it already settled; no tx was sent. */
   | 'alreadySettled'
-  /** A concurrent settle won the race — the settle attempt reverted but a
-   * re-read confirmed the speculation is settled. Carries `revertedTxHash`
-   * (+ `revertedReceipt`, so its gas can be accounted) iff this wallet
-   * broadcast a tx that reverted (inclusion-time loss); pre-send /
-   * pre-flight recovery broadcasts nothing. */
+  /** The speculation ended up settled even though this call's settle attempt
+   * was not the confirmed settle — a concurrent settle won the race (this
+   * wallet's attempt reverted, OR its receipt wait timed out) and an
+   * authoritative re-read confirms the speculation is closed. Carries
+   * `revertedTxHash` (+ `revertedReceipt`, so its gas can be accounted) ONLY
+   * when this wallet broadcast a tx that PROVABLY reverted (inclusion-time
+   * loss); a pre-flight / pre-send recovery broadcasts nothing, and a
+   * receipt-wait-timeout recovery can't prove a revert, so it surfaces no
+   * reverted-tx fields. */
   | 'recovered';
 
 export interface EnsureSettledResult {
@@ -67,10 +71,13 @@ export interface EnsureSettledResult {
   /** Present only on `outcome === 'settled'`. */
   receipt?: TransactionReceipt;
   /** Present only on `outcome === 'recovered'` AND only when this wallet
-   * actually broadcast a settle tx that then reverted (an inclusion-time
-   * race loss — gas was spent). Absent when recovery came via a pre-flight
-   * read or a pre-send (`estimateGas`) revert, where no tx was sent. The
-   * audit trail must not lose this hash. */
+   * broadcast a settle tx that PROVABLY reverted on inclusion (`receipt.status
+   * === 'reverted'` — gas was spent). Absent when recovery came via a
+   * pre-flight read or a pre-send (`estimateGas`) revert (no tx sent), OR when
+   * a broadcast tx's receipt wait timed out — in that case a tx WAS sent but
+   * its on-chain outcome is UNKNOWN, so it is NOT surfaced here as reverted
+   * (it may have succeeded). The audit trail must not lose a proven-reverted
+   * hash. */
   revertedTxHash?: Hash;
   /** The receipt of the reverted settle tx (`revertedTxHash`), re-fetched
    * so consumers can account the gas it spent — a recovered inclusion-time
@@ -146,12 +153,19 @@ export async function ensureSpeculationSettled(
   }
 }
 
-/** Pull a receipt-level revert tx hash off a caught error.
- * `broadcastSignedTx` throws `OspexChainError({ txHash })` for a reverted
- * receipt; pre-send (`estimateGas`) reverts carry no `txHash`. */
+/** Pull the tx hash off a caught error ONLY when it carries a *proven
+ * reverted receipt*. A bare `txHash` is NOT sufficient: `broadcastSignedTx`
+ * also attaches a `txHash` (with NO receipt) when the receipt wait times out
+ * after a successful broadcast — that tx may actually have mined
+ * successfully, so surfacing it as `revertedTxHash` would mis-account a
+ * possibly-successful settle as reverted. Keying on `receipt?.status ===
+ * 'reverted'` (the authoritative on-chain revert signal) mirrors the
+ * claim-side `revertedReceiptOf` in ensureClaimed.ts. A wait-timeout that
+ * recovers via the post-read still resolves `recovered` — it just doesn't
+ * claim a revert it can't prove. */
 function revertTxHashOf(err: unknown): Hash | undefined {
-  return err instanceof OspexChainError && err.txHash !== undefined
-    ? (err.txHash as Hash)
+  return err instanceof OspexChainError && err.receipt?.status === 'reverted'
+    ? (err.receipt.transactionHash as Hash)
     : undefined;
 }
 

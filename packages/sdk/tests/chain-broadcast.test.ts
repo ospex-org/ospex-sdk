@@ -86,4 +86,58 @@ describe('broadcastSignedTx', () => {
     await expect(broadcastSignedTx(client, '0xdeadbeef')).rejects.toBeInstanceOf(OspexChainError);
     expect(calls.waited).toEqual([txHash]);
   });
+
+  describe('receipt-wait failure after a successful broadcast (M2)', () => {
+    function fakeClientWaitRejects(txHash: Hash, waitErr: Error): PublicClient {
+      return {
+        sendRawTransaction: async () => txHash,
+        waitForTransactionReceipt: async () => {
+          throw waitErr;
+        },
+      } as unknown as PublicClient;
+    }
+
+    it('preserves the txHash when the receipt wait times out (tx may still land)', async () => {
+      const txHash = ('0x' + 'ee'.repeat(32)) as Hash;
+      const timeout = new Error('Timed out while waiting for transaction to be confirmed.');
+      timeout.name = 'WaitForTransactionReceiptTimeoutError';
+      const client = fakeClientWaitRejects(txHash, timeout);
+
+      let caught: unknown;
+      try {
+        await broadcastSignedTx(client, '0xdeadbeef');
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(OspexChainError);
+      const chainErr = caught as OspexChainError;
+      // The hash IS carried — the broadcast succeeded; only the wait failed.
+      expect(chainErr.txHash).toBe(txHash);
+      // No receipt: on-chain status is UNKNOWN, not reverted. This absence is
+      // the discriminator the failure envelope relies on.
+      expect(chainErr.receipt).toBeUndefined();
+      // The original wait error is preserved on `cause` so the CLI cause-chain
+      // walker can still classify timeout vs transport.
+      expect((chainErr as { cause?: unknown }).cause).toBe(timeout);
+      expect(chainErr.message).toMatch(/may still be mined/i);
+    });
+
+    it('preserves the txHash on a transport drop mid-poll', async () => {
+      const txHash = ('0x' + 'ff'.repeat(32)) as Hash;
+      const transport = new Error('socket hang up');
+      transport.name = 'HttpRequestError';
+      const client = fakeClientWaitRejects(txHash, transport);
+
+      let caught: unknown;
+      try {
+        await broadcastSignedTx(client, '0xdeadbeef');
+      } catch (err) {
+        caught = err;
+      }
+      const chainErr = caught as OspexChainError;
+      expect(chainErr).toBeInstanceOf(OspexChainError);
+      expect(chainErr.txHash).toBe(txHash);
+      expect(chainErr.receipt).toBeUndefined();
+    });
+  });
 });

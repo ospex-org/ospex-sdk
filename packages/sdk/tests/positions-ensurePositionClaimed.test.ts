@@ -108,6 +108,9 @@ function fakeCtx(opts: {
   estimateGas?: () => Promise<bigint>;
   receiptStatus?: 'success' | 'reverted';
   claimedLog?: { address: `0x${string}`; topics: Hash[]; data: `0x${string}` };
+  /** When true, `waitForTransactionReceipt` rejects AFTER a successful
+   * broadcast — the M2 receipt-wait-timeout shape (txHash, NO receipt). */
+  waitFails?: boolean;
 }): { ctx: PositionsContext; sendRaw: ReturnType<typeof vi.fn> } {
   let readIdx = 0;
   const sendRaw = vi.fn(async () => ('0x' + 'aa'.repeat(32)) as Hash);
@@ -131,7 +134,14 @@ function fakeCtx(opts: {
       return r;
     },
     sendRawTransaction: sendRaw,
-    waitForTransactionReceipt: async () => receipt,
+    waitForTransactionReceipt: async () => {
+      if (opts.waitFails) {
+        throw Object.assign(new Error('wait timed out'), {
+          name: 'WaitForTransactionReceiptTimeoutError',
+        });
+      }
+      return receipt;
+    },
     getTransactionCount: async () => 7,
     estimateFeesPerGas: async () => ({ maxFeePerGas: 50n, maxPriorityFeePerGas: 1n }),
     estimateGas: opts.estimateGas ?? (async () => 80_000n),
@@ -324,6 +334,34 @@ describe('positions.ensurePositionClaimed', () => {
     await expect(
       ensurePositionClaimed(ctx, { speculationId: 42n, positionType: 0 }),
     ).rejects.toBeInstanceOf(OspexChainError);
+  });
+
+  // M2 regression sibling of test 7: the new receipt-wait-timeout shape
+  // (broadcast succeeded, wait timed out → txHash but NO receipt) must ALSO
+  // stay loud even when a post-read says claimed. The recovery gate keys on a
+  // PROVEN reverted receipt (`revertedReceiptOf`), and a wait-timeout has no
+  // receipt — so it never rescues a may-still-be-pending claim and never drops
+  // a payout. Pins this against a refactor that keyed recovery on bare txHash.
+  it('9. stays LOUD on a receipt-wait timeout (txHash, NO receipt) even if a re-read says claimed (M2 regression)', async () => {
+    const { ctx, sendRaw } = fakeCtx({
+      reads: [
+        { claimed: false }, // pre-flight: unclaimed
+        { claimed: true }, // a post-read WOULD say claimed — must not rescue
+      ],
+      waitFails: true, // broadcast ok, receipt wait times out → txHash, no receipt
+    });
+    let caught: unknown;
+    try {
+      await ensurePositionClaimed(ctx, { speculationId: 42n, positionType: 0 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(OspexChainError);
+    // The hash IS preserved (M2) so the caller can reconcile on-chain...
+    expect((caught as OspexChainError).txHash).toBe(('0x' + 'aa'.repeat(32)) as `0x${string}`);
+    // ...but no receipt → on-chain status UNKNOWN → never silently recovered.
+    expect((caught as OspexChainError).receipt).toBeUndefined();
+    expect(sendRaw).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a non-positive speculationId before any chain work', async () => {

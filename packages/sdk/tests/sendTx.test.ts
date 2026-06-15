@@ -16,6 +16,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { buildSignAndSend } from '../src/commitments/sendTx.js';
+import { OspexChainError } from '../src/errors.js';
 import type { PublicClient } from 'viem';
 import type { Signer, SignTransactionArgs } from '../src/types/signer.js';
 
@@ -92,5 +93,37 @@ describe('buildSignAndSend — gas handling', () => {
     expect(captured.estimateGasCalls).toBe(1);
     // 1_000_000 * 110 / 100 = 1_100_000
     expect(captured.signArgs?.gas).toBe(1_100_000n);
+  });
+});
+
+describe('buildSignAndSend — receipt-wait failure preserves txHash (M2)', () => {
+  it('propagates the OspexChainError (with txHash, no receipt) when the wait fails after broadcast', async () => {
+    const txHash = '0x' + 'cc'.repeat(32);
+    const { publicClient, signer } = makeStubs(1_000_000n);
+    // Broadcast succeeds (returns a hash) but the receipt wait rejects — the
+    // exact path the review flagged as losing the hash in buildSignAndSend's
+    // generic wrap. broadcastSignedTx now throws an OspexChainError carrying
+    // the hash, and buildSignAndSend re-throws OspexChainError untouched.
+    (publicClient.sendRawTransaction as ReturnType<typeof vi.fn>).mockResolvedValue(txHash);
+    (publicClient.waitForTransactionReceipt as ReturnType<typeof vi.fn>).mockRejectedValue(
+      Object.assign(new Error('wait timed out'), { name: 'WaitForTransactionReceiptTimeoutError' }),
+    );
+
+    let caught: unknown;
+    try {
+      await buildSignAndSend({
+        publicClient,
+        signer,
+        chainId: 137,
+        to: '0x1111111111111111111111111111111111111111',
+        data: '0x1234' as `0x${string}`,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(OspexChainError);
+    const chainErr = caught as OspexChainError;
+    expect(chainErr.txHash).toBe(txHash);
+    expect(chainErr.receipt).toBeUndefined();
   });
 });

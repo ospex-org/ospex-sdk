@@ -725,7 +725,7 @@ try {
 | `VALIDATION_ERROR` | `OspexValidationError` | `field` | Caller-supplied argument failed a shape / range / regex check. |
 | `SIGNING_ERROR` | `OspexSigningError` | — | Keystore decrypt failed (wrong passphrase), EIP-712 sign failed. |
 | `ALLOWANCE_INSUFFICIENT` | `OspexAllowanceError` | `required: bigint`, `current: bigint`, `spender`, `token` | Pre-flight allowance shortfall. SDK never auto-approves. |
-| `CHAIN_ERROR` | `OspexChainError` | `reason?`, `revertReason?`, `txHash?`, `causeChain?` | RPC error, revert, receipt status reverted. `causeChain[]` (when present) surfaces the underlying viem / transport error with `name` / `status` / `shortMessage` so agents can classify rate-limit vs timeout vs underpriced without parsing the wrapper message. |
+| `CHAIN_ERROR` | `OspexChainError` | `reason?`, `revertReason?`, `txHash?`, `receiptStatus?`, `receiptBlockNumber?`, `causeChain?` | RPC error, revert, receipt status reverted. `txHash` is present whenever a tx was broadcast — a revert, a confirmed-but-post-parse-failed send, OR a receipt-wait timeout — so it is **not** by itself proof of a revert. `receiptStatus` (`'success'` \| `'reverted'`) is the discriminator: `'reverted'` = the tx reverted on-chain; `'success'` = the tx CONFIRMED but a post-send step (e.g. event parse) failed; **absent** = no receipt was observed (the broadcast landed a hash but the wait timed out / dropped — on-chain status UNKNOWN). `causeChain[]` (when present) surfaces the underlying viem / transport error with `name` / `status` / `shortMessage` so agents can classify rate-limit vs timeout vs underpriced without parsing the wrapper message. |
 | `SCRIPT_APPROVAL_INVALID` | `OspexScriptApprovalError` | `reason: 'hash_mismatch' \| 'expired' \| 'not_configured'`, `expectedHash?`, `actualHash?` | Chainlink Functions ScriptApproval is unusable. |
 | `SUBSCRIPTION_ERROR` | `OspexSubscriptionError` | `reason: 'link_balance_insufficient' \| 'consumer_not_registered' \| 'subscription_id_missing'`, `subscriptionId?` | Chainlink Functions subscription unusable. |
 | `STREAM_ERROR` | `OspexStreamError` | `reason: 'connection_failed' \| 'capacity_exceeded' \| 'fatal'`, `status?`, `phase?: 'token-mint' \| 'token-refresh' \| 'connect' \| 'snapshot-page' \| 'decode' \| 'dispatch'` | An Ospex SSE stream failed (odds or a protocol `subscribe`). `reason` discriminates retry-vs-stop (`connection_failed` / `capacity_exceeded` retried; `fatal` ends the subscription). `phase` (v0.5.2+) is populated by `client.ownState.subscribe` so composite-health-gate consumers can latch on the failure phase without parsing messages; other resource streams leave it undefined. Delivered to `onError`. |
@@ -766,7 +766,9 @@ New reason codes are additive (forward-compatible).
 | `VALIDATION_ERROR` | No — fix the argument. |
 | `SIGNING_ERROR` | No (passphrase) / situational. |
 | `ALLOWANCE_INSUFFICIENT` | Yes after running an `approve` for `required - current`. |
-| `CHAIN_ERROR` with `txHash` | No — the tx already landed reverted. Inspect on-chain. |
+| `CHAIN_ERROR` with `txHash` + `receiptStatus: 'reverted'` | No — the tx landed and reverted on-chain (gas spent). Inspect on-chain; fix the cause before re-issuing. |
+| `CHAIN_ERROR` with `txHash` + `receiptStatus: 'success'` | No — the tx CONFIRMED on-chain; only a post-send step (e.g. event parse) failed. The on-chain effect already happened — reconcile state, do **not** re-send. |
+| `CHAIN_ERROR` with `txHash`, no `receiptStatus` | Not without polling first — the tx was broadcast but its receipt wasn't observed (wait timeout / transport drop) and it MAY still be mined. Poll the chain for `txHash` before any retry. |
 | `CHAIN_ERROR` without `txHash` | Sometimes — see "Safe retry rule" below. |
 | `SCRIPT_APPROVAL_INVALID` with `reason === 'expired'` | Wait for re-sign + redeploy of `ospex-core-api`. |
 | `SUBSCRIPTION_ERROR` with `reason === 'link_balance_insufficient'` | Yes after funding the wallet with LINK. |
@@ -776,7 +778,7 @@ The SDK does not retry for you. Build the retry loop in your agent.
 
 ### Safe retry rule for `CHAIN_ERROR` without `txHash`
 
-A missing `txHash` means the SDK/CLI did **not** receive a transaction hash from the transport. It is not proof that the raw transaction never reached a node or provider — timeout / dropped-connection cases are genuinely ambiguous (the tx may have been accepted by a node before the response was lost). Treat `details.causeChain[0]` as a classifier, not as standalone retry permission; the predicate below is what actually decides.
+A missing `txHash` means the SDK/CLI did **not** receive a transaction hash from the **broadcast** (`sendRawTransaction`) round-trip. As of the txHash/receipt-preservation fix, a receipt-wait timeout that happens AFTER a successful broadcast carries the `txHash` (the broadcast returned a hash; only the wait failed) — so a genuinely missing `txHash` now reliably means the broadcast call itself never returned one. It is still not proof that the raw transaction never reached a node or provider — a broadcast timeout / dropped-connection is genuinely ambiguous (the tx may have been accepted by a node before the response was lost). Treat `details.causeChain[0]` as a classifier, not as standalone retry permission; the predicate below is what actually decides.
 
 With `details.causeChain[]` populated, agents can classify three sub-cases:
 

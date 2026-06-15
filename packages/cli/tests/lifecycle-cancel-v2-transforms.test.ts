@@ -11,6 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { OspexChainError } from '@ospex/sdk';
 import type { Commitment, Hex } from '@ospex/sdk';
 import {
   toCancelOffchainAgentEnvelope,
@@ -135,23 +136,115 @@ describe('toCancelDualAgentEnvelope (cancel --also-onchain partial-success)', ()
     expect(env.effects[2]?.status).toBe('reverted');
   });
 
-  it('off-chain OK + on-chain failed before send → effects show error, errors[] populated', () => {
+  it('off-chain OK + on-chain failed before send (no tx) → effects show error, reason + causeChain preserved, no status/txHash', () => {
+    // Pre-send revert (NotCommitmentMaker caught at estimateGas): no tx was
+    // broadcast, so the effect carries neither status nor txHash. The SDK
+    // error carries the decoded `reason` AND the underlying viem revert on
+    // `cause` — routing through errorToAgentError (vs the old hand-rolled
+    // {code,message}) preserves BOTH in details (the M7 win).
+    const cause = Object.assign(new Error('execution reverted'), {
+      name: 'ContractFunctionRevertedError',
+    });
     const env = toCancelDualAgentEnvelope(
       {
         offChainResult: { ok: true },
         onChainResult: null,
-        onChainError: { code: 'CHAIN_ERROR', message: 'NotCommitmentMaker' },
+        onChainError: new OspexChainError(
+          'cancelCommitment reverted: signer is not the commitment maker.',
+          { reason: 'NotCommitmentMaker', cause },
+        ),
         explorer: null,
       },
       makeCommitment(),
       { chainId: POLYGON, signerAddress: SIGNER, hash: HASH },
     );
     expect(env.ok).toBe(false);
-    expect(env.errors).toEqual([
-      { code: 'CHAIN_ERROR', message: 'NotCommitmentMaker' },
-    ]);
+    expect(env.errors[0]?.code).toBe('CHAIN_ERROR');
+    const details = env.errors[0]?.details as {
+      reason?: string;
+      causeChain?: Array<{ name?: string }>;
+    };
+    expect(details.reason).toBe('NotCommitmentMaker');
+    // causeChain preserved with contents — the breadcrumb the old flattened
+    // {code,message} dropped.
+    expect(details.causeChain?.[0]?.name).toBe('ContractFunctionRevertedError');
     expect(env.effects[2]?.ok).toBe(false);
     expect(env.effects[2]?.errorCode).toBe('CHAIN_ERROR');
+    expect(env.effects[2]?.status).toBeUndefined();
+    expect(env.effects[2]?.txHash).toBeUndefined();
+    expect(env.payload.txHash).toBeNull();
+    expect(env.payload.onChainError?.code).toBe('CHAIN_ERROR');
+  });
+
+  it('off-chain OK + on-chain INCLUSION revert → effect carries txHash + status:reverted + details (M7)', () => {
+    // The bug M7 fixes: cancelOnchain throws OspexChainError({txHash, receipt})
+    // on an inclusion revert. The dual transform must preserve the hash + the
+    // reverted receipt status — not flatten to {code,message}. This mirrors the
+    // REAL emitted shape: broadcastSignedTx attaches no `cause` to a
+    // reverted-receipt error, so a clean inclusion revert has NO causeChain.
+    const env = toCancelDualAgentEnvelope(
+      {
+        offChainResult: { ok: true },
+        onChainResult: null,
+        onChainError: new OspexChainError('Transaction reverted on-chain.', {
+          txHash: '0xreverted',
+          receipt: { status: 'reverted', blockNumber: 4242n } as never,
+        }),
+        explorer: 'https://polygonscan.com/tx/0xreverted',
+      },
+      makeCommitment(),
+      { chainId: POLYGON, signerAddress: SIGNER, hash: HASH },
+    );
+    expect(env.ok).toBe(false);
+    const txEffect = env.effects[2];
+    expect(txEffect?.ok).toBe(false);
+    expect(txEffect?.txHash).toBe('0xreverted');
+    expect(txEffect?.status).toBe('reverted');
+    expect(txEffect?.blockNumber).toBe('4242');
+    expect(txEffect?.errorCode).toBe('CHAIN_ERROR');
+    // errors[] now carries the structured discriminators (M3).
+    const details = env.errors[0]?.details as {
+      txHash?: string;
+      receiptStatus?: string;
+      receiptBlockNumber?: string;
+      causeChain?: unknown[];
+    };
+    expect(details.txHash).toBe('0xreverted');
+    expect(details.receiptStatus).toBe('reverted');
+    expect(details.receiptBlockNumber).toBe('4242');
+    // A clean inclusion revert carries no cause → no causeChain fabricated.
+    expect(details.causeChain).toBeUndefined();
+    // payload reflects the reverted tx too.
+    expect(env.payload.txHash).toBe('0xreverted');
+    expect(env.payload.blockNumber).toBe('4242');
+  });
+
+  it('off-chain OK + on-chain broadcast-then-receipt-timeout → effect status:submitted, txHash, no receiptStatus (M2+M7)', () => {
+    // broadcastSignedTx broadcast a hash but the receipt wait failed: the tx
+    // MAY still land. The effect must read submitted (not reverted), and the
+    // error must NOT claim a receipt status.
+    const env = toCancelDualAgentEnvelope(
+      {
+        offChainResult: { ok: true },
+        onChainResult: null,
+        onChainError: new OspexChainError(
+          'Transaction was broadcast but waiting for its receipt failed; the transaction may still be mined.',
+          { txHash: '0xpending' },
+        ),
+        explorer: 'https://polygonscan.com/tx/0xpending',
+      },
+      makeCommitment(),
+      { chainId: POLYGON, signerAddress: SIGNER, hash: HASH },
+    );
+    const txEffect = env.effects[2];
+    expect(txEffect?.txHash).toBe('0xpending');
+    expect(txEffect?.status).toBe('submitted');
+    expect(txEffect?.blockNumber).toBeUndefined();
+    const details = env.errors[0]?.details as { txHash?: string; receiptStatus?: string };
+    expect(details.txHash).toBe('0xpending');
+    expect(details.receiptStatus).toBeUndefined();
+    expect(env.payload.txHash).toBe('0xpending');
+    expect(env.payload.blockNumber).toBeNull();
   });
 });
 
