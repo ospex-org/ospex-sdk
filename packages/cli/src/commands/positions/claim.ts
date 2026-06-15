@@ -43,6 +43,8 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import { type SideContext } from '../../lib/sideContext.js';
+import { resolvePositionSideContext } from '../../lib/resolveSideContext.js';
 import {
   VERIFY_POSITION_STATUS,
   deriveRemediationNextCommands,
@@ -86,6 +88,13 @@ export const positionsClaimCommand = addSignerOptions(
       signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
 
       const result = await client.positions.ensurePositionClaimed({ speculationId, positionType });
+      // Additive Team Identity enrichment — NON-BLOCKING: the claim already
+      // resolved above; resolvePositionSideContext never throws, so a
+      // metadata-fetch failure degrades to context:null + a warning rather
+      // than reporting a successful claim as failed. (context:null because the
+      // held side can't be derived from positionType without the market.)
+      const { context: positionSideContext, warning: enrichmentWarning } =
+        await resolvePositionSideContext(client, speculationId, positionType);
 
       if (wantJson) {
         writeAgentEnvelope(
@@ -94,6 +103,8 @@ export const positionsClaimCommand = addSignerOptions(
             signerAddress,
             speculationId,
             positionType,
+            sideContext: positionSideContext,
+            enrichmentWarning,
           }),
         );
         return;
@@ -105,6 +116,7 @@ export const positionsClaimCommand = addSignerOptions(
         formatOutput(
           {
             outcome: result.outcome,
+            ...(positionSideContext ? { side: positionSideContext.display } : {}),
             txHash: result.txHash,
             blockNumber: result.blockNumber?.toString(),
             payoutUSDC: result.payoutUSDC,
@@ -116,6 +128,7 @@ export const positionsClaimCommand = addSignerOptions(
         formatOutput(
           {
             outcome: result.outcome,
+            ...(positionSideContext ? { side: positionSideContext.display } : {}),
             note: 'Already claimed on-chain — no transaction sent.',
           },
           { json: false },
@@ -124,6 +137,7 @@ export const positionsClaimCommand = addSignerOptions(
         formatOutput(
           {
             outcome: result.outcome,
+            ...(positionSideContext ? { side: positionSideContext.display } : {}),
             note: 'Already claimed by a concurrent/prior transaction — recovered, no claim needed.',
             ...(result.revertedTxHash !== undefined ? { revertedTx: result.revertedTxHash } : {}),
           },
@@ -182,6 +196,12 @@ export interface ClaimPayload {
   payoutUSDC: number | null;
   speculationId: string;
   positionType: 0 | 1;
+  /** Additive Team Identity context for the side this position represents
+   * (derived from positionType + market) — next to the bare positionType,
+   * never instead of it (agents route on `positionType`; `display` is
+   * human-facing). Null when enrichment metadata was unavailable (the side
+   * can't be derived without the market). See AGENT_ENVELOPE_SPEC §2.7. */
+  positionSideContext: SideContext | null;
 }
 
 export interface ToClaimEnvelopeArgs {
@@ -189,6 +209,12 @@ export interface ToClaimEnvelopeArgs {
   signerAddress: Hex;
   speculationId: bigint;
   positionType: 0 | 1;
+  /** Additive structured Team Identity context for the held position's side.
+   * Omitted by older callers / null when enrichment was unavailable. */
+  sideContext?: SideContext | null;
+  /** A non-fatal enrichment-degradation warning (team/role metadata
+   * unavailable) — appended to `warnings[]` when present. */
+  enrichmentWarning?: AgentWarning | undefined;
 }
 
 /**
@@ -235,7 +261,11 @@ export function toClaimAgentEnvelope(
       code: 'claim-skipped-already-claimed',
       message: `Position (speculation ${args.speculationId}, type ${args.positionType}) was already claimed on-chain — no transaction sent.`,
       severity: 'info',
-      details: { speculationId: args.speculationId.toString(), positionType: args.positionType },
+      details: {
+        speculationId: args.speculationId.toString(),
+        positionType: args.positionType,
+        positionSideContext: args.sideContext ?? null,
+      },
     });
   } else {
     if (result.revertedTxHash !== undefined) {
@@ -251,9 +281,17 @@ export function toClaimAgentEnvelope(
       code: 'claim-recovered-already-claimed',
       message: `Position (speculation ${args.speculationId}, type ${args.positionType}) was already claimed by a concurrent transaction — recovered, no claim needed.`,
       severity: 'info',
-      details: { speculationId: args.speculationId.toString(), positionType: args.positionType },
+      details: {
+        speculationId: args.speculationId.toString(),
+        positionType: args.positionType,
+        positionSideContext: args.sideContext ?? null,
+      },
     });
   }
+
+  // Append the non-fatal enrichment-degradation warning, if any (team/role
+  // metadata couldn't be fetched). Distinct from the outcome warnings above.
+  if (args.enrichmentWarning) warnings.push(args.enrichmentWarning);
 
   return buildAgentEnvelope<ClaimPayload>({
     ok: true,
@@ -277,6 +315,7 @@ export function toClaimAgentEnvelope(
       payoutUSDC: result.outcome === 'claimed' ? result.payoutUSDC ?? null : null,
       speculationId: args.speculationId.toString(),
       positionType: args.positionType,
+      positionSideContext: args.sideContext ?? null,
     },
   });
 }

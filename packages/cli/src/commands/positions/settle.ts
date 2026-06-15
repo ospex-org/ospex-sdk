@@ -38,6 +38,8 @@ import {
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
+import { type SideContext } from '../../lib/sideContext.js';
+import { resolveWinSideContext } from '../../lib/resolveSideContext.js';
 import {
   VERIFY_POSITION_STATUS,
   deriveRemediationNextCommands,
@@ -71,6 +73,12 @@ export const positionsSettleCommand = addSignerOptions(
       signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
 
       const result = await client.positions.ensureSpeculationSettled({ speculationId });
+      // Additive Team Identity enrichment — NON-BLOCKING: the settle already
+      // resolved above, so a metadata-fetch failure degrades the context and
+      // adds a warning; resolveWinSideContext never throws, so a successful
+      // settle is never reported as failed because display data couldn't load.
+      const { context: winSideContext, warning: enrichmentWarning } =
+        await resolveWinSideContext(client, speculationId, result.winSide);
 
       if (wantJson) {
         writeAgentEnvelope(
@@ -78,6 +86,8 @@ export const positionsSettleCommand = addSignerOptions(
             chainId,
             signerAddress,
             speculationId,
+            sideContext: winSideContext,
+            enrichmentWarning,
           }),
         );
         return;
@@ -89,7 +99,7 @@ export const positionsSettleCommand = addSignerOptions(
         formatOutput(
           {
             outcome: result.outcome,
-            winSide: result.winSide,
+            side: winSideContext.display,
             txHash: result.txHash,
             blockNumber: result.blockNumber?.toString(),
           },
@@ -99,7 +109,7 @@ export const positionsSettleCommand = addSignerOptions(
         formatOutput(
           {
             outcome: result.outcome,
-            winSide: result.winSide,
+            side: winSideContext.display,
             note: 'Already settled on-chain — no transaction sent.',
           },
           { json: false },
@@ -108,7 +118,7 @@ export const positionsSettleCommand = addSignerOptions(
         formatOutput(
           {
             outcome: result.outcome,
-            winSide: result.winSide,
+            side: winSideContext.display,
             note: 'Settled by a concurrent transaction — recovered, no settle needed.',
             ...(result.revertedTxHash !== undefined ? { revertedTx: result.revertedTxHash } : {}),
           },
@@ -150,6 +160,11 @@ export interface SettlePayload {
    * race loss) — present only on `recovered` when one was broadcast. */
   revertedTxHash: string | null;
   winSide: EnsureSettledResult['winSide'];
+  /** Additive Team Identity context for the settle-resolved winSide — next to
+   * the bare winSide, never instead of it (agents route on `winSide`;
+   * `display` is human-facing). Null only if the transform was called without
+   * it. See lib/sideContext.ts + AGENT_ENVELOPE_SPEC §2.7. */
+  winSideContext: SideContext | null;
   speculationId: string;
 }
 
@@ -157,6 +172,12 @@ export interface ToSettleEnvelopeArgs {
   chainId: ChainId;
   signerAddress: Hex;
   speculationId: bigint;
+  /** Additive structured Team Identity context for the settle-resolved
+   * winSide. Omitted by older callers → null in the payload. */
+  sideContext?: SideContext | null;
+  /** A non-fatal enrichment-degradation warning (team/role metadata
+   * unavailable) — appended to `warnings[]` when present. */
+  enrichmentWarning?: AgentWarning | undefined;
 }
 
 /**
@@ -194,7 +215,11 @@ export function toSettleAgentEnvelope(
       code: 'settle-skipped-already-settled',
       message: `Speculation ${args.speculationId} was already settled on-chain — no transaction sent.`,
       severity: 'info',
-      details: { speculationId: args.speculationId.toString(), winSide: result.winSide },
+      details: {
+        speculationId: args.speculationId.toString(),
+        winSide: result.winSide,
+        winSideContext: args.sideContext ?? null,
+      },
     });
   } else {
     if (result.revertedTxHash !== undefined) {
@@ -210,9 +235,17 @@ export function toSettleAgentEnvelope(
       code: 'projection-lag-recovered',
       message: `Speculation ${args.speculationId} was settled by a concurrent transaction — recovered, no settle needed.`,
       severity: 'info',
-      details: { speculationId: args.speculationId.toString(), winSide: result.winSide },
+      details: {
+        speculationId: args.speculationId.toString(),
+        winSide: result.winSide,
+        winSideContext: args.sideContext ?? null,
+      },
     });
   }
+
+  // Append the non-fatal enrichment-degradation warning, if any (team/role
+  // metadata couldn't be fetched). Distinct from the outcome warnings above.
+  if (args.enrichmentWarning) warnings.push(args.enrichmentWarning);
 
   return buildAgentEnvelope<SettlePayload>({
     ok: true,
@@ -232,6 +265,7 @@ export function toSettleAgentEnvelope(
       blockNumber: result.outcome === 'settled' ? result.blockNumber?.toString() ?? null : null,
       revertedTxHash: result.revertedTxHash ?? null,
       winSide: result.winSide,
+      winSideContext: args.sideContext ?? null,
       speculationId: args.speculationId.toString(),
     },
   });
