@@ -40,7 +40,7 @@ const LINK = '0xb0897686c545045aFc77CF20eC7A532E3120E0F1';
 // supply probe data — otherwise the new structured checks
 // (`connectivity.rpc` / `network.chain_id_match` / `network.contracts_deployed`)
 // skip and roll up to block matchCommitments, since `ready` is now
-// derived from `summary.byCapability` (Hermes PR 53 blocker #1).
+// derived from `summary.byCapability` (review blocker #1).
 const HAPPY_RPC_PROBE: RpcProbeResult = {
   ok: true,
   urlHost: 'rpc.example.com',

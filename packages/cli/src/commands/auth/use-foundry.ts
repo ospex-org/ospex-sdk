@@ -98,7 +98,7 @@ export const authUseFoundryCommand = new Command('use-foundry')
     // to config — without this step, a re-run without
     // `--foundry-keystores-dir` could silently leave a stale
     // `config.foundryKeystoresDir` in place, breaking the next no-
-    // flag write (Hermes PR 49 round 2 blocker).
+    // flag write (review round 2 blocker).
     let signer: KeystoreSigner;
     let effectiveFoundryKeystoresDir: string | undefined;
     if (opts.account !== undefined) {

@@ -204,7 +204,7 @@ async function resolveSignerByPrecedence(intent: SignerIntent): Promise<Signer> 
  * this, `OSPEX_KEYSTORE_PATH` was a "ghost source" —
  * `hasExplicitKeystoreSource` saw it but `loadSignerNonInteractive`
  * passed `undefined` to the SDK helper, which then threw
- * `keystore_not_found` (Hermes's PR 48 blocker #3).
+ * `keystore_not_found` (review blocker #3).
  *
  * Also materializes `OSPEX_PASSWORD_FILE` so the precedence ladder
  * (flag > env > config) is enforceable in one place. The SDK helper
@@ -234,7 +234,7 @@ function materializeIntent(intent: SignerIntent): SignerIntent {
   // > FOUNDRY_DIR/keystores. Lifting here means env beats
   // `mergeIntentFromConfig`'s lift of `config.foundryKeystoresDir` —
   // matching the documented flag > env > config ordering.
-  // Hermes PR 49 blocker #3.
+  // Review blocker #3.
   if (result.foundryKeystoresDir === undefined) {
     const envOspex = process.env.OSPEX_FOUNDRY_KEYSTORES_DIR;
     if (envOspex !== undefined && envOspex !== '') {
@@ -310,7 +310,7 @@ async function mergeIntentFromConfig(intent: SignerIntent): Promise<SignerIntent
     }
   }
 
-  // Expected-address pin (Hermes PR 49 blocker #4):
+  // Expected-address pin (review blocker #4):
   //
   // The config-pinned address is a guardrail for "the configured
   // account always resolves here." It applies only when the result's
@@ -513,7 +513,7 @@ export async function resolvePreviewAddress(intent: SignerIntent): Promise<`0x${
   }
 
   // 2. Explicit keystore source — must NOT fall through to the
-  //    session cache (Hermes PR 48 #1). If we can't unlock non-
+  //    session cache (review blocker #1). If we can't unlock non-
   //    interactively, throw — preview-only can't prompt.
   if (resolvedIntent.account !== undefined || resolvedIntent.keystorePath !== undefined) {
     if (!hasNonInteractivePassphrase(resolvedIntent)) {

@@ -21,7 +21,7 @@ export type SideRole = 'away' | 'home' | 'over' | 'under';
 
 /**
  * Always-present, agent-facing summary of the speculation creation fee
- * for a single preview (submit or match). Answers Hermes's six core
+ * for a single preview (submit or match). Answers the six core
  * questions in one block without forcing consumers to inspect
  * `approvals[]`, decode protocol vocabulary, or sum role shares.
  *

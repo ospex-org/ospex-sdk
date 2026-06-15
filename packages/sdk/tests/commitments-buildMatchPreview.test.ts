@@ -334,7 +334,7 @@ describe('buildMatchPreview — approvals (existing vs lazy)', () => {
   });
 });
 
-// Hermes asked that the lazy-vs-existing distinction be answerable
+// A reviewer asked that the lazy-vs-existing distinction be answerable
 // positively (read one field, act) rather than by inferring from
 // absence-of-fields. These assertions pin the wire contract for the
 // always-present `creationFee` summary and `tradeAction` tag on both
@@ -387,7 +387,7 @@ describe('buildMatchPreview — creationFee + tradeAction (agent contract)', () 
     });
   });
 
-  it('lazy self-match: viewerShare collapses to the FULL fee (Hermes-flagged invariant)', () => {
+  it('lazy self-match: viewerShare collapses to the FULL fee (review-flagged invariant)', () => {
     const p = buildMatchPreview(
       baseArgs({
         taker: MAKER,

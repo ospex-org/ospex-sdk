@@ -16,7 +16,7 @@
  *     unlock.
  *   - Nothing supplied → throw `non_interactive_password_required`.
  *
- * Also covers Hermes's PR 48 blockers as they apply to the preview
+ * Also covers the review blockers as they apply to the preview
  * path (parallel to load-signer.test.ts for the sign path).
  */
 
@@ -167,7 +167,7 @@ describe('resolvePreviewAddress — empty-intent branch', () => {
   });
 });
 
-// ── Hermes PR 48 regression coverage ──────────────────────────────
+// ── PR 48 review regression coverage ──────────────────────────────
 
 describe('resolvePreviewAddress — explicit intent skips session (PR 48 blocker #1)', () => {
   it('--account WITHOUT a passphrase source does NOT fall through to the cached session', async () => {

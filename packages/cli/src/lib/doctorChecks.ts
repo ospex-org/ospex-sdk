@@ -1034,7 +1034,7 @@ export function buildSummary(checks: readonly CheckResult[]): SummaryBlock {
   // both flip it false. Anything weaker is a false-positive footgun: an
   // envelope with chain-reads-failed produces 6 `skip` lines and 0 `fail`,
   // so a `counts.fail === 0` rule would say `ok: true` while every
-  // `byCapability.*.ok` is false and the process exits 1. Hermes PR 52
+  // `byCapability.*.ok` is false and the process exits 1. A review
   // blocker; the strict semantic also matches `worstStatus === 'ok'`.
   const ok = worstStatus === 'ok';
 

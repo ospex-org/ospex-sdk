@@ -143,7 +143,7 @@ export const positionsClaimAllCommand = addSignerOptions(
     // a multi-wallet sweep that finds everything already done by peers stays 0.
     if (result.totals.failed > 0) process.exitCode = 1;
     } catch (err) {
-      // Hermes PR-6 scope: when claimAll itself throws (e.g. API
+      // The failure-envelope scope: when claimAll itself throws (e.g. API
       // fetch fails before any tx is dispatched), emit a failure
       // envelope. Per-entry failures are NOT thrown by the SDK —
       // they land in result.entries[].success and surface as failed
@@ -239,7 +239,7 @@ export interface ToClaimAllEnvelopeArgs {
  *            entry: 0–2 confirmed + optional failure marker).
  *
  * Payout shoulder uses the SDK's exact `totals.totalPayoutWei6`
- * bigint string — preserves wei6 precision (Hermes PR-70 review).
+ * bigint string — preserves wei6 precision (per review).
  *
  * `envelope.ok` is `true` for any cleanly-produced envelope: dry-run
  * plans, live no-op sweeps, and successful live sweeps. `false` only
@@ -262,7 +262,7 @@ export function toClaimAllAgentEnvelope(
   const warnings: AgentWarning[] = args.dryRun ? [] : buildClaimAllWarnings(result);
   const payout = buildClaimAllPayout(result);
 
-  // Hermes PR-70 blocker 1: envelope-level ok is "command produced a
+  // review blocker 1: envelope-level ok is "command produced a
   // valid response" — not "domain-level claimed at least one thing".
   // Dry-run + live no-op are normal successful completions; only
   // live execute with failed entries flips ok to false.
@@ -483,7 +483,7 @@ function stepNotes(steps: ClaimAllResult['entries'][number]['steps']): string {
 }
 
 /**
- * Aggregate payout shoulder. Hermes PR-70 blocker 3: use the SDK's
+ * Aggregate payout shoulder. Review blocker 3: use the SDK's
  * exact `totals.totalPayoutWei6` bigint string — going through
  * `totalPayoutUSDC` (a JS `number`) loses precision past
  * `Number.MAX_SAFE_INTEGER` and even on values like 1000000000000000001

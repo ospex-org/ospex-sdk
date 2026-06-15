@@ -212,7 +212,7 @@ describe('probeContractsDeployed', () => {
     expect(positionEntry?.hasCode).toBe(false);
   });
 
-  // Hermes PR 53 blocker #2: a transport-level failure on individual
+  // review blocker #2: a transport-level failure on individual
   // getCode lookups must NOT be conflated with confirmed-empty
   // bytecode. The probe records the failed entry as `hasCode: null`
   // and adds its name to `unknown[]` (not `missing[]`) so the
@@ -246,7 +246,7 @@ describe('probeContractsDeployed', () => {
 // Integration: pipe the REAL probe output into the REAL check
 // classifier. Catches the class of bug where a hand-built probe shape
 // passes a unit test but the actual probe path produces a different
-// shape that misclassifies. Hermes PR 53 blocker #2 surfaced exactly
+// shape that misclassifies. A review blocker surfaced exactly
 // that gap.
 describe('probeContractsDeployed → checkNetworkContractsDeployed (integration)', () => {
   const HAPPY_RPC_PROBE = {

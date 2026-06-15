@@ -12,7 +12,7 @@
  * `mergeIntentFromConfig` + `resolveSignerByPrecedence`** — the
  * provenance enums and reachability rules are an agent contract
  * (see `docs/AGENT_CONTRACT.md` §4). Three locked-in regression
- * subtleties Hermes caught on the original PR 50 reviews:
+ * subtleties caught in review:
  *
  *   1. Session-cache password provenance applies ONLY when the
  *      keystore came from a legacy source. Explicit sources skip
@@ -427,7 +427,7 @@ export interface DeriveSignerAddressArgs {
 
 /**
  * Derive the configured wallet's address using the walker's
- * resolution data — closes the Hermes PR 55 blocker where the
+ * resolution data — closes the review blocker where the
  * doctor's legacy `resolveWalletAddress(...)` only consulted
  * `getKeystorePath()` and never saw a config-pinned `foundryAccount`.
  *
@@ -489,7 +489,7 @@ export async function deriveSignerAddress(
   //     `password.provenance`. Without this gate a fresh session for
   //     wallet B leaks past a config-pinned Foundry signer A, and
   //     the doctor reports B's address even though `config.signer`
-  //     correctly says A was selected (Hermes PR 55 round-2 blocker).
+  //     correctly says A was selected (review round 2 blocker).
   if (resolution.password.provenance === 'session-cache') {
     const session = await readSession();
     if (session && isValidAddress(session.address)) {
@@ -501,7 +501,7 @@ export async function deriveSignerAddress(
   }
 
   // (4) Non-interactive unlock when the walker shows a credentialed
-  //     password source. This is the path that fixes Hermes PR 55
+  //     password source. This is the path that fixes review
   //     blocker #1 — `auth use-foundry`-pinned setups land here.
   if (resolution.keystore.exists && hasNonInteractivePassword(resolution.password.provenance)) {
     try {

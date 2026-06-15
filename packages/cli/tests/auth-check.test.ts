@@ -783,7 +783,7 @@ describe('auth check — command help', () => {
   });
 });
 
-// ── Hermes PR 50 regression — session-cache must mirror loadSigner ──
+// ── Review regression — session-cache must mirror loadSigner ──
 
 // Anvil PK #1 — used as the session-cache wallet in regression tests
 // so we can tell the difference between an explicit-source unlock
@@ -806,9 +806,9 @@ async function writeFakeSession(privateKey: string, address: string): Promise<vo
   );
 }
 
-describe('auth check — Hermes PR 50 blocker #1 (session-cache must not leak past explicit sources)', () => {
+describe('auth check — review blocker #1 (session-cache must not leak past explicit sources)', () => {
   it('explicit --account + active session + no password → password.provenance is "none", NOT "session-cache"', async () => {
-    // Repro from Hermes's review: `auth check --account maker-a` was
+    // Repro from the review: `auth check --account maker-a` was
     // returning 'session-cache' when a stale session existed, which
     // would let `--sign-challenge` sign with the WRONG wallet.
     await writeFakeSession(SESSION_PK, SESSION_ADDRESS);
@@ -927,7 +927,7 @@ describe('auth check — Hermes PR 50 blocker #1 (session-cache must not leak pa
   });
 });
 
-describe('auth check — Hermes PR 50 blocker #2 (session unlocks even when legacy keystore file missing)', () => {
+describe('auth check — review blocker #2 (session unlocks even when legacy keystore file missing)', () => {
   it('legacy default keystore missing + session active → unlock via session, no keystore_not_found error', async () => {
     // Real loadSigner reaches path 2 (session) before path 3 reads
     // the keystore file. Previously we hard-failed with
@@ -996,9 +996,9 @@ describe('auth check — Hermes PR 50 blocker #2 (session unlocks even when lega
   });
 });
 
-describe('auth check — Hermes PR 50 blocker #3 (config expectedAddress vs env OSPEX_KEYSTORE_PATH)', () => {
+describe('auth check — review blocker #3 (config expectedAddress vs env OSPEX_KEYSTORE_PATH)', () => {
   it('env OSPEX_KEYSTORE_PATH set + config.expectedAddress pinned to a different wallet → no false address_mismatch', async () => {
-    // Repro from Hermes's review: env points at wallet A, config has a
+    // Repro from the review: env points at wallet A, config has a
     // stale pin for wallet B. Previously the pin would falsely apply
     // and unlock would emit address_mismatch.
     const ks = await writeKeystoreAt(tmpDir, 'envks.json');
@@ -1092,11 +1092,11 @@ describe('auth check — Hermes PR 50 blocker #3 (config expectedAddress vs env 
   });
 });
 
-// ── Hermes PR 50 round 2 — legacy keystore must ignore non-session
+// ── Review round 2 — legacy keystore must ignore non-session
 //    password sources (path-3 prompts and discards intent.passwordFile)
 
-describe('auth check — Hermes PR 50 round-2 (legacy keystore ignores non-session password sources)', () => {
-  it("Hermes exact repro: legacy config.keystorePath + config.passwordFile (wallet A) + active session (wallet B) → unlock returns wallet B, NOT wallet A", async () => {
+describe('auth check — review round 2 (legacy keystore ignores non-session password sources)', () => {
+  it("exact repro: legacy config.keystorePath + config.passwordFile (wallet A) + active session (wallet B) → unlock returns wallet B, NOT wallet A", async () => {
     // From the round-2 review:
     //   Setup: legacy `config.keystorePath` + `config.passwordFile`
     //   point at wallet A, and a fresh legacy session exists for

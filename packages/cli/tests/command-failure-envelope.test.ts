@@ -5,7 +5,7 @@
  * envelope the command's catch emitted; assertions check the actual
  * runtime contract, not just hand-picked `emitJsonFailure(...)` args.
  *
- * Scope (per Hermes's PR-111 round-2 ask):
+ * Scope (per review round 2 ask):
  *   1. `commitments submit --json --expected-address <addr>` against
  *      a dead API.
  *      Expect: stage='preview', requiresSignature=true,

@@ -4,7 +4,7 @@
  * settle/claim succeeds but whose enrichment reads (`speculations.get` /
  * `odds.snapshot`) either succeed or fail.
  *
- * The load-bearing case is Hermes's acceptance criterion: **an enrichment
+ * The load-bearing case is the reviewer's acceptance criterion: **an enrichment
  * fetch failure must NOT block the tx result emission** — the command still
  * emits an ok:true envelope (exit 0) with a degraded context + a warning.
  */

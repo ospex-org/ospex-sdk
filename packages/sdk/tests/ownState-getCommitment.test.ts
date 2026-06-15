@@ -4,7 +4,7 @@
  * Covers:
  *   - found on first page → OwnerCommitment;
  *   - found on later page (pagination drives forward) → OwnerCommitment;
- *   - drained without finding → null (per Hermes-locked framing: null means
+ *   - drained without finding → null (per review-locked framing: null means
  *     "outside snapshot scope", NOT "doesn't exist");
  *   - exactly ONE token mint regardless of page count;
  *   - cursor flows forward between pages;

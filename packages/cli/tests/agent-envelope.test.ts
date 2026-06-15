@@ -161,7 +161,7 @@ describe('buildAgentEnvelope', () => {
     expect(env.nextCommands).toHaveLength(MAX_NEXT_COMMANDS);
   });
 
-  // Hermes PR-67 review: `doctor` shipped with `payload.schemaVersion: 1`
+  // Review: `doctor` shipped with `payload.schemaVersion: 1`
   // because `JsonDoctorReport` baked it in. The guard below catches this
   // class of bug at build time so future migrations can't silently
   // ship two version signals.
@@ -302,7 +302,7 @@ describe('networkForChainId', () => {
   });
 });
 
-describe('buildFailureEnvelope (Hermes PR-6 scope: effects preservation)', () => {
+describe('buildFailureEnvelope (the failure-envelope scope: effects preservation)', () => {
   const errors: AgentError[] = [{ code: 'CHAIN_ERROR', message: 'reverted' }];
 
   it('preserves completed effects[] on mid-flight failure', () => {

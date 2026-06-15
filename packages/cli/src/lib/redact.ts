@@ -91,7 +91,7 @@ export function redactUrl(raw: string, source: string): UrlField {
     // so the envelope and rendered output never contain the raw
     // value. Agents can detect the case via `host === ''` and use
     // `fingerprint` (computed from the raw input) to spot config
-    // changes between runs. Hermes PR 54 blocker #2.
+    // changes between runs. Review blocker #2.
     return {
       source,
       redactedValue: '[invalid url]',
@@ -197,8 +197,8 @@ function computeFingerprint(raw: string): string {
  *      cleanly parse.
  *   2. Mask `<credential-name>=<value>` and `<credential-name>: <value>`
  *      pairs (api_key, authorization, bearer, token, password,
- *      passphrase) — same regex shape as the Hermes diagnose-create.mjs
- *      template, anchored to known names so a JSON-shaped message
+ *      passphrase) — same regex shape as an internal diagnostic script,
+ *      anchored to known names so a JSON-shaped message
  *      containing a `token:` field is also caught.
  *   3. `postgres://` / `postgresql://` connection strings are masked
  *      wholesale (these never appear in viem errors but the sanitizer

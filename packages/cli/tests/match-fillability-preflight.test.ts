@@ -223,6 +223,6 @@ describe('hasRemediableShortfall', () => {
   });
 });
 
-// Hermes round 1 follow-up — see commitments-v2-transforms.test.ts for the
+// Review round 1 follow-up — see commitments-v2-transforms.test.ts for the
 // envelope-shaped tests (`payload.fillability` / `preflightFillability` /
 // `approvalRemediation`); kept here are the pure-function helpers.

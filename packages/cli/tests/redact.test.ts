@@ -119,7 +119,7 @@ describe('redactUrl — fingerprint', () => {
 });
 
 describe('redactUrl — malformed input fails closed', () => {
-  // Hermes PR 54 blocker #2: a malformed URL with secret-bearing
+  // review blocker #2: a malformed URL with secret-bearing
   // substrings (`not-a-url?apikey=secret`) used to pass through as
   // `redactedValue` and leak the secret into shared envelopes. The
   // redactor now substitutes a sentinel instead — the raw value
@@ -173,7 +173,7 @@ describe('redactUrl — does not over-redact safe URLs', () => {
   });
 });
 
-// Hermes PR 54 blocker #1. Probe error messages (especially viem's
+// review blocker #1. Probe error messages (especially viem's
 // HttpRequestError) include the raw URL verbatim. Without
 // sanitisation the URL — and any embedded credential — propagates
 // into checks[].details and the human Checks section. The sanitiser
@@ -229,8 +229,8 @@ describe('sanitizeMessageForUrl', () => {
     expect(sanitized).toContain('[invalid url]');
   });
 
-  it('Hermes PR 54 blocker #1 repro — viem-style HttpRequestError', () => {
-    // Mirrors the smoke output Hermes posted: an Alchemy key
+  it('review blocker #1 repro — viem-style HttpRequestError', () => {
+    // Mirrors the smoke output a reviewer posted: an Alchemy key
     // appearing verbatim in the error message because viem's
     // HttpRequestError adds `URL: <raw>` to its message body.
     const raw = 'http://127.0.0.1:9/v2/supersecretkey0123456789abcdef';

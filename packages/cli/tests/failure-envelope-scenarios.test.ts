@@ -1,7 +1,7 @@
 /**
- * Hermes PR-6 coverage scenarios for the v2 failure envelope.
+ * Failure-envelope coverage scenarios for the v2 failure envelope.
  *
- * Pins the three scenarios Hermes listed in the PR-70 thread:
+ * Pins the three scenarios the reviewer listed in the PR thread:
  *   1. Validation failure BEFORE side effects → ok:false, no
  *      effects[], typed code (e.g. VALIDATION_ERROR).
  *   2. Preflight/RPC/API failure BEFORE side effects → ok:false,
@@ -84,7 +84,7 @@ function parseEnvelope(stdout: string): ParsedEnvelope {
   return JSON.parse(stdout.trim()) as ParsedEnvelope;
 }
 
-describe('Hermes PR-6 scenario 1: validation failure before side effects', () => {
+describe('failure-envelope scenario 1: validation failure before side effects', () => {
   it('emits a v2 failure envelope with VALIDATION_ERROR code and empty effects[]', () => {
     const stdout = captureStdout(() => {
       emitJsonFailure({
@@ -115,7 +115,7 @@ describe('Hermes PR-6 scenario 1: validation failure before side effects', () =>
   });
 });
 
-describe('Hermes PR-6 scenario 2: preflight/RPC/API failure before side effects', () => {
+describe('failure-envelope scenario 2: preflight/RPC/API failure before side effects', () => {
   it('emits a v2 failure envelope for ALLOWANCE_INSUFFICIENT with structured details', () => {
     const stdout = captureStdout(() => {
       emitJsonFailure({
@@ -168,9 +168,9 @@ describe('Hermes PR-6 scenario 2: preflight/RPC/API failure before side effects'
   });
 });
 
-describe('Hermes PR-6 scenario 3: mid-flight failure after one successful effect', () => {
+describe('failure-envelope scenario 3: mid-flight failure after one successful effect', () => {
   it('preserves the already-confirmed approve tx in effects[] when submit then throws', () => {
-    // This is the critical regression Hermes asked for: a
+    // This is the critical regression the reviewer asked for: a
     // `commitments submit --yes --json` invocation that successfully
     // sent a USDC approve tx (commitment-risk), then `submitPrepared`
     // throws NONCE_TOO_LOW. The approve tx hash MUST land in the
@@ -303,7 +303,7 @@ describe('Hermes PR-6 scenario 3: mid-flight failure after one successful effect
     expect(env.errors[0]?.details).toMatchObject({ reason: 'ScriptApprovalExpired' });
   });
 
-  // Hermes PR-71 blocker regression: when contests create's verification
+  // review blocker regression: when contests create's verification
   // poll throws AFTER the create tx landed, the action used to write
   // the success envelope first and THEN throw — producing TWO envelopes
   // on stdout and a failure envelope that omitted the create tx. Fix:
@@ -612,7 +612,7 @@ describe('Hermes PR-6 scenario 3: mid-flight failure after one successful effect
         ),
       });
     });
-    // Single JSON envelope on stdout (the Hermes contract).
+    // Single JSON envelope on stdout (the review contract).
     const trimmed = stdout.trim();
     expect(() => JSON.parse(trimmed)).not.toThrow();
     // Confirm there's only one object (no second envelope appended).
@@ -623,7 +623,7 @@ describe('Hermes PR-6 scenario 3: mid-flight failure after one successful effect
     expect(env.effects).toHaveLength(2);
     expect(env.effects[0]?.purpose).toBe('approve-link');
     expect(env.effects[0]?.ok).toBe(true);
-    // The create tx — the bit Hermes flagged as missing.
+    // The create tx — the bit the review flagged as missing.
     expect(env.effects[1]?.purpose).toBe('create-contest');
     expect(env.effects[1]?.ok).toBe(true);
     expect(env.effects[1]?.txHash).toBe('0xcreate');

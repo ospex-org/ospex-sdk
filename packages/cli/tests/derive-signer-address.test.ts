@@ -1,5 +1,5 @@
 /**
- * Hermes PR 55 review regression test.
+ * review regression test.
  *
  * The doctor was deriving `wallet.address` through the legacy
  * `resolveWalletAddress(...)` path, which only consults
@@ -45,7 +45,7 @@ beforeAll(async () => {
   // Foundry-produced keystores omit the top-level `address` field
   // that ethers writes. Strip it so the in-keystore-field cheap
   // path returns null and the test forces the unlock branch — which
-  // is the path that fixes Hermes's PR 55 blocker.
+  // is the path that fixes review blocker.
   const parsed = JSON.parse(keystoreJson) as Record<string, unknown>;
   delete parsed['address'];
   foundryStyleKeystoreJson = JSON.stringify(parsed);
@@ -120,7 +120,7 @@ describe('deriveSignerAddress — --address override', () => {
   });
 });
 
-describe('deriveSignerAddress — expected-address pin (Hermes PR 55 trigger condition)', () => {
+describe('deriveSignerAddress — expected-address pin (review trigger condition)', () => {
   it('returns the pin when no credentials are available (zero I/O)', async () => {
     const r = await deriveSignerAddress({
       override: undefined,
@@ -137,7 +137,7 @@ describe('deriveSignerAddress — expected-address pin (Hermes PR 55 trigger con
 
 describe('deriveSignerAddress — non-interactive unlock via Foundry account', () => {
   it('unlocks the keystore via a password file and returns the derived address', async () => {
-    // Construct the on-disk setup that mirrors Hermes's repro:
+    // Construct the on-disk setup that mirrors the review repro:
     // a Foundry-account keystore + a password file + an
     // expectedAddress pin.
     const keystoresDir = path.join(tmpDir, 'foundry-keystores');
@@ -277,7 +277,7 @@ describe('deriveSignerAddress — no-prompt failure modes', () => {
   });
 });
 
-describe('deriveSignerAddress — session cache precedence (Hermes PR 55 round-2)', () => {
+describe('deriveSignerAddress — session cache precedence (review round 2)', () => {
   // Wallet B = "the stale session wallet" that must NOT be returned
   // when the walker resolved an explicit Foundry signer (wallet A).
   const SESSION_PK_B =
@@ -298,7 +298,7 @@ describe('deriveSignerAddress — session cache precedence (Hermes PR 55 round-2
     );
   }
 
-  // Hermes PR 55 round-2 blocker repro. Config pins Foundry signer A
+  // review round 2 blocker repro. Config pins Foundry signer A
   // via foundryAccount + passwordFile (walker reports
   // passwordProvenance: 'config-passwordFile'). A fresh legacy
   // session exists for an unrelated wallet B. `auth check --json`

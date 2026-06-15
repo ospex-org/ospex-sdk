@@ -1,6 +1,6 @@
 /**
  * Unit tests for `buildSideContext` — the pure team-identity enrichment
- * helper shared by settle / claim / claim-all. Covers Hermes's acceptance
+ * helper shared by settle / claim / claim-all. Covers the review acceptance
  * matrix: moneyline full team+role, spread role-from-line (+ odds
  * fallback), role unavailable → unknown, totals (no team), push/void/tbd
  * wording, and the team-unavailable degrade. The helper is pure, so every

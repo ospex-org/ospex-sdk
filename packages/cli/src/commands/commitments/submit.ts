@@ -344,7 +344,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
     //    --approve-max → unlimited; otherwise → the exact required
     //    amount on each row.
     //
-    //    Hermes PR-69 fix: each approve tx is recorded as an
+    //    review fix: each approve tx is recorded as an
     //    AgentEffect (collected in `approveEffects`, declared at the
     //    top of the action so the failure-envelope catch can also
     //    surface already-confirmed approves on a mid-flight throw)
@@ -529,7 +529,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
       { json: false },
     );
     } catch (err) {
-      // Hermes PR-6 scope: --json failures emit a v2 failure envelope
+      // The failure-envelope scope: --json failures emit a v2 failure envelope
       // that preserves any approve txs that already landed before the
       // throw. Without this, a NONCE_TOO_LOW after a successful USDC
       // approve would lose the approve tx hash to stderr (legacy path).

@@ -7,7 +7,7 @@
  * the first time it matches, OR `null` once a page with `truncated:false`
  * has been scanned without finding it.
  *
- * Locked semantics (per Hermes review):
+ * Locked semantics (per review):
  *
  *   - {@link OwnerCommitment} ⇒ row is in the maker's owner-auth snapshot scope.
  *   - `null`                  ⇒ the snapshot DRAINED (a page returned
@@ -110,8 +110,8 @@ export async function getOwnerCommitment(
     // (top-level fields + every commitment + every position) is validated
     // before any field is trusted: a malformed page fails closed with
     // OspexValidationError rather than a raw TypeError on `.toLowerCase()`
-    // or a silently-wrong `truncated` / `cursor`. (Hermes Phase 3 PR0a
-    // round-7 site — this helper previously read `wire.commitments` raw,
+    // or a silently-wrong `truncated` / `cursor`. (review-round-7
+    // finding — this helper previously read `wire.commitments` raw,
     // bypassing decodeSnapshot's validation.)
     const decoded = decodeSnapshot(wire);
     const match = decoded.commitments.find(

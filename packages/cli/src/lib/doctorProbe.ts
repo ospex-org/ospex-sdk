@@ -89,7 +89,7 @@ export async function probeRpc(
       // viem's HttpRequestError includes the raw URL in its message
       // body. Run every captured error message through the URL
       // sanitiser so credentials never reach `checks[].details` or
-      // the rendered human output. Hermes PR 54 blocker #1.
+      // the rendered human output. Review blocker #1.
       error: sanitizeMessageForUrl(errorMessage(err), rpcUrl),
     };
   }
@@ -192,7 +192,7 @@ export async function probeContractsDeployed(
   // whole report. The "lookup failed" case is preserved as
   // `hasCode: null` (not `false`) so the classifier can warn on
   // unknown rather than misclassify it as a confirmed-missing failure
-  // — that was the Hermes PR 53 blocker #2 bug.
+  // — that was the review blocker #2 bug.
   const settled = await Promise.allSettled(
     targets.map(async (t): Promise<ContractCodeEntry> => {
       const code = await client.getBytecode({ address: t.address });

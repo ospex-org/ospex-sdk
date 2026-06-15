@@ -41,7 +41,7 @@ async function seedConfig(config: Record<string, unknown>): Promise<void> {
 
 describe('auth clear-foundry — no flags / --all', () => {
   it('clears every foundry-signer field, preserves non-signer fields AND legacy keystorePath', async () => {
-    // Hermes PR 49 blocker #2: the legacy `keystorePath` field (set
+    // review blocker #2: the legacy `keystorePath` field (set
     // by `ospex init` before any auth use-foundry work) is non-signer
     // config from this command's POV and must NOT be cleared.
     await seedConfig({
