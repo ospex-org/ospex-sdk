@@ -806,7 +806,7 @@ errors[0].code === 'CHAIN_ERROR'
 
 If all conditions hold, ONE retry is safe. If a `txHash` exists OR the signer's pending nonce moved, do NOT retry without first polling the chain — the original tx may already be landing.
 
-**If the failure envelope does not identify a signer (`envelope.signer === null`), the agent cannot perform the pending-nonce check and MUST NOT auto-retry.** Surface to the operator instead. Every write-command failure envelope post-#111 carries `signer` (and `wallet`) for the broadcasting wallet — `signer: null` reliably means "this envelope is not a broadcast attempt" (e.g. a read scoped via `--maker`, or `claim-all --dry-run --address`), and those are never retry candidates here.
+**If the failure envelope does not identify a signer (`envelope.signer === null`), the agent cannot perform the pending-nonce check and MUST NOT auto-retry.** Surface to the operator instead. Every write-command failure envelope carries `signer` (and `wallet`) for the broadcasting wallet — `signer: null` reliably means "this envelope is not a broadcast attempt" (e.g. a read scoped via `--maker`, or `claim-all --dry-run --address`), and those are never retry candidates here.
 
 The pending-nonce check protects against the underpriced case: a tx that was accepted into the mempool but underpriced still moves the signer's pending nonce; a tx whose broadcast was dropped does not. **Use `envelope.signer`** (not the maker, not the taker, not the contest creator) — for `commitments match` the signer is the taker, for `contests create` the signer is the operator, for `claim` / `settle` the signer is the claimant / settler, etc. Routing by `envelope.signer` is the only nonce check that holds across all write commands. The "row state unchanged" check is the second line of defense — even if the signer / caller only-half-saw the broadcast succeed, the indexer-projected state catches up via the on-chain receipt.
 
@@ -869,7 +869,7 @@ nextNonce = max(
 Two consequences:
 
 1. **One client per signing identity per process.** Two `OspexClient` instances on the same wallet in the same process will collide on the unix-second floor and produce identical nonces, leading to one of the submits failing with a duplicate-hash 409 from the API. Concrete pattern: spawn one `OspexClient` per worker, share it across all submits from that worker.
-2. **Clients across processes need coordination.** An external `nonceProvider` injection is on the M2.5 deferred list. Until then, agents distributing submits across hosts must serialize nonce assignment themselves — typically by routing all submits for a given `(maker, speculationKey)` through a single host.
+2. **Clients across processes need coordination.** An external `nonceProvider` injection is planned but not yet implemented. Until then, agents distributing submits across hosts must serialize nonce assignment themselves — typically by routing all submits for a given `(maker, speculationKey)` through a single host.
 
 `commitments.cancelAllOnSpeculation` (and the underlying `commitments.raiseMinNonce`) raises the on-chain nonce floor, which **invalidates every commitment with `nonce < newMinNonce`**. Use this carefully: it doesn't just cancel, it pre-emptively rejects all such commitments at match time on chain.
 
