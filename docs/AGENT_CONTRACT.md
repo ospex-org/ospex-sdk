@@ -689,7 +689,7 @@ The SDK's typed errors that surface to the CLI all currently exit `1`. If you ne
 
 ## 7. SDK: typed error contract
 
-Every error thrown by the SDK extends `OspexError` and carries a discriminable `code` field. Switch on `code` for routing; switch on `reason` (sub-class) for finer dispatch.
+Every error the SDK itself throws extends `OspexError` and carries a discriminable `code` field. Switch on `code` for routing; switch on `reason` (sub-class) for finer dispatch. (The CLI `--json` envelope adds one non-SDK fallback code, `UNKNOWN_ERROR`, for unclassified throws — see the Catalog.)
 
 ```ts
 import {
@@ -732,6 +732,7 @@ try {
 | `SUBSCRIPTION_ERROR` | `OspexSubscriptionError` | `reason: 'link_balance_insufficient' \| 'consumer_not_registered' \| 'subscription_id_missing'`, `subscriptionId?` | Chainlink Functions subscription unusable. |
 | `STREAM_ERROR` | `OspexStreamError` | `reason: 'connection_failed' \| 'capacity_exceeded' \| 'fatal'`, `status?`, `phase?: 'token-mint' \| 'token-refresh' \| 'connect' \| 'snapshot-page' \| 'decode' \| 'dispatch'` | An Ospex SSE stream failed (odds or a protocol `subscribe`). `reason` discriminates retry-vs-stop (`connection_failed` / `capacity_exceeded` retried; `fatal` ends the subscription). `phase` (v0.5.2+) is populated by `client.ownState.subscribe` so composite-health-gate consumers can latch on the failure phase without parsing messages; other resource streams leave it undefined. Delivered to `onError`. |
 | `SIGNER_RESOLUTION_ERROR` | `OspexSignerResolutionError` | `reason`, `path?`, `expectedAddress?`, `actualAddress?`, `mode?` | Non-interactive Foundry-keystore signer resolution failed (missing path / file, wrong passphrase, address mismatch, conflicting flags, or — under `--strict` — loose password-file perms). See §4. |
+| `UNKNOWN_ERROR` | — (CLI `--json` envelope fallback; **not** an `OspexError`) | `causeChain?` | The CLI caught a thrown value that was not an `OspexError` — a native `Error`, or a non-`Error` throw. The `--json` envelope's `errors[]` falls back to this code (with the sanitized `message`) so the structured-error contract holds even on an unexpected throw. Indicates an unanticipated failure, not a routed SDK error. |
 
 ### `OspexChainError.reason` enum
 
@@ -775,6 +776,7 @@ New reason codes are additive (forward-compatible).
 | `SCRIPT_APPROVAL_INVALID` with `reason === 'expired'` | Wait for re-sign + redeploy of `ospex-core-api`. |
 | `SUBSCRIPTION_ERROR` with `reason === 'link_balance_insufficient'` | Yes after funding the wallet with LINK. |
 | `SIGNER_RESOLUTION_ERROR` (any `reason`) | No — fix the configuration. Surface to the operator rather than retrying. |
+| `UNKNOWN_ERROR` | No automatic retry — an unexpected throw the SDK did not classify. Inspect `message` + `details.causeChain[]` and surface to the operator; do not blindly re-issue. |
 
 The SDK does not retry for you. Build the retry loop in your agent.
 

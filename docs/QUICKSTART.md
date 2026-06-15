@@ -454,7 +454,7 @@ Agents skip the human flow where commands provide explicit preview/execute modes
 
 ```bash
 # Discover a candidate.
-HASH=$(ospex commitments list --contest-id 8 --json | jq -r '.[0].commitmentHash')
+HASH=$(ospex commitments list --contest-id 8 --json | jq -r '.payload[0].commitmentHash')
 
 # Preview without signing — inspect the resolved tuple, fee profile, warnings.
 ospex commitments match "$HASH" --json
@@ -478,7 +478,7 @@ If none of those resolve, the command errors out with `non_interactive_password_
 For machine-readable wallet/readiness state:
 
 ```bash
-ospex wallet address --json | jq -r .address      # passphrase prompt goes to stderr
+ospex wallet address --json | jq -r .payload.address      # passphrase prompt goes to stderr
 ospex doctor --address $WALLET --json             # full readiness envelope
 ospex approvals show --address $WALLET --json
 ```

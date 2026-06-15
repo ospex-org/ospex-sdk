@@ -119,7 +119,7 @@ Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end bef
 | 4.6 | `ospex commitments list --maker <walletA> --status cancelled --raw` | Row now appears with `status='cancelled'`. (The default status filter is `open,partially_filled`; cancelled rows require an explicit `--status cancelled`. `--raw` keeps the status column visible — the default taker view drops it.) | Cancel propagation. |
 | 4.7 | `ospex commitments cancel <hash>` again | `{ ok: true }` (idempotent) | API CAS guard. |
 
-**Picking inputs for 4.2**: contest id from `ospex contests list --chain-id 80002` (assuming Amoy contests are seeded; otherwise ask ops to seed one). Scorer = one of the three Amoy scorer addresses (moneyline `0x2e6f…`, spread `0x0de8…`, total `0xac2e…`). `oddsTick=250` ⇒ 2.50 odds; `riskAmount=1000` ⇒ 0.001 USDC (lot-size aligned).
+**Picking inputs for 4.2**: contest id from `ospex contests list` — the network comes from `chainId` in `~/.ospex/config.json` (`80002` for Amoy per the prereqs); there is no `--chain-id` flag. Assumes Amoy contests are seeded; otherwise ask ops to seed one. Scorer = one of the three Amoy scorer addresses (moneyline `0x2e6f…`, spread `0x0de8…`, total `0xac2e…`). `oddsTick=250` ⇒ 2.50 odds; `riskAmount=1000` ⇒ 0.001 USDC (lot-size aligned).
 
 ---
 
@@ -153,7 +153,7 @@ Verifies the SDK's takerRisk math against the contract's revert-or-exact-fill ru
 | # | Step | Expected | Validates |
 |---|---|---|---|
 | 6.1 | Wallet A submits a 1000-unit commitment at oddsTick=200 (2.00). | `ospex commitments submit-raw ... 200 1000` succeeds. | — |
-| 6.2 | Wallet B: `ospex commitments match <hash> --risk-usdc 0.000400 --yes` | Match succeeds. Verify the fill landed: `ospex commitments list --speculation <id> --raw` shows the maker row's `remaining` dropped to `0.000600` USDC (from `0.001000`) — a 400-wei6 fill (taker risks 400 = (400×100)/(200-100) → makerFill 400, takerRisk 400). For an exact `filledRiskAmount` integer, use `... --json | jq '.[].filledRiskAmount'`. | Partial-fill math + indexer projection + `--risk-usdc` decimal parsing. |
+| 6.2 | Wallet B: `ospex commitments match <hash> --risk-usdc 0.000400 --yes` | Match succeeds. Verify the fill landed: `ospex commitments list --speculation <id> --raw` shows the maker row's `remaining` dropped to `0.000600` USDC (from `0.001000`) — a 400-wei6 fill (taker risks 400 = (400×100)/(200-100) → makerFill 400, takerRisk 400). For an exact `filledRiskAmount` integer, use `... --json | jq '.payload[].filledRiskAmount'`. | Partial-fill math + indexer projection + `--risk-usdc` decimal parsing. |
 | 6.3 | Wallet B again: `ospex commitments match <hash> --risk-usdc 0.000600 --yes` | Commitment now `filled`. | Remaining-capacity match. |
 | 6.4 | `ospex commitments match <hash> --risk-usdc 0.000100 --yes` (any wallet) | SDK throws `OspexValidationError` ("commitment has no remaining capacity") OR contract reverts `CommitmentFullyFilled` and SDK surfaces `OspexChainError`. | Fully-filled guard. |
 
