@@ -205,8 +205,8 @@ Initial stable `warning.code` catalog (additive — consumers log + ignore unkno
 | `'nonce-floor-stale'` | `warning` | `nonce-floor` read when chain > supabase |
 | `'verify-script-expiring-soon'` | `warning` | `contests scripts` (T-30d) |
 | `'password-file-permissions-loose'` | `warning` (`blocking` under `--strict`) | `auth check` |
-| `'settle-skipped-already-settled'` | `info` | `claim-all` / `settle` — a pre-flight read found the speculation already settled, so the duplicate settle tx was skipped. `details: { speculationId, winSide, … }`. |
-| `'projection-lag-recovered'` | `info` | `claim-all` / `settle` — a concurrent settle won a race mid-flight, an on-chain re-read confirmed it, and the command proceeded (claim-all → claim; settle → done). `details: { speculationId, winSide, … }`. |
+| `'settle-skipped-already-settled'` | `info` | `claim-all` / `settle` — a pre-flight read found the speculation already settled, so the duplicate settle tx was skipped. `details: { speculationId, winSide, … }` (`claim-all` also adds `winSideContext` — see §2.7). |
+| `'projection-lag-recovered'` | `info` | `claim-all` / `settle` — a concurrent settle won a race mid-flight, an on-chain re-read confirmed it, and the command proceeded (claim-all → claim; settle → done). `details: { speculationId, winSide, … }` (`claim-all` also adds `winSideContext` — see §2.7). |
 | `'claim-skipped-already-claimed'` | `info` | `claim-all` / `claim` — a pre-flight `getPosition.claimed` read found the position already claimed, so the duplicate claim tx was skipped. **No payout** (the contract zeroes economic fields post-claim; never fabricated). `details: { speculationId, positionType / positionId, … }`. |
 | `'claim-recovered-already-claimed'` | `info` | `claim-all` / `claim` — a benign already-claimed (concurrent caller, rerun, `claimable`-projection lag) won a race mid-flight; an on-chain re-read confirmed it and the command proceeded. **No payout.** A reverted-on-inclusion claim this wallet broadcast also emits a `status:'reverted'` `claim-position` effect (gas spent). `details: { speculationId, positionType / positionId, … }`. |
 
@@ -322,6 +322,35 @@ Examples:
   "safeToAutoRun": false
 }
 ```
+
+---
+
+### 2.7 `SideContext` (`winSideContext` / `positionSideContext`)
+
+**Additive Team Identity context** for the position-lifecycle commands. The protocol surfaces a bare side enum — `winSide` (`away|home|over|under|push|void|tbd`) on `settle` / `claim-all` settle outcomes, and `positionType` (`0|1`) on `claim` — which names a side without the actual team or its favorite/underdog role. `SideContext` travels **next to** that bare field (the field at `…Context` is suffixed onto the existing key: `winSideContext` where the bare field is `winSide`, `positionSideContext` where it is `positionType`). It is **additive and never replaces the bare field** — agents MUST route on the bare `winSide` / `positionType`; `display` is human-facing only.
+
+```ts
+interface SideContext {
+  side: 'away' | 'home' | 'over' | 'under' | 'push' | 'void' | 'tbd';
+  marketType: 'moneyline' | 'spread' | 'total' | null;
+  team: { name: string; alignment: 'away' | 'home' } | null;   // null for totals / push / void / tbd, or when unresolved
+  role: 'favorite' | 'underdog' | 'even' | 'unknown' | 'not_applicable';
+  display: string;                                              // human-facing, e.g. "away (New York Yankees, favorite)"
+  status: 'complete' | 'partial' | 'unavailable' | 'not_applicable';
+  source: {
+    team: 'speculation-detail' | 'claim-params-description' | 'unavailable' | 'not_applicable';
+    role: 'moneyline-odds' | 'spread-line' | 'spread-odds' | 'unavailable' | 'not_applicable';
+  };
+}
+```
+
+Rules:
+
+- **Never fabricated.** A team name / role that can't be resolved degrades honestly (`team: null`, `role: 'unknown'`, `status: 'unavailable'|'partial'`, `source.*: 'unavailable'`) — it is never invented.
+- **Role derivation.** `moneyline` → American-odds sign (more-negative = favorite); `spread` → line sign (negative = favorite, positive = underdog, zero = even), falling back to spread American odds; `total` and `push`/`void`/`tbd` → `not_applicable`; missing inputs → `unknown`.
+- **`status`.** `complete` (team + role resolved) · `partial` (team resolved, role `unknown`) · `unavailable` (team unresolved) · `not_applicable` (totals / no-winner sides).
+- **Enrichment is non-blocking.** If the metadata fetch fails, the command still succeeds/fails on the underlying settle/claim — the context degrades to `status: 'unavailable'` with a warning; it never blocks a valid transaction.
+- **Availability.** Currently emitted by **`claim-all`** — `winSideContext` on each entry payload and on the settle-leg warning `details` (`settle-skipped-already-settled` / `projection-lag-recovered`, §2.4), next to the bare `winSide`. `claim-all` reuses only the data already on each entry (no per-entry fetch), so a team-bearing side is `status: 'unavailable'` there (the human-readable team is in the entry `description`). Single **`settle`** (`winSideContext`) and **`claim`** (`positionSideContext`) gain the field — with the full team + role resolved via `speculations.get` (+ `odds.snapshot` for moneyline role) — in a follow-up; today they emit only the bare `winSide` / `positionType`.
 
 ---
 

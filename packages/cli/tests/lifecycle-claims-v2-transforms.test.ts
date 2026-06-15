@@ -697,6 +697,82 @@ describe('toClaimAllAgentEnvelope', () => {
     expect(env.payload.totals.claimedFresh).toBe(1);
   });
 
+  // Team Identity (PR3-A): each entry's settle-resolved winSide gets an
+  // additive structured winSideContext next to the bare winSide. claim-all
+  // reuses only entry data (no per-entry fetch), so a team-bearing side
+  // degrades to team `unavailable` — honest, never fabricated. The bare
+  // winSide is retained for machine routing.
+  it('attaches winSideContext to entry payloads + settle-leg warning details (team-bearing → unavailable)', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: true,
+        totals: {
+          claimed: 1,
+          failed: 0,
+          claimedFresh: 0,
+          alreadyClaimed: 0,
+          recoveredAlreadyClaimed: 0,
+          settledFresh: 0,
+          alreadySettled: 1,
+          recoveredAlreadySettled: 0,
+          totalPayoutWei6: '5000000',
+          totalPayoutUSDC: 5,
+        } as never,
+        entries: [
+          makeEntry({
+            bucket: 'pendingSettle',
+            txHashes: ['0xclaimonly'],
+            winSide: 'away',
+            steps: [
+              { name: 'settleSpeculation', outcome: 'skippedAlreadySettled', winSide: 'away' },
+              { name: 'claimPosition', outcome: 'sent', txHash: '0xclaimonly', payoutWei6: '5000000', payoutUSDC: 5 },
+            ],
+          }),
+        ] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    const entry = env.payload.entries[0]!;
+    expect(entry.winSide).toBe('away'); // bare field retained for routing
+    expect(entry.winSideContext).not.toBeNull();
+    expect(entry.winSideContext?.side).toBe('away');
+    expect(entry.winSideContext?.team).toBeNull(); // no per-entry fetch → not fabricated
+    expect(entry.winSideContext?.status).toBe('unavailable');
+    expect(entry.winSideContext?.display).toBe('away (team unavailable)');
+    // The settle-skipped warning's details carry the same structured context
+    // alongside the bare winSide.
+    const warn = env.warnings.find((w) => w.code === 'settle-skipped-already-settled');
+    expect(warn).toBeDefined();
+    const details = warn!.details as { winSide?: string; winSideContext?: { side?: string } };
+    expect(details.winSide).toBe('away');
+    expect(details.winSideContext?.side).toBe('away');
+  });
+
+  it('winSideContext is null for an entry with no settle-resolved winSide (claimable)', () => {
+    const env = toClaimAllAgentEnvelope(
+      {
+        address: SIGNER,
+        success: true,
+        totals: {
+          claimed: 1,
+          failed: 0,
+          claimedFresh: 1,
+          alreadyClaimed: 0,
+          recoveredAlreadyClaimed: 0,
+          settledFresh: 0,
+          alreadySettled: 0,
+          recoveredAlreadySettled: 0,
+          totalPayoutWei6: '5000000',
+          totalPayoutUSDC: 5,
+        } as never,
+        entries: [makeEntry({ winSide: undefined })] as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER, dryRun: false },
+    );
+    expect(env.payload.entries[0]!.winSideContext).toBeNull();
+  });
+
   // Claim-leg idempotency (v0.4.3): an already-claimed claim sends NO tx and
   // is NOT a failure — it surfaces as a distinct claim-specific info warning,
   // never as a fake claim effect or a payout.

@@ -31,6 +31,7 @@ import {
   emitJsonSuccess,
   networkForChainId,
 } from '../../lib/agentEnvelope.js';
+import { buildSideContext, type SideContext } from '../../lib/sideContext.js';
 import {
   COMPLETE_CLAIM_ALL,
   VERIFY_POSITION_STATUS,
@@ -213,6 +214,14 @@ export interface ClaimAllPayload {
     payoutUSDC: number | undefined;
     payoutWei6: string | undefined;
     winSide: string | undefined;
+    /** Additive Team Identity context for the settle-resolved `winSide`
+     * (next to the bare `winSide`, never instead of it). `null` for entries
+     * with no resolved winSide (a `claimable` entry sent no settle leg).
+     * claim-all reuses only the data already on the entry — no per-entry
+     * fetch — so for team-bearing sides the team is `unavailable` here
+     * (the human-readable team is in `description`); single `settle`/`claim`
+     * fetch the full context. See lib/sideContext.ts. */
+    winSideContext: SideContext | null;
     error: string | undefined;
   }>;
 }
@@ -298,6 +307,10 @@ export function toClaimAllAgentEnvelope(
         payoutUSDC: e.payoutUSDC,
         payoutWei6: e.payoutWei6,
         winSide: e.winSide,
+        // Additive structured context next to the bare winSide. claim-all has
+        // only the entry's winSide here (no per-entry fetch), so a team-bearing
+        // side degrades to team `unavailable` — honest, never fabricated.
+        winSideContext: e.winSide !== undefined ? buildSideContext({ side: e.winSide }) : null,
         // Per-entry SDK errors wrap viem/transport failures whose message
         // can carry a credentialed RPC URL — scrub before it reaches the
         // stdout envelope (H1). No-op on credential-free messages.
@@ -412,14 +425,24 @@ function buildClaimAllWarnings(result: ClaimAllResult): AgentWarning[] {
             code: 'settle-skipped-already-settled',
             message: `Speculation ${entry.speculationId} was already settled on-chain — skipped the duplicate settle and proceeded to claim.`,
             severity: 'info',
-            details: { ...ids, winSide: step.winSide },
+            details: {
+              ...ids,
+              winSide: step.winSide,
+              winSideContext:
+                step.winSide !== undefined ? buildSideContext({ side: step.winSide }) : null,
+            },
           });
         } else if (step.outcome === 'recoveredAlreadySettled') {
           out.push({
             code: 'projection-lag-recovered',
             message: `Speculation ${entry.speculationId} was settled by a concurrent transaction — recovered from the duplicate-settle revert and proceeded to claim.`,
             severity: 'info',
-            details: { ...ids, winSide: step.winSide },
+            details: {
+              ...ids,
+              winSide: step.winSide,
+              winSideContext:
+                step.winSide !== undefined ? buildSideContext({ side: step.winSide }) : null,
+            },
           });
         }
       } else if (step.name === 'claimPosition') {
