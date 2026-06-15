@@ -8,8 +8,10 @@
  * when a passphrase prompt fires, because the prompt fires on stderr
  * and the JSON payload is the only thing on stdout.
  *
- * These functions assume a TTY. Non-TTY callers (CI, piped stdin) should
- * provide credentials via env vars instead.
+ * These functions assume a TTY. The non-interactive signer surface
+ * (`--password-file` / `--password-stdin`) bypasses passphrase prompts
+ * entirely — see docs/AGENT_CONTRACT.md §4. There is no env var or flag
+ * that supplies a raw private key or passphrase value.
  */
 
 const CTRL_C = String.fromCharCode(3);
@@ -82,7 +84,11 @@ function readLine(options: ReadLineOptions): Promise<string> {
     const stdin = process.stdin;
     const isTTY = stdin.isTTY === true;
     if (options.hidden && !isTTY) {
-      reject(new Error('Hidden input requires a TTY. Set the value via env var instead.'));
+      reject(
+        new Error(
+          'Hidden input requires a TTY (interactive terminal). For passphrases, use --password-file or --password-stdin; private-key import is interactive only.',
+        ),
+      );
       return;
     }
 

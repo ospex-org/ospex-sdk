@@ -31,9 +31,10 @@ export const walletImportCommand = new Command('import')
       }
     }
 
-    const rawPk =
-      process.env.OSPEX_IMPORT_PRIVATE_KEY ??
-      (await promptHidden('Private key (0x…64 hex chars): '));
+    // The private key is read interactively only — never from a CLI argument
+    // or env var. See docs/AGENT_CONTRACT.md §4: the CLI never accepts a raw
+    // private key or passphrase non-interactively.
+    const rawPk = await promptHidden('Private key (0x…64 hex chars): ');
     const privateKey = rawPk.trim().startsWith('0x') ? rawPk.trim() : `0x${rawPk.trim()}`;
     if (!PRIVATE_KEY_REGEX.test(privateKey)) {
       console.error('Invalid private key. Expected 0x-prefixed 64 hex characters.');
