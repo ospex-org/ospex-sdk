@@ -19,9 +19,9 @@ import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
   emitJsonFailure,
+  emitJsonSuccess,
   errorToAgentError,
   networkForChainId,
-  writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 import {
   VERIFY_COMMITMENT,
@@ -89,7 +89,9 @@ export const commitmentsCancelCommand = addSignerOptions(
 
     if (!wantsOnchain) {
       if (wantJson) {
-        writeAgentEnvelope(
+        // emitJsonSuccess writes the envelope and sets the §6 exit code
+        // (nonzero iff ok:false) — see lib/agentEnvelope.ts.
+        emitJsonSuccess(
           toCancelOffchainAgentEnvelope(offChainResult, commitment, {
             chainId,
             // Non-null assertion: signerAddress was assigned at the
@@ -149,7 +151,13 @@ export const commitmentsCancelCommand = addSignerOptions(
       const explorerUrl = onChainTxHash !== null
         ? polygonscanTxUrl(chainId, onChainTxHash)
         : null;
-      writeAgentEnvelope(
+      // emitJsonSuccess writes the dual envelope AND sets the §6 exit code:
+      // the dual envelope's `ok` is `effects.every(e => e.ok)`, so a
+      // reverted/failed on-chain leg (onChainError !== null) makes ok:false →
+      // exit 1, surfacing the partial failure to shell pipelines without
+      // parsing the envelope (same outcome as the prior explicit exit, but
+      // routed through the shared §6 helper).
+      emitJsonSuccess(
         toCancelDualAgentEnvelope(
           { offChainResult, onChainResult, onChainError, explorer: explorerUrl },
           commitment,
@@ -160,9 +168,6 @@ export const commitmentsCancelCommand = addSignerOptions(
           },
         ),
       );
-      // Surface non-zero exit on partial failure so shell pipelines
-      // catch it without parsing the envelope.
-      if (onChainError !== null) process.exit(1);
       return;
     }
 

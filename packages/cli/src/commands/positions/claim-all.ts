@@ -28,8 +28,8 @@ import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
   emitJsonFailure,
+  emitJsonSuccess,
   networkForChainId,
-  writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 import {
   COMPLETE_CLAIM_ALL,
@@ -80,21 +80,20 @@ export const positionsClaimAllCommand = addSignerOptions(
     });
 
     if (wantJson) {
-      const envelope = toClaimAllAgentEnvelope(result, {
-        chainId,
-        signerAddress,
-        dryRun,
-      });
-      writeAgentEnvelope(envelope);
-      // AGENT_ENVELOPE_SPEC §6: exit code is nonzero when ok:false, so a
-      // shell-gating harness catches a partially- or fully-failed sweep
-      // without parsing the envelope. claim-all is the one write whose
-      // SUCCESS-path envelope can be ok:false: the SDK isolates per-entry
-      // failures into entry.success rather than throwing, so the catch-path
-      // process.exit(1) below never fires for them — this is its success-path
-      // twin. process.exitCode (not process.exit) lets the already-written
-      // envelope flush and keeps the action return-clean (and unit-testable).
-      if (!envelope.ok) process.exitCode = 1;
+      // emitJsonSuccess writes the envelope AND sets the §6 exit code
+      // (nonzero iff ok:false) in one call — see lib/agentEnvelope.ts.
+      // claim-all is a write whose SUCCESS-path envelope can be ok:false: the
+      // SDK isolates per-entry failures into entry.success rather than
+      // throwing, so the catch-path process.exit(1) below never fires for
+      // them. This is the success-path twin that surfaces a partially- or
+      // fully-failed sweep to shell-gating harnesses.
+      emitJsonSuccess(
+        toClaimAllAgentEnvelope(result, {
+          chainId,
+          signerAddress,
+          dryRun,
+        }),
+      );
       return;
     }
 
