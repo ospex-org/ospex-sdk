@@ -76,6 +76,49 @@ describe('toSettleAgentEnvelope', () => {
     expect(env.warnings[0]?.code).toBe('projection-lag-recovered');
     expect(env.payload.revertedTxHash).toBe('0xreverted');
   });
+
+  // Team Identity (PR3-B): the resolved winSideContext flows into the payload
+  // + the settle-skipped warning details, and a non-fatal enrichment warning
+  // is appended alongside the outcome warning. The bare winSide is retained.
+  it('passes winSideContext into payload + warning details and appends the enrichment warning', () => {
+    const sideContext = {
+      side: 'away',
+      marketType: 'moneyline',
+      team: { name: 'New York Yankees', alignment: 'away' },
+      role: 'unknown',
+      display: 'away (New York Yankees, role unknown)',
+      status: 'partial',
+      source: { team: 'speculation-detail', role: 'unavailable' },
+    } as never;
+    const env = toSettleAgentEnvelope(
+      { speculationId: 101n, outcome: 'alreadySettled', winSide: 'away' },
+      {
+        chainId: POLYGON,
+        signerAddress: SIGNER,
+        speculationId: 101n,
+        sideContext,
+        enrichmentWarning: { code: 'side-role-unavailable', message: 'role unavailable', severity: 'warning' },
+      },
+    );
+    expect(env.payload.winSide).toBe('away'); // bare field retained for routing
+    expect(env.payload.winSideContext).toMatchObject({
+      side: 'away',
+      team: { name: 'New York Yankees', alignment: 'away' },
+      status: 'partial',
+    });
+    const skip = env.warnings.find((w) => w.code === 'settle-skipped-already-settled');
+    expect((skip?.details as { winSideContext?: { side?: string } })?.winSideContext?.side).toBe('away');
+    // the enrichment-degradation warning is appended next to the outcome warning
+    expect(env.warnings.some((w) => w.code === 'side-role-unavailable')).toBe(true);
+  });
+
+  it('winSideContext is null in the payload when the transform is called without it', () => {
+    const env = toSettleAgentEnvelope(
+      { speculationId: 101n, outcome: 'settled', winSide: 'away', txHash: '0xtx', blockNumber: 1n },
+      { chainId: POLYGON, signerAddress: SIGNER, speculationId: 101n },
+    );
+    expect(env.payload.winSideContext).toBeNull();
+  });
 });
 
 describe('toClaimAgentEnvelope', () => {
@@ -150,6 +193,45 @@ describe('toClaimAgentEnvelope', () => {
     expect(env.effects[0]?.txHash).toBe('0xreverted');
     expect(env.warnings[0]?.code).toBe('claim-recovered-already-claimed');
     expect(env.payload.revertedTxHash).toBe('0xreverted');
+  });
+
+  // Team Identity (PR3-B): the resolved positionSideContext flows into the
+  // payload + the claim-skipped warning details. The bare positionType is
+  // retained for routing.
+  it('passes positionSideContext into payload + warning details (bare positionType retained)', () => {
+    const sideContext = {
+      side: 'home',
+      marketType: 'spread',
+      team: { name: 'B', alignment: 'home' },
+      role: 'underdog',
+      display: 'home (B, underdog)',
+      status: 'complete',
+      source: { team: 'speculation-detail', role: 'spread-line' },
+    } as never;
+    const env = toClaimAgentEnvelope(
+      { speculationId: 101n, positionType: 1, outcome: 'alreadyClaimed' },
+      { chainId: POLYGON, signerAddress: SIGNER, speculationId: 101n, positionType: 1, sideContext },
+    );
+    expect(env.payload.positionType).toBe(1); // bare field retained for routing
+    expect(env.payload.positionSideContext).toMatchObject({ side: 'home', role: 'underdog' });
+    const skip = env.warnings.find((w) => w.code === 'claim-skipped-already-claimed');
+    expect((skip?.details as { positionSideContext?: { side?: string } })?.positionSideContext?.side).toBe('home');
+  });
+
+  it('positionSideContext null + enrichment warning appended when enrichment was unavailable', () => {
+    const env = toClaimAgentEnvelope(
+      { speculationId: 101n, positionType: 0, outcome: 'alreadyClaimed' },
+      {
+        chainId: POLYGON,
+        signerAddress: SIGNER,
+        speculationId: 101n,
+        positionType: 0,
+        enrichmentWarning: { code: 'side-context-unavailable', message: 'unavailable', severity: 'warning' },
+      },
+    );
+    expect(env.payload.positionSideContext).toBeNull();
+    expect(env.payload.positionType).toBe(0); // bare field retained
+    expect(env.warnings.some((w) => w.code === 'side-context-unavailable')).toBe(true);
   });
 });
 
