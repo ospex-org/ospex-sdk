@@ -236,7 +236,7 @@ interface AgentEffect {
 
 There is **no** separate `transactions[]` field — consumers filter `effects` by `type === 'transaction'`.
 
-Per-effect `ok` lets multi-phase commands surface partial success cleanly. Example: `cancel --also-onchain` records both the off-chain DELETE and the on-chain tx:
+Per-effect `ok` lets multi-phase commands surface partial success cleanly. Example: `cancel --also-onchain` where the off-chain DELETE landed but the on-chain tx **reverted on inclusion** — the `transaction` effect carries the `txHash` + `status: 'reverted'`, and `errors[0].details` carries the structured discriminators (`txHash` / `receiptStatus` / `causeChain`):
 
 ```jsonc
 {
@@ -245,11 +245,21 @@ Per-effect `ok` lets multi-phase commands surface partial success cleanly. Examp
   "stage": "execute",
   "effects": [
     { "type": "offchain-write", "purpose": "offchain-cancel", "ok": true },
-    { "type": "transaction", "purpose": "onchain-cancel", "ok": false, "status": "reverted", "errorCode": "CHAIN_ERROR" }
+    { "type": "transaction", "purpose": "onchain-cancel", "ok": false, "txHash": "0x…", "blockNumber": "64200001", "status": "reverted", "errorCode": "CHAIN_ERROR" }
   ],
-  "errors": [{ "code": "CHAIN_ERROR", "message": "tx reverted: NotCommitmentMaker" }]
+  "errors": [{ "code": "CHAIN_ERROR", "message": "Transaction reverted on-chain.", "details": { "txHash": "0x…", "receiptStatus": "reverted", "receiptBlockNumber": "64200001" } }]
 }
 ```
+
+`details.causeChain` is **not** present on a clean inclusion revert (the SDK attaches no `cause` to a reverted-receipt error). It appears when the underlying failure carried a cause — e.g. a pre-send RPC/transport error, or a decoded custom-error revert (`NotCommitmentMaker` / `NonceMustIncrease`), whose viem error is preserved on `cause` and walked into `causeChain[]`.
+
+The on-chain leg has three distinguishable failure shapes — the `transaction` effect's `status` (and `txHash` presence) tells them apart, so agents never blind-retry a tx that may have already moved funds:
+
+| On-chain leg outcome | effect `status` | effect `txHash` | Notes |
+|---|---|---|---|
+| Reverted on inclusion | `reverted` | present | tx mined + reverted (gas spent). `errors[].details.receiptStatus: 'reverted'`. |
+| Broadcast, receipt-wait timed out | `submitted` | present | tx MAY still be mined — on-chain status UNKNOWN. No `receiptStatus`. Poll `txHash` before retrying. |
+| Pre-send failure (e.g. `NotCommitmentMaker` caught at gas estimation, RPC error before broadcast) | omitted | omitted | no tx was sent; nothing reverted on-chain. |
 
 Top-level `ok` tracks the requested **domain outcome** — true when the command achieved what was asked. Exit code follows.
 

@@ -146,12 +146,19 @@ export async function ensureSpeculationSettled(
   }
 }
 
-/** Pull a receipt-level revert tx hash off a caught error.
- * `broadcastSignedTx` throws `OspexChainError({ txHash })` for a reverted
- * receipt; pre-send (`estimateGas`) reverts carry no `txHash`. */
+/** Pull the tx hash off a caught error ONLY when it carries a *proven
+ * reverted receipt*. A bare `txHash` is NOT sufficient: `broadcastSignedTx`
+ * also attaches a `txHash` (with NO receipt) when the receipt wait times out
+ * after a successful broadcast — that tx may actually have mined
+ * successfully, so surfacing it as `revertedTxHash` would mis-account a
+ * possibly-successful settle as reverted. Keying on `receipt?.status ===
+ * 'reverted'` (the authoritative on-chain revert signal) mirrors the
+ * claim-side `revertedReceiptOf` in ensureClaimed.ts. A wait-timeout that
+ * recovers via the post-read still resolves `recovered` — it just doesn't
+ * claim a revert it can't prove. */
 function revertTxHashOf(err: unknown): Hash | undefined {
-  return err instanceof OspexChainError && err.txHash !== undefined
-    ? (err.txHash as Hash)
+  return err instanceof OspexChainError && err.receipt?.status === 'reverted'
+    ? (err.receipt.transactionHash as Hash)
     : undefined;
 }
 

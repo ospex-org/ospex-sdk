@@ -102,9 +102,26 @@ export async function sendWithMatchingErrorClassification<T>(
   } catch (err) {
     const reason = classifyMatchingModuleRevert(err);
     if (reason) {
+      // Forward any structured tx fields the original error already carried
+      // (a reverted-receipt's txHash + receipt, or the M2 wait-timeout's
+      // txHash-without-receipt) so this typed re-wrap never drops a broadcast
+      // hash. A matched reason usually comes from a pre-send (estimateGas)
+      // revert with no txHash, but an inclusion-time revert can also surface a
+      // recognizable selector — its hash must survive. Mirrors the txHash
+      // protection the unmatched `instanceof OspexChainError` re-throw below
+      // already gives.
       throw new OspexChainError(
         `${actionLabel} reverted: ${REASON_HUMAN_MESSAGE[reason]}`,
-        { reason, cause: err },
+        {
+          reason,
+          cause: err,
+          ...(err instanceof OspexChainError && err.txHash !== undefined
+            ? { txHash: err.txHash }
+            : {}),
+          ...(err instanceof OspexChainError && err.receipt !== undefined
+            ? { receipt: err.receipt }
+            : {}),
+        },
       );
     }
     if (err instanceof OspexChainError) throw err;

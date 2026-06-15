@@ -358,6 +358,50 @@ describe('errorToAgentError', () => {
     });
   });
 
+  // M3: the failure envelope must carry receipt.status — the discriminator
+  // between a reverted tx and a confirmed-but-post-parse-failed tx. Without
+  // it, an agent's retry table mislabels a SUCCESSFUL claim as "tx reverted".
+  it('surfaces receiptStatus + receiptBlockNumber for a reverted-on-inclusion OspexChainError', () => {
+    const err = new OspexChainError('Transaction reverted on-chain.', {
+      txHash: '0xreverted',
+      receipt: { status: 'reverted', blockNumber: 1234n } as never,
+    });
+    const out = errorToAgentError(err);
+    expect(out.details).toMatchObject({
+      txHash: '0xreverted',
+      receiptStatus: 'reverted',
+      receiptBlockNumber: '1234',
+    });
+  });
+
+  it('surfaces receiptStatus:"success" for a confirmed-but-unparsed OspexChainError (NOT a revert)', () => {
+    const err = new OspexChainError('tx confirmed but POSITION_CLAIMED event missing', {
+      txHash: '0xclaimed',
+      receipt: { status: 'success', blockNumber: 5678n } as never,
+    });
+    const out = errorToAgentError(err);
+    const details = out.details as { receiptStatus?: string };
+    // The confirmed claim must NOT read as reverted — this is the exact
+    // mislabel M3 exists to prevent.
+    expect(details.receiptStatus).toBe('success');
+  });
+
+  it('omits receiptStatus when the OspexChainError carries a txHash but no receipt (status UNKNOWN)', () => {
+    // The M2 receipt-wait-timeout shape: broadcast landed a hash, no receipt.
+    // NOTE: this is an OVER-CLAIM guard (it would catch new code wrongly
+    // surfacing a receiptStatus on a no-receipt error), not a fix-pin — it
+    // passes on pre-M3 code too. The discriminating M3 behavior (receipt
+    // PRESENT ⇒ receiptStatus surfaced) is pinned by the two sibling tests
+    // above. The pair together pins the present-vs-absent contrast.
+    const err = new OspexChainError('broadcast ok, receipt wait failed', {
+      txHash: '0xpending',
+    });
+    const out = errorToAgentError(err);
+    const details = out.details as { txHash?: string; receiptStatus?: string };
+    expect(details.txHash).toBe('0xpending');
+    expect(details.receiptStatus).toBeUndefined();
+  });
+
   it('OspexAllowanceError surfaces required/current/spender/token via details', () => {
     const err = new OspexAllowanceError('short', {
       required: 25_000_000n,

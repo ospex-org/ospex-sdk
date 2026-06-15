@@ -367,10 +367,13 @@ export function emitJsonFailure(args: EmitJsonFailureArgs): void {
  * `Error`s fall back to `UNKNOWN_ERROR` so the envelope's
  * structured-error contract holds even on unexpected throws.
  *
- * For OspexChainError specifically the `txHash` (when present on a
- * reverted send) and `reason` are surfaced under `details` so agents
- * can recover the on-chain location of the failure without parsing
- * the message text.
+ * For OspexChainError specifically the `txHash` (present whenever a tx
+ * was broadcast — a revert, a confirmed-but-unparsed send, OR a
+ * receipt-wait timeout), `receiptStatus` (`'success'` | `'reverted'`,
+ * the discriminator between those cases; absent when no receipt was
+ * observed), and `reason` are surfaced under `details` so agents can
+ * recover the on-chain location AND outcome of the failure without
+ * parsing the message text.
  *
  * `err.cause` (ES2022 Error.cause) is walked into
  * `details.causeChain[]` (sanitized) — this is the only path that
@@ -524,6 +527,7 @@ function extractOspexErrorDetails(err: OspexError): Record<string, unknown> | un
     reason?: string;
     revertReason?: string;
     txHash?: string;
+    receipt?: unknown;
     field?: string;
     apiCode?: string;
     status?: number;
@@ -552,6 +556,25 @@ function extractOspexErrorDetails(err: OspexError): Record<string, unknown> | un
     out.revertReason = sanitizeUntargetedMessage(e.revertReason);
   }
   if (typeof e.txHash === 'string') out.txHash = e.txHash;
+  // `receipt.status` is the discriminator `OspexChainError` deliberately
+  // attaches (errors.ts): `'reverted'` = the tx reverted on-chain;
+  // `'success'` = the tx CONFIRMED but a post-send step (event parse)
+  // failed; a wait-timeout error carries a txHash but NO receipt (status
+  // UNKNOWN). Without `receiptStatus` in the envelope, a confirmed claim
+  // whose payout couldn't be parsed is indistinguishable from a reverted
+  // tx, and the retry table mislabels a SUCCESSFUL claim as "landed
+  // reverted." Agents MUST branch on `receiptStatus`, not txHash presence.
+  // `receiptBlockNumber` aids on-chain lookup + POL accounting. Defensive
+  // structural read — only known receipt shapes are surfaced.
+  if (e.receipt !== null && typeof e.receipt === 'object') {
+    const receipt = e.receipt as { status?: unknown; blockNumber?: unknown };
+    if (receipt.status === 'success' || receipt.status === 'reverted') {
+      out.receiptStatus = receipt.status;
+    }
+    if (typeof receipt.blockNumber === 'bigint') {
+      out.receiptBlockNumber = receipt.blockNumber.toString();
+    }
+  }
   if (typeof e.field === 'string') out.field = e.field;
   if (typeof e.apiCode === 'string') out.apiCode = e.apiCode;
   if (typeof e.status === 'number') out.status = e.status;

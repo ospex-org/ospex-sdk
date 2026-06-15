@@ -96,7 +96,9 @@ function makeSettledLog(
 }
 
 interface PlannedTx {
-  status: 'success' | 'reverted';
+  /** `'wait-timeout'`: the broadcast succeeds but `waitForTransactionReceipt`
+   * rejects (the M2 shape) — the leg's error carries a txHash but NO receipt. */
+  status: 'success' | 'reverted' | 'wait-timeout';
   logs: Array<{ address: `0x${string}`; topics: Hash[]; data: `0x${string}` }>;
 }
 
@@ -151,6 +153,14 @@ function fakeContext({
       txIndex += 1;
       if (!planned) {
         throw new Error(`unexpected tx ${hash} (index ${txIndex - 1})`);
+      }
+      if (planned.status === 'wait-timeout') {
+        // Broadcast succeeded (sendRawTransaction returned a hash) but the
+        // receipt wait fails — the M2 shape. broadcastSignedTx throws
+        // OspexChainError({ txHash }) with NO receipt.
+        throw Object.assign(new Error('wait timed out'), {
+          name: 'WaitForTransactionReceiptTimeoutError',
+        });
       }
       return {
         status: planned.status,
@@ -926,6 +936,45 @@ describe('positions.claimAll', () => {
     expect(result.totals.claimedFresh).toBe(0);
     expect(result.totals.alreadyClaimed).toBe(0);
     expect(result.totals.recoveredAlreadyClaimed).toBe(0);
+    expect(result.totals.totalPayoutWei6).toBe('0');
+  });
+
+  // M2 regression: a claim leg whose receipt wait times out (broadcast ok, no
+  // receipt) must fail the entry, KEEP the txHash for audit, and record
+  // txStatus UNDEFINED — never 'reverted'. The tx may still be mined; tagging
+  // it reverted would mis-account a possibly-successful claim. (failedStep
+  // sets txHash from err.txHash but leaves txStatus unset when err.receipt is
+  // absent.)
+  it('a receipt-wait-timeout claim keeps txHash but leaves txStatus undefined on the failed step (M2)', async () => {
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `1_${SIGNER_ADDR}_0`,
+            speculationId: '1',
+            description: 'Broadcast ok, receipt wait timed out',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 10,
+            estimatedPayoutWei6: '10000000',
+            txParams: [
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '1', positionType: 0 } },
+            ],
+          },
+        ],
+      },
+      specStates: { '1': [{ claimed: false }] }, // pre-flight unclaimed
+      plannedTxs: [{ status: 'wait-timeout', logs: [] }],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+    expect(result.entries[0]!.success).toBe(false);
+    const step = result.entries[0]!.steps[0]!;
+    expect(step.outcome).toBe('failed');
+    expect(step.txHash).toBeDefined(); // hash preserved for reconciliation
+    expect(step.txStatus).toBeUndefined(); // status UNKNOWN — not reverted
+    // No payout booked, not counted as a successful/recovered claim.
     expect(result.totals.totalPayoutWei6).toBe('0');
   });
 

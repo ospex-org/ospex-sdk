@@ -60,13 +60,41 @@ export function createReadClient(rpcUrl: string, chainId: ChainId): PublicClient
  * a success. We treat anything other than `'success'` as a chain error
  * here, with the txHash attached so the caller can investigate on
  * Polygonscan.
+ *
+ * The receipt WAIT itself can fail after a successful broadcast — viem's
+ * default 180s timeout elapses, or the transport drops mid-poll. The
+ * broadcast still landed a txHash and the tx MAY still be mined, so the
+ * error carries the txHash (but NO receipt: on-chain status is UNKNOWN,
+ * not reverted). Without it the txHash dies in this stack frame and the
+ * failure envelope steers an agent toward an unsafe blind retry of a tx
+ * that may already be confirming. Three distinguishable shapes result —
+ * branch on receipt presence/status, never on txHash alone:
+ *   - txHash + `receipt.status === 'reverted'` — tx reverted on-chain.
+ *   - txHash + no receipt — broadcast landed, receipt not observed; UNKNOWN.
+ *   - no txHash — broadcast itself failed (no hash from the transport).
  */
 export async function broadcastSignedTx(
   publicClient: PublicClient,
   serializedTransaction: ViemHex,
 ): Promise<{ txHash: Hash; receipt: TransactionReceipt }> {
   const txHash = await publicClient.sendRawTransaction({ serializedTransaction });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+  let receipt: TransactionReceipt;
+  try {
+    receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+  } catch (err) {
+    // Broadcast SUCCEEDED (we hold a txHash) but waiting for the receipt
+    // failed — wait timeout or transport drop mid-poll. Attach the txHash
+    // (NO receipt) so the caller can reconcile on-chain and never
+    // blind-retries a tx that may already be landing. `cause` is preserved
+    // so the CLI's cause-chain walker can still classify timeout vs
+    // transport. `buildSignAndSend` re-throws OspexChainError untouched, so
+    // the txHash survives the wrap.
+    throw new OspexChainError(
+      'Transaction was broadcast but waiting for its receipt failed; the ' +
+        'transaction may still be mined. Inspect the txHash on-chain before retrying.',
+      { txHash, cause: err },
+    );
+  }
   if (receipt.status !== 'success') {
     // Carry the receipt, not just the hash. Here `receipt.status` is
     // `'reverted'` — the authoritative "this tx reverted on-chain" signal —
