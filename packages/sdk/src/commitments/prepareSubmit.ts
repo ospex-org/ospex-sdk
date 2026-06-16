@@ -36,7 +36,7 @@ import { SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6 } from '../contracts/constant
 import { resolveSide, type ContestContextForResolve } from './resolveSide.js';
 import { readAllowance } from './allowance.js';
 import { readNonceFloor } from './nonce.js';
-import { nowUnixSec } from './validation.js';
+import { nowUnixSec, validateCommitmentLineTicks } from './validation.js';
 import { deriveSpeculationKey } from '../chain/eip712.js';
 import { OspexValidationError } from '../errors.js';
 import type { CommitmentsContext } from './context.js';
@@ -155,6 +155,15 @@ export async function prepareSubmit(
         'Math.abs(lineTicks)) would not match the EIP-712 raw tuple.',
     );
   }
+
+  // ── 6b. Line magnitude bound (fund-lock guard) ─────────────────────
+  // Final chokepoint on the protocol-side lineTicks the commitment will be
+  // signed against — catches BOTH a user `--line` (already screened by
+  // lineDecimalToTicks) AND a poisoned value sourced from a pinned/existing
+  // speculation row, which `lineDecimalToTicks` never sees. An out-of-range
+  // line overflows the spread scorer and permanently locks both sides' escrow
+  // at settlement, so refuse to sign it. See validation.ts MAX_LINE_TICKS.
+  validateCommitmentLineTicks(lineTicksProtocol);
 
   // ── 7. Speculation key + existing/lazy classification ──────────────
   const contestIdBig = parent.pinnedSpeculation

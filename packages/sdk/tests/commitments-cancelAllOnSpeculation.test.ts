@@ -21,6 +21,7 @@ import {
   type TransactionReceipt,
 } from 'viem';
 import { cancelAllOnSpeculation } from '../src/commitments/cancelAllOnSpeculation.js';
+import { MAX_LINE_TICKS } from '../src/commitments/validation.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import { deriveSpeculationKey } from '../src/chain/eip712.js';
 import { matchingModuleAbi } from '../src/contracts/abi/index.js';
@@ -210,6 +211,23 @@ describe('commitments.cancelAllOnSpeculation', () => {
     await expect(
       cancelAllOnSpeculation(ctx, { ...baseArgs, newMinNonce: 0n }),
     ).rejects.toMatchObject({ name: 'OspexValidationError', field: 'newMinNonce' });
+  });
+
+  it('ACCEPTS an out-of-magnitude lineTicks (recovery must reach any int32 key)', async () => {
+    // Self-defense path: a maker neutralizing an already-signed poisoned
+    // (|lineTicks| > MAX_LINE_TICKS) commitment on its exact key. This path
+    // uses the int32-only validateLineTicks, NOT the create/fill magnitude
+    // guard — so it must reach the on-chain raiseMinNonce, not reject. Pins the
+    // call site against a future swap to validateCommitmentLineTicks.
+    const { ctx, sentTxs } = fakeContext({ onChainFloor: 0n, rows: [] });
+    const result = await cancelAllOnSpeculation(ctx, {
+      contestId: CONTEST_ID,
+      scorer: SCORER,
+      lineTicks: MAX_LINE_TICKS + 1,
+      newMinNonce: 12_345n,
+    });
+    expect(result.newMinNonce).toBe(12_345n);
+    expect(sentTxs).toHaveLength(1);
   });
 
   it('explicit newMinNonce → sends raiseMinNonce with that exact value', async () => {

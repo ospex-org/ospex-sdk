@@ -27,6 +27,7 @@
 
 import { deriveSpeculationKey } from '../chain/eip712.js';
 import { OspexValidationError } from '../errors.js';
+import { validateCommitmentLineTicks } from './validation.js';
 import { buildMatchPreview } from './buildMatchPreview.js';
 import { readAllowance } from './allowance.js';
 import { requireVisibleCommitment } from './requireVisible.js';
@@ -107,6 +108,13 @@ export async function prepareMatch(
       first !== undefined ? { field: first } : undefined,
     );
   }
+
+  // Refuse to price (and ultimately fill) a poisoned line BEFORE any network
+  // read. An out-of-range `|lineTicks|` overflows the spread scorer and
+  // permanently locks both sides' escrow at settlement — a taker filling it
+  // would lock their own funds. `lineTicks` is non-null here (just screened by
+  // the missing-field check). See validation.ts MAX_LINE_TICKS.
+  validateCommitmentLineTicks(commitment.lineTicks as number);
 
   // ── 2. Fetch parent contest ───────────────────────────────────────
   const contestsApi = ctx.getContestsApi();

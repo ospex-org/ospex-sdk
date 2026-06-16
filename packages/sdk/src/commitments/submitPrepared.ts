@@ -29,6 +29,7 @@ import {
 } from '../chain/eip712.js';
 import { toCommitment } from '../api/commitments.js';
 import { requireVisibleCommitment } from './requireVisible.js';
+import { validateCommitmentLineTicks } from './validation.js';
 import { OspexValidationError } from '../errors.js';
 import type { CommitmentsContext } from './context.js';
 import type { SubmitPreview } from '../types/preview.js';
@@ -69,6 +70,15 @@ export async function submitPrepared(
     nonce: BigInt(preview.raw.nonce),
     expiry: BigInt(preview.raw.expiry),
   };
+
+  // Defense-in-depth: refuse to sign a preview whose line is out of the
+  // protocol magnitude bound, even if it was hand-built (bypassing
+  // prepareSubmit's chokepoint) or had its lineTicks edited to a value that
+  // happens to carry a matching speculationKey. An out-of-range line overflows
+  // the spread scorer and would permanently lock both sides' escrow. Mirrors
+  // the matchFromPreview backstop on the fill side. See validation.ts
+  // MAX_LINE_TICKS.
+  validateCommitmentLineTicks(message.lineTicks);
 
   // Defense-in-depth: re-derive the speculationKey from the same tuple
   // we're about to sign and cross-check `preview.raw.speculationKey`.

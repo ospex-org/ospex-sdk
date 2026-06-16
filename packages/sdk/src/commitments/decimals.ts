@@ -15,6 +15,7 @@
  */
 
 import { OspexValidationError } from '../errors.js';
+import { MAX_LINE_TICKS, commitmentLineTicksOutOfRange } from './validation.js';
 
 // ── Protocol bounds ────────────────────────────────────────────────────
 //
@@ -23,13 +24,13 @@ import { OspexValidationError } from '../errors.js';
 //   MIN_ODDS   = 101
 //   MAX_ODDS   = 10100
 //   riskAmount % ODDS_SCALE === 0
+// Line magnitude is bounded by MAX_LINE_TICKS (validation.ts) — see
+// lineDecimalToTicks.
 const ODDS_SCALE = 100;
 const MIN_ODDS_TICK = 101;
 const MAX_ODDS_TICK = 10100;
 const RISK_LOT_SIZE_WEI6 = 100n;
 const LINE_SCALE = 10;
-const INT32_MAX = 2_147_483_647;
-const INT32_MIN = -2_147_483_648;
 
 const REJECT_TOKENS = new Set(['', 'nan', 'infinity', '-infinity', '+infinity']);
 // Strict regex: optional leading '-', integer part, optional '.' + fractional part.
@@ -385,9 +386,10 @@ export function wei6ToDecimalUSDC(wei6: bigint): string {
  * Parse a decimal line (max 1 fractional digit) into the integer
  * `lineTicks` the contract uses (decimal × 10). Sign preserved.
  *
- *   "-3.5" → -35
- *   "8"    → 80
- *   "8.25" throws line_precision
+ *   "-3.5"     → -35
+ *   "8"        → 80
+ *   "8.25"     throws line_precision
+ *   "100000.1" throws line_out_of_range (|ticks| > MAX_LINE_TICKS)
  */
 export function lineDecimalToTicks(input: string): number {
   const { negative, intPart, fracPart } = parseDecimalParts(input, true);
@@ -400,8 +402,17 @@ export function lineDecimalToTicks(input: string): number {
     throw new OspexValidationError(`Line parse failed: "${input}".`);
   }
   if (negative) ticks = -ticks;
-  if (ticks < INT32_MIN || ticks > INT32_MAX) {
-    throw new OspexValidationError(`Line ticks ${ticks} outside int32 range.`);
+  // Mirror the protocol's MAX_LINE_TICKS magnitude bound (this is well inside
+  // int32). A line large enough to overflow the spread scorer would lock both
+  // sides' escrow at settlement, so fail fast before signing. See
+  // validation.ts MAX_LINE_TICKS.
+  if (commitmentLineTicksOutOfRange(ticks)) {
+    throw new OspexValidationError(
+      `Line "${input}" (${ticks} ticks) exceeds the protocol maximum |lineTicks| <= ${MAX_LINE_TICKS} ` +
+        `(±${MAX_LINE_TICKS / 10} points). Lines this large overflow the spread scorer and would ` +
+        `lock both sides' escrow at settlement.`,
+      { field: 'lineTicks' },
+    );
   }
   return ticks;
 }

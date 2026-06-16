@@ -17,6 +17,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { prepareMatch } from '../src/commitments/prepareMatch.js';
+import { MAX_LINE_TICKS } from '../src/commitments/validation.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
 import type { Hex, Signer } from '../src/types/signer.js';
@@ -232,6 +233,16 @@ describe('prepareMatch — input modes', () => {
     await expect(prepareMatch(ctx, { commitment: broken })).rejects.toThrow(
       /missing required fields.*signature/,
     );
+  });
+
+  it('refuses a poisoned line (|lineTicks| > MAX_LINE_TICKS) before any network read', async () => {
+    const poisoned = makeCommitment({ marketType: 'spread', lineTicks: MAX_LINE_TICKS + 1 });
+    const { ctx, contestsGet } = buildContext({ commitment: poisoned });
+    await expect(prepareMatch(ctx, { commitment: poisoned })).rejects.toMatchObject({
+      field: 'lineTicks',
+    });
+    // Fails fast — the parent contest is never fetched.
+    expect(contestsGet).not.toHaveBeenCalled();
   });
 });
 

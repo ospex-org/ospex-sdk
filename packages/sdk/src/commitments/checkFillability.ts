@@ -48,6 +48,7 @@
 
 import type { PublicClient } from 'viem';
 import { OspexAPIError, OspexConfigError, OspexValidationError } from '../errors.js';
+import { commitmentLineTicksOutOfRange } from './validation.js';
 import { readAllowance } from './allowance.js';
 import { prepareMatch, type PrepareMatchArgs } from './prepareMatch.js';
 import { erc20Abi } from '../contracts/abi/erc20.js';
@@ -103,6 +104,16 @@ export type FillabilityReasonCode =
   | 'NONCE_INVALIDATED'
   | 'NO_REMAINING_CAPACITY'
   | 'SPECULATION_CLOSED'
+  /**
+   * The commitment's `|lineTicks|` exceeds the protocol magnitude bound
+   * (`MAX_LINE_TICKS`). A line this large overflows the spread scorer, so once
+   * the contest is scored settlement reverts forever and BOTH sides' escrowed
+   * USDC are permanently locked with no recovery. Filling it would lock the
+   * taker's own funds — so it is definitively `not-fillable` for everyone,
+   * independent of any balance/allowance. A property of the signed commitment,
+   * decided with no chain read.
+   */
+  | 'LINE_TICKS_OUT_OF_RANGE'
   /**
    * The maker pulled the commitment off the public book (`book_visible=false`)
    * and the matchable payload (signature/nonce/odds/risk) is redacted from
@@ -196,6 +207,24 @@ export async function checkCommitmentFillability(
   }
   const commitment: PublicVisibleCommitment = resolved;
 
+  // ── 0b. Line-magnitude short-circuit (no chain or address access) ──
+  // An out-of-range `|lineTicks|` overflows the spread scorer and permanently
+  // locks both sides' escrow at settlement — so the row is definitively
+  // not-fillable for ANY taker, independent of funding. Like the redaction
+  // short-circuit this is a property of the SIGNED commitment (no chain read),
+  // so resolve it BEFORE `requireChainClient` / `getAddresses` — the verdict is
+  // produced even for callers without an RPC config, and an `OspexConfigError`
+  // is never raised ahead of it. `lineTicks` may be null on the public row
+  // (e.g. a malformed body); a null is left to the pricing step's
+  // missing-field handling below (surfaces as NOT_LIVE).
+  if (commitment.lineTicks !== null && commitmentLineTicksOutOfRange(commitment.lineTicks)) {
+    return result({
+      commitmentHash,
+      outcome: 'not-fillable',
+      reasons: [{ code: 'LINE_TICKS_OUT_OF_RANGE' }],
+    });
+  }
+
   // Fillability is fundamentally a chain-read feature from here on. Surface a
   // missing-rpcUrl config error immediately (consistent with the `ensure*`
   // primitives), rather than partway through after a liveness short-circuit
@@ -242,6 +271,11 @@ export async function checkCommitmentFillability(
           reasons: [{ code: 'NO_REMAINING_CAPACITY' }],
         });
       }
+      // NB: a `field: 'lineTicks'` error is NOT mapped to LINE_TICKS_OUT_OF_RANGE
+      // here. Every genuine out-of-range line is already caught by the 0b
+      // short-circuit above (before prepareMatch runs), so the only way
+      // prepareMatch throws `field: 'lineTicks'` is the missing-field case
+      // (`lineTicks: null`) — which is a NOT_LIVE condition, not a fund-lock.
       const code: FillabilityReasonCode =
         err.field === 'speculationId'
           ? 'SPECULATION_CLOSED'

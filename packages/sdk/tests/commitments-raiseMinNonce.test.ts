@@ -13,6 +13,7 @@ import {
   type TransactionReceipt,
 } from 'viem';
 import { raiseMinNonce } from '../src/commitments/raiseMinNonce.js';
+import { MAX_LINE_TICKS } from '../src/commitments/validation.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import { OspexChainError, OspexValidationError } from '../src/errors.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
@@ -101,6 +102,18 @@ describe('commitments.raiseMinNonce', () => {
     await expect(
       raiseMinNonce(ctx, { ...validArgs, scorer: '0xnope' as `0x${string}` }),
     ).rejects.toBeInstanceOf(OspexValidationError);
+  });
+
+  it('ACCEPTS an out-of-magnitude lineTicks (recovery must reach any int32 key)', async () => {
+    // A maker who already signed a poisoned (|lineTicks| > MAX_LINE_TICKS)
+    // commitment must be able to raise the nonce floor on that exact key to
+    // neutralize it on-chain before it can be matched. This path uses the
+    // int32-only validateLineTicks, NOT the create/fill magnitude guard — so it
+    // must reach the on-chain call, not reject. Pins the call site against a
+    // future swap to validateCommitmentLineTicks.
+    const { ctx } = fakeContext();
+    const result = await raiseMinNonce(ctx, { ...validArgs, lineTicks: MAX_LINE_TICKS + 1 });
+    expect(result.txHash).toMatch(/^0x[0-9a-f]{64}$/);
   });
 
   it('maps NonceMustIncrease structured revert to typed reason', async () => {

@@ -20,6 +20,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { type Hash, type PublicClient, type TransactionReceipt } from 'viem';
 import { matchFromPreview } from '../src/commitments/matchFromPreview.js';
 import { buildMatchPreview } from '../src/commitments/buildMatchPreview.js';
+import { MAX_LINE_TICKS } from '../src/commitments/validation.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import { OspexAllowanceError, OspexValidationError } from '../src/errors.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
@@ -251,6 +252,37 @@ describe('matchFromPreview — happy path', () => {
     expect(result.takerRisk).toBe(BigInt(preview.economics.takerRiskWei6));
     expect(result.fillMakerRisk).toBe(BigInt(preview.economics.fillMakerRiskWei6));
     expect(result.commitment.commitmentHash).toBe(HASH);
+  });
+});
+
+describe('matchFromPreview — line magnitude backstop', () => {
+  it('refuses a poisoned line at the final gate, even when every staleness check passes', async () => {
+    // A hand-built preview that bypassed prepareMatch's guard: the line is
+    // out-of-range but every re-validation (signed fields, status, expiry,
+    // remaining, speculation existence, allowance) is made to pass, so the
+    // backstop in step 7 is the only thing standing between it and a fill that
+    // would lock escrow forever.
+    const poisonedLine = MAX_LINE_TICKS + 1;
+    const poisoned = makeCommitment({ marketType: 'spread', lineTicks: poisonedLine });
+    const preview = buildPreview({
+      commitment: poisoned,
+      speculation: { mode: 'existing', speculationId: '101' },
+    });
+    const freshContest = buildContest({
+      speculations: [
+        {
+          speculationId: '101',
+          contestId: '42',
+          type: 'spread',
+          lineTicks: poisonedLine,
+          line: poisonedLine / 10,
+          speculationStatus: 0,
+        },
+      ],
+    });
+    const { ctx } = buildCtx({ freshCommitment: poisoned, freshContest });
+    // The guard runs before calldata is encoded or any tx is broadcast.
+    await expect(matchFromPreview(ctx, preview)).rejects.toMatchObject({ field: 'lineTicks' });
   });
 });
 
