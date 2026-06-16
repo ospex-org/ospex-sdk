@@ -13,7 +13,8 @@
  * can't back the maker's whole open book still posts more "liquidity" that will
  * revert at fill time. This check closes that gap.
  *
- * THE AGGREGATE MODEL — VISIBLE BOOK ONLY. The maker is on the hook for every
+ * THE AGGREGATE MODEL (DEFAULT SCOPE: VISIBLE BOOK ONLY; opt-in whole-book
+ * below). The maker is on the hook for every
  * one of their still-matchable commitments — each fill independently pulls its
  * own remaining maker risk from the same wallet via the same PositionModule
  * allowance — so the requirement is the SUM, not the new commitment alone:
@@ -189,7 +190,7 @@ export interface SubmitFundabilityReason {
   token?: Hex;
   /** The spender the allowance requirement targets (PositionModule / TreasuryModule). Allowance reasons only. */
   spender?: Hex;
-  /** Aggregate required amount (wei6) — the whole-visible-book sum, not the new commitment alone (hidden rows are out of scope; see `scope`). (For `EXISTING_LAZY_FEE_UNDETERMINED`, the maximum undeterminable existing lazy fee.) */
+  /** Aggregate required amount (wei6) over the verdict's `scope` — the whole VISIBLE book when `scope: 'visible-book-only'`, the whole book (visible + hidden) when `scope: 'whole-book'` — not the new commitment alone. (For `EXISTING_LAZY_FEE_UNDETERMINED`, the maximum undeterminable existing lazy fee.) */
   requiredWei6?: bigint;
   /** Current on-chain amount (wei6) that was read. Funding shortfall reasons only. */
   actualWei6?: bigint;
@@ -198,9 +199,9 @@ export interface SubmitFundabilityReason {
 export interface SubmitFundabilityRequirement {
   /** This submit's maker risk (PositionModule pull at match). */
   newCommitmentRiskWei6: bigint;
-  /** Σ remaining maker risk (`riskAmount − filled`) over the maker's API-visible open + partially-filled commitments. */
+  /** Σ remaining maker risk (`riskAmount − filled`) over the maker's open + partially-filled commitments WITHIN the verdict's `scope`: the API-visible book when `scope: 'visible-book-only'`, the whole (visible + hidden) book when `scope: 'whole-book'`. See `coverage` and the `existingVisible*`/`existingHidden*` breakdown for exact inclusion. */
   existingOpenRiskWei6: bigint;
-  /** Count of those existing open / partially-filled commitments. */
+  /** Count of those existing open / partially-filled commitments (within the verdict's `scope`). */
   existingOpenCommitmentCount: number;
   /** Maker's share of THIS submit's lazy creation fee (→ TreasuryModule); `0n` when this submit isn't lazy. */
   lazyCreationFeeWei6: bigint;
@@ -270,10 +271,12 @@ export interface CheckSubmitFundabilityResult {
   /** Block at which balances/allowances were read. Absent only when the block read failed. */
   checkedAtBlock?: bigint;
   /**
-   * The whole-visible-book requirement the verdict was computed against (hidden
-   * rows are out of scope; see `scope`). Present once the maker's existing open
-   * book was fetched — absent when that fetch failed (→ `unknown`), since the
-   * aggregate can't be computed without it.
+   * The aggregate requirement the verdict was computed against, over the achieved
+   * `scope` — the whole VISIBLE book (`scope: 'visible-book-only'`) or the whole
+   * book including hidden exposure (`scope: 'whole-book'`); see `coverage` and the
+   * `existingVisible*`/`existingHidden*` breakdown for exact inclusion. Present
+   * once the maker's existing book was fetched — absent when that fetch failed
+   * (→ `unknown`), since the aggregate can't be computed without it.
    */
   requirement?: SubmitFundabilityRequirement;
   reasons: SubmitFundabilityReason[];
