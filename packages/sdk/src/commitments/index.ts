@@ -357,6 +357,7 @@ export type {
   SubmitFundabilityReasonCode,
   SubmitFundabilityRequirement,
   SubmitFundabilityScope,
+  SubmitFundabilityCoverage,
 } from './checkSubmitFundability.js';
 export type {
   ResolveByPrefixOptions,

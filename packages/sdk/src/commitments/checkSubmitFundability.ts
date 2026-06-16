@@ -59,6 +59,24 @@
  * via the SDK/CLI whose whole book is public, the API book is everything they're
  * on the hook for.
  *
+ * OPT-IN WHOLE-BOOK MODE (`bookScope: 'whole-book'`). A maker who DOES keep
+ * book-hidden rows (e.g. a market-maker that off-chain-cancels as its routine
+ * quote-pull) can ask for a true whole-book verdict. In this mode the existing
+ * book is sourced from the owner-authenticated own-state snapshot — the maker's
+ * ENTIRE live book (visible + hidden, unredacted) from ONE consistent snapshot,
+ * not the public list plus a hidden add-on (one source ⇒ no timing skew, no
+ * double-count, no privacy leak). It requires a signer whose address matches
+ * `preview.raw.maker` (it mints one EIP-712 stream-auth token for the read; it
+ * still signs no transaction and allocates no nonce). On full success the result
+ * is `scope: 'whole-book'`. If the signer is missing/mismatched or the own-state
+ * read can't fully drain, the verdict NEVER falsely reports `fundable`: a definite
+ * visible/new-commitment shortfall still returns `not-fundable`, otherwise it
+ * degrades to `unknown` (`HIDDEN_EXPOSURE_UNKNOWN`) with `scope:
+ * 'visible-book-only'`. The default (no `bookScope`, or `'visible-book-only'`)
+ * stays signer-free and visible-book-only. The `coverage` field always reports
+ * exactly what was included (visible / hidden / source) so an agent can tell
+ * "hidden excluded by default" from "hidden attempted but unavailable."
+ *
  * It is ADVISORY: "fundable now, based on the latest reads" — never a guarantee.
  * Mirrors the `ensure*` family: a discriminated `outcome`, fields present only
  * when meaningful, and never a fabricated value — `not-fundable` and `unknown`
@@ -75,12 +93,25 @@ import { readAllowance } from './allowance.js';
 import { erc20Abi } from '../contracts/abi/erc20.js';
 import { SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6 } from '../contracts/constants.js';
 import { CommitmentsApi } from '../api/commitments.js';
+import { OwnStateApi } from '../api/ownState.js';
+import { mintStreamToken } from '../ownState/auth.js';
+import { decodeSnapshot } from '../ownState/snapshot.js';
 import type { CommitmentsContext } from './context.js';
 import type { SubmitPreview } from '../types/preview.js';
-import type { Hex } from '../types/signer.js';
+import type { Hex, Signer } from '../types/signer.js';
 
 /** One page of the maker's open-book scan — the Supabase row cap (`list` paginates above it). */
 const EXISTING_RISK_PAGE = 1000;
+
+/**
+ * Defensive page cap for the whole-book own-state drain. Matches the same bound
+ * used by the other own-state drainers (`ownState/getCommitment.ts`,
+ * `ownState/subscribe.ts`); the server serves up to 5000 commitments/page, so 50
+ * pages is far beyond any real single-maker book. If the snapshot is STILL
+ * truncated after this many pages, the whole-book fetch returns `null` (→ verdict
+ * degrades to `unknown`) rather than a partial, under-counted sum.
+ */
+const MAX_SNAPSHOT_PAGES = 50;
 
 export interface CheckSubmitFundabilityArgs {
   /**
@@ -90,6 +121,18 @@ export interface CheckSubmitFundabilityArgs {
    * same preview flows on to `submitPrepared` unchanged.
    */
   preview: SubmitPreview;
+  /**
+   * Which slice of the maker's existing book to aggregate. Default
+   * `'visible-book-only'`: sums the public (book_visible=true) list, signer-free
+   * — book-hidden rows are out of scope (see the file header). `'whole-book'`
+   * opts into the owner-authenticated own-state path that ALSO counts the maker's
+   * book-hidden but still-on-chain-matchable rows; it requires a signer matching
+   * `preview.raw.maker` (mints one EIP-712 stream-auth token, signs no tx). The
+   * RESULT's `scope` reports what was actually achieved — it stays
+   * `'visible-book-only'` if the own-state read was unavailable (then the verdict
+   * degrades to `unknown` rather than a possibly-optimistic `fundable`).
+   */
+  bookScope?: SubmitFundabilityScope;
 }
 
 export type SubmitFundabilityOutcome =
@@ -101,15 +144,25 @@ export type SubmitFundabilityOutcome =
   | 'unknown';
 
 /**
- * The book the verdict was computed over. Always `'visible-book-only'` today:
- * the aggregate sums the maker's API-visible open book, which the public list
- * filters to `book_visible=true`. Book-hidden (`book_visible=false`) but
- * still-on-chain-matchable rows are NOT summed and do NOT degrade the verdict —
- * they are outside this scope (see the file header). Read hidden exposure from
- * the owner-auth own-state surface. A future own-state-sourced mode could widen
- * this to a whole-book scope.
+ * The book the verdict was actually computed over.
+ *
+ * - `'visible-book-only'` — the aggregate summed only the maker's API-visible
+ *   open book (public list, `book_visible=true`). Book-hidden but
+ *   still-on-chain-matchable rows are NOT included (read hidden exposure from the
+ *   owner-auth own-state surface). This is the default, and also the fallback
+ *   scope when `bookScope: 'whole-book'` was requested but the own-state read was
+ *   unavailable — distinguish the two via `coverage.hidden`
+ *   (`'excluded'` vs `'unknown'`).
+ * - `'whole-book'` — the aggregate summed the maker's ENTIRE live book (visible +
+ *   hidden, unredacted) from a fully-drained owner-auth own-state snapshot. Only
+ *   reported on a complete, successful own-state read in `bookScope: 'whole-book'`
+ *   mode.
+ *
+ * Used both as the `bookScope` REQUEST on the args and the ACHIEVED scope on the
+ * result; they can differ (request whole-book, achieve visible-book-only on
+ * own-state failure) — `coverage` records the gap.
  */
-export type SubmitFundabilityScope = 'visible-book-only';
+export type SubmitFundabilityScope = 'visible-book-only' | 'whole-book';
 
 export type SubmitFundabilityReasonCode =
   | 'MAKER_USDC_BALANCE_INSUFFICIENT'
@@ -120,6 +173,13 @@ export type SubmitFundabilityReasonCode =
    * (whose speculations may or may not be created yet) — can't tell without a
    * per-speculation lookup, so the verdict is `unknown` rather than a risky `fundable`. */
   | 'EXISTING_LAZY_FEE_UNDETERMINED'
+  /** `bookScope: 'whole-book'` was requested but the maker's hidden exposure
+   * could not be sourced from own-state (no signer / signer ≠ maker / token mint
+   * or snapshot read failed / the snapshot could not be fully drained). The
+   * verdict degrades to `unknown` rather than report a `fundable` that omits
+   * hidden exposure — never a false `fundable`. (`coverage.hidden` is `'unknown'`
+   * here.) */
+  | 'HIDDEN_EXPOSURE_UNKNOWN'
   /** A chain read or the open-book list failed — advisory, never a false not-fundable. */
   | 'FUNDABILITY_UNKNOWN';
 
@@ -156,6 +216,34 @@ export interface SubmitFundabilityRequirement {
   positionAllowanceRequiredWei6: bigint;
   /** Aggregate maker→TreasuryModule allowance needed (lower bound): this submit's lazy fee. The upper bound adds `existingLazyFeeMaxWei6`. */
   treasuryAllowanceRequiredWei6: bigint;
+  /** Visible (book_visible=true) portion of `existingOpenRiskWei6`. Present only on a `whole-book` (`scope: 'whole-book'`) verdict, where visible + hidden are summed separately from one own-state snapshot. */
+  existingVisibleOpenRiskWei6?: bigint;
+  /** Count of the visible open / partially-filled commitments. Present only on a `whole-book` verdict. */
+  existingVisibleOpenCommitmentCount?: number;
+  /** Book-hidden (book_visible=false) but still-on-chain-matchable portion of `existingOpenRiskWei6` — the exposure the default visible-book-only check cannot see. Present only on a `whole-book` verdict. */
+  existingHiddenOpenRiskWei6?: bigint;
+  /** Count of the hidden open / partially-filled commitments. Present only on a `whole-book` verdict. */
+  existingHiddenOpenCommitmentCount?: number;
+}
+
+/**
+ * What the verdict's aggregate actually covered. Always present, so an agent can
+ * tell "hidden excluded by default" (`hidden: 'excluded'`) from "hidden attempted
+ * but unavailable" (`hidden: 'unknown'`, the own-state read failed) from "hidden
+ * fully included" (`hidden: 'included'`) — never relying on the `scope` string alone.
+ */
+export interface SubmitFundabilityCoverage {
+  /** `'included'` when the visible book was read successfully; `'unknown'` when that read failed. */
+  visible: 'included' | 'unknown';
+  /**
+   * `'excluded'` — default visible-book-only mode; hidden rows were never
+   * attempted. `'included'` — `whole-book` mode drained own-state and summed the
+   * maker's hidden rows. `'unknown'` — `whole-book` was requested but the
+   * own-state read was unavailable, so hidden exposure could not be counted.
+   */
+  hidden: 'excluded' | 'included' | 'unknown';
+  /** Where the existing-book aggregate was sourced: the anonymous public list, the owner-auth own-state snapshot, or a mix (own-state attempted, visible fell back to the public list). */
+  source: 'public-commitments' | 'own-state' | 'mixed';
 }
 
 export interface CheckSubmitFundabilityResult {
@@ -165,11 +253,18 @@ export interface CheckSubmitFundabilityResult {
   fundableNow: boolean;
   outcome: SubmitFundabilityOutcome;
   /**
-   * The book scope the verdict covers — always `'visible-book-only'` today.
-   * Hidden (`book_visible=false`) but on-chain-matchable rows are not summed and
-   * do not degrade the verdict; read owner-auth own-state for hidden exposure.
+   * The book scope the verdict was actually computed over — `'visible-book-only'`
+   * (default, or a `whole-book` request that fell back on own-state failure) or
+   * `'whole-book'` (own-state fully drained). See `coverage` for the precise
+   * visible/hidden breakdown behind this label.
    */
   scope: SubmitFundabilityScope;
+  /**
+   * Exactly what the aggregate covered (visible / hidden / source) — always
+   * present. Lets an agent distinguish "hidden excluded by default" from "hidden
+   * attempted but unavailable" without inferring from `scope` alone.
+   */
+  coverage: SubmitFundabilityCoverage;
   /** Always true — a point-in-time advisory, never a guarantee. */
   advisory: true;
   /** Block at which balances/allowances were read. Absent only when the block read failed. */
@@ -199,6 +294,7 @@ export async function checkSubmitFundability(
   const { preview } = args;
   const maker = preview.raw.maker.toLowerCase() as Hex;
   const newKey = preview.raw.speculationKey.toLowerCase();
+  const wantWholeBook = (args.bookScope ?? 'visible-book-only') === 'whole-book';
 
   // The new commitment's maker risk comes off the preview's PositionModule
   // 'commitment-risk' approval row; its lazy creation fee (if any) is the
@@ -211,12 +307,16 @@ export async function checkSubmitFundability(
   const lazyCreation = preview.submitAction === 'trade-and-create-speculation';
   const newLazyFeeWei6 = lazyCreation ? makerCreationFeeShareWei6 : 0n;
 
-  // All reads in parallel. Treasury allowance is read whenever the chain has a
-  // creation fee — it bounds BOTH this submit's lazy fee AND the existing
-  // maybe-lazy fees (computed from the list below). Every read degrades to null
-  // on failure so a flaky read never produces a false `fundable`.
-  const [existing, balance, positionAllowance, treasuryAllowance, block] = await Promise.all([
-    tryFetchExistingOpenRisk(ctx, maker, newKey),
+  // All reads in parallel. The existing-book source depends on bookScope:
+  // whole-book drains the owner-auth own-state snapshot (visible + hidden);
+  // the default reads the public visible-book list. Treasury allowance is read
+  // whenever the chain has a creation fee — it bounds BOTH this submit's lazy fee
+  // AND the existing maybe-lazy fees. Every read degrades to null on failure so a
+  // flaky read never produces a false `fundable`.
+  const [primaryExisting, balance, positionAllowance, treasuryAllowance, block] = await Promise.all([
+    wantWholeBook
+      ? tryFetchWholeBookFromOwnState(ctx, maker, newKey)
+      : tryFetchExistingOpenRisk(ctx, maker, newKey),
     tryReadUsdcBalance(publicClient, usdc, maker),
     tryReadAllowance(publicClient, usdc, maker, positionModule),
     makerCreationFeeShareWei6 > 0n
@@ -225,6 +325,35 @@ export async function checkSubmitFundability(
     tryReadBlockNumber(publicClient),
   ]);
   const checkedAtBlock = block ?? undefined;
+
+  // Resolve the existing-book result, the ACHIEVED scope, and coverage. On a
+  // whole-book request the own-state read is the single source (one consistent
+  // snapshot of visible + hidden — no list/own-state skew or double-count). If it
+  // is unavailable we fall back to the public visible list ONLY to still catch a
+  // definite shortfall; the verdict then degrades to `unknown` (never a `fundable`
+  // that silently omits hidden exposure).
+  let existing = primaryExisting;
+  let scope: SubmitFundabilityScope = 'visible-book-only';
+  let coverage: SubmitFundabilityCoverage;
+  let hiddenUnavailable = false;
+  if (!wantWholeBook) {
+    coverage = {
+      visible: existing === null ? 'unknown' : 'included',
+      hidden: 'excluded',
+      source: 'public-commitments',
+    };
+  } else if (existing !== null) {
+    scope = 'whole-book';
+    coverage = { visible: 'included', hidden: 'included', source: 'own-state' };
+  } else {
+    existing = await tryFetchExistingOpenRisk(ctx, maker, newKey);
+    hiddenUnavailable = true;
+    coverage = {
+      visible: existing === null ? 'unknown' : 'included',
+      hidden: 'unknown',
+      source: 'mixed',
+    };
+  }
 
   // When the existing-book fetch failed, `existingRiskWei6` is 0 — the
   // requirements below become the new-commitment-only LOWER bound, so a
@@ -303,13 +432,38 @@ export async function checkSubmitFundability(
           balanceRequiredWei6,
           positionAllowanceRequiredWei6,
           treasuryAllowanceRequiredWei6,
+          // Visible/hidden breakdown is only meaningful on a whole-book verdict,
+          // where own-state summed the two slices separately.
+          ...(existing.breakdown !== undefined
+            ? {
+                existingVisibleOpenRiskWei6: existing.breakdown.visibleRiskWei6,
+                existingVisibleOpenCommitmentCount: existing.breakdown.visibleCount,
+                existingHiddenOpenRiskWei6: existing.breakdown.hiddenRiskWei6,
+                existingHiddenOpenCommitmentCount: existing.breakdown.hiddenCount,
+              }
+            : {}),
         };
 
   // A definite shortfall from a successful read is proof the book can't be
-  // backed — even on a list failure (the new-commitment lower bound) or when
-  // another read failed.
+  // backed — even on a list failure (the new-commitment lower bound), an
+  // unavailable own-state read, or when another read failed.
   if (reasons.length > 0) {
-    return result({ maker, outcome: 'not-fundable', reasons, requirement, checkedAtBlock });
+    return result({ maker, outcome: 'not-fundable', reasons, requirement, scope, coverage, checkedAtBlock });
+  }
+  // `whole-book` was requested but the maker's hidden exposure couldn't be sourced
+  // (no/mismatched signer, or the own-state read couldn't fully drain). No definite
+  // shortfall was found, but a `fundable` here would silently omit hidden exposure —
+  // degrade to `unknown` instead. `coverage.hidden` is `'unknown'`.
+  if (hiddenUnavailable) {
+    return result({
+      maker,
+      outcome: 'unknown',
+      reasons: [{ code: 'HIDDEN_EXPOSURE_UNKNOWN' }],
+      requirement,
+      scope,
+      coverage,
+      checkedAtBlock,
+    });
   }
   // No definite shortfall. Without the existing book we can't form the aggregate
   // (it could be arbitrarily large) → unknown.
@@ -318,6 +472,8 @@ export async function checkSubmitFundability(
       maker,
       outcome: 'unknown',
       reasons: [{ code: 'FUNDABILITY_UNKNOWN' }],
+      scope,
+      coverage,
       checkedAtBlock,
     });
   }
@@ -327,6 +483,8 @@ export async function checkSubmitFundability(
       outcome: 'unknown',
       reasons: [{ code: 'FUNDABILITY_UNKNOWN' }],
       requirement,
+      scope,
+      coverage,
       checkedAtBlock,
     });
   }
@@ -336,18 +494,41 @@ export async function checkSubmitFundability(
       outcome: 'unknown',
       reasons: [{ code: 'EXISTING_LAZY_FEE_UNDETERMINED', token: usdc, requiredWei6: existingLazyFeeMaxWei6 }],
       requirement,
+      scope,
+      coverage,
       checkedAtBlock,
     });
   }
-  return result({ maker, outcome: 'fundable', reasons: [], requirement, checkedAtBlock });
+  return result({ maker, outcome: 'fundable', reasons: [], requirement, scope, coverage, checkedAtBlock });
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
+
+/**
+ * The maker's existing open-book aggregate, however sourced. `riskWei6` is Σ
+ * remaining maker risk; `maybeLazyKeyCount` is the number of distinct
+ * not-yet-disambiguated `open` speculation keys (each MIGHT owe a creation-fee
+ * share). `breakdown` is present ONLY when sourced from own-state (whole-book
+ * mode), splitting the aggregate into its visible and hidden halves.
+ */
+interface ExistingBook {
+  riskWei6: bigint;
+  count: number;
+  maybeLazyKeyCount: number;
+  breakdown?: {
+    visibleRiskWei6: bigint;
+    visibleCount: number;
+    hiddenRiskWei6: bigint;
+    hiddenCount: number;
+  };
+}
 
 function result(args: {
   maker: Hex;
   outcome: SubmitFundabilityOutcome;
   reasons: SubmitFundabilityReason[];
+  scope: SubmitFundabilityScope;
+  coverage: SubmitFundabilityCoverage;
   // `| undefined` (not just `?`) so callers can pass the maybe-undefined `requirement`
   // directly under `exactOptionalPropertyTypes`; the body assigns it only when present.
   requirement?: SubmitFundabilityRequirement | undefined;
@@ -357,7 +538,8 @@ function result(args: {
     maker: args.maker,
     fundableNow: args.outcome === 'fundable',
     outcome: args.outcome,
-    scope: 'visible-book-only',
+    scope: args.scope,
+    coverage: args.coverage,
     advisory: true,
     reasons: args.reasons,
   };
@@ -384,7 +566,7 @@ async function tryFetchExistingOpenRisk(
   ctx: CommitmentsContext,
   maker: Hex,
   newKey: string,
-): Promise<{ riskWei6: bigint; count: number; maybeLazyKeyCount: number } | null> {
+): Promise<ExistingBook | null> {
   const api = new CommitmentsApi(ctx.api);
   let riskWei6 = 0n;
   let count = 0;
@@ -433,6 +615,105 @@ async function tryFetchExistingOpenRisk(
     }
     return { riskWei6, count, maybeLazyKeyCount: maybeLazyKeys.size };
   } catch {
+    return null;
+  }
+}
+
+/**
+ * Whole-book existing risk for `bookScope: 'whole-book'`: the maker's ENTIRE live
+ * book (visible + hidden, unredacted) summed from the owner-authenticated
+ * own-state snapshot — one consistent source, so no public-list/own-state timing
+ * skew or double-count. Mirrors `ownState/getCommitment.ts`'s drainer: require a
+ * signer, mint ONE stream-auth token (the EIP-712 read challenge — no tx, no
+ * nonce), then loop `OwnStateApi.snapshot(token, { cursor })` + `decodeSnapshot`
+ * while `truncated`, accumulating over each page's live commitments.
+ *
+ * Returns `null` (→ caller degrades to `unknown`, never a false `fundable`) on ANY
+ * inability to produce a COMPLETE aggregate: no configured signer, signer address
+ * ≠ `maker` (we'd be reading the wrong book), token mint / snapshot read / decode
+ * failure, or the snapshot still truncated after `MAX_SNAPSHOT_PAGES` (a partial
+ * sum would under-count). Liveness uses the decode-stamped `OwnerCommitment.isLive`
+ * (the shared owner liveness predicate); rows are de-duplicated by commitment hash
+ * across pages. The new commitment's own speculation key is excluded from the
+ * maybe-lazy set (its fee is already in the lower bound); a live `open` row with a
+ * null `speculationKey` can't be disambiguated, so it is counted as its OWN
+ * maybe-lazy key (upper bound) rather than ignored — never an optimistic verdict.
+ */
+async function tryFetchWholeBookFromOwnState(
+  ctx: CommitmentsContext,
+  maker: Hex,
+  newKey: string,
+): Promise<ExistingBook | null> {
+  let signer: Signer;
+  try {
+    signer = ctx.requireSigner();
+  } catch {
+    // No signer configured — whole-book mode can't authenticate the own-state read.
+    return null;
+  }
+  try {
+    const signerAddr = (await signer.getAddress()).toLowerCase();
+    if (signerAddr !== maker) return null; // wrong wallet → would read a different book
+    const { matchingModule } = ctx.getAddresses();
+    const { token } = await mintStreamToken({
+      api: ctx.api,
+      signer,
+      address: maker,
+      chainId: ctx.getChainId(),
+      matchingModule,
+    });
+    const ownStateApi = new OwnStateApi(ctx.api);
+
+    let riskWei6 = 0n;
+    let count = 0;
+    let visibleRiskWei6 = 0n;
+    let visibleCount = 0;
+    let hiddenRiskWei6 = 0n;
+    let hiddenCount = 0;
+    const maybeLazyKeys = new Set<string>();
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+
+    for (let page = 0; page < MAX_SNAPSHOT_PAGES; page += 1) {
+      const wire = await ownStateApi.snapshot(token, cursor !== undefined ? { cursor } : {});
+      const decoded = decodeSnapshot(wire);
+      for (const c of decoded.commitments) {
+        const hash = c.commitmentHash.toLowerCase();
+        if (seen.has(hash)) continue; // dedupe across pages
+        seen.add(hash);
+        if (!c.isLive) continue; // open/partially_filled, nonce-valid, remaining>0, future expiry
+        const remaining = BigInt(c.remainingRiskAmount);
+        if (remaining <= 0n) continue; // belt-and-braces — `isLive` already implies this
+        riskWei6 += remaining;
+        count += 1;
+        if (c.visibility === 'hidden') {
+          hiddenRiskWei6 += remaining;
+          hiddenCount += 1;
+        } else {
+          visibleRiskWei6 += remaining;
+          visibleCount += 1;
+        }
+        // Only a never-matched (`stored 'open'`) commitment can owe a creation fee.
+        if (c.storedStatus === 'open') {
+          const key = c.speculationKey === null ? `nokey:${hash}` : c.speculationKey.toLowerCase();
+          if (key !== newKey) maybeLazyKeys.add(key);
+        }
+      }
+      if (!decoded.truncated) {
+        return {
+          riskWei6,
+          count,
+          maybeLazyKeyCount: maybeLazyKeys.size,
+          breakdown: { visibleRiskWei6, visibleCount, hiddenRiskWei6, hiddenCount },
+        };
+      }
+      cursor = decoded.cursor;
+    }
+    // Page cap hit while the server still reports more — can't confirm a full
+    // drain, so don't return a partial (under-counted) sum.
+    return null;
+  } catch {
+    // Token mint / snapshot fetch / decode failure → unknown, never a false fundable.
     return null;
   }
 }

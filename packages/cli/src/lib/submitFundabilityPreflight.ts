@@ -100,6 +100,8 @@ export function submitFundabilityReasonMessage(r: SubmitFundabilityReason): stri
       const max = r.requiredWei6 !== undefined ? ` (up to ${wei6ToDecimalUSDC(r.requiredWei6)} USDC)` : '';
       return `You have existing open commitments that might each owe a speculation-creation fee${max}; fundability can't be confirmed without per-speculation checks.`;
     }
+    case 'HIDDEN_EXPOSURE_UNKNOWN':
+      return 'Whole-book fundability could not be determined: your book-hidden exposure could not be read from own-state (no matching signer, or the owner-auth read was unavailable). The visible book is covered; hidden exposure is not.';
     case 'FUNDABILITY_UNKNOWN':
       return 'Fundability could not be determined (an on-chain read or the open-book list failed).';
   }

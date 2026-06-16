@@ -26,8 +26,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { checkSubmitFundability } from '../src/commitments/checkSubmitFundability.js';
 import { SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6 } from '../src/contracts/constants.js';
+import { KeystoreSigner } from '../src/signers/keystore.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
-import type { Hex } from '../src/types/signer.js';
+import type { Hex, Signer } from '../src/types/signer.js';
 import type { StoredCommitmentStatus } from '../src/types/commitment.js';
 import type { SubmitPreview } from '../src/types/preview.js';
 
@@ -197,6 +198,8 @@ describe('checkSubmitFundability — fundable', () => {
     expect(r.fundableNow).toBe(true);
     expect(r.advisory).toBe(true);
     expect(r.scope).toBe('visible-book-only');
+    // Default mode is signer-free + hidden-excluded (the buildContext signer throws if touched).
+    expect(r.coverage).toEqual({ visible: 'included', hidden: 'excluded', source: 'public-commitments' });
     expect(r.maker).toBe(MAKER);
     expect(r.reasons).toHaveLength(0);
     expect(r.checkedAtBlock).toBe(73_491_234n);
@@ -461,6 +464,336 @@ describe('checkSubmitFundability — degraded reads', () => {
     expect(r.requirement).toMatchObject({
       existingOpenRiskWei6: 1_000_000n,
       existingOpenCommitmentCount: 1,
+    });
+  });
+});
+
+// ── whole-book mode (bookScope: 'whole-book', own-state-sourced) ──────────
+
+// Anvil account #0 — a real signer so the EIP-712 stream-auth mint actually runs.
+const WB_PRIVATE_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as Hex;
+const WB_MAKER = '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266' as Hex; // its address (lowercase)
+
+/** A wire OwnerCommitmentBody for the own-state snapshot mock — mirrors the shape
+ *  the core-api own-state surface emits (visible + hidden, unredacted). */
+function ownerBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    commitmentHash: '0x' + '11'.repeat(32),
+    maker: WB_MAKER,
+    contestId: '42',
+    scorer: '0x' + '22'.repeat(20),
+    lineTicks: 0,
+    positionType: 0,
+    oddsTick: 200,
+    marketType: 'moneyline',
+    riskAmount: '1000000',
+    filledRiskAmount: '0',
+    remainingRiskAmount: '1000000',
+    nonce: '1',
+    expiry: new Date(Date.now() + 600_000).toISOString(),
+    speculationKey: '0x' + 'aa'.repeat(32),
+    signature: '0x' + 'bb'.repeat(65),
+    status: 'open',
+    storedStatus: 'open',
+    source: 'sdk',
+    network: 'polygon',
+    nonceInvalidated: false,
+    bookVisible: true,
+    createdAt: new Date().toISOString(),
+    speculationId: '7',
+    sport: 'americanfootball_nfl',
+    awayTeam: 'A',
+    homeTeam: 'H',
+    updatedAtUnixSec: 1735700000,
+    signedPayload: null,
+    ...overrides,
+  };
+}
+
+interface WBOpts {
+  /** Own-state snapshot pages (indexed by cursor). Default one empty, non-truncated page. */
+  pages?: Array<{ commitments: Array<Record<string, unknown>>; truncated: boolean }>;
+  pc?: PCOpts;
+  failChallenge?: boolean;
+  failToken?: boolean;
+  failSnapshot?: boolean;
+  /** Public-list fallback rows (used only when the own-state read is unavailable). */
+  existing?: Array<Record<string, unknown>>;
+  failList?: boolean;
+  /** Override the configured signer; `null` → `requireSigner()` throws. Default: a real WB_MAKER signer. */
+  signer?: Signer | null;
+}
+
+function buildWholeBookContext(opts: WBOpts = {}): { ctx: CommitmentsContext; snapshotCalls: () => number } {
+  const counter = { snapshotCalls: 0 };
+  const now = Math.floor(Date.now() / 1000);
+  const pages = opts.pages ?? [{ commitments: [], truncated: false }];
+  const request = vi.fn(async (path: string, init?: { query?: Record<string, unknown> }) => {
+    if (path === '/v1/auth/stream-challenge') {
+      if (opts.failChallenge) throw new Error('challenge 503');
+      return {
+        challenge: {
+          address: WB_MAKER,
+          resource: 'own-state',
+          scope: 'read:own-state',
+          network: { chainId: 137 },
+          audience: 'api.ospex.test',
+          challengeId: 'CID_wb_test',
+          issuedAt: now,
+          expiresAt: now + 180,
+        },
+        expiresAt: now + 180,
+      };
+    }
+    if (path === '/v1/auth/stream-token') {
+      if (opts.failToken) throw new Error('token 503');
+      return { token: 'WB_TOKEN', expiresAt: now + 900 };
+    }
+    if (path === '/v1/own-state/snapshot') {
+      if (opts.failSnapshot) throw new Error('snapshot 503');
+      counter.snapshotCalls += 1;
+      const cursor = init?.query?.cursor as string | undefined;
+      const idx = cursor === undefined ? 0 : Number(cursor);
+      const page = pages[Math.min(idx, pages.length - 1)]!;
+      return {
+        cursor: String(idx + 1),
+        commitments: page.commitments,
+        positions: [],
+        truncated: page.truncated,
+        positionsTruncated: false,
+      };
+    }
+    if (path === '/v1/commitments') {
+      if (opts.failList) throw new Error('list 503');
+      return { commitments: opts.existing ?? [] };
+    }
+    throw new Error(`unexpected path: ${path}`);
+  });
+  const signer =
+    opts.signer === undefined ? KeystoreSigner.fromPrivateKey(WB_PRIVATE_KEY) : opts.signer;
+  const ctx: CommitmentsContext = {
+    api: { request } as unknown as CommitmentsContext['api'],
+    requireSigner: () => {
+      if (signer === null) throw new Error('no signer configured');
+      return signer;
+    },
+    getChainId: () => 137,
+    getAddresses: () => ADDRESSES,
+    requireChainClient: () =>
+      buildPublicClient(opts.pc ?? {}) as ReturnType<CommitmentsContext['requireChainClient']>,
+    nonceCounter: {} as CommitmentsContext['nonceCounter'],
+    getContestsApi: () => ({}) as ReturnType<CommitmentsContext['getContestsApi']>,
+    getSpeculationsApi: () => ({}) as ReturnType<CommitmentsContext['getSpeculationsApi']>,
+    getTeams: () => ({}) as ReturnType<CommitmentsContext['getTeams']>,
+  };
+  return { ctx, snapshotCalls: () => counter.snapshotCalls };
+}
+
+/** A live, already-matched (partially-filled → not maybe-lazy) own-state row. */
+function liveOwnerRow(
+  hashByte: string,
+  remainingWei6: bigint,
+  opts: { bookVisible?: boolean; keyByte?: string } = {},
+): Record<string, unknown> {
+  return ownerBody({
+    commitmentHash: '0x' + hashByte.repeat(32),
+    bookVisible: opts.bookVisible ?? false,
+    storedStatus: 'partially_filled',
+    status: 'partially_filled',
+    riskAmount: (remainingWei6 + 1_000_000n).toString(),
+    filledRiskAmount: '1000000',
+    remainingRiskAmount: remainingWei6.toString(),
+    speculationKey: '0x' + (opts.keyByte ?? hashByte).repeat(32),
+  });
+}
+
+describe('checkSubmitFundability — whole-book (own-state) mode', () => {
+  it('whole-book without a signer → unknown (HIDDEN_EXPOSURE_UNKNOWN), never fundable', async () => {
+    const { ctx } = buildContext({ existing: [] }); // buildContext.requireSigner throws if touched
+    const r = await checkSubmitFundability(ctx, {
+      preview: makePreview({ riskWei6: 1_000_000n }),
+      bookScope: 'whole-book',
+    });
+    expect(r.outcome).toBe('unknown');
+    expect(r.fundableNow).toBe(false);
+    expect(r.reasons.map((x) => x.code)).toEqual(['HIDDEN_EXPOSURE_UNKNOWN']);
+    expect(r.scope).toBe('visible-book-only'); // achieved scope, not the request
+    expect(r.coverage).toEqual({ visible: 'included', hidden: 'unknown', source: 'mixed' });
+  });
+
+  it('whole-book with a signer that is not the maker → unknown, and never touches own-state', async () => {
+    // Configured signer is WB_MAKER, but the preview maker is the default MAKER → mismatch.
+    const { ctx, snapshotCalls } = buildWholeBookContext({ existing: [] });
+    const r = await checkSubmitFundability(ctx, {
+      preview: makePreview({ riskWei6: 1_000_000n }),
+      bookScope: 'whole-book',
+    });
+    expect(r.outcome).toBe('unknown');
+    expect(r.reasons.map((x) => x.code)).toEqual(['HIDDEN_EXPOSURE_UNKNOWN']);
+    expect(r.coverage.hidden).toBe('unknown');
+    expect(snapshotCalls()).toBe(0); // short-circuits before minting / snapshotting
+  });
+
+  it('whole-book sums visible + hidden live commitments from own-state (no double-count)', async () => {
+    const visible = liveOwnerRow('11', 2_000_000n, { bookVisible: true, keyByte: 'a1' });
+    const hidden = liveOwnerRow('22', 3_000_000n, { bookVisible: false, keyByte: 'a2' });
+    const { ctx } = buildWholeBookContext({ pages: [{ commitments: [visible, hidden], truncated: false }] });
+    const r = await checkSubmitFundability(ctx, {
+      preview: makePreview({ riskWei6: 1_000_000n, maker: WB_MAKER }),
+      bookScope: 'whole-book',
+    });
+    expect(r.scope).toBe('whole-book');
+    expect(r.coverage).toEqual({ visible: 'included', hidden: 'included', source: 'own-state' });
+    expect(r.outcome).toBe('fundable'); // default 1e9 balance/allowances cover it
+    expect(r.requirement).toMatchObject({
+      existingOpenRiskWei6: 5_000_000n, // 2M visible + 3M hidden
+      existingOpenCommitmentCount: 2,
+      existingVisibleOpenRiskWei6: 2_000_000n,
+      existingVisibleOpenCommitmentCount: 1,
+      existingHiddenOpenRiskWei6: 3_000_000n,
+      existingHiddenOpenCommitmentCount: 1,
+    });
+  });
+
+  it('a hidden still-live row raises the requirement → whole-book flips a visible-only fundable to not-fundable', async () => {
+    // Visible book empty, hidden book 5 USDC, new 1 USDC. Wallet holds 4 USDC:
+    // visible-only would say fundable (0 + 1 ≤ 4), whole-book says NOT (0 + 5 + 1 > 4).
+    const hidden = liveOwnerRow('33', 5_000_000n, { bookVisible: false, keyByte: 'a3' });
+    const { ctx } = buildWholeBookContext({
+      pages: [{ commitments: [hidden], truncated: false }],
+      pc: { balances: { [WB_MAKER]: 4_000_000n } },
+    });
+    const r = await checkSubmitFundability(ctx, {
+      preview: makePreview({ riskWei6: 1_000_000n, maker: WB_MAKER }),
+      bookScope: 'whole-book',
+    });
+    expect(r.scope).toBe('whole-book');
+    expect(r.outcome).toBe('not-fundable');
+    expect(r.reasons.find((x) => x.code === 'MAKER_USDC_BALANCE_INSUFFICIENT')).toMatchObject({
+      requiredWei6: 6_000_000n, // hidden 5 + new 1
+      actualWei6: 4_000_000n,
+    });
+    expect(r.requirement).toMatchObject({ existingHiddenOpenRiskWei6: 5_000_000n });
+  });
+
+  it('whole-book excludes non-live hidden rows (expired / nonce-invalidated / filled)', async () => {
+    const expired = ownerBody({ commitmentHash: '0x' + '44'.repeat(32), bookVisible: false, expiry: new Date(Date.now() - 60_000).toISOString() });
+    const invalidated = ownerBody({ commitmentHash: '0x' + '55'.repeat(32), bookVisible: false, nonceInvalidated: true });
+    const filled = liveOwnerRow('66', 0n, { bookVisible: false }); // remaining 0 → not live
+    const live = liveOwnerRow('77', 2_000_000n, { bookVisible: false, keyByte: 'a7' });
+    const { ctx } = buildWholeBookContext({
+      pages: [{ commitments: [expired, invalidated, filled, live], truncated: false }],
+    });
+    const r = await checkSubmitFundability(ctx, {
+      preview: makePreview({ riskWei6: 1_000_000n, maker: WB_MAKER }),
+      bookScope: 'whole-book',
+    });
+    expect(r.scope).toBe('whole-book');
+    expect(r.requirement).toMatchObject({
+      existingOpenRiskWei6: 2_000_000n, // only the one live row
+      existingOpenCommitmentCount: 1,
+      existingHiddenOpenRiskWei6: 2_000_000n,
+      existingHiddenOpenCommitmentCount: 1,
+    });
+  });
+
+  it('whole-book drains all snapshot pages (truncated) and de-dupes by hash across pages', async () => {
+    const a = liveOwnerRow('81', 2_000_000n, { bookVisible: false, keyByte: 'b1' });
+    const b = liveOwnerRow('82', 3_000_000n, { bookVisible: true, keyByte: 'b2' });
+    const { ctx, snapshotCalls } = buildWholeBookContext({
+      pages: [
+        { commitments: [a], truncated: true },
+        { commitments: [a, b], truncated: false }, // `a` repeated → must be de-duped
+      ],
+    });
+    const r = await checkSubmitFundability(ctx, {
+      preview: makePreview({ riskWei6: 1_000_000n, maker: WB_MAKER }),
+      bookScope: 'whole-book',
+    });
+    expect(snapshotCalls()).toBe(2);
+    expect(r.scope).toBe('whole-book');
+    expect(r.requirement).toMatchObject({
+      existingOpenRiskWei6: 5_000_000n, // a(2M) + b(3M), a counted once
+      existingOpenCommitmentCount: 2,
+    });
+  });
+
+  it('whole-book own-state snapshot failure → unknown (HIDDEN_EXPOSURE_UNKNOWN), never fundable', async () => {
+    const { ctx } = buildWholeBookContext({ failSnapshot: true, existing: [] });
+    const r = await checkSubmitFundability(ctx, {
+      preview: makePreview({ riskWei6: 1_000_000n, maker: WB_MAKER }),
+      bookScope: 'whole-book',
+    });
+    expect(r.outcome).toBe('unknown');
+    expect(r.reasons.map((x) => x.code)).toEqual(['HIDDEN_EXPOSURE_UNKNOWN']);
+    expect(r.scope).toBe('visible-book-only');
+    expect(r.coverage).toEqual({ visible: 'included', hidden: 'unknown', source: 'mixed' });
+  });
+
+  it('whole-book token mint failure → unknown, never fundable', async () => {
+    const { ctx } = buildWholeBookContext({ failToken: true, existing: [] });
+    const r = await checkSubmitFundability(ctx, {
+      preview: makePreview({ riskWei6: 1_000_000n, maker: WB_MAKER }),
+      bookScope: 'whole-book',
+    });
+    expect(r.outcome).toBe('unknown');
+    expect(r.reasons.map((x) => x.code)).toEqual(['HIDDEN_EXPOSURE_UNKNOWN']);
+  });
+
+  it('whole-book own-state never fully drains (page cap) → unknown, not a partial sum', async () => {
+    const a = liveOwnerRow('91', 2_000_000n, { bookVisible: false });
+    const { ctx, snapshotCalls } = buildWholeBookContext({
+      pages: [{ commitments: [a], truncated: true }], // always truncated → never drains
+      existing: [],
+    });
+    const r = await checkSubmitFundability(ctx, {
+      preview: makePreview({ riskWei6: 1_000_000n, maker: WB_MAKER }),
+      bookScope: 'whole-book',
+    });
+    expect(r.outcome).toBe('unknown');
+    expect(r.reasons.map((x) => x.code)).toEqual(['HIDDEN_EXPOSURE_UNKNOWN']);
+    expect(snapshotCalls()).toBe(50); // MAX_SNAPSHOT_PAGES — bounded, then degrades
+  });
+
+  it('whole-book: a definite visible/new shortfall still returns not-fundable even when own-state is unavailable', async () => {
+    // own-state unavailable (no signer); wallet can't even cover the new commitment alone.
+    const { ctx } = buildContext({ existing: [], pc: { balances: { [MAKER.toLowerCase()]: 0n } } });
+    const r = await checkSubmitFundability(ctx, {
+      preview: makePreview({ riskWei6: 1_000_000n }),
+      bookScope: 'whole-book',
+    });
+    expect(r.outcome).toBe('not-fundable'); // a definite shortfall wins over hidden-unknown
+    expect(r.reasons.map((x) => x.code)).toEqual(['MAKER_USDC_BALANCE_INSUFFICIENT']);
+  });
+
+  it('whole-book maybe-lazy-fee accounting includes hidden live OPEN commitments', async () => {
+    // A hidden, never-matched (open) commitment on a distinct key MIGHT owe a creation fee.
+    const hiddenOpen = ownerBody({
+      commitmentHash: '0x' + 'cc'.repeat(32),
+      bookVisible: false,
+      storedStatus: 'open',
+      status: 'open',
+      riskAmount: '1000000',
+      filledRiskAmount: '0',
+      remainingRiskAmount: '1000000',
+      speculationKey: '0x' + 'c1'.repeat(32),
+    });
+    const { ctx } = buildWholeBookContext({
+      pages: [{ commitments: [hiddenOpen], truncated: false }],
+      // ≥ 2.0 definite (hidden 1 + new 1), but < 2.0 + FEE worst-case lazy → unknown.
+      pc: { balances: { [WB_MAKER]: 2_000_000n + FEE - 1n } },
+    });
+    const r = await checkSubmitFundability(ctx, {
+      preview: makePreview({ riskWei6: 1_000_000n, maker: WB_MAKER }),
+      bookScope: 'whole-book',
+    });
+    expect(r.scope).toBe('whole-book');
+    expect(r.outcome).toBe('unknown');
+    expect(r.reasons.map((x) => x.code)).toEqual(['EXISTING_LAZY_FEE_UNDETERMINED']);
+    expect(r.requirement).toMatchObject({
+      existingMaybeLazyKeyCount: 1, // the hidden open key
+      existingLazyFeeMaxWei6: FEE,
+      existingHiddenOpenRiskWei6: 1_000_000n,
     });
   });
 });
