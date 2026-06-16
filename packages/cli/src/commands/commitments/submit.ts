@@ -272,10 +272,12 @@ export const commitmentsSubmitCommand = addSignerOptions(
 
     // 3.5 Fundability preflight (execute path only — mirrors `match`). Read the
     //     maker's USDC balance + PositionModule/TreasuryModule allowance and
-    //     their open-commitment book, and check whether the WHOLE book (existing
-    //     + this commitment + lazy fees) is backed — the approve-loop below only
-    //     ever covers THIS commitment's allowance and reads no balance, so this
-    //     is what catches whole-book over-commitment. REFUSE-before-sign on a
+    //     their open-commitment book, and check whether the WHOLE VISIBLE book
+    //     (existing + this commitment + lazy fees) is backed — the approve-loop
+    //     below only ever covers THIS commitment's allowance and reads no
+    //     balance, so this is what catches whole-visible-book over-commitment.
+    //     (Visible-book-only: book-hidden but matchable rows are out of scope —
+    //     payload.fundability.scope says so.) REFUSE-before-sign on a
     //     non-remediable USDC balance shortfall; allowance shortfalls + the
     //     lazy-fee uncertainty are advisory (the approve-loop / a manual approve
     //     remediates allowances) — surfaced below + in `payload.fundability`,

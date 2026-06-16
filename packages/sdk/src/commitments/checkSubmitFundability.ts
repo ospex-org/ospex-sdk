@@ -129,7 +129,7 @@ export interface SubmitFundabilityReason {
   token?: Hex;
   /** The spender the allowance requirement targets (PositionModule / TreasuryModule). Allowance reasons only. */
   spender?: Hex;
-  /** Aggregate required amount (wei6) — the whole-book sum, not the new commitment alone. (For `EXISTING_LAZY_FEE_UNDETERMINED`, the maximum undeterminable existing lazy fee.) */
+  /** Aggregate required amount (wei6) — the whole-visible-book sum, not the new commitment alone (hidden rows are out of scope; see `scope`). (For `EXISTING_LAZY_FEE_UNDETERMINED`, the maximum undeterminable existing lazy fee.) */
   requiredWei6?: bigint;
   /** Current on-chain amount (wei6) that was read. Funding shortfall reasons only. */
   actualWei6?: bigint;
@@ -175,9 +175,10 @@ export interface CheckSubmitFundabilityResult {
   /** Block at which balances/allowances were read. Absent only when the block read failed. */
   checkedAtBlock?: bigint;
   /**
-   * The whole-book requirement the verdict was computed against. Present once
-   * the maker's existing open book was fetched — absent when that fetch failed
-   * (→ `unknown`), since the aggregate can't be computed without it.
+   * The whole-visible-book requirement the verdict was computed against (hidden
+   * rows are out of scope; see `scope`). Present once the maker's existing open
+   * book was fetched — absent when that fetch failed (→ `unknown`), since the
+   * aggregate can't be computed without it.
    */
   requirement?: SubmitFundabilityRequirement;
   reasons: SubmitFundabilityReason[];

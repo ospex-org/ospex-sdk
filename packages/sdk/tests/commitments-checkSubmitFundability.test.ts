@@ -8,8 +8,9 @@
  * Covers:
  *   - happy path → fundable, with requirement + checkedAtBlock populated
  *   - each maker funding shortfall (balance / PositionModule / TreasuryModule)
- *   - the WHOLE-BOOK aggregate: a new commitment that fits in isolation but tips
+ *   - the whole-VISIBLE-book aggregate: a new commitment that fits in isolation but tips
  *     the book past the wallet → not-fundable (the gap submit's approve loop misses)
+ *   - a book-hidden (redacted) row is SKIPPED (visible-book-only), never degraded to unknown
  *   - partially-filled remaining is counted at risk − filled, and a partially-filled
  *     row is NOT treated as maybe-lazy (its speculation is already created)
  *   - this submit's lazy-creation-fee Treasury leg folds into balance + Treasury allowance
@@ -239,7 +240,7 @@ describe('checkSubmitFundability — fundable', () => {
 });
 
 describe('checkSubmitFundability — funding shortfalls', () => {
-  it('whole-book over-commitment: new commitment fits alone but tips the book past the wallet → not-fundable', async () => {
+  it('whole-visible-book over-commitment: new commitment fits alone but tips the book past the wallet → not-fundable', async () => {
     // Existing 100 USDC open, new 10 USDC, wallet 105 USDC. The new commitment
     // (10) fits in 105 in isolation — submit's per-commitment approve loop sees
     // no problem — but the 110 aggregate doesn't. This is exactly the gap B1 closes.
