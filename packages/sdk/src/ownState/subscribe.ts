@@ -163,7 +163,17 @@ export function subscribeToOwnState(
   const lifecycle = new AbortController();
 
   const emitStatus = (s: OwnerStateSubscribeStatus): void => {
-    if (closed || lastStatus === s) return;
+    if (closed) return;
+    // `resync` is an EVENT, not a health LEVEL: each occurrence is a distinct
+    // "drop your accumulation and re-snapshot" directive a consumer MUST act on
+    // (a snapshot-page accumulator discards its partial baseline on EVERY resync
+    // — docs/AGENT_CONTRACT.md), so it is never de-duped, not even back-to-back
+    // (e.g. two truncated cold snapshots whose REST paging fails in a row — the
+    // intervening reconnect emits no status, so without this the second
+    // abandonment would be swallowed and partial rows would survive). The other
+    // three statuses (connected / reconnecting / degraded) are LEVELS — a repeat
+    // is noise, so they stay de-duped on `lastStatus`.
+    if (s !== 'resync' && lastStatus === s) return;
     lastStatus = s;
     try {
       handlers.onStatus?.(s);

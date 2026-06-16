@@ -548,6 +548,74 @@ describe('subscribeToOwnState — truncated snapshot REST paging', () => {
     expect(bag.ready).toBe(1);
   });
 
+  it('emits resync on EVERY truncated-snapshot paging failure, including back-to-back (status is not de-duped)', async () => {
+    // Regression: `resync` is an event, not a level. Two truncated cold snapshots
+    // whose REST paging fails in a row must EACH deliver onStatus('resync'). The
+    // old emitStatus de-duped same-status repeats (`lastStatus === s`), and the
+    // intervening reconnect emits no status — so the second baseline abandonment
+    // was swallowed, and a snapshot-page accumulator (e.g. the CLI's liveByHash)
+    // kept the first attempt's phantom rows. Expect TWO resyncs before ready.
+    const bag = newBag();
+    const server = makeServer({
+      sseAttempts: [
+        // Connect 1: truncated snapshot → REST paging handoff (fails below).
+        {
+          frames: [
+            {
+              event: 'snapshot',
+              id: 'PAGE_1',
+              data: snapshotBody({ cursor: 'PAGE_1', truncated: true }),
+            },
+          ],
+        },
+        // Connect 2: cold-start again, truncated AGAIN → second handoff (also fails).
+        {
+          frames: [
+            {
+              event: 'snapshot',
+              id: 'PAGE_2',
+              data: snapshotBody({ cursor: 'PAGE_2', truncated: true }),
+            },
+          ],
+        },
+        // Connect 3: full snapshot + ready.
+        {
+          frames: [
+            {
+              event: 'snapshot',
+              id: 'LIVE',
+              data: snapshotBody({ cursor: 'LIVE' }),
+            },
+            { event: 'ready', data: {} },
+          ],
+        },
+      ],
+      // Both paging handoffs 500 → pageRestUntilLive returns null → resync branch.
+      restSnapshotPages: [
+        { status: 500, body: { error: 'Internal error.', code: 'INTERNAL' } },
+        { status: 500, body: { error: 'Internal error.', code: 'INTERNAL' } },
+      ],
+    });
+    const signer = KeystoreSigner.fromPrivateKey(TEST_PRIVATE_KEY);
+    const sub = subscribeToOwnState(
+      {
+        api: server.api,
+        signer,
+        address: TEST_ADDRESS,
+        chainId: CHAIN_ID,
+        matchingModule: MATCHING_MODULE,
+      },
+      captureHandlers(bag),
+    );
+    // Long timeout — two full-jitter backoffs (one per paging failure) before ready.
+    await waitFor(() => bag.ready > 0, 15_000);
+    await sub.unsubscribe();
+
+    // BOTH abandonments must surface as a discard signal — not just the first.
+    expect(bag.statuses.filter((s) => s === 'resync')).toHaveLength(2);
+    expect(bag.ready).toBe(1);
+  }, 30_000);
+
   it('fires a fatal-style error when REST paging exceeds the defensive bound', async () => {
     // Build 50 truncated REST pages — exceeds MAX_SNAPSHOT_PAGES (50).
     const truncatedPages = Array.from({ length: 60 }, (_, i) => ({
