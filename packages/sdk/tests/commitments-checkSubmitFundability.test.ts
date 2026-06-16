@@ -195,6 +195,7 @@ describe('checkSubmitFundability — fundable', () => {
     expect(r.outcome).toBe('fundable');
     expect(r.fundableNow).toBe(true);
     expect(r.advisory).toBe(true);
+    expect(r.scope).toBe('visible-book-only');
     expect(r.maker).toBe(MAKER);
     expect(r.reasons).toHaveLength(0);
     expect(r.checkedAtBlock).toBe(73_491_234n);
@@ -248,6 +249,7 @@ describe('checkSubmitFundability — funding shortfalls', () => {
     });
     const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 10_000_000n }) });
     expect(r.outcome).toBe('not-fundable');
+    expect(r.scope).toBe('visible-book-only');
     expect(r.reasons.find((x) => x.code === 'MAKER_USDC_BALANCE_INSUFFICIENT')).toMatchObject({
       token: USDC,
       requiredWei6: 110_000_000n, // existing 100 + new 10
@@ -404,6 +406,7 @@ describe('checkSubmitFundability — degraded reads', () => {
     const { ctx } = buildContext({ failList: true });
     const r = await checkSubmitFundability(ctx, { preview: makePreview() });
     expect(r.outcome).toBe('unknown');
+    expect(r.scope).toBe('visible-book-only');
     expect(r.reasons.map((x) => x.code)).toEqual(['FUNDABILITY_UNKNOWN']);
     expect(r.requirement).toBeUndefined();
   });
@@ -425,13 +428,16 @@ describe('checkSubmitFundability — degraded reads', () => {
     expect(r.checkedAtBlock).toBeUndefined();
   });
 
-  it('a redacted hidden row in the maker book → unknown (cannot account for its risk)', async () => {
-    // Hidden bodies (book_visible=false) redact `remainingRiskAmount` +
-    // `speculationKey` per the public allow-list (own-state SSE plan §2.3).
-    // Skipping them would silently under-count the maker's open exposure —
-    // exactly the failure a solvency guard must never make. Degrade to
-    // `unknown` so the verdict is honest. The maker recovers a definite
-    // verdict via owner-auth `client.ownState.*`.
+  it('a hidden (redacted) row in the maker book is skipped — visible-book-only, NOT degraded to unknown', async () => {
+    // The public commitments list filters `book_visible=true` server-side, so a
+    // maker's book-hidden but still-on-chain-matchable rows never reach this
+    // scan at all; a stray redacted row (only via `?since=` recovery / core-api
+    // defensive projection, neither of which this scan uses) is likewise
+    // skipped. The verdict is VISIBLE-BOOK-ONLY: it sums only the visible rows
+    // and does NOT degrade to `unknown` for the hidden one — claiming otherwise
+    // would promise a protection this anonymous read cannot deliver. The maker
+    // accounts for hidden exposure via owner-auth `client.ownState.*`; the
+    // result advertises the limit via `scope`.
     const hiddenRow: Record<string, unknown> = {
       commitmentHash: '0x' + 'ff'.repeat(32),
       maker: MAKER,
@@ -448,9 +454,12 @@ describe('checkSubmitFundability — degraded reads', () => {
     };
     const { ctx } = buildContext({ existing: [row(1_000_000n), hiddenRow] });
     const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n }) });
-    expect(r.outcome).toBe('unknown');
-    expect(r.fundableNow).toBe(false);
-    expect(r.reasons.map((x) => x.code)).toEqual(['FUNDABILITY_UNKNOWN']);
-    expect(r.requirement).toBeUndefined();
+    expect(r.outcome).toBe('fundable'); // NOT 'unknown' — the hidden row does not degrade the verdict
+    expect(r.scope).toBe('visible-book-only');
+    // Only the visible row is summed; the hidden row contributes nothing to the aggregate.
+    expect(r.requirement).toMatchObject({
+      existingOpenRiskWei6: 1_000_000n,
+      existingOpenCommitmentCount: 1,
+    });
   });
 });
