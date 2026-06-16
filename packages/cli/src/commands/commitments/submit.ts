@@ -120,6 +120,7 @@ const optionsSchema = z.object({
   raw: z.boolean().optional(),
   skipFundabilityPreflight: z.boolean().optional(),
   force: z.boolean().optional(),
+  fundabilityScope: z.enum(['visible-book-only', 'whole-book']).optional(),
 });
 
 export const commitmentsSubmitCommand = addSignerOptions(
@@ -164,6 +165,17 @@ export const commitmentsSubmitCommand = addSignerOptions(
       'alias for --skip-fundability-preflight — proceed despite (or without) the funding check ' +
         '(the commitment may be unfillable).',
     )
+    .option(
+      '--fundability-scope <scope>',
+      'which book the funding check covers: "visible-book-only" (default — sums only your ' +
+        'public book_visible=true commitments, no owner-auth read) or "whole-book" (also counts ' +
+        'your book-hidden but still-on-chain-matchable commitments via an owner-authenticated ' +
+        'own-state read). "whole-book" performs that read with your configured signer and may sign ' +
+        'an EIP-712 stream-auth challenge — it submits NO transaction and consumes NO nonce. The ' +
+        'check runs only on the execute path (with --yes / interactive), never on a --json-only ' +
+        'preview. If the hidden read is unavailable it never reports a false fundable: a definite ' +
+        'shortfall still refuses, otherwise the verdict is advisory unknown (HIDDEN_EXPOSURE_UNKNOWN).',
+    )
     .addOption(
       new Option(
         '--json',
@@ -191,6 +203,12 @@ export const commitmentsSubmitCommand = addSignerOptions(
     const approveMax = opts.approveMax === true;
     const isInteractive = process.stdin.isTTY === true;
     const previewOnly = wantJson && !skipPrompt;
+    // Which book the fundability preflight covers. 'whole-book' adds the maker's
+    // book-hidden exposure via an owner-auth own-state read using the (already
+    // unlocked, execute-path) signer; the default stays visible-book-only and
+    // signer-free. The preflight is execute-path only (see step 3.5), so neither
+    // scope runs on a --json-only preview.
+    const bookScope = opts.fundabilityScope ?? 'visible-book-only';
 
     // Lazy signer split (spec §17.2): preview-only mode (`--json`
     // without `--yes`) MUST NOT trigger an interactive passphrase
@@ -276,8 +294,11 @@ export const commitmentsSubmitCommand = addSignerOptions(
     //     (existing + this commitment + lazy fees) is backed — the approve-loop
     //     below only ever covers THIS commitment's allowance and reads no
     //     balance, so this is what catches whole-visible-book over-commitment.
-    //     (Visible-book-only: book-hidden but matchable rows are out of scope —
-    //     payload.fundability.scope says so.) REFUSE-before-sign on a
+    //     (Default scope is visible-book-only: book-hidden but matchable rows are
+    //     out of scope — payload.fundability.scope says so. --fundability-scope
+    //     whole-book opts into an owner-auth own-state read that also counts them,
+    //     using the already-unlocked signer; HIDDEN_EXPOSURE_UNKNOWN is advisory,
+    //     not blocking.) REFUSE-before-sign on a
     //     non-remediable USDC balance shortfall; allowance shortfalls + the
     //     lazy-fee uncertainty are advisory (the approve-loop / a manual approve
     //     remediates allowances) — surfaced below + in `payload.fundability`,
@@ -288,7 +309,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
     let preflightFundability: CheckSubmitFundabilityResult | null = null;
     const skipFundability = opts.skipFundabilityPreflight === true || opts.force === true;
     if (!skipFundability) {
-      preflightFundability = await client.commitments.checkSubmitFundability({ preview });
+      preflightFundability = await client.commitments.checkSubmitFundability({ preview, bookScope });
       const blocking = selectBlockingSubmitReasons(preflightFundability.reasons);
       if (blocking.length > 0) {
         if (wantJson) {
@@ -451,7 +472,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
     let effectiveFundability: CheckSubmitFundabilityResult | null = preflightFundability;
     if (preflightFundability !== null && confirmedApprovalPurposes.length > 0) {
       try {
-        effectiveFundability = await client.commitments.checkSubmitFundability({ preview });
+        effectiveFundability = await client.commitments.checkSubmitFundability({ preview, bookScope });
       } catch (err) {
         process.stderr.write(
           'Post-approval fundability re-check failed; proceeding with the submit. ' +

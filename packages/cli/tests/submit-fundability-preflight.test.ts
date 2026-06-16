@@ -77,9 +77,21 @@ describe('selectBlockingSubmitReasons', () => {
     ]);
   });
 
-  it('does NOT block on EXISTING_LAZY_FEE_UNDETERMINED or FUNDABILITY_UNKNOWN (advisory)', () => {
+  it('does NOT block on EXISTING_LAZY_FEE_UNDETERMINED, FUNDABILITY_UNKNOWN, or HIDDEN_EXPOSURE_UNKNOWN (advisory)', () => {
     expect(selectBlockingSubmitReasons([reason('EXISTING_LAZY_FEE_UNDETERMINED')])).toHaveLength(0);
     expect(selectBlockingSubmitReasons([reason('FUNDABILITY_UNKNOWN')])).toHaveLength(0);
+    // whole-book mode couldn't read hidden exposure → unknown, not a refusal.
+    expect(selectBlockingSubmitReasons([reason('HIDDEN_EXPOSURE_UNKNOWN')])).toHaveLength(0);
+  });
+
+  it('still blocks the balance shortfall even when a HIDDEN_EXPOSURE_UNKNOWN rides alongside it', () => {
+    // whole-book own-state failed (→ HIDDEN_EXPOSURE_UNKNOWN) AND the visible/new
+    // lower bound is a definite shortfall: the shortfall must still refuse-before-sign.
+    const mixed = [
+      reason('MAKER_USDC_BALANCE_INSUFFICIENT', { requiredWei6: 3_000_000n, actualWei6: 1_000_000n }),
+      reason('HIDDEN_EXPOSURE_UNKNOWN'),
+    ];
+    expect(codes(selectBlockingSubmitReasons(mixed))).toEqual(['MAKER_USDC_BALANCE_INSUFFICIENT']);
   });
 
   it('keeps only the blocking reason from a mixed set', () => {
@@ -117,6 +129,12 @@ describe('submitFundabilityReasonMessage', () => {
     const msg = submitFundabilityReasonMessage(reason('EXISTING_LAZY_FEE_UNDETERMINED', { requiredWei6: 500_000n }));
     expect(msg).toMatch(/creation fee/i);
     expect(msg).toMatch(/up to 0\.500000 USDC/);
+  });
+
+  it('explains that whole-book hidden exposure could not be read (HIDDEN_EXPOSURE_UNKNOWN)', () => {
+    const msg = submitFundabilityReasonMessage(reason('HIDDEN_EXPOSURE_UNKNOWN'));
+    expect(msg).toMatch(/hidden/i);
+    expect(msg).toMatch(/whole-book/i);
   });
 });
 

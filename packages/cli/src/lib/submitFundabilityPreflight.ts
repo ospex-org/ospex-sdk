@@ -6,9 +6,10 @@
  * allowance shortfalls are remediable (the submit approve-loop, or a separate
  * `ospex commitments approve`, raises them — so blocking would regress the
  * normal approve-on-submit flow); only the NON-remediable USDC balance
- * shortfall blocks. `EXISTING_LAZY_FEE_UNDETERMINED` and `FUNDABILITY_UNKNOWN`
- * are advisory — warn, never block (mirrors the SDK primitive's "unknown, not a
- * false not-fundable" stance, and `match`'s preflight).
+ * shortfall blocks. `EXISTING_LAZY_FEE_UNDETERMINED`, `FUNDABILITY_UNKNOWN`, and
+ * `HIDDEN_EXPOSURE_UNKNOWN` (whole-book mode couldn't read the maker's hidden
+ * exposure) are advisory — warn, never block (mirrors the SDK primitive's
+ * "unknown, not a false not-fundable" stance, and `match`'s preflight).
  */
 import {
   wei6ToDecimalUSDC,
@@ -35,9 +36,10 @@ export const SUBMIT_REMEDIABLE_REASON_CODES: readonly SubmitFundabilityReasonCod
 /**
  * The blocking subset of a fundability verdict's reasons for the SUBMIT flow:
  * drops the approve-loop-remediable maker-allowance reasons and the advisory
- * `EXISTING_LAZY_FEE_UNDETERMINED` / `FUNDABILITY_UNKNOWN`. What remains is the
- * non-remediable `MAKER_USDC_BALANCE_INSUFFICIENT` (you can't approve USDC into
- * existence). A non-empty result means refuse-before-sign.
+ * `EXISTING_LAZY_FEE_UNDETERMINED` / `FUNDABILITY_UNKNOWN` / `HIDDEN_EXPOSURE_UNKNOWN`.
+ * What remains is the non-remediable `MAKER_USDC_BALANCE_INSUFFICIENT` (you can't
+ * approve USDC into existence) — including a balance shortfall the whole-book scope
+ * surfaced from hidden exposure. A non-empty result means refuse-before-sign.
  */
 export function selectBlockingSubmitReasons(
   reasons: readonly SubmitFundabilityReason[],
@@ -46,6 +48,7 @@ export function selectBlockingSubmitReasons(
     (r) =>
       r.code !== 'FUNDABILITY_UNKNOWN' &&
       r.code !== 'EXISTING_LAZY_FEE_UNDETERMINED' &&
+      r.code !== 'HIDDEN_EXPOSURE_UNKNOWN' &&
       !SUBMIT_REMEDIABLE_REASON_CODES.includes(r.code),
   );
 }
