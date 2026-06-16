@@ -35,7 +35,7 @@ import { assertSufficientAllowance } from './allowance.js';
 import { readNonceFloor } from './nonce.js';
 import {
   validateExpiry,
-  validateLineTicks,
+  validateCommitmentLineTicks,
   validateOdds,
   validatePositionType,
   validateRiskAmount,
@@ -133,7 +133,7 @@ export async function submitRaw(
   ctx: CommitmentsContext,
   args: RawSubmitArgs,
 ): Promise<SubmitResult> {
-  validateLineTicks(args.lineTicks);
+  validateCommitmentLineTicks(args.lineTicks);
   validatePositionType(args.positionType);
   validateOdds(args.oddsTick);
   validateRiskAmount(args.riskAmount);

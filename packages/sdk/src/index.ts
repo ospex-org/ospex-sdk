@@ -234,6 +234,11 @@ export {
   lineDecimalToTicks,
   ticksToDecimalLine,
 } from './commitments/decimals.js';
+export {
+  MAX_LINE_TICKS,
+  validateCommitmentLineTicks,
+  commitmentLineTicksOutOfRange,
+} from './commitments/validation.js';
 export { pushPossible } from './commitments/pushPossible.js';
 export {
   resolveSide,

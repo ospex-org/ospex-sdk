@@ -116,6 +116,8 @@ export function reasonMessage(r: FillabilityReason): string {
       return 'Commitment has no remaining capacity to fill.';
     case 'SPECULATION_CLOSED':
       return 'The speculation is closed (settled or scored); a match would revert.';
+    case 'LINE_TICKS_OUT_OF_RANGE':
+      return "The commitment's line is outside the protocol's safe magnitude bound — matching it would overflow the spread scorer and permanently lock both sides' escrow at settlement. Never fillable.";
     case 'COMMITMENT_REDACTED':
       return 'Commitment is hidden (book_visible=false); the matchable payload is redacted from anonymous reads and a match cannot be constructed.';
     case 'FILLABILITY_UNKNOWN':

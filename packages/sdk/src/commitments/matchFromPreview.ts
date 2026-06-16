@@ -25,6 +25,7 @@ import { encodeFunctionData } from 'viem';
 import { matchingModuleAbi } from '../contracts/abi/index.js';
 import { CommitmentsApi } from '../api/commitments.js';
 import { OspexValidationError } from '../errors.js';
+import { validateCommitmentLineTicks } from './validation.js';
 import { assertSufficientAllowance } from './allowance.js';
 import { requireVisibleCommitment } from './requireVisible.js';
 import { buildSignAndSend } from './sendTx.js';
@@ -202,6 +203,11 @@ export async function matchFromPreview(
   // commitment for these (validated unchanged by step 3) — they
   // round-trip the maker's signature byte-for-byte.
   const c = preview.commitment;
+  // Final fund-lock backstop before broadcast: refuse to fill a poisoned line
+  // even from a hand-built preview that bypassed prepareMatch's guard. An
+  // out-of-range `|lineTicks|` overflows the spread scorer and permanently
+  // locks both sides' escrow at settlement. See validation.ts MAX_LINE_TICKS.
+  validateCommitmentLineTicks(c.lineTicks as number);
   const data = encodeFunctionData({
     abi: matchingModuleAbi,
     functionName: 'matchCommitment',

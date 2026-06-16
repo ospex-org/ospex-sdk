@@ -63,6 +63,7 @@ describe('selectBlockingMatchReasons', () => {
       'NONCE_INVALIDATED',
       'NO_REMAINING_CAPACITY',
       'SPECULATION_CLOSED',
+      'LINE_TICKS_OUT_OF_RANGE',
     ];
     for (const code of nonRemediable) {
       expect(codes(selectBlockingMatchReasons([reason(code)]))).toEqual([code]);
@@ -113,6 +114,12 @@ describe('reasonMessage', () => {
   it('spells out that maker-side shortfalls are not the taker’s to fix', () => {
     expect(reasonMessage(reason('MAKER_USDC_BALANCE_INSUFFICIENT'))).toMatch(/taker cannot fix/i);
     expect(reasonMessage(reason('MAKER_POSITION_ALLOWANCE_INSUFFICIENT'))).toMatch(/taker cannot fix/i);
+  });
+
+  it('explains the out-of-range line locks escrow and is never fillable', () => {
+    const msg = reasonMessage(reason('LINE_TICKS_OUT_OF_RANGE'));
+    expect(msg).toMatch(/lock/i);
+    expect(msg).toMatch(/never fillable/i);
   });
 });
 

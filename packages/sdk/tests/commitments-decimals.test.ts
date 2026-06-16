@@ -392,15 +392,19 @@ describe('lineDecimalToTicks', () => {
     expect(() => lineDecimalToTicks('')).toThrow(OspexValidationError);
   });
 
-  it('rejects values whose tick representation overflows int32', () => {
-    // INT32_MAX = 2_147_483_647; ticks = decimal × 10. So a decimal of
-    // 214_748_364.8 → tick 2_147_483_648 → overflow. Anything ≥ 214_748_364.8
-    // overflows; one decimal place above the boundary triggers it.
-    expect(() => lineDecimalToTicks('214748364.8')).toThrow(/int32/);
-    expect(() => lineDecimalToTicks('-214748364.9')).toThrow(/int32/);
-    // Just inside the bound is accepted.
-    expect(lineDecimalToTicks('214748364.7')).toBe(2_147_483_647);
-    expect(lineDecimalToTicks('-214748364.8')).toBe(-2_147_483_648);
+  it('rejects values whose tick magnitude exceeds MAX_LINE_TICKS (1_000_000)', () => {
+    // ticks = decimal × 10, and MAX_LINE_TICKS = 1_000_000, so the bound is
+    // decimal ±100_000.0. One decimal place above the boundary triggers it.
+    expect(() => lineDecimalToTicks('100000.1')).toThrow(/exceeds the protocol maximum/);
+    expect(() => lineDecimalToTicks('-100000.1')).toThrow(/exceeds the protocol maximum/);
+    // A value still inside int32 but past the magnitude bound is now rejected
+    // (it would have been accepted under the old int32-only check).
+    expect(() => lineDecimalToTicks('214748364.7')).toThrow(/exceeds the protocol maximum/);
+    // The boundary itself is accepted.
+    expect(lineDecimalToTicks('100000')).toBe(1_000_000);
+    expect(lineDecimalToTicks('100000.0')).toBe(1_000_000);
+    expect(lineDecimalToTicks('-100000')).toBe(-1_000_000);
+    expect(lineDecimalToTicks('-100000.0')).toBe(-1_000_000);
   });
 });
 

@@ -20,6 +20,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { prepareSubmit } from '../src/commitments/prepareSubmit.js';
 import { submitPrepared } from '../src/commitments/submitPrepared.js';
+import { MAX_LINE_TICKS } from '../src/commitments/validation.js';
+import { deriveSpeculationKey } from '../src/chain/eip712.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import { OspexAPIError, OspexValidationError } from '../src/errors.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
@@ -223,6 +225,29 @@ describe('prepareSubmit — --speculation happy path', () => {
     const ctx = buildContext({ allowance: 0n });
     const preview = await prepareSubmit(ctx, speculationArgs());
     expect(preview.approvals[0]?.needsApproval).toBe(true);
+  });
+});
+
+describe('prepareSubmit — line magnitude chokepoint', () => {
+  it('refuses a pinned speculation whose lineTicks is out of range (the path lineDecimalToTicks never screens)', async () => {
+    // A poisoned line can enter prepareSubmit from an existing/pinned
+    // speculation row — never through `lineDecimalToTicks` (no user --line).
+    // The chokepoint on the final protocol-side lineTicks must still catch it.
+    const poisonedLine = MAX_LINE_TICKS + 1;
+    const spec = buildSpec({
+      type: 'spread',
+      lineTicks: poisonedLine,
+      line: poisonedLine / 10,
+    });
+    const ctx = buildContext({ spec, allowance: 1_000_000n });
+    await expect(
+      prepareSubmit(ctx, {
+        parent: { kind: 'speculation', speculationId: '100' },
+        side: 'lakers',
+        odds: '1.91',
+        riskUsdc: '1',
+      }),
+    ).rejects.toMatchObject({ field: 'lineTicks' });
   });
 });
 
@@ -683,6 +708,24 @@ describe('submitPrepared — sanity guards', () => {
       raw: { ...preview.raw, speculationKey: '0x' + 'aa'.repeat(32) },
     };
     await expect(submitPrepared(ctx, tampered)).rejects.toThrow(/speculationKey/);
+  });
+
+  it('refuses to sign a hand-built preview whose line is out of the magnitude bound (backstop)', async () => {
+    const ctx = buildContext({});
+    const preview = await prepareSubmit(ctx, speculationArgs());
+    const poisonedLine = MAX_LINE_TICKS + 1;
+    // Re-derive a MATCHING speculationKey for the poisoned line so the key
+    // cross-check passes — the magnitude guard must be the thing that rejects.
+    const key = deriveSpeculationKey(
+      BigInt(preview.raw.contestId),
+      preview.raw.scorer as Hex,
+      poisonedLine,
+    );
+    const tampered: SubmitPreview = {
+      ...preview,
+      raw: { ...preview.raw, lineTicks: poisonedLine, speculationKey: key },
+    };
+    await expect(submitPrepared(ctx, tampered)).rejects.toMatchObject({ field: 'lineTicks' });
   });
 });
 

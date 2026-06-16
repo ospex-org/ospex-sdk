@@ -16,6 +16,7 @@ import type { PublicClient } from 'viem';
 import { submitRaw } from '../src/commitments/submitRaw.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import { buildDomain, hashCommitment } from '../src/chain/eip712.js';
+import { MAX_LINE_TICKS } from '../src/commitments/validation.js';
 import { OspexAPIError, OspexValidationError } from '../src/errors.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
 import type { CommitmentBody } from '../src/api/types.js';
@@ -174,6 +175,36 @@ describe('submitRaw — happy path returns signedPayload', () => {
     // domain — proves the payload is "act-on-able" without re-fetching.
     const domain = buildDomain(CHAIN_ID, MATCHING_MODULE);
     expect(hashCommitment(domain, result.signedPayload.commitment)).toBe(result.hash);
+  });
+});
+
+describe('submitRaw — commitment line magnitude guard', () => {
+  it('rejects |lineTicks| > MAX_LINE_TICKS before signing or posting', async () => {
+    let posted = false;
+    const ctx = fakeContext({
+      apiResponder: async () => {
+        posted = true;
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+    });
+    await expect(
+      submitRaw(ctx, { ...ARGS, lineTicks: MAX_LINE_TICKS + 1 }),
+    ).rejects.toMatchObject({ field: 'lineTicks' });
+    // The guard is the first thing submitRaw does — nothing was signed or POSTed.
+    expect(posted).toBe(false);
+  });
+
+  it('accepts a line exactly at the MAX_LINE_TICKS boundary', async () => {
+    const ctx = fakeContext({
+      apiResponder: async () => fullBody('0xPLACEHOLDER'),
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+    });
+    await expect(
+      submitRaw(ctx, { ...ARGS, lineTicks: MAX_LINE_TICKS }),
+    ).resolves.toBeDefined();
   });
 });
 

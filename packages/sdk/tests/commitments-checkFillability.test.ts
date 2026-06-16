@@ -18,6 +18,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { checkCommitmentFillability } from '../src/commitments/checkFillability.js';
+import { MAX_LINE_TICKS } from '../src/commitments/validation.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
 import type { Hex, Signer } from '../src/types/signer.js';
@@ -252,6 +253,56 @@ describe('checkCommitmentFillability — liveness short-circuit (no chain reads)
     const r = await checkCommitmentFillability(ctx, { commitment, taker: TAKER });
     expect(r.outcome).toBe('not-fillable');
     expect(r.reasons.map((x) => x.code)).toContain('NOT_LIVE');
+  });
+});
+
+describe('checkCommitmentFillability — out-of-range line (fund-lock guard)', () => {
+  it('|lineTicks| over MAX_LINE_TICKS → not-fillable LINE_TICKS_OUT_OF_RANGE, no chain reads', async () => {
+    const { ctx, reads } = buildContext();
+    const commitment = makeCommitment({ marketType: 'spread', lineTicks: MAX_LINE_TICKS + 1 });
+    const r = await checkCommitmentFillability(ctx, { commitment, taker: TAKER });
+    expect(r.outcome).toBe('not-fillable');
+    expect(r.fillableNow).toBe(false);
+    expect(r.reasons.map((x) => x.code)).toEqual(['LINE_TICKS_OUT_OF_RANGE']);
+    // Decided from the signed commitment alone — no funding evaluated, no reads.
+    expect(r.checkedAtBlock).toBeUndefined();
+    expect(r.fill).toBeUndefined();
+    expect(reads).toHaveLength(0);
+  });
+
+  it('the negative magnitude boundary is symmetric', async () => {
+    const { ctx } = buildContext();
+    const commitment = makeCommitment({ marketType: 'spread', lineTicks: -(MAX_LINE_TICKS + 1) });
+    const r = await checkCommitmentFillability(ctx, { commitment, taker: TAKER });
+    expect(r.reasons.map((x) => x.code)).toEqual(['LINE_TICKS_OUT_OF_RANGE']);
+  });
+
+  it('resolves the verdict even when no chain client is configured (short-circuits before requireChainClient)', async () => {
+    const { ctx } = buildContext();
+    const noChainCtx: CommitmentsContext = {
+      ...ctx,
+      requireChainClient: () => {
+        throw new Error('rpcUrl required');
+      },
+    };
+    const commitment = makeCommitment({ marketType: 'spread', lineTicks: MAX_LINE_TICKS + 5 });
+    const r = await checkCommitmentFillability(noChainCtx, { commitment, taker: TAKER });
+    expect(r.outcome).toBe('not-fillable');
+    expect(r.reasons.map((x) => x.code)).toEqual(['LINE_TICKS_OUT_OF_RANGE']);
+  });
+
+  it('a missing (null) lineTicks is NOT_LIVE, never the fund-lock reason', async () => {
+    // A null lineTicks is a missing required field, not an out-of-range line:
+    // the 0b short-circuit skips it (null-guarded), liveness passes it, and
+    // prepareMatch's missing-field check throws `field: 'lineTicks'`. That must
+    // map to NOT_LIVE — mislabeling a benign missing field as the catastrophic
+    // fund-lock reason would be a false alarm.
+    const { ctx } = buildContext();
+    const commitment = makeCommitment({ lineTicks: null });
+    const r = await checkCommitmentFillability(ctx, { commitment, taker: TAKER });
+    expect(r.outcome).toBe('not-fillable');
+    expect(r.reasons.map((x) => x.code)).toContain('NOT_LIVE');
+    expect(r.reasons.map((x) => x.code)).not.toContain('LINE_TICKS_OUT_OF_RANGE');
   });
 });
 
