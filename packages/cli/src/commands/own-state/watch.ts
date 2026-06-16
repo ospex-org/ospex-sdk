@@ -543,6 +543,14 @@ export const ownStateWatchCommand = addSignerOptions(
         onStatus: (status: OwnerStateSubscribeStatus) => {
           counts.status += 1;
           lastStatus = status;
+          if (status === 'resync') {
+            // A resync abandons the running cursor and re-grounds from a fresh
+            // cold snapshot; deltas missed across the gap are never replayed. Clear
+            // the live map so the upcoming snapshot fully rebuilds it — otherwise a
+            // row that went terminal during the disconnect lingers here and
+            // over-counts in every heartbeat/summary until passive expiry.
+            liveByHash.clear();
+          }
           emit({ kind: 'status', at: at(), address, status });
         },
         onFrame: (frame: OwnStateFrameMeta) => {

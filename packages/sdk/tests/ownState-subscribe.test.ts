@@ -539,6 +539,11 @@ describe('subscribeToOwnState — truncated snapshot REST paging', () => {
         (e) => e.reason === 'connection_failed' && e.status === 401,
       ),
     ).toBe(true);
+    // A paging failure is a re-baseline event, so the consumer is signalled
+    // 'resync' (not 'reconnecting'/'degraded') — it must discard any partial
+    // snapshot accumulation before the cold-restart snapshot replaces it.
+    // Mirrors the 400 INVALID_CURSOR + `event: resync` paths.
+    expect(bag.statuses).toContain('resync');
     // Eventually ready fires (on the second connect).
     expect(bag.ready).toBe(1);
   });

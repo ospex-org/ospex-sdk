@@ -27,9 +27,14 @@
  *     3. Server emits `event: ready`. SDK delivers + status → `connected`.
  *     4. Live deltas flow.
  *
- *   RESYNC (server sends `event: resync`)
+ *   RESYNC (server sends `event: resync`, server rejects the cursor with
+ *   400 INVALID_CURSOR, OR a truncated-snapshot REST paging attempt fails
+ *   mid-flight)
  *     SDK drops its running cursor and transitions to `resync` status.
- *     Next reconnect is a fresh cold-start (no Last-Event-ID).
+ *     Next reconnect is a fresh cold-start (no Last-Event-ID). A consumer
+ *     that accumulates snapshot pages MUST discard its partial accumulation
+ *     on `resync` — the cold-start snapshot replaces it, it is not a
+ *     continuation.
  *
  *   DEGRADED (server sends `event: degraded`, or persistent reconnect
  *   failures)
@@ -937,7 +942,15 @@ export function subscribeToOwnState(
             // `ready` firing on a partial baseline if the server's
             // resume path tolerated it. Force a clean cold-start.
             cursor = undefined;
-            emitStatus(nextRetryStatus());
+            // Signal `resync`, not `reconnecting`/`degraded`: the partial
+            // baseline this attempt accumulated is now being abandoned for a
+            // fresh cold snapshot, exactly like the 400 INVALID_CURSOR and
+            // `event: resync` paths above. A consumer merging snapshot pages
+            // by accumulation MUST be told to discard what it has, or the next
+            // cold snapshot's first page merges onto the stale partial. The
+            // backoff is preserved (a persistent paging failure must not
+            // tight-loop); only the status the consumer sees changes.
+            emitStatus('resync');
             await abortableSleep(backoffDelay(attempt), lifecycle.signal);
             attempt += 1;
             continue;
