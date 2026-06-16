@@ -49,6 +49,7 @@ function makeResult(reasons: SubmitFundabilityReason[]): CheckSubmitFundabilityR
     maker: MAKER,
     fundableNow: outcome === 'fundable',
     outcome,
+    scope: 'visible-book-only',
     advisory: true,
     checkedAtBlock: 73_491_234n,
     reasons,

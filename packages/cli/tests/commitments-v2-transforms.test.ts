@@ -351,6 +351,7 @@ describe('toSubmitExecuteEnvelope', () => {
       maker: MAKER.toLowerCase() as Hex,
       fundableNow: true,
       outcome: 'fundable',
+      scope: 'visible-book-only',
       advisory: true,
       reasons: [],
       ...overrides,

@@ -13,17 +13,20 @@
  * can't back the maker's whole open book still posts more "liquidity" that will
  * revert at fill time. This check closes that gap.
  *
- * THE AGGREGATE (whole-book) MODEL. The maker is on the hook for EVERY one of
- * their still-matchable commitments — each fill independently pulls its own
- * remaining maker risk from the same wallet via the same PositionModule
- * allowance. So the requirement is the SUM, not the new commitment alone:
+ * THE AGGREGATE MODEL — VISIBLE BOOK ONLY. The maker is on the hook for every
+ * one of their still-matchable commitments — each fill independently pulls its
+ * own remaining maker risk from the same wallet via the same PositionModule
+ * allowance — so the requirement is the SUM, not the new commitment alone:
  *   - balance requirement            = existing open risk + new risk + lazy fees
  *   - PositionModule allowance req    = existing open risk + new risk
  *   - TreasuryModule allowance req    = lazy creation fees
  * where `existing open risk` = Σ remaining maker risk over the maker's
- * API-visible open + partially-filled commitments. Comparing the new commitment
- * in isolation would UNDER-state what the wallet must hold — the one error a
- * funding guard must never make.
+ * API-VISIBLE open + partially-filled commitments. Comparing the new commitment
+ * in isolation would UNDER-state what the wallet must hold — but note the
+ * visible-book sum ITSELF under-states true exposure whenever the maker holds
+ * book-hidden (`book_visible=false`) but still-on-chain-matchable rows (see the
+ * Scope note): the public list filters those out, so this verdict is
+ * `scope: 'visible-book-only'`, never a whole-book guarantee.
  *
  * LAZY CREATION FEES. The first match of a not-yet-created `(contestId, scorer,
  * lineTicks)` speculation key pulls the maker's half of the creation fee from
@@ -41,12 +44,20 @@
  * matched, so their speculation definitely exists and owes no creation fee. The
  * new commitment's own key is excluded — its fee is already in the lower bound.)
  *
- * Scope note — VISIBLE, not locally-tracked latent. "Existing open risk" is the
- * maker's open + partially-filled book as the API returns it. It does NOT model
- * book-hidden latent payloads a market-maker tracks in local state (off-chain
- * cancelled but still on-chain-matchable); the MM's per-tick funding guard owns
- * that — see ospex-market-maker DESIGN §6. For a maker submitting via the
- * SDK/CLI, the API book is everything they're on the hook for.
+ * Scope note — VISIBLE BOOK ONLY, not hidden or locally-tracked latent.
+ * "Existing open risk" is the maker's open + partially-filled book AS THE PUBLIC
+ * API RETURNS IT, which filters `book_visible=true`. It does NOT include the
+ * maker's book-hidden rows (`book_visible=false` but still on-chain-matchable
+ * until expiry / nonce-floor / on-chain cancel — e.g. rows left live by the
+ * default off-chain `commitments cancel`), and it does NOT model latent payloads
+ * a market-maker tracks in local state. Those rows do not appear in the sum and
+ * do NOT degrade the verdict to `unknown` — they are simply outside scope, which
+ * the result states via `scope: 'visible-book-only'`. A maker who needs hidden
+ * exposure counted reads it from the owner-auth own-state surface
+ * (`client.ownState.snapshot`); the MM's per-tick funding guard owns the
+ * latent-payload case (see ospex-market-maker DESIGN §6). For a maker submitting
+ * via the SDK/CLI whose whole book is public, the API book is everything they're
+ * on the hook for.
  *
  * It is ADVISORY: "fundable now, based on the latest reads" — never a guarantee.
  * Mirrors the `ensure*` family: a discriminated `outcome`, fields present only
@@ -89,6 +100,17 @@ export type SubmitFundabilityOutcome =
   /** A required read failed, OR funding straddles the undeterminable existing-lazy-fee band — the verdict can't be asserted either way. */
   | 'unknown';
 
+/**
+ * The book the verdict was computed over. Always `'visible-book-only'` today:
+ * the aggregate sums the maker's API-visible open book, which the public list
+ * filters to `book_visible=true`. Book-hidden (`book_visible=false`) but
+ * still-on-chain-matchable rows are NOT summed and do NOT degrade the verdict —
+ * they are outside this scope (see the file header). Read hidden exposure from
+ * the owner-auth own-state surface. A future own-state-sourced mode could widen
+ * this to a whole-book scope.
+ */
+export type SubmitFundabilityScope = 'visible-book-only';
+
 export type SubmitFundabilityReasonCode =
   | 'MAKER_USDC_BALANCE_INSUFFICIENT'
   | 'MAKER_POSITION_ALLOWANCE_INSUFFICIENT'
@@ -107,7 +129,7 @@ export interface SubmitFundabilityReason {
   token?: Hex;
   /** The spender the allowance requirement targets (PositionModule / TreasuryModule). Allowance reasons only. */
   spender?: Hex;
-  /** Aggregate required amount (wei6) — the whole-book sum, not the new commitment alone. (For `EXISTING_LAZY_FEE_UNDETERMINED`, the maximum undeterminable existing lazy fee.) */
+  /** Aggregate required amount (wei6) — the whole-visible-book sum, not the new commitment alone (hidden rows are out of scope; see `scope`). (For `EXISTING_LAZY_FEE_UNDETERMINED`, the maximum undeterminable existing lazy fee.) */
   requiredWei6?: bigint;
   /** Current on-chain amount (wei6) that was read. Funding shortfall reasons only. */
   actualWei6?: bigint;
@@ -142,14 +164,21 @@ export interface CheckSubmitFundabilityResult {
   /** Convenience flag — `outcome === 'fundable'`. */
   fundableNow: boolean;
   outcome: SubmitFundabilityOutcome;
+  /**
+   * The book scope the verdict covers — always `'visible-book-only'` today.
+   * Hidden (`book_visible=false`) but on-chain-matchable rows are not summed and
+   * do not degrade the verdict; read owner-auth own-state for hidden exposure.
+   */
+  scope: SubmitFundabilityScope;
   /** Always true — a point-in-time advisory, never a guarantee. */
   advisory: true;
   /** Block at which balances/allowances were read. Absent only when the block read failed. */
   checkedAtBlock?: bigint;
   /**
-   * The whole-book requirement the verdict was computed against. Present once
-   * the maker's existing open book was fetched — absent when that fetch failed
-   * (→ `unknown`), since the aggregate can't be computed without it.
+   * The whole-visible-book requirement the verdict was computed against (hidden
+   * rows are out of scope; see `scope`). Present once the maker's existing open
+   * book was fetched — absent when that fetch failed (→ `unknown`), since the
+   * aggregate can't be computed without it.
    */
   requirement?: SubmitFundabilityRequirement;
   reasons: SubmitFundabilityReason[];
@@ -328,6 +357,7 @@ function result(args: {
     maker: args.maker,
     fundableNow: args.outcome === 'fundable',
     outcome: args.outcome,
+    scope: 'visible-book-only',
     advisory: true,
     reasons: args.reasons,
   };
@@ -344,8 +374,11 @@ function result(args: {
  * the new commitment's own key (`newKey`): its fee is already in the lower bound
  * (lazy) or its speculation is created (existing mode), so existing commitments
  * on it owe nothing extra. Paginates so a maker with a full page of open
- * commitments isn't under-counted. Returns `null` on ANY list failure — the
- * aggregate can't be computed without it, so the caller degrades to `unknown`.
+ * commitments isn't under-counted within the visible book. Book-hidden rows are
+ * filtered out by the public list and any stray redacted row is skipped, so this
+ * sum is visible-book-only (see the file header). Returns `null` on ANY list
+ * failure — the aggregate can't be computed without it, so the caller degrades
+ * to `unknown`.
  */
 async function tryFetchExistingOpenRisk(
   ctx: CommitmentsContext,
@@ -366,20 +399,23 @@ async function tryFetchExistingOpenRisk(
         offset,
       });
       for (const r of rows) {
-        // Hidden bodies redact `remainingRiskAmount` + `speculationKey` per the
-        // public allow-list (own-state SSE plan §2.3), so we cannot account for
-        // them in either the existing-risk sum or the maybe-lazy-key set.
-        // Skipping would silently UNDER-count the maker's open exposure — the
-        // one error a funding guard must never make. Degrade to `unknown`
-        // (caller surfaces `EXISTING_OPEN_RISK_UNDETERMINED`) so the verdict is
-        // honest. The maker recovers a definite verdict by re-running with the
-        // owner-auth own-state surface (`client.ownState.snapshot({address,
-        // cursor?})` — returns one page; drain via cursor loop while
-        // truncated:true), which delivers the full payload for the maker's
-        // own hidden rows in the active + recently-terminal scope (sufficient
-        // for fundability accounting; older terminal hidden rows have
-        // remainingRisk == 0 and don't contribute to existing open risk).
-        if (r.redacted === true) return null;
+        // VISIBLE-BOOK-ONLY scope. The public commitments list filters
+        // `book_visible=true` server-side, so a maker's book-hidden
+        // (`book_visible=false`) but still-on-chain-matchable rows — e.g. left
+        // live by the default off-chain `commitments cancel` — never appear in
+        // this list at all. They are simply absent from the sum; the verdict is
+        // NOT degraded to `unknown` for them (claiming otherwise would promise a
+        // protection this anonymous read cannot deliver). A redacted row can
+        // only reach this scan via the `?since=` recovery mode (which it does
+        // not use) or core-api's defense-in-depth projection — either way it is
+        // a hidden row and out of scope, so skip it, consistent with the
+        // `scope: 'visible-book-only'` the result carries. The maker accounts for
+        // hidden exposure via the owner-auth own-state surface
+        // (`client.ownState.snapshot({ address, cursor? })`, draining while
+        // `truncated`), which returns the full unredacted payload for their own
+        // hidden rows; a market-maker's per-tick funding guard tracks the same
+        // book-hidden latent exposure locally.
+        if (r.redacted === true) continue;
         const remaining = BigInt(r.remainingRiskAmount);
         if (remaining > 0n) {
           riskWei6 += remaining;

@@ -301,6 +301,7 @@ export type {
   SubmitFundabilityReason,
   SubmitFundabilityReasonCode,
   SubmitFundabilityRequirement,
+  SubmitFundabilityScope,
 } from './commitments/index.js';
 
 // Match-flow preview model — parallels SubmitPreview but for the taker
