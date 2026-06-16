@@ -231,21 +231,36 @@ export class Commitments {
   /**
    * Advisory, read-only preflight: "can the maker back what they're about to
    * sign?" The maker-side mirror of `checkCommitmentFillability`. Given a
-   * `prepareSubmit` preview, sums the maker's API-visible open + partially-filled
-   * commitment risk and compares the whole-VISIBLE-book aggregate (existing + this
-   * new commitment + any lazy creation fee) against the maker's USDC balance and
-   * PositionModule / TreasuryModule allowances. Catches whole-visible-book
-   * over-commitment the submit approve-loop misses (it only ever covers the new
-   * commitment in isolation, and reads no balance). VISIBLE-BOOK-ONLY: the public
-   * list filters `book_visible=true`, so the maker's book-hidden but
-   * on-chain-matchable rows are NOT summed and do NOT degrade the verdict — the
-   * result carries `scope: 'visible-book-only'`, and a `fundable` verdict means
-   * "fundable against the visible book" (read owner-auth own-state for hidden
-   * exposure). Returns a structured `{ outcome, fundableNow, scope, requirement,
-   * reasons[] }` verdict; signs nothing, allocates no nonce, and never throws on
-   * a not-fundable/unknown condition (those are outcomes). The intended flow is
-   * `prepareSubmit` → this → (if fundable / forced) `submitPrepared`, all on the
-   * one preview.
+   * `prepareSubmit` preview, sums the maker's existing open + partially-filled
+   * commitment risk and compares the whole-book aggregate (existing + this new
+   * commitment + any lazy creation fee) against the maker's USDC balance and
+   * PositionModule / TreasuryModule allowances. Catches whole-book over-commitment
+   * the submit approve-loop misses (it only ever covers the new commitment in
+   * isolation, and reads no balance).
+   *
+   * Two scopes, selected by `args.bookScope` (default `'visible-book-only'`):
+   * - **`'visible-book-only'`** (default, signer-free) — sums only the maker's
+   *   API-visible (`book_visible=true`) book. Book-hidden but on-chain-matchable
+   *   rows are NOT summed and do NOT degrade the verdict; the result carries
+   *   `scope: 'visible-book-only'` / `coverage.hidden: 'excluded'`, so a `fundable`
+   *   verdict means "fundable against the visible book" and real exposure can be
+   *   higher.
+   * - **`'whole-book'`** (opt-in) — also counts the maker's book-hidden exposure
+   *   by draining the owner-auth own-state snapshot (visible + hidden, unredacted,
+   *   one consistent source). Requires a signer matching `preview.raw.maker` and
+   *   mints one EIP-712 stream-auth token for the read — still signs no tx and
+   *   allocates no nonce. On a complete read: `scope: 'whole-book'` /
+   *   `coverage.hidden: 'included'`. Never a false `fundable`: if the read is
+   *   unavailable, a definite shortfall still returns `not-fundable`, else the
+   *   verdict degrades to `unknown` (`HIDDEN_EXPOSURE_UNKNOWN`) with
+   *   `scope: 'visible-book-only'`.
+   *
+   * Returns a structured `{ outcome, fundableNow, scope, coverage, requirement,
+   * reasons[] }` verdict (`coverage` always present — records what was actually
+   * summed). Signs nothing in the default path, allocates no nonce, and never
+   * throws on a not-fundable/unknown condition (those are outcomes). The intended
+   * flow is `prepareSubmit` → this → (if fundable / forced) `submitPrepared`, all
+   * on the one preview.
    */
   checkSubmitFundability(
     args: CheckSubmitFundabilityArgs,
@@ -357,6 +372,7 @@ export type {
   SubmitFundabilityReasonCode,
   SubmitFundabilityRequirement,
   SubmitFundabilityScope,
+  SubmitFundabilityCoverage,
 } from './checkSubmitFundability.js';
 export type {
   ResolveByPrefixOptions,

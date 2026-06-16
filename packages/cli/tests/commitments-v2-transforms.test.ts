@@ -352,6 +352,7 @@ describe('toSubmitExecuteEnvelope', () => {
       fundableNow: true,
       outcome: 'fundable',
       scope: 'visible-book-only',
+      coverage: { visible: 'included', hidden: 'excluded', source: 'public-commitments' },
       advisory: true,
       reasons: [],
       ...overrides,

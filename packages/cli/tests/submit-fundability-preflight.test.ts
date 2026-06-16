@@ -50,6 +50,7 @@ function makeResult(reasons: SubmitFundabilityReason[]): CheckSubmitFundabilityR
     fundableNow: outcome === 'fundable',
     outcome,
     scope: 'visible-book-only',
+    coverage: { visible: 'included', hidden: 'excluded', source: 'public-commitments' },
     advisory: true,
     checkedAtBlock: 73_491_234n,
     reasons,
