@@ -605,8 +605,15 @@ async function tryFetchExistingOpenRisk(
         }
         // Only a never-matched (`stored 'open'`) commitment can owe a creation
         // fee — a `partially_filled` one has matched, so its speculation exists.
-        if (r.storedStatus === 'open' && r.speculationKey !== null) {
-          const key = r.speculationKey.toLowerCase();
+        // A live open row with no speculationKey can't be disambiguated, so count
+        // it as its OWN maybe-lazy key (upper bound) rather than drop it — dropping
+        // would under-count the worst-case fee and could yield a false `fundable`.
+        // (Mirrors the whole-book own-state path's `nokey:` fail-safe.)
+        if (r.storedStatus === 'open') {
+          const key =
+            r.speculationKey === null
+              ? `nokey:${r.commitmentHash.toLowerCase()}`
+              : r.speculationKey.toLowerCase();
           if (key !== newKey) maybeLazyKeys.add(key);
         }
       }

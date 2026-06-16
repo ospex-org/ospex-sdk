@@ -369,6 +369,29 @@ describe('checkSubmitFundability — existing maybe-lazy creation fees', () => {
       existingMaybeLazyKeyCount: 0, // but not an extra possible fee
     });
   });
+
+  it('a live OPEN row with a null speculationKey is counted as its own maybe-lazy key (upper bound), not dropped', async () => {
+    // A never-matched open row whose speculationKey can't be disambiguated must
+    // still contribute one possible creation fee — dropping it would under-count
+    // the worst case and risk a false `fundable`.
+    const nullKeyOpen: Record<string, unknown> = {
+      commitmentHash: '0x' + 'd0'.repeat(32),
+      remainingRiskAmount: '1000000',
+      status: 'open',
+      storedStatus: 'open',
+      speculationKey: null,
+      nonceInvalidated: false,
+      expiry: '2099-01-01T00:00:00Z',
+    };
+    const { ctx } = buildContext({
+      existing: [nullKeyOpen],
+      pc: { balances: { [MAKER.toLowerCase()]: 2_000_000n + FEE - 1n } }, // ≥ 2.0 definite, < 2.0 + FEE
+    });
+    const r = await checkSubmitFundability(ctx, { preview: makePreview({ riskWei6: 1_000_000n }) });
+    expect(r.outcome).toBe('unknown');
+    expect(r.reasons.map((x) => x.code)).toEqual(['EXISTING_LAZY_FEE_UNDETERMINED']);
+    expect(r.requirement).toMatchObject({ existingMaybeLazyKeyCount: 1, existingLazyFeeMaxWei6: FEE });
+  });
 });
 
 describe('checkSubmitFundability — pagination', () => {
