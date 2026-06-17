@@ -56,7 +56,9 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
     .description(
       'On-chain cancel: call MatchingModule.cancelCommitment(commitment). ' +
         'Accepts a full hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars). ' +
-        'Always requires API access to reconstruct the commitment struct.',
+        'Reconstructs the struct from the public commitments API for a visible ' +
+        'row, or from owner-auth own-state for a book-hidden row (full hash, ' +
+        'maker only) — the recovery path for an already off-chain-cancelled order.',
     )
     .argument('<hash-or-prefix>', 'full commitment hash, or unique 0x-prefixed hex prefix')
     .option('--json', 'output as JSON'),

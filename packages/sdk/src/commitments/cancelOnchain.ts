@@ -13,17 +13,23 @@
  *      book-hide is in play, because the public commitments path redacts
  *      the matchable payload for hidden rows.
  *
- *   2. `cancelOnchain({ hash } | { signedCommitment })` — convenience
- *      overload. The signedCommitment branch is a thin pass-through to
- *      `cancelOnchainSigned`. The hash branch fetches via
- *      `CommitmentsApi.get` → `toCommitment` → `requireVisibleCommitment`
- *      (M5/PR1 narrow: throws structured before any signer / RPC / gas
- *      access if the row is redacted), reconstructs the
- *      SignedCommitmentPayload from the visible row, then delegates to
- *      `cancelOnchainSigned`. Anonymous callers default to this branch;
- *      makers / MMs holding the signed payload should prefer the
- *      signedCommitment branch (one round-trip cheaper, no dependency on
- *      `book_visible`).
+ *   2. `cancelOnchain({ hash } | { signedCommitment } | { commitment }, recoverHidden?)`
+ *      — convenience overload. The signedCommitment branch is a thin
+ *      pass-through to `cancelOnchainSigned`. The hash branch fetches via
+ *      `CommitmentsApi.get` → `toCommitment`; the commitment branch takes an
+ *      already-fetched public row (no second round-trip). Both reconstruct the
+ *      SignedCommitmentPayload bound to the CALLER-REQUESTED hash (the supplied
+ *      hash, or the supplied row's own hash) and delegate to
+ *      `cancelOnchainSigned`, so `assertReconstructHash` refuses a drifted /
+ *      wrong-row body rather than cancelling a different commitment. On a
+ *      redacted (book-hidden) row both branches `requireVisibleCommitment`-refuse
+ *      BEFORE any signer / RPC / gas access UNLESS `recoverHidden: true`, which
+ *      recovers the maker's signed payload from the owner-auth own-state surface
+ *      (`getOwnerCommitment`, scoped to the signer's address) — re-asserting the
+ *      recovered payload targets the requested hash — and cancels it. Anonymous
+ *      callers default to the hash branch; makers / MMs holding the signed
+ *      payload should prefer the signedCommitment branch (one round-trip
+ *      cheaper, no dependency on `book_visible`).
  *
  * Authoritative semantics are the same as before: once
  * `s_cancelledCommitments[hash]` is set, `matchCommitment` reverts with
@@ -150,7 +156,14 @@ export async function cancelOnchain(
   const recoverHidden = args.recoverHidden === true;
 
   if (commitment !== undefined) {
-    return cancelFromCommitment(ctx, commitment, recoverHidden);
+    // The caller-supplied row IS the request, so its own hash is the expected
+    // (requested) hash the cancel must be bound to.
+    return cancelFromCommitment(
+      ctx,
+      commitment,
+      recoverHidden,
+      commitment.commitmentHash.toLowerCase() as Hex,
+    );
   }
 
   // hash branch — fetch via decoder so the M2 wire `redacted` discriminant
@@ -163,31 +176,44 @@ export async function cancelOnchain(
   }
   const lowercaseHash = (hash as Hex).toLowerCase() as Hex;
   const fetched = await new CommitmentsApi(ctx.api).get(lowercaseHash);
-  return cancelFromCommitment(ctx, fetched, recoverHidden);
+  // Bind the cancel to the REQUESTED hash, not the fetched body's own
+  // commitmentHash — so a drifted / wrong-row API response is refused
+  // (by assertReconstructHash on the visible path, or the recovered-payload
+  // check on the hidden path) rather than silently cancelling whatever the
+  // body describes.
+  return cancelFromCommitment(ctx, fetched, recoverHidden, lowercaseHash);
 }
 
 /**
- * Route an already-decoded public {@link Commitment} to the on-chain cancel:
+ * Route an already-decoded public {@link Commitment} to the on-chain cancel,
+ * BOUND to `expectedHash` — the hash the caller asked to cancel (the requested
+ * hash on the `{ hash }` branch, or the supplied row's own hash on the
+ * `{ commitment }` branch):
  *
  *   - visible row → reconstruct the struct ({@link buildPayloadFromVisible})
- *     and cancel via {@link cancelOnchainSigned};
+ *     against `expectedHash` and cancel via {@link cancelOnchainSigned};
+ *     `assertReconstructHash` then refuses if the row's struct hashes to
+ *     anything other than `expectedHash` (a drifted / wrong-row body never
+ *     cancels a different commitment than requested);
  *   - redacted (book-hidden) row → recover via owner-auth own-state when
- *     `recoverHidden` is set, otherwise refuse via
- *     {@link requireVisibleCommitment} BEFORE any signer / chain access (the
- *     historical contract — a hidden body has no signature / nonce / oddsTick
- *     / riskAmount / scorer / lineTicks, so letting it through would hit a
- *     `BigInt(undefined)` TypeError and waste a Foundry-passphrase decrypt).
+ *     `recoverHidden` is set (also bound to `expectedHash`), otherwise refuse
+ *     via {@link requireVisibleCommitment} BEFORE any signer / chain access
+ *     (the historical contract — a hidden body has no signature / nonce /
+ *     oddsTick / riskAmount / scorer / lineTicks, so letting it through would
+ *     hit a `BigInt(undefined)` TypeError and waste a Foundry-passphrase
+ *     decrypt).
  */
 async function cancelFromCommitment(
   ctx: CommitmentsContext,
   commitment: Commitment,
   recoverHidden: boolean,
+  expectedHash: Hex,
 ): Promise<CancelOnchainResult> {
   if (commitment.redacted === false) {
-    const payload = buildPayloadFromVisible(
-      commitment,
-      commitment.commitmentHash.toLowerCase() as Hex,
-    );
+    // Reconstruct against the EXPECTED (requested) hash, NOT the body's own
+    // commitmentHash — so assertReconstructHash binds the cancel to what the
+    // caller asked for.
+    const payload = buildPayloadFromVisible(commitment, expectedHash);
     return cancelOnchainSigned(ctx, payload);
   }
   // Book-hidden (redacted) row.
@@ -197,10 +223,7 @@ async function cancelFromCommitment(
     // BEFORE any signer / RPC / gas access.
     requireVisibleCommitment(commitment, { purpose: 'cancel on chain' });
   }
-  return recoverHiddenCommitmentAndCancel(
-    ctx,
-    commitment.commitmentHash.toLowerCase() as Hex,
-  );
+  return recoverHiddenCommitmentAndCancel(ctx, expectedHash);
 }
 
 /**
@@ -220,7 +243,7 @@ async function cancelFromCommitment(
  */
 async function recoverHiddenCommitmentAndCancel(
   ctx: CommitmentsContext,
-  lowercaseHash: Hex,
+  expectedHash: Hex,
 ): Promise<CancelOnchainResult> {
   const signer = ctx.requireSigner();
   const address = ((await signer.getAddress()) as string).toLowerCase() as Hex;
@@ -232,11 +255,11 @@ async function recoverHiddenCommitmentAndCancel(
     address,
     chainId,
     matchingModule: matchingModule as Hex,
-    hash: lowercaseHash,
+    hash: expectedHash,
   });
   if (owner === null) {
     throw new OspexValidationError(
-      `cancelOnchain: book-hidden commitment ${lowercaseHash} was not found in your owner-auth ` +
+      `cancelOnchain: book-hidden commitment ${expectedHash} was not found in your owner-auth ` +
         'own-state snapshot scope. Only the maker can recover a hidden commitment’s signed ' +
         'payload; if you are the maker and the row is outside snapshot scope, invalidate it with ' +
         'the nonce-floor lever instead (cancelAllOnSpeculation).',
@@ -245,10 +268,24 @@ async function recoverHiddenCommitmentAndCancel(
   }
   if (owner.signedPayload === null) {
     throw new OspexValidationError(
-      `cancelOnchain: book-hidden commitment ${lowercaseHash} has no signed payload (a ` +
+      `cancelOnchain: book-hidden commitment ${expectedHash} has no signed payload (a ` +
         'signature-less indexer-discovered row); its cancel struct cannot be reconstructed. ' +
         'Invalidate it with the nonce-floor lever instead (cancelAllOnSpeculation).',
       { field: 'signedPayload' },
+    );
+  }
+  // Defense-in-depth: bind the recovered payload to the REQUESTED hash. The
+  // own-state lookup matched `expectedHash` on the row, but the EMBEDDED signed
+  // payload must also target it before we cancel — so an internally
+  // inconsistent own-state body can never authorize cancelling a different
+  // on-chain slot than requested. (cancelOnchainSigned then independently
+  // asserts the struct hashes to that same payload hash — together: struct →
+  // payload hash → requested hash.)
+  if (owner.signedPayload.commitmentHash.toLowerCase() !== expectedHash) {
+    throw new OspexValidationError(
+      `cancelOnchain: the owner-auth payload recovered for ${expectedHash} carries a different ` +
+        `commitmentHash (${owner.signedPayload.commitmentHash}); refusing to cancel a different commitment.`,
+      { field: 'commitmentHash' },
     );
   }
   return cancelOnchainSigned(ctx, owner.signedPayload);

@@ -1,9 +1,11 @@
 /**
- * `client.commitments.cancelOnchain({ hash } | { signedCommitment })` +
- * `client.commitments.cancelOnchainSigned(payload)` — happy paths,
+ * `client.commitments.cancelOnchain({ hash } | { signedCommitment } | { commitment }, recoverHidden?)`
+ * + `client.commitments.cancelOnchainSigned(payload)` — happy paths,
  * validation errors, mutually-exclusive args, hash↔struct round-trip,
- * idempotent re-cancel, and the two error-classification paths for
- * `MatchingModule__NotCommitmentMaker` (structured + raw selector).
+ * idempotent re-cancel, the two error-classification paths for
+ * `MatchingModule__NotCommitmentMaker` (structured + raw selector), and the
+ * { commitment } overload + owner-auth book-hidden recovery (incl. the
+ * requested-hash binding on both the visible and recovery paths).
  *
  * Same fake-publicClient + fake-signer pattern as positions-claim.test.ts.
  */
@@ -776,6 +778,44 @@ describe('commitments.cancelOnchain — { commitment } overload + recoverHidden 
       name: 'OspexValidationError',
       field: 'commitmentHash',
       message: expect.stringContaining('does not match commitmentHash'),
+    });
+  });
+
+  it('{ hash } binds the cancel to the REQUESTED hash — refuses a wrong-row API body', async () => {
+    // Defense-in-depth: api.get(H2) returns a coherent body for a DIFFERENT
+    // commitment (it hashes to HASH, not the requested H2). The cancel MUST
+    // refuse — bound to the REQUESTED hash, never the fetched body's own hash —
+    // rather than silently cancel whatever the body describes. With the
+    // requested-hash binding, assertReconstructHash(struct, H2) sees the struct
+    // hash to HASH ≠ H2 and throws.
+    const DIFFERENT_HASH = ('0x' + 'cd'.repeat(32)) as `0x${string}`;
+    const { ctx } = fakeContext(); // default apiResponder → body hashing to HASH
+    await expect(cancelOnchain(ctx, { hash: DIFFERENT_HASH })).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      field: 'commitmentHash',
+      message: expect.stringContaining('does not match commitmentHash'),
+    });
+  });
+
+  it('recoverHidden: a recovered payload whose commitmentHash ≠ the requested hash is REFUSED (requested-hash binding)', async () => {
+    // The own-state ROW matches the requested hash, but its embedded
+    // signedPayload targets a DIFFERENT commitmentHash (an internally
+    // inconsistent owner-auth body). The recovery MUST refuse — binding the
+    // cancel to the requested hash — rather than cancel the payload's hash.
+    const OTHER_HASH = ('0x' + 'cd'.repeat(32)) as `0x${string}`;
+    const inconsistent: NonNullable<OwnerCommitmentBody['signedPayload']> = {
+      ...SIGNED_PAYLOAD_WIRE,
+      commitmentHash: OTHER_HASH,
+    };
+    const { ctx } = fakeRecoveryContext({
+      snapshotPages: [snapshotPage([ownerBodyForHash(inconsistent)], false, 'LIVE')],
+    });
+    await expect(
+      cancelOnchain(ctx, { commitment: HIDDEN_COMMITMENT, recoverHidden: true }),
+    ).rejects.toMatchObject({
+      name: 'OspexValidationError',
+      field: 'commitmentHash',
+      message: expect.stringContaining('refusing to cancel a different commitment'),
     });
   });
 });
