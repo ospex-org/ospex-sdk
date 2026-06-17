@@ -33,7 +33,7 @@ import { validateCommitmentLineTicks } from './validation.js';
 import { OspexValidationError } from '../errors.js';
 import type { CommitmentsContext } from './context.js';
 import type { SubmitPreview } from '../types/preview.js';
-import type { SubmitResult } from './submitRaw.js';
+import { withCommitmentHash, type SubmitResult } from './submitRaw.js';
 import type { CommitmentBody } from '../api/types.js';
 import type { Hex } from '../types/signer.js';
 
@@ -114,25 +114,36 @@ export async function submitPrepared(
   const speculationKey = preview.raw.speculationKey as Hex;
   ctx.nonceCounter.observe(message.maker.toLowerCase(), speculationKey.toLowerCase(), message.nonce);
 
-  const body = await ctx.api.request<CommitmentBody>('/v1/commitments', {
-    method: 'POST',
-    headers: { 'Idempotency-Key': hash },
-    body: {
-      action: {
-        type: 'OspexCommitment',
-        maker: message.maker,
-        contestId: message.contestId.toString(),
-        scorer: message.scorer,
-        lineTicks: message.lineTicks,
-        positionType: message.positionType,
-        oddsTick: message.oddsTick,
-        riskAmount: message.riskAmount.toString(),
-        nonce: message.nonce.toString(),
-        expiry: message.expiry.toString(),
+  let body: CommitmentBody;
+  try {
+    body = await ctx.api.request<CommitmentBody>('/v1/commitments', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': hash },
+      body: {
+        action: {
+          type: 'OspexCommitment',
+          maker: message.maker,
+          contestId: message.contestId.toString(),
+          scorer: message.scorer,
+          lineTicks: message.lineTicks,
+          positionType: message.positionType,
+          oddsTick: message.oddsTick,
+          riskAmount: message.riskAmount.toString(),
+          nonce: message.nonce.toString(),
+          expiry: message.expiry.toString(),
+        },
+        signature,
       },
-      signature,
-    },
-  });
+    });
+  } catch (err) {
+    // Attach the locally-computed hash so an ambiguous POST failure (the
+    // response lost after a maybe-insert) carries the handle to the maybe-live
+    // commitment — the caller can probe (`commitments show <hash>` / own-state)
+    // before retrying instead of blindly re-submitting (a fresh submit signs a
+    // new nonce → new hash → server dedup misses → doubled exposure). See
+    // AGENT_CONTRACT §7 retry carve-out.
+    throw withCommitmentHash(err, hash);
+  }
   // Submission inserts `book_visible=true` by construction; the server
   // response must decode visible. See submitRaw.ts for the same defensive narrow.
   const commitment = requireVisibleCommitment(toCommitment(body), {

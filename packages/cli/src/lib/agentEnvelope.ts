@@ -571,6 +571,7 @@ function extractOspexErrorDetails(err: OspexError): Record<string, unknown> | un
     expectedHash?: string;
     actualHash?: string;
     subscriptionId?: bigint;
+    commitmentHash?: string;
   };
   const out: Record<string, unknown> = {};
   if (typeof e.reason === 'string') out.reason = e.reason;
@@ -618,6 +619,11 @@ function extractOspexErrorDetails(err: OspexError): Record<string, unknown> | un
   if (typeof e.expectedHash === 'string') out.expectedHash = e.expectedHash;
   if (typeof e.actualHash === 'string') out.actualHash = e.actualHash;
   if (typeof e.subscriptionId === 'bigint') out.subscriptionId = e.subscriptionId.toString();
+  // `commitmentHash` is attached by `submit` / `submit-raw` to an `OspexAPIError`
+  // when a `/v1/commitments` POST fails AFTER the hash was computed — the handle
+  // to a maybe-live commitment the agent must probe before retrying (§7 retry
+  // carve-out). Surfaced so it rides `errors[0].details.commitmentHash`.
+  if (typeof e.commitmentHash === 'string') out.commitmentHash = e.commitmentHash;
   return Object.keys(out).length === 0 ? undefined : out;
 }
 
