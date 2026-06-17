@@ -203,6 +203,29 @@ export const COMPLETE_CONTESTS_WAIT_VERIFIED = registerNextCommand({
 /* ------------------------------------------------------------------------- */
 
 /**
+ * After a dual `cancel --also-onchain` whose on-chain leg did NOT confirm
+ * (no POL, RPC outage, receipt-wait timeout): the off-chain DELETE landed, so
+ * the row is hidden from the relay but a taker holding the signed payload is
+ * NOT blocked. Suggest the standalone on-chain cancel to finish the
+ * authoritative leg. At this point the row is book-hidden, so the command
+ * recovers the maker's signed payload via owner-auth own-state before
+ * cancelling. Idempotent — the contract has no `AlreadyCancelled` revert, so
+ * re-running after a transient failure is safe.
+ */
+export const REMEDIATE_CANCEL_ONCHAIN = registerNextCommand({
+  id: 'remediate-cancel-onchain',
+  suggestedFor: 'remediate',
+  safeToAutoRun: false,
+  render: (params: { hash: string }) => ({
+    description:
+      'Complete the authoritative on-chain cancel (recovers the book-hidden row ' +
+      'via owner-auth own-state). Idempotent — safe to re-run.',
+    command: `ospex commitments cancel-onchain ${params.hash} --json`,
+    argv: ['commitments', 'cancel-onchain', params.hash, '--json'],
+  }),
+});
+
+/**
  * For ALLOWANCE_INSUFFICIENT against PositionModule (commitment-risk
  * shortfall). The amount is rounded up from `required` to the
  * nearest USDC unit for a slightly looser allowance so re-runs

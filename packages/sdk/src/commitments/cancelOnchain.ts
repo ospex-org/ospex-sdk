@@ -61,8 +61,13 @@ import { buildSignAndSend } from './sendTx.js';
 import { sendWithMatchingErrorClassification } from './matchingErrors.js';
 import { requireVisibleCommitment } from './requireVisible.js';
 import { CommitmentsApi } from '../api/commitments.js';
+import { getOwnerCommitment } from '../ownState/getCommitment.js';
 import type { CommitmentsContext } from './context.js';
-import type { PublicVisibleCommitment, SignedCommitmentPayload } from '../types/commitment.js';
+import type {
+  Commitment,
+  PublicVisibleCommitment,
+  SignedCommitmentPayload,
+} from '../types/commitment.js';
 import type { Hex } from '../types/signer.js';
 
 const HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
@@ -77,35 +82,59 @@ export interface CancelOnchainResult {
 }
 
 /**
- * `cancelOnchain({ hash } | { signedCommitment })` — the convenience
- * overload. Use `{ signedCommitment }` when you already hold the signed
- * payload (one round-trip cheaper; works against book-hidden rows). Use
- * `{ hash }` when you only have the EIP-712 hash and the row is on the
- * public book.
+ * `cancelOnchain({ hash } | { signedCommitment } | { commitment })` — the
+ * convenience overload. Pick the branch by what you hold:
  *
- * The two branches are mutually exclusive — passing both throws
- * `OspexValidationError`. Passing neither throws too (defensive — the
- * type system already requires one).
+ *   - `{ signedCommitment }` — you already hold the maker-signed payload
+ *     (one round-trip cheaper; works against book-hidden rows; no API hit).
+ *   - `{ commitment }` — you already fetched the public row (e.g. via
+ *     `resolveByPrefix`); the SDK reconstructs the struct from it WITHOUT a
+ *     second `/v1/commitments/:hash` round-trip. This is the branch the CLI
+ *     dual `cancel --also-onchain` uses for its on-chain leg, so it never
+ *     re-fetches a row its own off-chain DELETE just hid (book_visible=false)
+ *     and then chokes on the redacted body.
+ *   - `{ hash }` — you only have the EIP-712 hash; the SDK fetches via the
+ *     public commitments API and narrows redaction.
+ *
+ * **`recoverHidden` (hash / commitment branches only).** A book-hidden row
+ * (`book_visible=false`) redacts the matchable struct from anonymous reads,
+ * so the default behavior on a redacted body is to refuse with structured
+ * guidance (the historical contract). Pass `recoverHidden: true` to instead
+ * recover the maker's signed payload via the owner-auth own-state surface
+ * (`getCommitment`) and proceed — the signer MUST own the commitment (the
+ * snapshot is scoped to the signer's address). This is the authoritative
+ * recovery path for cancelling a commitment the maker took off the public
+ * book. It mints one stream-auth token and pages the owner-auth snapshot.
+ *
+ * The branches are mutually exclusive — passing more than one throws
+ * `OspexValidationError`. Passing none throws too (defensive — the type
+ * system already requires one).
  */
 export type CancelOnchainArgs =
-  | { hash: Hex; signedCommitment?: undefined }
-  | { hash?: undefined; signedCommitment: SignedCommitmentPayload };
+  | { hash: Hex; recoverHidden?: boolean; signedCommitment?: undefined; commitment?: undefined }
+  | {
+      signedCommitment: SignedCommitmentPayload;
+      hash?: undefined;
+      commitment?: undefined;
+      recoverHidden?: undefined;
+    }
+  | { commitment: Commitment; recoverHidden?: boolean; hash?: undefined; signedCommitment?: undefined };
 
 export async function cancelOnchain(
   ctx: CommitmentsContext,
   args: CancelOnchainArgs,
 ): Promise<CancelOnchainResult> {
-  const hash = args.hash;
-  const signedCommitment = args.signedCommitment;
-  if (hash !== undefined && signedCommitment !== undefined) {
+  const { hash, signedCommitment, commitment } = args;
+  const provided = [hash, signedCommitment, commitment].filter((v) => v !== undefined).length;
+  if (provided > 1) {
     throw new OspexValidationError(
-      'cancelOnchain: pass either { hash } or { signedCommitment }, not both.',
+      'cancelOnchain: pass exactly one of { hash }, { signedCommitment }, or { commitment }.',
       { field: 'hash' },
     );
   }
-  if (hash === undefined && signedCommitment === undefined) {
+  if (provided === 0) {
     throw new OspexValidationError(
-      'cancelOnchain: one of { hash } or { signedCommitment } is required.',
+      'cancelOnchain: one of { hash }, { signedCommitment }, or { commitment } is required.',
       { field: 'hash' },
     );
   }
@@ -114,7 +143,18 @@ export async function cancelOnchain(
     return cancelOnchainSigned(ctx, signedCommitment);
   }
 
-  // hash branch — fetch via decoder + narrow before any signer / RPC work.
+  // `recoverHidden` opt-in applies to the hash + commitment branches: a
+  // redacted (book-hidden) row → owner-auth own-state recovery. Defaults
+  // false so the historical "refuse a redacted row" contract is preserved
+  // unless a caller explicitly opts into the heavier owner-auth path.
+  const recoverHidden = args.recoverHidden === true;
+
+  if (commitment !== undefined) {
+    return cancelFromCommitment(ctx, commitment, recoverHidden);
+  }
+
+  // hash branch — fetch via decoder so the M2 wire `redacted` discriminant
+  // is decoded, then route exactly like the commitment branch.
   if (!HASH_PATTERN.test(hash as Hex)) {
     throw new OspexValidationError(
       'cancelOnchain hash must be a 0x-prefixed 32-byte hex string.',
@@ -122,21 +162,96 @@ export async function cancelOnchain(
     );
   }
   const lowercaseHash = (hash as Hex).toLowerCase() as Hex;
-
-  // Routes through `CommitmentsApi.get` → `toCommitment` so the M2 wire
-  // `redacted` discriminant is decoded. A hidden public body has no
-  // signature / nonce / oddsTick / riskAmount / scorer / lineTicks (the
-  // public allow-list excludes everything `cancelCommitment`'s struct
-  // needs) — narrow BEFORE any signer / chain-client / addresses access so
-  // a redacted row never reaches the BigInt() conversions (which would
-  // TypeError on undefined) and never spends a Foundry-passphrase decrypt
-  // on a request that's about to fail. Makers with the signed payload in
-  // local state should bypass this by passing `{ signedCommitment }`.
   const fetched = await new CommitmentsApi(ctx.api).get(lowercaseHash);
-  const visible = requireVisibleCommitment(fetched, { purpose: 'cancel on chain' });
-  const payload = buildPayloadFromVisible(visible, lowercaseHash);
+  return cancelFromCommitment(ctx, fetched, recoverHidden);
+}
 
-  return cancelOnchainSigned(ctx, payload);
+/**
+ * Route an already-decoded public {@link Commitment} to the on-chain cancel:
+ *
+ *   - visible row → reconstruct the struct ({@link buildPayloadFromVisible})
+ *     and cancel via {@link cancelOnchainSigned};
+ *   - redacted (book-hidden) row → recover via owner-auth own-state when
+ *     `recoverHidden` is set, otherwise refuse via
+ *     {@link requireVisibleCommitment} BEFORE any signer / chain access (the
+ *     historical contract — a hidden body has no signature / nonce / oddsTick
+ *     / riskAmount / scorer / lineTicks, so letting it through would hit a
+ *     `BigInt(undefined)` TypeError and waste a Foundry-passphrase decrypt).
+ */
+async function cancelFromCommitment(
+  ctx: CommitmentsContext,
+  commitment: Commitment,
+  recoverHidden: boolean,
+): Promise<CancelOnchainResult> {
+  if (commitment.redacted === false) {
+    const payload = buildPayloadFromVisible(
+      commitment,
+      commitment.commitmentHash.toLowerCase() as Hex,
+    );
+    return cancelOnchainSigned(ctx, payload);
+  }
+  // Book-hidden (redacted) row.
+  if (!recoverHidden) {
+    // Refuse with the structured owner-auth guidance — `requireVisibleCommitment`
+    // throws `OspexValidationError({ field: 'commitment' })` on a redacted row
+    // BEFORE any signer / RPC / gas access.
+    requireVisibleCommitment(commitment, { purpose: 'cancel on chain' });
+  }
+  return recoverHiddenCommitmentAndCancel(
+    ctx,
+    commitment.commitmentHash.toLowerCase() as Hex,
+  );
+}
+
+/**
+ * Owner-auth recovery for a book-hidden commitment: page the maker's
+ * owner-auth own-state snapshot for the signed payload, then cancel on chain
+ * via {@link cancelOnchainSigned}. Used when the public body is redacted (the
+ * maker took the row off the public book) and the caller opted into recovery
+ * (`recoverHidden: true`).
+ *
+ * The snapshot is scoped to the configured signer's address, so a signer that
+ * does NOT own the commitment simply won't find the hash — surfaced as a clear
+ * error pointing at the nonce-floor lever (the only payload-free authoritative
+ * cancel). `getOwnerCommitment` mints exactly one stream-auth token and throws
+ * `OspexOwnStateError({ reason: 'scan_limit_exceeded' })` on an indeterminate
+ * (still-truncated) scan — propagated unchanged so an UNKNOWN is never silently
+ * treated as "not found".
+ */
+async function recoverHiddenCommitmentAndCancel(
+  ctx: CommitmentsContext,
+  lowercaseHash: Hex,
+): Promise<CancelOnchainResult> {
+  const signer = ctx.requireSigner();
+  const address = ((await signer.getAddress()) as string).toLowerCase() as Hex;
+  const { matchingModule } = ctx.getAddresses();
+  const chainId = ctx.getChainId();
+  const owner = await getOwnerCommitment({
+    api: ctx.api,
+    signer,
+    address,
+    chainId,
+    matchingModule: matchingModule as Hex,
+    hash: lowercaseHash,
+  });
+  if (owner === null) {
+    throw new OspexValidationError(
+      `cancelOnchain: book-hidden commitment ${lowercaseHash} was not found in your owner-auth ` +
+        'own-state snapshot scope. Only the maker can recover a hidden commitment’s signed ' +
+        'payload; if you are the maker and the row is outside snapshot scope, invalidate it with ' +
+        'the nonce-floor lever instead (cancelAllOnSpeculation).',
+      { field: 'hash' },
+    );
+  }
+  if (owner.signedPayload === null) {
+    throw new OspexValidationError(
+      `cancelOnchain: book-hidden commitment ${lowercaseHash} has no signed payload (a ` +
+        'signature-less indexer-discovered row); its cancel struct cannot be reconstructed. ' +
+        'Invalidate it with the nonce-floor lever instead (cancelAllOnSpeculation).',
+      { field: 'signedPayload' },
+    );
+  }
+  return cancelOnchainSigned(ctx, owner.signedPayload);
 }
 
 /**
