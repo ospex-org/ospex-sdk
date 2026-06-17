@@ -246,6 +246,60 @@ describe('toCancelDualAgentEnvelope (cancel --also-onchain partial-success)', ()
     expect(env.payload.txHash).toBe('0xpending');
     expect(env.payload.blockNumber).toBeNull();
   });
+
+  it('off-chain OK + on-chain NON-chain error → off-chain leg preserved, UNKNOWN_ERROR, recovery nextCommand (M6)', () => {
+    // The on-chain leg can now throw a NON-OspexChainError (e.g. a validation
+    // error if the in-hand row can't be reconstructed, or an owner-auth
+    // recovery failure). The dual envelope MUST still preserve the completed
+    // off-chain DELETE in effects[] — never collapse to a bare failure that
+    // hides it (the M6 fix) — and surface the cancel-onchain recovery.
+    const env = toCancelDualAgentEnvelope(
+      {
+        offChainResult: { ok: true },
+        onChainResult: null,
+        onChainError: new Error('owner-auth recovery unavailable'),
+        explorer: null,
+      },
+      makeCommitment(),
+      { chainId: POLYGON, signerAddress: SIGNER, hash: HASH },
+    );
+    expect(env.ok).toBe(false);
+    // The completed off-chain leg survives (the regression M6 fixes).
+    expect(env.effects[0]?.type).toBe('eip712-signature');
+    expect(env.effects[0]?.ok).toBe(true);
+    expect(env.effects[1]?.type).toBe('offchain-write');
+    expect(env.effects[1]?.ok).toBe(true);
+    // A non-chain failure → UNKNOWN_ERROR, no tx handle (honest: none landed).
+    expect(env.effects[2]?.type).toBe('transaction');
+    expect(env.effects[2]?.ok).toBe(false);
+    expect(env.effects[2]?.errorCode).toBe('UNKNOWN_ERROR');
+    expect(env.effects[2]?.txHash).toBeUndefined();
+    expect(env.effects[2]?.status).toBeUndefined();
+    expect(env.errors[0]?.code).toBe('UNKNOWN_ERROR');
+    expect(env.payload.txHash).toBeNull();
+    expect(env.payload.onChainError?.code).toBe('UNKNOWN_ERROR');
+    // Recovery: complete the authoritative cancel via the standalone command.
+    expect(
+      env.nextCommands?.some(
+        (c) => c.argv?.[0] === 'commitments' && c.argv?.[1] === 'cancel-onchain',
+      ),
+    ).toBe(true);
+  });
+
+  it('both phases succeed → nextCommands is verify-only (no cancel-onchain remediation)', () => {
+    const env = toCancelDualAgentEnvelope(
+      {
+        offChainResult: { ok: true },
+        onChainResult: makeOnChainResult('success'),
+        onChainError: null,
+        explorer: 'https://polygonscan.com/tx/0xon',
+      },
+      makeCommitment(),
+      { chainId: POLYGON, signerAddress: SIGNER, hash: HASH },
+    );
+    expect(env.ok).toBe(true);
+    expect(env.nextCommands?.some((c) => c.argv?.[1] === 'cancel-onchain')).toBe(false);
+  });
 });
 
 describe('toCancelOnchainAgentEnvelope', () => {

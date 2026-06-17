@@ -15,8 +15,11 @@ import type { Hex } from './signer.js';
  * can still authoritatively cancel on chain without round-tripping a
  * redacted public read). `cancelOnchain({ signedCommitment })` is the
  * convenience overload that delegates to it; `cancelOnchain({ hash })`
- * is the alternative that fetches via the public commitments API and
- * narrows redaction before constructing the equivalent payload.
+ * fetches via the public commitments API, and `cancelOnchain({ commitment })`
+ * reuses an already-fetched public row — both reconstruct the equivalent
+ * payload bound to the requested hash. On a book-hidden row those two
+ * branches refuse unless `recoverHidden: true` is passed, which recovers the
+ * payload from the owner-auth own-state surface before cancelling.
  *
  * Although `MatchingModule.cancelCommitment` only consumes `commitment`
  * on chain (the contract recomputes the hash from the struct and uses

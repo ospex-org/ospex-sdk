@@ -10,10 +10,16 @@
  * scripting against this command.
  *
  * Accepts a full 32-byte hash OR a unique 0x-prefixed hex prefix (≥ 8
- * hex chars). On-chain cancel always requires API access to reconstruct
- * the commitment struct (full ABI fields needed for
- * MatchingModule.cancelCommitment), regardless of whether the input is
- * a full hash or a prefix.
+ * hex chars). Reconstructing the commitment struct needs the full ABI
+ * fields:
+ *   - a VISIBLE row is fetched from the public commitments API;
+ *   - a BOOK-HIDDEN row (book_visible=false — the maker already
+ *     off-chain-cancelled it) is redacted on the public API, so the struct
+ *     is recovered from the OWNER-AUTH own-state surface instead. This makes
+ *     the command the recovery path after a dual `cancel --also-onchain`
+ *     whose on-chain leg didn't confirm. A hidden row only resolves by its
+ *     FULL hash (the public list omits hidden rows), and only the maker can
+ *     recover it (the own-state snapshot is scoped to the signer).
  */
 
 import { Command } from '@commander-js/extra-typings';
@@ -50,7 +56,9 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
     .description(
       'On-chain cancel: call MatchingModule.cancelCommitment(commitment). ' +
         'Accepts a full hash or a unique 0x-prefixed hex prefix (≥ 8 hex chars). ' +
-        'Always requires API access to reconstruct the commitment struct.',
+        'Reconstructs the struct from the public commitments API for a visible ' +
+        'row, or from owner-auth own-state for a book-hidden row (full hash, ' +
+        'maker only) — the recovery path for an already off-chain-cancelled order.',
     )
     .argument('<hash-or-prefix>', 'full commitment hash, or unique 0x-prefixed hex prefix')
     .option('--json', 'output as JSON'),
@@ -69,8 +77,15 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
     // catch below carries wallet/signer populated.
     signerAddress = ((await client.signer().getAddress()) as string).toLowerCase() as Hex;
 
+    // Include `cancelled` in the resolve scope: a maker who already off-chain-
+    // cancelled (book_visible=false → effective status `cancelled`) — e.g. after
+    // a dual `cancel --also-onchain` whose on-chain leg didn't confirm — must
+    // still be able to run the authoritative on-chain cancel. The row reads
+    // `cancelled` but is STILL matchable on chain. (Resolution is by FULL hash
+    // for a hidden row: the public list filters book_visible=false rows out, so
+    // a prefix won't resolve one — pass the full hash to recover a hidden row.)
     const commitment = await client.commitments.resolveByPrefix(hashArg, {
-      status: ['open', 'partially_filled'],
+      status: ['open', 'partially_filled', 'cancelled'],
     });
     const hash = commitment.commitmentHash as Hex;
     if (commitment.commitmentHash.toLowerCase() !== hashArg.toLowerCase()) {
@@ -79,7 +94,12 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
 
     let result;
     try {
-      result = await client.commitments.cancelOnchain({ hash });
+      // `recoverHidden: true`: if the resolved row is book-hidden (redacted),
+      // recover the maker's signed payload via owner-auth own-state and cancel
+      // authoritatively — the standalone recovery for a commitment taken off
+      // the public book. Passing the already-resolved `commitment` (not just
+      // the hash) also skips a redundant re-fetch for the visible case.
+      result = await client.commitments.cancelOnchain({ commitment, recoverHidden: true });
     } catch (err) {
       if (err instanceof OspexChainError && err.reason === 'NotCommitmentMaker') {
         process.stderr.write(

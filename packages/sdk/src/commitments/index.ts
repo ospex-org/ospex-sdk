@@ -304,15 +304,28 @@ export class Commitments {
   // ── On-chain cancel + nonce floor (M2.5) ──────────────────────────
 
   /**
-   * On-chain cancel — convenience overload. Pass `{ signedCommitment }` when
-   * you already hold the maker-signed payload locally (zero API round-trips,
-   * works against book-hidden rows). Pass `{ hash }` when you only have the
-   * EIP-712 hash and the row is still on the public book; the SDK fetches via
-   * the public commitments API, narrows redaction with
-   * {@link requireVisibleCommitment} (M5/PR1) BEFORE any signer / RPC access,
-   * then delegates to {@link cancelOnchainSigned}.
+   * On-chain cancel — convenience overload, three mutually-exclusive branches:
    *
-   * Mutually exclusive: passing both fields throws `OspexValidationError`.
+   *   - `{ signedCommitment }` — you already hold the maker-signed payload
+   *     locally (zero API round-trips, works against book-hidden rows).
+   *   - `{ commitment }` — you already fetched the public row (e.g. via
+   *     {@link Commitments.resolveByPrefix}); the SDK reconstructs the struct
+   *     from it with NO second `/v1/commitments/:hash` round-trip. Lets a
+   *     dual off-chain-then-on-chain cancel use the row it resolved BEFORE the
+   *     off-chain DELETE hid it, instead of re-fetching a now-redacted body.
+   *   - `{ hash }` — you only have the EIP-712 hash; the SDK fetches via the
+   *     public commitments API and narrows redaction with
+   *     {@link requireVisibleCommitment} BEFORE any signer / RPC access.
+   *
+   * `recoverHidden: true` (hash / commitment branches) recovers a book-hidden
+   * row's signed payload via the owner-auth own-state surface
+   * ({@link OwnState.getCommitment}) and cancels it authoritatively — the
+   * recovery path for a commitment the maker took off the public book. The
+   * signer must own the commitment. Without the flag, a redacted row is
+   * refused (the backward-compatible default).
+   *
+   * Mutually exclusive: passing more than one branch throws
+   * `OspexValidationError`.
    */
   cancelOnchain(args: CancelOnchainArgs): Promise<CancelOnchainResult> {
     return cancelOnchain(this.ctx, args);

@@ -57,6 +57,7 @@ const STUB_PARAMS: Record<string, unknown> = {
   'remediate-approve-position': { requiredUsdc: '25.000000' },
   'remediate-approve-treasury': { requiredUsdc: '1.000000' },
   'remediate-approve-link': { requiredLink: '2.5' },
+  'remediate-cancel-onchain': { hash: '0x' + 'ab'.repeat(32) },
 };
 
 /**
