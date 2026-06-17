@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.7.0] — 2026-06-16
+
 ### Added
 
 - **`@ospex/cli`: `commitments submit --fundability-scope <visible-book-only|whole-book>` surfaces the SDK whole-book fundability mode.** Default `visible-book-only` is unchanged (signer-free, sums only the public book). `whole-book` runs the owner-auth own-state read with the command's already-unlocked signer to also count the maker's book-hidden but still-on-chain-matchable exposure — it may sign an EIP-712 stream-auth challenge but submits **no transaction and consumes no nonce**, and runs **only on the execute path** (`--yes` / interactive); a `--json`-only preview returns before the preflight, so it never signs. The verdict (incl. `scope` + `coverage`) rides `payload.fundability` on the execute envelope. `HIDDEN_EXPOSURE_UNKNOWN` (whole-book requested but the hidden read was unavailable) is **advisory** — it warns and proceeds, like `FUNDABILITY_UNKNOWN`; only a definite `MAKER_USDC_BALANCE_INSUFFICIENT` refuses-before-sign (so a hidden-row over-commitment surfaced by `whole-book` correctly blocks). (`AGENT_CONTRACT.md` advisory-preflight section updated.)
