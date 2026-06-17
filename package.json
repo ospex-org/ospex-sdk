@@ -1,6 +1,6 @@
 {
   "name": "ospex-sdk-monorepo",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "Ospex SDK and CLI — workspace root",
   "workspaces": [
