@@ -129,6 +129,30 @@ export interface SubmitResult {
 
 const DEFAULT_EXPIRY_OFFSET_SEC = 24n * 60n * 60n;
 
+/**
+ * Re-wrap an `OspexAPIError` from a `/v1/commitments` POST so it carries the
+ * locally-computed EIP-712 `commitmentHash`. A POST that fails AFTER the server
+ * inserted the row (a lost response — fetch reject, gateway timeout / Heroku
+ * H12, a 5xx emitted after the insert) leaves a LIVE, matchable commitment the
+ * caller can identify only by this hash; surfacing it lets the caller probe
+ * (`commitments show <hash>` / own-state) before retrying, instead of blindly
+ * re-submitting (a fresh submit signs a NEW nonce → NEW hash → the server's
+ * hash-keyed `Idempotency-Key` dedup can't catch it → doubled exposure). See
+ * `docs/AGENT_CONTRACT.md` §7 retry carve-out. Preserves `status` / `apiCode` /
+ * `path` / `cause`, so error classification (incl. the `NONCE_TOO_LOW` retry
+ * branch) is unchanged. No-op on a non-`OspexAPIError` or an already-tagged one.
+ */
+export function withCommitmentHash(err: unknown, commitmentHash: Hex): unknown {
+  if (!(err instanceof OspexAPIError) || err.commitmentHash !== undefined) return err;
+  return new OspexAPIError(err.message, {
+    ...(err.status !== undefined ? { status: err.status } : {}),
+    ...(err.apiCode !== undefined ? { apiCode: err.apiCode } : {}),
+    ...(err.path !== undefined ? { path: err.path } : {}),
+    ...(err.cause !== undefined ? { cause: err.cause } : {}),
+    commitmentHash,
+  });
+}
+
 export async function submitRaw(
   ctx: CommitmentsContext,
   args: RawSubmitArgs,
@@ -216,25 +240,34 @@ export async function submitRaw(
         { field: 'beforePost' },
       );
     }
-    const body = await ctx.api.request<CommitmentBody>('/v1/commitments', {
-      method: 'POST',
-      headers: { 'Idempotency-Key': hashHex },
-      body: {
-        action: {
-          type: 'OspexCommitment',
-          maker: msg.maker,
-          contestId: msg.contestId.toString(),
-          scorer: msg.scorer,
-          lineTicks: msg.lineTicks,
-          positionType: msg.positionType,
-          oddsTick: msg.oddsTick,
-          riskAmount: msg.riskAmount.toString(),
-          nonce: msg.nonce.toString(),
-          expiry: msg.expiry.toString(),
+    let body: CommitmentBody;
+    try {
+      body = await ctx.api.request<CommitmentBody>('/v1/commitments', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': hashHex },
+        body: {
+          action: {
+            type: 'OspexCommitment',
+            maker: msg.maker,
+            contestId: msg.contestId.toString(),
+            scorer: msg.scorer,
+            lineTicks: msg.lineTicks,
+            positionType: msg.positionType,
+            oddsTick: msg.oddsTick,
+            riskAmount: msg.riskAmount.toString(),
+            nonce: msg.nonce.toString(),
+            expiry: msg.expiry.toString(),
+          },
+          signature: sig,
         },
-        signature: sig,
-      },
-    });
+      });
+    } catch (err) {
+      // Attach the locally-computed hash so an ambiguous POST failure (the
+      // response lost after a maybe-insert) carries the handle to the
+      // maybe-live row. Preserves `apiCode`, so the outer `NONCE_TOO_LOW`
+      // retry branch still recognizes + handles that case.
+      throw withCommitmentHash(err, hashHex);
+    }
     // Submission inserts `book_visible=true` by construction — the server
     // response must decode visible. Narrow defensively; a redacted response
     // here would be a server bug, not a normal flow.

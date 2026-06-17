@@ -166,6 +166,32 @@ describe('failure-envelope scenario 2: preflight/RPC/API failure before side eff
     expect(env.errors[0]?.details).toMatchObject({ status: 429, apiCode: 'RATE_LIMITED' });
     expect(env.effects).toEqual([]);
   });
+
+  it('surfaces commitmentHash in details when a submit POST failed after the hash was computed (#7 / H2)', () => {
+    // An ambiguous submit POST failure (e.g. a gateway timeout after the server
+    // may have inserted the row) carries the locally-computed commitment hash on
+    // the OspexAPIError. The failure envelope must surface it at
+    // errors[0].details.commitmentHash so an agent can probe
+    // `commitments show <hash>` before retrying, instead of blindly re-submitting.
+    const HASH = '0x' + 'ab'.repeat(32);
+    const stdout = captureStdout(() => {
+      emitJsonFailure({
+        action: 'commitments.submit',
+        stage: 'execute',
+        chainId: POLYGON,
+        wallet: SIGNER,
+        walletRole: 'signer',
+        signer: SIGNER,
+        requiresSignature: true,
+        requiresTransaction: false,
+        error: new OspexAPIError('gateway timeout', { status: 504, commitmentHash: HASH }),
+      });
+    });
+    const env = parseEnvelope(stdout);
+    expect(env.ok).toBe(false);
+    expect(env.errors[0]?.code).toBe('API_ERROR');
+    expect(env.errors[0]?.details).toMatchObject({ status: 504, commitmentHash: HASH });
+  });
 });
 
 describe('failure-envelope scenario 3: mid-flight failure after one successful effect', () => {

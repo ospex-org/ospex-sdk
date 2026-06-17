@@ -44,16 +44,37 @@ export class OspexAPIError extends OspexError {
   readonly apiCode: string | undefined;
   /** The endpoint path that failed (e.g. `/v1/contests`). */
   readonly path: string | undefined;
+  /**
+   * The locally-computed EIP-712 commitment hash, attached ONLY when a
+   * `/v1/commitments` POST (submit / submit-raw) failed AFTER the hash was
+   * computed. A POST that fails after the server inserted the row (a lost
+   * response — fetch reject, gateway timeout / Heroku H12, a 5xx emitted after
+   * the insert) leaves a LIVE, matchable commitment the caller can identify
+   * only by this hash. Surfacing it lets the caller probe whether the
+   * commitment landed (`commitments show <hash>` / own-state) before retrying,
+   * instead of blindly re-submitting (a fresh submit signs a NEW nonce → NEW
+   * hash → the server's hash-keyed `Idempotency-Key` dedup can't catch it →
+   * doubled exposure). See `docs/AGENT_CONTRACT.md` §7 retry carve-out.
+   * Undefined for every other API error.
+   */
+  readonly commitmentHash: string | undefined;
 
   constructor(
     message: string,
-    init?: { status?: number; apiCode?: string; path?: string; cause?: unknown },
+    init?: {
+      status?: number;
+      apiCode?: string;
+      path?: string;
+      commitmentHash?: string;
+      cause?: unknown;
+    },
   ) {
     super('API_ERROR', message, init?.cause !== undefined ? { cause: init.cause } : undefined);
     this.name = 'OspexAPIError';
     this.status = init?.status;
     this.apiCode = init?.apiCode;
     this.path = init?.path;
+    this.commitmentHash = init?.commitmentHash;
   }
 }
 

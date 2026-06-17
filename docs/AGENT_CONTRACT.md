@@ -763,9 +763,9 @@ New reason codes are additive (forward-compatible).
 
 | `code` / condition | Retry safe? |
 |---|---|
-| `API_ERROR` with `status === 429` or `>= 500` | Yes, with backoff. |
+| `API_ERROR` with `status === 429` or `>= 500` | Yes, with backoff — **except `commitments submit` / `submit-raw`: see the carve-out below.** |
 | `API_ERROR` with `status` 4xx (except 429) | No — fix the request. |
-| `API_ERROR` with no `status` (transport) | Yes, with backoff. |
+| `API_ERROR` with no `status` (transport) | Yes, with backoff — **except `commitments submit` / `submit-raw`: see the carve-out below.** |
 | `CONFIG_ERROR` | No — fix configuration. |
 | `VALIDATION_ERROR` | No — fix the argument. |
 | `SIGNING_ERROR` | No (passphrase) / situational. |
@@ -780,6 +780,21 @@ New reason codes are additive (forward-compatible).
 | `UNKNOWN_ERROR` | No automatic retry — an unexpected throw the SDK did not classify. Inspect `message` + `details.causeChain[]` and surface to the operator; do not blindly re-issue. |
 
 The SDK does not retry for you. Build the retry loop in your agent.
+
+### Retry carve-out: `commitments submit` / `submit-raw` are NOT idempotent across a re-issued call
+
+The `API_ERROR` rows above mark 429 / 5xx / transport failures "retry safe with backoff." That holds for reads and for writes whose inputs are stable — but a **re-issued `commitments submit` / `submit-raw` is a special case**, because each call **re-derives wall-clock-dependent fields of the signed commitment**: by default a fresh nonce (`max(floor, lastUsed + 1, unixSec)`) and, for `submit-raw` (and the high-level path when `--expiry` is relative or the contest match time is unavailable), a fresh `expiry` (`now + …`). `expiry` is one of the nine hashed EIP-712 fields, so **any** re-derived field → a **different commitment hash** → the server's hash-keyed `Idempotency-Key` dedup (§9) cannot recognize it as the same commitment. So a blind retry after an *ambiguous* submit failure can create a **second live, matchable commitment** at the same tuple — doubled maker exposure.
+
+The danger window is a **lost response after a successful insert**: the server accepted + persisted the commitment, but the response was lost in transit (fetch reject, gateway timeout / Heroku H12, a 5xx emitted after the insert). The first commitment is LIVE; a naive retry posts a second.
+
+**Where the locally-computed hash is surfaced** (the handle to the commitment that *may* have landed): `commitments submit --json` puts it on the failure envelope at **`errors[0].details.commitmentHash`**; SDK callers (`commitments.submitPrepared` / `submitRaw`) read it from the thrown **`OspexAPIError.commitmentHash`**. (The `submit-raw` **CLI** does NOT emit a structured `--json` failure envelope — its hash is available only via the SDK error, so reach for option 1 below or call the SDK directly.)
+
+Before re-issuing a failed submit, do ONE of:
+
+1. **Verify, then decide (preferred).** Look up the commitment — `ospex commitments show <details.commitmentHash> --json`, or `commitments list --maker <addr>` / owner-auth own-state when you don't have the hash. If a commitment for that tuple **exists**, the submit landed despite the error — do **NOT** retry (you would double the exposure); treat the original as successful. If none exists, the insert didn't happen and a retry is safe.
+2. **Or reproduce the exact signed commitment.** The dedup collapses the retry onto the first row ONLY when the FULL EIP-712 struct is byte-identical — so pin **every** wall-clock-derived field, not just the nonce: re-issue with the original `--nonce` **and** the original `--expiry` (both are on the preview's `raw.nonce` / `raw.expiry`; for `submitRaw`, pass the same `nonce` **and** `expiry` you originally signed). Pinning only the nonce while `expiry` re-defaults produces a different hash → a duplicate. (The high-level `commitments submit` default expiry is the contest match time, which is stable across re-issues — but pin it explicitly rather than relying on that.)
+
+Never blindly re-issue a failed submit on the strength of the `API_ERROR → retry with backoff` row alone.
 
 ### Safe retry rule for `CHAIN_ERROR` without `txHash`
 
@@ -838,7 +853,7 @@ The SDK has no module-level state. Multiple `OspexClient` instances are fully is
 
 | Operation | Idempotent? | Notes |
 |---|---|---|
-| `commitments.submit` with **identical inputs** | Yes | Server-side dedup on `commitmentHash`. Same hash returned, no duplicate row. |
+| `commitments.submit` with **identical inputs** | Yes | Server-side dedup on `commitmentHash`. Same hash returned, no duplicate row. **"Identical" is load-bearing:** a default re-issued submit re-derives wall-clock fields of the signed struct (a fresh nonce, and for `submit-raw` a fresh `expiry`) → a different hash → no dedup. To retry idempotently, reproduce the FULL signed struct — pin the original nonce **and** expiry — or verify via `commitments show <hash>` first. See the §7 retry carve-out. |
 | `commitments.cancel(hash)` (off-chain DELETE) | Yes | Re-cancel on a cancelled row returns `200`. |
 | `commitments.cancelOnchain({ hash } \| { signedCommitment } \| { commitment }, recoverHidden?)` / `commitments.cancelOnchainSigned(payload)` | Yes | The contract has **no `AlreadyCancelled` revert path** — the second `cancelCommitment` succeeds. Don't infer "first cancel" from tx success; check off-chain status if you need that signal. **Recovering a book-hidden row** (e.g. after a dual `cancel --also-onchain` whose on-chain leg didn't confirm): pass `recoverHidden: true` to `cancelOnchain` (the `ospex commitments cancel-onchain` CLI does this), or hold the payload and call `cancelOnchainSigned`. A hidden row resolves by **full hash only** (the public list omits hidden rows) and only its maker can recover it. |
 | `commitments.raiseMinNonce` / `cancelAllOnSpeculation` with `newMinNonce` ≤ current floor | No | Reverts `NonceMustIncrease`. Read the current floor with `commitments.getNonceFloor(...)` and pass `max(thatFloor, anyHigherNonceYouSigned) + 1` as the explicit `newMinNonce` — the SDK no longer auto-computes (anonymous reads cannot enumerate the maker's hidden book, so any default would be a fail-open guarantee). |
