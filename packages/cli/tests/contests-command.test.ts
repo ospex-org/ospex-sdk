@@ -8,10 +8,10 @@ import { describe, expect, it } from 'vitest';
 import { makeContestsCommand } from '../src/commands/contests/index.js';
 
 describe('makeContestsCommand', () => {
-  it('registers create / score / show / list / wait-verified / scripts as subcommands', () => {
+  it('registers create / score / show / list / wait-verified as subcommands', () => {
     const root = makeContestsCommand();
     const names = root.commands.map((c) => c.name()).sort();
-    expect(names).toEqual(['create', 'list', 'score', 'scripts', 'show', 'wait-verified']);
+    expect(names).toEqual(['create', 'list', 'score', 'show', 'wait-verified']);
   });
 
   it('command name is plural (contests, not contest)', () => {

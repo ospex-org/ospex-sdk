@@ -3,7 +3,7 @@
  * approvals against the Ospex spenders so a user can configure their
  * worst-case risk exposure in a single command.
  *
- * Flag mode (any of `--risk-usdc`, `--fee-usdc`, `--link` provided):
+ * Flag mode (any of `--risk-usdc`, `--fee-usdc` provided):
  *   only act on the dimensions specified. When `--risk-usdc` is set
  *   alone, a small `--fee-usdc` default is auto-included so the next
  *   commitment match doesn't trigger a mid-bet approval prompt; pass
@@ -53,7 +53,6 @@ import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js
 import { promptValue, promptYesNo } from '../../lib/prompt.js';
 import {
   buildSetupPlan,
-  parseLinkInput,
   parseUsdcInput,
   type ApprovalSpenderKey,
   type PlanItem,
@@ -69,7 +68,6 @@ import {
 const optionsSchema = z.object({
   riskUsdc: z.string().optional(),
   feeUsdc: z.string().optional(),
-  link: z.string().optional(),
   yes: z.boolean().optional(),
   json: z.boolean().optional(),
 });
@@ -77,7 +75,7 @@ const optionsSchema = z.object({
 export const approvalsSetupCommand = addSignerOptions(
   new Command('setup')
     .description(
-      'Set up USDC + LINK approvals for Ospex modules in one command. ' +
+      'Set up USDC approvals for Ospex modules in one command. ' +
         'Without flags, runs interactively. With at least one flag, only acts on the dimensions specified.',
     )
     .option(
@@ -90,11 +88,6 @@ export const approvalsSetupCommand = addSignerOptions(
         'If --risk-usdc is set and --fee-usdc is omitted, a small default is auto-included to ' +
         'prevent a mid-bet approval prompt; pass --fee-usdc 0 to opt out.',
     )
-    .option(
-      '--link <amount>',
-      'LINK approval for OracleModule (Chainlink Functions, only for contest creation/scoring). ' +
-        'Most users skip this. Decimal LINK like "2", or "max".',
-    )
     .option('--yes', 'skip the confirmation prompt')
     .option('--json', 'machine-readable output'),
 )
@@ -106,18 +99,18 @@ export const approvalsSetupCommand = addSignerOptions(
     const isInteractiveTTY = process.stdin.isTTY === true;
 
     const flagsProvided =
-      opts.riskUsdc !== undefined || opts.feeUsdc !== undefined || opts.link !== undefined;
+      opts.riskUsdc !== undefined || opts.feeUsdc !== undefined;
     const wantInteractive = !flagsProvided && !wantJson;
 
     if (!flagsProvided && wantJson) {
       throw new OspexValidationError(
-        'Pass at least one of --risk-usdc, --fee-usdc, --link with --json. Interactive ' +
+        'Pass at least one of --risk-usdc, --fee-usdc with --json. Interactive ' +
           'prompts and --json are mutually exclusive.',
       );
     }
     if (wantInteractive && !isInteractiveTTY) {
       throw new OspexValidationError(
-        'Interactive setup requires a TTY. Re-run with at least one of --risk-usdc, --fee-usdc, --link.',
+        'Interactive setup requires a TTY. Re-run with at least one of --risk-usdc, --fee-usdc.',
       );
     }
     if (!skipPrompt && !wantJson && !isInteractiveTTY) {
@@ -129,11 +122,10 @@ export const approvalsSetupCommand = addSignerOptions(
     // Pre-parse flag amounts BEFORE any signer/chain interaction, so a
     // typo'd `--risk-usdc not-a-number` errors out without first
     // prompting for the keystore passphrase. The result is discarded —
-    // buildSetupPlan re-parses internally — and parseLinkInput /
-    // parseUsdcInput throw on bad shape.
+    // buildSetupPlan re-parses internally — and parseUsdcInput throws
+    // on bad shape.
     if (opts.riskUsdc !== undefined) parseUsdcInput(opts.riskUsdc);
     if (opts.feeUsdc !== undefined) parseUsdcInput(opts.feeUsdc);
-    if (opts.link !== undefined) parseLinkInput(opts.link);
 
     const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
     const chainId = client.chainId();
@@ -152,7 +144,7 @@ export const approvalsSetupCommand = addSignerOptions(
 
     const input: SetupInput = wantInteractive
       ? await runInteractivePrompts(current)
-      : { riskUsdc: opts.riskUsdc, feeUsdc: opts.feeUsdc, link: opts.link };
+      : { riskUsdc: opts.riskUsdc, feeUsdc: opts.feeUsdc };
 
     plan = buildSetupPlan(input, current);
 
@@ -328,8 +320,7 @@ function setupResultsToEffects(
 
 function spenderLabelFromKey(key: ApprovalSpenderKey): AgentApprovalSpenderLabel {
   if (key === 'positionModule') return 'PositionModule';
-  if (key === 'treasuryModule') return 'TreasuryModule';
-  return 'OracleModule';
+  return 'TreasuryModule';
 }
 
 function approvalPurposeFor(spender: ApprovalSpenderKey): AgentApprovalPurpose {
@@ -339,9 +330,7 @@ function approvalPurposeFor(spender: ApprovalSpenderKey): AgentApprovalPurpose {
   // consumer; setup is a bundled pre-approval and the precise purpose
   // depends on which downstream op consumes it first. spenderLabel
   // + tokenSymbol are the authoritative discriminators.
-  if (spender === 'treasuryModule') return 'lazy-creation-fee';
-  // OracleModule LINK covers contest-creation-link + contest-scoring-link.
-  return 'contest-creation-link';
+  return 'lazy-creation-fee';
 }
 
 async function runInteractivePrompts(current: ApprovalsSnapshot): Promise<SetupInput> {
@@ -352,14 +341,10 @@ async function runInteractivePrompts(current: ApprovalsSnapshot): Promise<SetupI
     '50',
   );
   const feeUsdc = await promptValue(
-    'USDC for fees (small budget for protocol fees on lazy spec creation)',
+    'USDC for fees (small budget for protocol fees on lazy spec creation + contest creation)',
     '1',
   );
-  const link = await promptValue(
-    'LINK for contest creation (most users skip this)',
-    'skip',
-  );
-  return { riskUsdc, feeUsdc, link };
+  return { riskUsdc, feeUsdc };
 }
 
 async function executeItem(
@@ -373,10 +358,8 @@ async function executeItem(
   let receipt;
   if (item.spenderModule === 'positionModule') {
     receipt = await client.commitments.approve(target);
-  } else if (item.spenderModule === 'treasuryModule') {
-    receipt = await client.commitments.approveCreationFee(target);
   } else {
-    receipt = await client.contests.approveLink(target);
+    receipt = await client.commitments.approveCreationFee(target);
   }
   return {
     spenderModule: item.spenderModule,
@@ -388,6 +371,5 @@ async function executeItem(
 
 function moduleDisplayName(spender: ApprovalSpenderKey): string {
   if (spender === 'positionModule') return 'PositionModule';
-  if (spender === 'treasuryModule') return 'TreasuryModule';
-  return 'OracleModule';
+  return 'TreasuryModule';
 }

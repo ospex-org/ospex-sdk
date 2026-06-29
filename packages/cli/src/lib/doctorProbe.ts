@@ -177,10 +177,9 @@ export async function probeContractsDeployed(
 
   const targets: Array<{ name: string; address: `0x${string}` }> = [
     { name: 'USDC', address: addresses.usdc },
-    { name: 'LINK', address: addresses.linkToken },
     { name: 'PositionModule', address: addresses.positionModule },
     { name: 'TreasuryModule', address: addresses.treasuryModule },
-    { name: 'OracleModule', address: addresses.oracleModule },
+    { name: 'CreOracleReceiver', address: addresses.creOracleReceiver },
     { name: 'OspexCore', address: addresses.ospexCore },
   ];
 

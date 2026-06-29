@@ -21,15 +21,4 @@ export interface ContestsContext {
   getChainId(): ChainId;
   getAddresses(): OspexAddresses;
   requireChainClient(): PublicClient;
-  /**
-   * Override for the secrets-API URL (encrypted Chainlink Functions
-   * secrets). Tests pass a stub; production uses the default URL from
-   * `contracts/constants.ts`.
-   */
-  apiServerUrl?: string;
-  /**
-   * Override for the global `fetch` used by helpers (script source,
-   * encrypted secrets). Tests inject a mock. Defaults to globalThis.fetch.
-   */
-  fetch?: typeof globalThis.fetch;
 }

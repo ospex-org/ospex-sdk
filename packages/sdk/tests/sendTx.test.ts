@@ -1,7 +1,7 @@
 /**
  * `buildSignAndSend` gas-handling unit tests.
  *
- * The OracleModule create / score paths pass a hardcoded `gas` parameter
+ * The CreOracleReceiver create / score paths pass a hardcoded `gas` parameter
  * (`OSPEX_CREATE_CONTEST_TX_GAS` / `OSPEX_SCORE_CONTEST_TX_GAS`) to bypass
  * `eth_estimateGas`, which is unreliable on some Polygon RPCs (Infura
  * strips revert data; public RPCs hit state-history errors). These tests

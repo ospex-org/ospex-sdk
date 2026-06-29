@@ -1,6 +1,6 @@
 /**
  * `ospex approvals show [--address <addr>]` — read-only summary of the
- * wallet's USDC + LINK allowances against every Ospex spender.
+ * wallet's USDC allowances against every Ospex spender.
  *
  * The command is the user-facing entry point to "do I have headroom
  * to bet / make a market / create a contest?" without inferring it
@@ -36,7 +36,7 @@ const optionsSchema = z.object({
 
 export const approvalsShowCommand = new Command('show')
   .description(
-    'Show the configured wallet\'s USDC + LINK allowances against every Ospex spender. ' +
+    'Show the configured wallet\'s USDC allowances against every Ospex spender. ' +
       'Pass --address to inspect any wallet without unlocking your keystore.',
   )
   .option('--address <addr>', 'wallet address to inspect (defaults to your keystore)')

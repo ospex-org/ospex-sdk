@@ -2,8 +2,8 @@
  * Approvals namespace — cross-cutting view of Ospex-relevant ERC-20
  * allowances for a configured wallet. Composes existing per-spender
  * allowance reads (USDC→PositionModule from commitments, USDC→
- * TreasuryModule shared with contests, LINK→OracleModule from contests)
- * into one snapshot so the CLI doesn't have to.
+ * TreasuryModule shared with contests) into one snapshot so the CLI
+ * doesn't have to.
  *
  * Read-only at M5; the `setup` orchestration (multi-tx approve flow)
  * lands in the next PR. Today this surface backs `ospex approvals show`
@@ -19,7 +19,7 @@ export class Approvals {
 
   /**
    * Read every Ospex-relevant allowance for `owner` (or the configured
-   * signer's address when `owner` is omitted). Three on-chain reads run
+   * signer's address when `owner` is omitted). Two on-chain reads run
    * in parallel via `Promise.all` so this is one network round trip
    * for the user's perspective.
    *
@@ -36,7 +36,6 @@ export type {
   AllowanceEntry,
   ApprovalSpender,
   ApprovalsSnapshot,
-  LinkAllowances,
   ReadApprovalsArgs,
   UsdcAllowances,
 } from './types.js';

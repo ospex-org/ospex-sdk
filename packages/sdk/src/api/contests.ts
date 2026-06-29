@@ -3,7 +3,6 @@
  *
  *   - `GET /v1/contests`                     → list of Contests
  *   - `GET /v1/contests/:contestId`          → single Contest with orderbook-populated speculations
- *   - `GET /v1/contests/scripts/approved`    → script approvals (M4)
  *
  * The wider contests namespace (create/score/waitForVerified) lives at
  * `src/contests/`; this file is the API-layer adapter so reads stay
@@ -15,20 +14,15 @@
 import type { ApiClient } from './client.js';
 import { toCommitment } from './commitments.js';
 import type {
-  ApprovedScripts,
   Contest,
   ContestsListOptions,
-  ScriptApproval,
   Speculation,
 } from '../types/contest.js';
 import type {
-  ApprovedScriptsBody,
   ContestBody,
   ContestsListBody,
-  ScriptApprovalEntryBody,
   SpeculationBody,
 } from './types.js';
-import type { Hex } from '../types/signer.js';
 
 export class ContestsApi {
   constructor(private readonly client: ApiClient) {}
@@ -49,13 +43,6 @@ export class ContestsApi {
       `/v1/contests/${encodeURIComponent(String(contestId))}`,
     );
     return toContest(body);
-  }
-
-  async scripts(): Promise<ApprovedScripts> {
-    const body = await this.client.request<ApprovedScriptsBody>(
-      '/v1/contests/scripts/approved',
-    );
-    return toApprovedScripts(body);
   }
 }
 
@@ -78,9 +65,6 @@ function toContest(body: ContestBody): Contest {
   if (body.sportspageId !== undefined) out.sportspageId = body.sportspageId;
   if (body.contestCreator !== undefined) out.contestCreator = body.contestCreator;
   if (body.leagueId !== undefined) out.leagueId = body.leagueId;
-  if (body.verifySourceHash !== undefined) out.verifySourceHash = body.verifySourceHash;
-  if (body.marketUpdateSourceHash !== undefined) out.marketUpdateSourceHash = body.marketUpdateSourceHash;
-  if (body.scoreContestSourceHash !== undefined) out.scoreContestSourceHash = body.scoreContestSourceHash;
   if (body.awayScore !== undefined) out.awayScore = body.awayScore;
   if (body.homeScore !== undefined) out.homeScore = body.homeScore;
   if (body.contestCreatedAt !== undefined) out.contestCreatedAt = body.contestCreatedAt;
@@ -105,26 +89,4 @@ export function toSpeculation(body: SpeculationBody): Speculation {
   if (body.homeLine !== undefined) out.homeLine = body.homeLine;
   if (body.orderbook !== undefined) out.orderbook = body.orderbook.map(toCommitment);
   return out;
-}
-
-function toApprovedScripts(body: ApprovedScriptsBody): ApprovedScripts {
-  return {
-    network: body.network,
-    approvedSigner: body.approvedSigner as Hex,
-    verify: toApprovalEntry(body.verify),
-    marketUpdate: toApprovalEntry(body.marketUpdate),
-    score: toApprovalEntry(body.score),
-  };
-}
-
-function toApprovalEntry(body: ScriptApprovalEntryBody): ScriptApproval {
-  return {
-    scriptHash: body.scriptHash as Hex,
-    purpose: body.purpose,
-    leagueId: body.leagueId,
-    version: body.version,
-    validUntil: body.validUntil,
-    signature: body.signature as Hex,
-    sourceUrl: body.sourceUrl,
-  };
 }

@@ -54,8 +54,6 @@ export type {
   SpeculationParentContext,
   ContestsListOptions,
   SpeculationsListOptions,
-  ScriptApproval,
-  ApprovedScripts,
 } from './contest.js';
 export type { Fill } from './fill.js';
 export type {
@@ -105,7 +103,6 @@ export type {
   AgentApprovalSpenderLabel,
   EstimatedCosts,
   AgentUsdcFee,
-  AgentLinkFee,
   AgentPayout,
   AgentWarning,
   AgentWarningCode,

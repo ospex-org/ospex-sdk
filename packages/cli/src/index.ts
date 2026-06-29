@@ -120,7 +120,7 @@ export function makeProgram(): Command {
   program.addCommand(wallet);
 
   const approvals = new Command('approvals').description(
-    'Inspect and manage USDC + LINK approvals against Ospex modules.',
+    'Inspect and manage USDC approvals against Ospex modules.',
   );
   approvals.addCommand(approvalsShowCommand);
   approvals.addCommand(approvalsSetupCommand);
@@ -166,7 +166,7 @@ async function main(): Promise<void> {
  * revert under `shortMessage` and any auxiliary lines under
  * `metaMessages` — both are useful when an estimateGas reverts in
  * `contests create` and the cause is a custom error like
- * `OracleModule__InvalidScriptApproval`.
+ * `CreOracleReceiver__PrematureScoreRequest`.
  *
  * Both `headline` and every `metaMessages` line are routed through
  * `sanitizeUntargetedMessage` first: viem transport errors embed the

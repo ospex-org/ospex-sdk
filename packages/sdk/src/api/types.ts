@@ -318,9 +318,6 @@ export interface ContestBody {
   sportspageId?: string | null;
   contestCreator?: string;
   leagueId?: string;
-  verifySourceHash?: string | null;
-  marketUpdateSourceHash?: string | null;
-  scoreContestSourceHash?: string | null;
   awayScore?: number | null;
   homeScore?: number | null;
   contestCreatedAt?: string | null;
@@ -369,24 +366,6 @@ export interface SpeculationDetailBody extends SpeculationBody {
 export interface SpeculationsListBody {
   speculations: SpeculationBody[];
   pagination: PaginationBody;
-}
-
-export interface ScriptApprovalEntryBody {
-  scriptHash: string;
-  purpose: 0 | 1 | 2;
-  leagueId: number;
-  version: number;
-  validUntil: number;
-  signature: string;
-  sourceUrl: string;
-}
-
-export interface ApprovedScriptsBody {
-  network: Network;
-  approvedSigner: string;
-  verify: ScriptApprovalEntryBody;
-  marketUpdate: ScriptApprovalEntryBody;
-  score: ScriptApprovalEntryBody;
 }
 
 export interface CommitmentsListBody {

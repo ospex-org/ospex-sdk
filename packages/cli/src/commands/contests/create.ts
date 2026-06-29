@@ -8,12 +8,11 @@
  *    are passed through; slug inputs are resolved against `games.slug`
  *    for the configured network. Multiple matches or no match fail
  *    closed. `--game-id` remains canonical forever.
- *  - On OspexAllowanceError: prompt to approve the right (token, spender)
- *    pair and retry. Both LINK→OracleModule and USDC→TreasuryModule may
- *    be missing on a fresh wallet, so the call site loops up to two
- *    approvals before giving up — fixing one at a time would surface the
- *    second as a hard error after a successful approve tx.
- *  - Without `--no-wait`, blocks until the Chainlink callback flips the
+ *  - On OspexAllowanceError: prompt to approve USDC → TreasuryModule
+ *    (the contest creation fee) and retry. R5/CRE creation is
+ *    permissionless and carries no LINK payment, so the only approval
+ *    that can be missing is the USDC creation fee.
+ *  - Without `--no-wait`, blocks until the CRE oracle report flips the
  *    contest to Verified (or timeout, in which case the contestId is
  *    surfaced and the user can re-poll with `ospex contests wait-verified`).
  */
@@ -21,7 +20,6 @@ import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import { formatUnits, parseUnits } from 'viem';
 import {
-  getAddresses,
   OspexAllowanceError,
   OspexValidationError,
   type AgentEffect,
@@ -49,8 +47,6 @@ import { promptYesNo, promptValue } from '../../lib/prompt.js';
 const optionsSchema = z.object({
   gameId: z.string().min(1).optional(),
   game: z.string().min(1).optional(),
-  subscriptionId: z.string().regex(/^[0-9]+$/).optional(),
-  gasLimit: z.coerce.number().int().positive().max(300_000).optional(),
   wait: z.boolean().optional(),
   json: z.boolean().optional(),
   yes: z.boolean().optional(),
@@ -58,17 +54,15 @@ const optionsSchema = z.object({
 
 export const contestCreateCommand = addSignerOptions(
   new Command('create')
-    .description('Create a contest by submitting OracleModule.createContestFromOracle.')
+    .description(
+      'Create a contest by submitting CreOracleReceiver.createContestAndRequestVerify (R5/CRE). ' +
+        'Permissionless; the caller pays the USDC contest-creation fee (allowance to TreasuryModule).',
+    )
     .option('--game-id <id>', 'gameId from `ospex games list` (canonical UUID)')
     .option(
       '--game <slug-or-id>',
       'resolver-friendly alias: pass either the slug from `ospex games list` or a UUID',
     )
-    .option(
-      '--subscription-id <n>',
-      'Chainlink Functions subscription id (defaults to OSPEX_SHARED_SUBSCRIPTION_ID per chain)',
-    )
-    .option('--gas-limit <n>', 'Chainlink Functions callback gas limit (default 300000, Polygon router max)')
     .option('--no-wait', 'skip polling for verification; print txHash and return')
     .option('--yes', 'skip the slug-resolved confirmation prompt (no effect for --game-id / UUID input)')
     .addOption(new Option('--json').hideHelp(false)),
@@ -147,8 +141,6 @@ export const contestCreateCommand = addSignerOptions(
     const args: Parameters<typeof client.contests.create>[0] = {
       gameId,
     };
-    if (opts.subscriptionId !== undefined) args.subscriptionId = BigInt(opts.subscriptionId);
-    if (opts.gasLimit !== undefined) args.gasLimit = opts.gasLimit;
 
     // Approve-effect collection: each on-chain approval that runs in
     // the retry loop is captured here (declaration lifted to the
@@ -179,10 +171,7 @@ export const contestCreateCommand = addSignerOptions(
     }
 
     if (opts.json !== true) {
-      process.stdout.write(
-        `Contest ${result.contestId} created (tx ${result.txHash}).\n` +
-          (result.requestId !== null ? `Chainlink requestId: ${result.requestId}\n` : ''),
-      );
+      process.stdout.write(`Contest ${result.contestId} created (tx ${result.txHash}).\n`);
     }
 
     const shouldWait = opts.wait !== false;
@@ -191,7 +180,7 @@ export const contestCreateCommand = addSignerOptions(
 
     if (shouldWait) {
       if (opts.json !== true) {
-        process.stdout.write('Waiting for Chainlink verification (≤120s)...\n');
+        process.stdout.write('Waiting for CRE verification (≤120s)...\n');
       }
       try {
         const verified = await client.contests.waitForVerified(result.contestId);
@@ -269,8 +258,8 @@ export const contestCreateCommand = addSignerOptions(
     } catch (err) {
       // The failure-envelope scope: preserve any approve txs that succeeded
       // before the create call threw. Without this, a wallet that
-      // approves LINK successfully and then hits a Chainlink Functions
-      // revert would lose the approve tx hash to stderr.
+      // approves the USDC creation fee successfully and then hits a
+      // create-time revert would lose the approve tx hash to stderr.
       if (wantJson) {
         emitJsonFailure({
           action: 'contests.create',
@@ -298,28 +287,22 @@ export const contestCreateCommand = addSignerOptions(
   });
 
 interface AllowanceCopy {
-  symbol: 'LINK' | 'USDC';
+  symbol: 'USDC';
   decimals: number;
   moduleName: string;
   purpose: string;
 }
 
-function describeAllowance(client: OspexClient, err: OspexAllowanceError): AllowanceCopy {
-  const oracleModule = getAddresses(client.chainId()).oracleModule.toLowerCase();
-  const isLink = err.spender.toLowerCase() === oracleModule;
-  return isLink
-    ? {
-        symbol: 'LINK',
-        decimals: 18,
-        moduleName: 'OracleModule',
-        purpose: 'Chainlink Functions request payment',
-      }
-    : {
-        symbol: 'USDC',
-        decimals: 6,
-        moduleName: 'TreasuryModule',
-        purpose: 'protocol contest creation fee',
-      };
+// R5/CRE creation charges only the USDC contest-creation fee (allowance
+// to TreasuryModule); there is no LINK payment, so the only allowance
+// error a create call can raise is USDC → TreasuryModule.
+function describeAllowance(): AllowanceCopy {
+  return {
+    symbol: 'USDC',
+    decimals: 6,
+    moduleName: 'TreasuryModule',
+    purpose: 'protocol contest creation fee',
+  };
 }
 
 async function handleContestAllowance(
@@ -328,7 +311,7 @@ async function handleContestAllowance(
   jsonMode: boolean,
   approveEffects: AgentEffect[],
 ): Promise<boolean> {
-  const copy = describeAllowance(client, err);
+  const copy = describeAllowance();
   const requiredHuman = formatUnits(err.required, copy.decimals);
   const currentHuman = formatUnits(err.current, copy.decimals);
 
@@ -377,14 +360,11 @@ async function handleContestAllowance(
     }
   }
 
-  const tx =
-    copy.symbol === 'LINK'
-      ? await client.contests.approveLink(approveAmount)
-      : await client.contests.approveFee(approveAmount);
+  const tx = await client.contests.approveFee(approveAmount);
   process.stdout.write(`approve tx: ${tx.txHash} (status ${tx.receipt.status})\n`);
   approveEffects.push({
     type: 'transaction',
-    purpose: copy.symbol === 'LINK' ? 'approve-link' : 'approve-usdc',
+    purpose: 'approve-usdc',
     ok: tx.receipt.status === 'success',
     txHash: tx.txHash as Hex,
     blockNumber: tx.receipt.blockNumber.toString(),
@@ -402,7 +382,6 @@ export type ContestCreateResult = Awaited<
 export interface ContestCreatePayload {
   contestId: string;
   txHash: string;
-  requestId: string | null;
   status: 'success' | 'reverted';
   verification: { contestId: string; status: string } | null;
 }
@@ -445,7 +424,6 @@ export function toContestCreateAgentEnvelope(
     payload: {
       contestId: contestIdStr,
       txHash: result.txHash,
-      requestId: result.requestId,
       status: result.receipt.status,
       verification: args.verification,
     },

@@ -20,7 +20,6 @@
  * the integration contract is `docs/AGENT_CONTRACT.md`.
  */
 
-import { formatUnits } from 'viem';
 import {
   OspexError,
   getAddresses,
@@ -568,9 +567,6 @@ function extractOspexErrorDetails(err: OspexError): Record<string, unknown> | un
     expectedAddress?: string;
     actualAddress?: string;
     mode?: string;
-    expectedHash?: string;
-    actualHash?: string;
-    subscriptionId?: bigint;
     commitmentHash?: string;
   };
   const out: Record<string, unknown> = {};
@@ -616,9 +612,6 @@ function extractOspexErrorDetails(err: OspexError): Record<string, unknown> | un
   if (typeof e.expectedAddress === 'string') out.expectedAddress = e.expectedAddress;
   if (typeof e.actualAddress === 'string') out.actualAddress = e.actualAddress;
   if (typeof e.mode === 'string') out.mode = e.mode;
-  if (typeof e.expectedHash === 'string') out.expectedHash = e.expectedHash;
-  if (typeof e.actualHash === 'string') out.actualHash = e.actualHash;
-  if (typeof e.subscriptionId === 'bigint') out.subscriptionId = e.subscriptionId.toString();
   // `commitmentHash` is attached by `submit` / `submit-raw` to an `OspexAPIError`
   // when a `/v1/commitments` POST fails AFTER the hash was computed — the handle
   // to a maybe-live commitment the agent must probe before retrying (§7 retry
@@ -691,9 +684,7 @@ export function mapPreviewApprovals(
 ): ApprovalRequirement[] {
   const addresses = getAddresses(chainId);
   return approvals.map((a) => {
-    const tokenAddress = (a.token === 'USDC'
-      ? addresses.usdc.toLowerCase()
-      : addresses.linkToken.toLowerCase()) as Hex;
+    const tokenAddress = addresses.usdc.toLowerCase() as Hex;
     const spenderHex = a.spender.toLowerCase() as Hex;
     const spenderLabel = spenderLabelFor(spenderHex, chainId);
     return {
@@ -725,7 +716,6 @@ export function spenderLabelFor(
   const s = spender.toLowerCase();
   if (s === a.positionModule.toLowerCase()) return 'PositionModule';
   if (s === a.treasuryModule.toLowerCase()) return 'TreasuryModule';
-  if (s === a.oracleModule.toLowerCase()) return 'OracleModule';
   throw new Error(
     `spenderLabelFor: unknown spender ${spender} on chainId ${chainId}. ` +
       'Extend AgentApprovalSpenderLabel and this lookup together when adding a new module.',
@@ -735,19 +725,18 @@ export function spenderLabelFor(
 /**
  * Human-format a wei-denominated decimal string for a token. USDC
  * (6 decimals) → 6-fractional-digit decimal string via the SDK's
- * canonical formatter; LINK (18 decimals) → viem's `formatUnits`.
+ * canonical formatter. USDC is the only Ospex approval token under
+ * R5/CRE (the LINK approval was retired with the Functions oracle).
  *
  * Exported for tests + reuse by ApprovalRequirement consumers (e.g.
  * `approvals setup` may need to format current vs target outside the
  * preview path).
  */
 export function formatTokenAmount(
-  symbol: 'USDC' | 'LINK',
+  _symbol: 'USDC',
   weiDecimalStr: string,
 ): string {
-  const value = BigInt(weiDecimalStr);
-  if (symbol === 'USDC') return wei6ToDecimalUSDC(value);
-  return formatUnits(value, 18);
+  return wei6ToDecimalUSDC(BigInt(weiDecimalStr));
 }
 
 /**

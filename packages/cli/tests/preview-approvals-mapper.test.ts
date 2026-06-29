@@ -6,10 +6,12 @@
  * Pins:
  *   - tokenSymbol + spenderLabel symbolic annotations
  *   - token address resolution from `getAddresses(chainId)`
- *   - requiredHuman / currentHuman formatting (USDC 6dp via SDK;
- *     LINK 18dp via viem.formatUnits)
+ *   - requiredHuman / currentHuman formatting (USDC 6dp via SDK)
  *   - lowercased spender address
  *   - unknown spender throws (forward-compat policy)
+ *
+ * (R5/CRE: USDC is the only approval token — the LINK / OracleModule
+ * dimension was retired with the Functions oracle.)
  */
 
 import { describe, expect, it } from 'vitest';
@@ -142,16 +144,13 @@ describe('mapPreviewApprovals', () => {
 });
 
 describe('spenderLabelFor', () => {
-  it('returns PositionModule / TreasuryModule / OracleModule for known spenders', () => {
+  it('returns PositionModule / TreasuryModule for known spenders', () => {
     const a = getAddresses(POLYGON);
     expect(spenderLabelFor(a.positionModule.toLowerCase() as `0x${string}`, POLYGON)).toBe(
       'PositionModule',
     );
     expect(spenderLabelFor(a.treasuryModule.toLowerCase() as `0x${string}`, POLYGON)).toBe(
       'TreasuryModule',
-    );
-    expect(spenderLabelFor(a.oracleModule.toLowerCase() as `0x${string}`, POLYGON)).toBe(
-      'OracleModule',
     );
   });
 });
@@ -161,10 +160,5 @@ describe('formatTokenAmount', () => {
     expect(formatTokenAmount('USDC', '25000000')).toBe('25.000000');
     expect(formatTokenAmount('USDC', '0')).toBe('0.000000');
     expect(formatTokenAmount('USDC', '1')).toBe('0.000001');
-  });
-  it('LINK: 18 fractional digits via viem.formatUnits', () => {
-    expect(formatTokenAmount('LINK', '1000000000000000000')).toBe('1');
-    expect(formatTokenAmount('LINK', '500000000000000000')).toBe('0.5');
-    expect(formatTokenAmount('LINK', '0')).toBe('0');
   });
 });

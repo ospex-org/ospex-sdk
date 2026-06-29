@@ -1,8 +1,9 @@
 /**
- * `client.balances.read()` — verify the snapshot composes the three
- * expected reads (native getBalance + USDC.balanceOf + LINK.balanceOf),
- * uses the explicit owner when passed, and falls back to the signer
- * otherwise. Mirrors the test structure of `approvals-read.test.ts`.
+ * `client.balances.read()` — verify the snapshot composes the two
+ * expected reads (native getBalance + USDC.balanceOf), uses the explicit
+ * owner when passed, and falls back to the signer otherwise. Mirrors the
+ * test structure of `approvals-read.test.ts`. (R5/CRE removed the LINK
+ * balance dimension.)
  */
 
 import { describe, expect, it } from 'vitest';
@@ -19,7 +20,6 @@ const ADDRESSES: OspexAddresses = {
   matchingModule: '0x4040404040404040404040404040404040404040',
   positionModule: '0x2222222222222222222222222222222222222222',
   usdc: '0x3333333333333333333333333333333333333333',
-  linkToken: '0x4444444444444444444444444444444444444444',
   ospexCore: '0x5050505050505050505050505050505050505050',
   speculationModule: '0x6060606060606060606060606060606060606060',
   contestModule: '0x7070707070707070707070707070707070707070',
@@ -27,7 +27,7 @@ const ADDRESSES: OspexAddresses = {
   rulesModule: '0x9090909090909090909090909090909090909090',
   treasuryModule: '0x5555555555555555555555555555555555555555',
   secondaryMarketModule: '0xaa00000000000000000000000000000000000000',
-  oracleModule: '0x6666666666666666666666666666666666666666',
+  creOracleReceiver: '0x6666666666666666666666666666666666666666',
   scorers: {
     moneyline: '0xbb00000000000000000000000000000000000000',
     spread: '0xcc00000000000000000000000000000000000000',
@@ -43,7 +43,6 @@ interface ReadCalls {
 interface FakeOpts {
   native?: bigint;
   usdc?: bigint;
-  link?: bigint;
   signerThrows?: boolean;
 }
 
@@ -63,9 +62,6 @@ function makeContext(opts: FakeOpts = {}): { ctx: BalancesContext; calls: ReadCa
       calls.readContract.push({ token: params.address, owner });
       if (params.address.toLowerCase() === ADDRESSES.usdc.toLowerCase()) {
         return opts.usdc ?? 0n;
-      }
-      if (params.address.toLowerCase() === ADDRESSES.linkToken.toLowerCase()) {
-        return opts.link ?? 0n;
       }
       return 0n;
     },
@@ -90,11 +86,10 @@ function makeContext(opts: FakeOpts = {}): { ctx: BalancesContext; calls: ReadCa
 }
 
 describe('client.balances.read', () => {
-  it('reads native + USDC + LINK in parallel when owner is passed', async () => {
+  it('reads native + USDC in parallel when owner is passed', async () => {
     const { ctx, calls } = makeContext({
       native: 2n * 10n ** 18n,
       usdc: 42_120_000n,
-      link: 5n * 10n ** 18n,
     });
 
     const snap = await read(ctx, { owner: OWNER_OVERRIDE });
@@ -103,22 +98,15 @@ describe('client.balances.read', () => {
     expect(snap.chainId).toBe(137);
     expect(snap.native).toBe(2n * 10n ** 18n);
     expect(snap.usdc).toBe(42_120_000n);
-    expect(snap.link).toBe(5n * 10n ** 18n);
     expect(snap.usdcAddress.toLowerCase()).toBe(ADDRESSES.usdc.toLowerCase());
-    expect(snap.linkAddress.toLowerCase()).toBe(ADDRESSES.linkToken.toLowerCase());
 
-    // One getBalance call against the owner; two readContract calls
-    // (USDC + LINK), each scoped to the owner.
+    // One getBalance call against the owner; one readContract call (USDC),
+    // scoped to the owner.
     expect(calls.getBalance).toHaveLength(1);
     expect(calls.getBalance[0]!.address.toLowerCase()).toBe(OWNER_OVERRIDE.toLowerCase());
-    expect(calls.readContract).toHaveLength(2);
-    for (const c of calls.readContract) {
-      expect(c.owner.toLowerCase()).toBe(OWNER_OVERRIDE.toLowerCase());
-    }
-    const tokens = calls.readContract.map((c) => c.token.toLowerCase()).sort();
-    expect(tokens).toEqual(
-      [ADDRESSES.linkToken.toLowerCase(), ADDRESSES.usdc.toLowerCase()].sort(),
-    );
+    expect(calls.readContract).toHaveLength(1);
+    expect(calls.readContract[0]!.owner.toLowerCase()).toBe(OWNER_OVERRIDE.toLowerCase());
+    expect(calls.readContract[0]!.token.toLowerCase()).toBe(ADDRESSES.usdc.toLowerCase());
   });
 
   it('falls back to the configured signer when owner is omitted', async () => {
@@ -143,6 +131,5 @@ describe('client.balances.read', () => {
     const snap = await read(ctx, { owner: OWNER_OVERRIDE });
     expect(snap.native).toBe(0n);
     expect(snap.usdc).toBe(0n);
-    expect(snap.link).toBe(0n);
   });
 });

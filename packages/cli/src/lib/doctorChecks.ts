@@ -38,7 +38,6 @@ import type { ContractCheckResult, RpcProbeResult } from './doctorProbe.js';
 // the structured checks never disagree with the human-rendered balance
 // annotations. If you change one, change the other.
 const POL_GAS_FLOOR_WEI = 100_000_000_000_000n;
-const LINK_DUST_FLOOR_WEI = 1_000_000_000_000n;
 
 // ── envelope types ────────────────────────────────────────────────────
 
@@ -61,10 +60,8 @@ export type CheckId =
   | 'signer.password_file_perms'
   | 'balances.native'
   | 'balances.usdc'
-  | 'balances.link'
   | 'allowances.usdc_position'
-  | 'allowances.usdc_treasury'
-  | 'allowances.link_oracle';
+  | 'allowances.usdc_treasury';
 
 // Stable enum, additive forward-compat. Later PRs append new codes.
 export type ErrorCode =
@@ -237,10 +234,8 @@ export function runDoctorChecks(rawInputs: ChecksInputs): CheckResult[] {
     checkSignerPasswordFilePerms(inputs),
     checkBalancesNative(inputs),
     checkBalancesUsdc(inputs),
-    checkBalancesLink(inputs),
     checkAllowancesUsdcPosition(inputs),
     checkAllowancesUsdcTreasury(inputs),
-    checkAllowancesLinkOracle(inputs),
   ];
 }
 
@@ -833,34 +828,6 @@ function checkBalancesUsdc(inputs: NormalizedChecksInputs): CheckResult {
   );
 }
 
-// LINK is only needed for contest creation; bettors and pure matchers
-// never see this fail block them.
-function checkBalancesLink(inputs: NormalizedChecksInputs): CheckResult {
-  return classifyChainCheck(
-    inputs,
-    'balances.link',
-    'LINK balance ≥ dust floor',
-    ['createContests'],
-    inputs.balances === null ? null : inputs.balances.link,
-    inputs.balancesError,
-    (raw) => {
-      const data = {
-        raw: raw.toString(),
-        formatted: trimDecimal(formatUnits(raw, 18), 6),
-        decimals: 18,
-      };
-      if (raw >= LINK_DUST_FLOOR_WEI) return { status: 'ok', data };
-      return {
-        status: 'fail',
-        details: 'no LINK balance — only required for contest creation',
-        remediation: 'Fund this wallet with LINK if you intend to create contests.',
-        data,
-        error: { code: 'balance_below_floor', retryable: false },
-      };
-    },
-  );
-}
-
 function checkAllowancesUsdcPosition(inputs: NormalizedChecksInputs): CheckResult {
   const blocking: CapabilityId[] = ['matchCommitments', 'submitCommitments'];
   return classifyChainCheck(
@@ -904,29 +871,7 @@ function checkAllowancesUsdcTreasury(inputs: NormalizedChecksInputs): CheckResul
         details:
           'TreasuryModule USDC not approved — required for contest creation, and for the first ' +
           'lazy-creation match on a fresh speculation key (preflighted by the SDK on submit).',
-        remediation: 'Run `ospex approvals setup --create-fee-usdc <amount>` to approve.',
-        data,
-        error: { code: 'allowance_zero', retryable: false },
-      };
-    },
-  );
-}
-
-function checkAllowancesLinkOracle(inputs: NormalizedChecksInputs): CheckResult {
-  return classifyChainCheck(
-    inputs,
-    'allowances.link_oracle',
-    'LINK → OracleModule approved',
-    ['createContests'],
-    inputs.approvals === null ? null : inputs.approvals.link.allowances.oracleModule,
-    inputs.approvalsError,
-    (entry) => {
-      const data = serializeAllowanceData(entry.raw, entry.spender, 18);
-      if (entry.raw > 0n) return { status: 'ok', data };
-      return {
-        status: 'fail',
-        details: 'OracleModule LINK not approved — only required for contest creation.',
-        remediation: 'Run `ospex approvals setup --link <amount>` to approve.',
+        remediation: 'Run `ospex approvals setup --fee-usdc <amount>` to approve.',
         data,
         error: { code: 'allowance_zero', retryable: false },
       };

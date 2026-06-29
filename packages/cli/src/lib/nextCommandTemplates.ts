@@ -21,7 +21,6 @@
  *     `safeToAutoRun: false`.
  */
 
-import { formatUnits } from 'viem';
 import {
   OspexAllowanceError,
   getAddresses,
@@ -61,7 +60,7 @@ export const VERIFY_ALLOWANCES = registerNextCommand({
   suggestedFor: 'verify',
   safeToAutoRun: true,
   render: (params: { address: Hex }) => ({
-    description: 'Verify the new USDC + LINK allowances.',
+    description: 'Verify the new USDC allowances.',
     command: `ospex approvals show --address ${params.address} --json`,
     argv: ['approvals', 'show', '--address', params.address, '--json'],
   }),
@@ -260,23 +259,6 @@ export const REMEDIATE_APPROVE_TREASURY = registerNextCommand({
   }),
 });
 
-/**
- * For ALLOWANCE_INSUFFICIENT against OracleModule (LINK payment for
- * Chainlink Functions). Routes through `approvals setup` for the
- * LINK dimension.
- */
-export const REMEDIATE_APPROVE_LINK = registerNextCommand({
-  id: 'remediate-approve-link',
-  suggestedFor: 'remediate',
-  safeToAutoRun: false,
-  render: (params: { requiredLink: string }) => ({
-    description:
-      'Approve LINK for OracleModule (Chainlink Functions). Re-run the original command after the approve tx lands.',
-    command: `ospex approvals setup --link ${params.requiredLink} --yes --json`,
-    argv: ['approvals', 'setup', '--link', params.requiredLink, '--yes', '--json'],
-  }),
-});
-
 /* ------------------------------------------------------------------------- */
 /* Error → nextCommands helper (failure-envelope wiring)                    */
 /* ------------------------------------------------------------------------- */
@@ -310,13 +292,6 @@ export function deriveRemediationNextCommands(
       return [
         REMEDIATE_APPROVE_TREASURY.build({
           requiredUsdc: wei6ToDecimalUSDC(err.required),
-        }),
-      ];
-    }
-    if (spender === addresses.oracleModule.toLowerCase()) {
-      return [
-        REMEDIATE_APPROVE_LINK.build({
-          requiredLink: formatUnits(err.required, 18),
         }),
       ];
     }

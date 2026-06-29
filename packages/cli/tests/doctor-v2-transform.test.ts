@@ -23,9 +23,7 @@ import type { AgentEnvelope, ApprovalsSnapshot, BalancesSnapshot, Hex } from '@o
 const OWNER: Hex = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as const;
 const POSITION_MODULE = '0x0DCd42f8609cd7884ddBa3481b03a78dfc88366c' as const;
 const TREASURY_MODULE = '0xCB56CD2c509301e888965DD3A2E5C486Fe03a56e' as const;
-const ORACLE_MODULE = '0x7e1397eD5b4c9f606DCF2EB0281485B2296E29Bb' as const;
 const USDC = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359' as const;
-const LINK = '0xb0897686c545045aFc77CF20eC7A532E3120E0F1' as const;
 
 function makeApprovals(): ApprovalsSnapshot {
   return {
@@ -38,13 +36,7 @@ function makeApprovals(): ApprovalsSnapshot {
         treasuryModule: { spender: TREASURY_MODULE, raw: 10n ** 9n },
       },
     },
-    link: {
-      address: LINK,
-      allowances: {
-        oracleModule: { spender: ORACLE_MODULE, raw: 10n ** 18n },
-      },
-    },
-  };
+  } as unknown as ApprovalsSnapshot;
 }
 
 function makeBalances(): BalancesSnapshot {
@@ -53,8 +45,7 @@ function makeBalances(): BalancesSnapshot {
     chainId: 137,
     native: 2n * 10n ** 18n,
     usdc: 10n ** 9n,
-    link: 10n ** 18n,
-  };
+  } as unknown as BalancesSnapshot;
 }
 
 function buildHappyReport(): ReturnType<typeof buildDoctorReport> {

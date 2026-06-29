@@ -4,21 +4,20 @@
  * snapshot, decides what (if anything) to do for each spender, and
  * returns a serialisable `SetupPlan` for the renderer + executor.
  *
- * Three dimensions, in render order:
+ * Two dimensions, in render order (both USDC):
  *
  *   1. USDC → PositionModule  (`--risk-usdc`)  — bet risk
  *   2. USDC → TreasuryModule  (`--fee-usdc`)   — protocol fees
- *   3. LINK → OracleModule    (`--link`)        — Chainlink (contests only)
+ *
+ * (R5/CRE removed the LINK → OracleModule dimension — contest
+ * verify/score are permissionless and funded off-chain by the workflow
+ * owner; only the USDC creation fee remains, covered by `--fee-usdc`.)
  *
  * Auto-include rule: when the caller provides ONLY `--risk-usdc`
- * (omitting both `--fee-usdc` and `--link`), we target a small fee
- * budget so the most common mid-bet approval prompt (the maker's /
- * taker's half of the lazy speculation creation fee, 0.25 USDC each)
- * doesn't fire on the next commitment match. Pass `--fee-usdc 0` to
- * opt out. The rule is deliberately scoped to the casual-bettor
- * shape — a user who sets `--link` is in operator territory and
- * should be explicit about every dimension; a surprise USDC approval
- * alongside a contest-creation setup would be a financial-UX bug.
+ * (omitting `--fee-usdc`), we target a small fee budget so the most
+ * common mid-bet approval prompt (the maker's / taker's half of the
+ * lazy speculation creation fee, 0.25 USDC each) doesn't fire on the
+ * next commitment match. Pass `--fee-usdc 0` to opt out.
  *
  * Skip rule: if the wallet already has at least the requested allowance
  * for a given spender, the planner emits a `skip-already-approved`
@@ -34,15 +33,12 @@ import type { Hex } from './walletAddress.js';
 const FEE_AUTO_INCLUDE_USDC = '1';
 
 const USDC_DECIMAL_RE = /^\d+(?:\.\d{1,6})?$/;
-const LINK_DECIMAL_RE = /^\d+(?:\.\d{1,18})?$/;
 
 export interface SetupInput {
   /** USDC amount string for PositionModule (decimal USDC, "max", or undefined to skip). */
   riskUsdc?: string | undefined;
   /** USDC amount string for TreasuryModule. */
   feeUsdc?: string | undefined;
-  /** LINK amount string for OracleModule. */
-  link?: string | undefined;
 }
 
 export type ApprovalAction =
@@ -50,12 +46,12 @@ export type ApprovalAction =
   | { kind: 'skip-already-approved'; currentRaw: bigint; targetRaw: bigint }
   | { kind: 'skip-not-requested' };
 
-export type ApprovalSpenderKey = 'positionModule' | 'treasuryModule' | 'oracleModule';
+export type ApprovalSpenderKey = 'positionModule' | 'treasuryModule';
 
 export interface PlanItem {
   spenderModule: ApprovalSpenderKey;
   spender: Hex;
-  token: 'USDC' | 'LINK';
+  token: 'USDC';
   tokenAddress: Hex;
   decimals: number;
   /** Short label for the renderer ("bet risk", "protocol fees", "Chainlink"). */
@@ -85,11 +81,6 @@ export type ParsedAmount =
  */
 export function parseUsdcInput(input: string | undefined): ParsedAmount {
   return parseDecimalAmount(input, 6, USDC_DECIMAL_RE, 'USDC');
-}
-
-/** Parse a decimal LINK string. Same shape as USDC; 18 fractional digits. */
-export function parseLinkInput(input: string | undefined): ParsedAmount {
-  return parseDecimalAmount(input, 18, LINK_DECIMAL_RE, 'LINK');
 }
 
 function parseDecimalAmount(
@@ -122,20 +113,15 @@ function parseDecimalAmount(
 export function buildSetupPlan(input: SetupInput, current: ApprovalsSnapshot): SetupPlan {
   const riskParsed = parseUsdcInput(input.riskUsdc);
   let feeParsed = parseUsdcInput(input.feeUsdc);
-  const linkParsed = parseLinkInput(input.link);
 
   // Auto-include: when the caller passed ONLY --risk-usdc (no
-  // --fee-usdc and no --link), target a small fee budget. "Did not
-  // set" is detected by raw input shape (undefined) — distinct from
-  // "0" / "skip", which is an explicit opt-out. The link === undefined
-  // gate keeps the rule scoped to the casual-bettor shape: any caller
-  // touching --link is in operator territory and should be explicit
-  // about every dimension.
+  // --fee-usdc), target a small fee budget. "Did not set" is detected
+  // by raw input shape (undefined) — distinct from "0" / "skip", which
+  // is an explicit opt-out.
   let autoIncludedFee = false;
   if (
     input.riskUsdc !== undefined &&
     input.feeUsdc === undefined &&
-    input.link === undefined &&
     riskParsed.kind !== 'skip'
   ) {
     feeParsed = parseUsdcInput(FEE_AUTO_INCLUDE_USDC);
@@ -145,7 +131,6 @@ export function buildSetupPlan(input: SetupInput, current: ApprovalsSnapshot): S
   const items: PlanItem[] = [
     buildItem(current, 'positionModule', 'USDC', 'bet risk', riskParsed, false),
     buildItem(current, 'treasuryModule', 'USDC', 'protocol fees', feeParsed, autoIncludedFee),
-    buildItem(current, 'oracleModule', 'LINK', 'Chainlink', linkParsed, false),
   ];
 
   const willSendCount = items.filter((i) => i.action.kind === 'send').length;
@@ -160,7 +145,7 @@ export function buildSetupPlan(input: SetupInput, current: ApprovalsSnapshot): S
 function buildItem(
   current: ApprovalsSnapshot,
   spenderKey: ApprovalSpenderKey,
-  token: 'USDC' | 'LINK',
+  token: 'USDC',
   purpose: string,
   parsed: ParsedAmount,
   autoIncluded: boolean,
@@ -210,20 +195,11 @@ function lookupSpender(
       currentRaw: e.raw,
     };
   }
-  if (spenderKey === 'treasuryModule') {
-    const e = current.usdc.allowances.treasuryModule;
-    return {
-      spenderAddr: e.spender as Hex,
-      tokenAddr: current.usdc.address as Hex,
-      decimals: current.usdc.decimals,
-      currentRaw: e.raw,
-    };
-  }
-  const e = current.link.allowances.oracleModule;
+  const e = current.usdc.allowances.treasuryModule;
   return {
     spenderAddr: e.spender as Hex,
-    tokenAddr: current.link.address as Hex,
-    decimals: current.link.decimals,
+    tokenAddr: current.usdc.address as Hex,
+    decimals: current.usdc.decimals,
     currentRaw: e.raw,
   };
 }

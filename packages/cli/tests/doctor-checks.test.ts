@@ -24,9 +24,8 @@ import type {
 const OWNER = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as `0x${string}`;
 const POSITION_MODULE = '0x0DCd42f8609cd7884ddBa3481b03a78dfc88366c' as `0x${string}`;
 const TREASURY_MODULE = '0xCB56CD2c509301e888965DD3A2E5C486Fe03a56e' as `0x${string}`;
-const ORACLE_MODULE = '0x7e1397eD5b4c9f606DCF2EB0281485B2296E29Bb' as `0x${string}`;
+const CRE_RECEIVER = '0x06e3470012039797119Ae30e1236169304F9220C' as `0x${string}`;
 const USDC = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359' as `0x${string}`;
-const LINK = '0xb0897686c545045aFc77CF20eC7A532E3120E0F1' as `0x${string}`;
 
 const STUB_META: MetaBlock = {
   generatedAt: '2026-05-15T00:00:00.000Z',
@@ -37,7 +36,6 @@ const STUB_META: MetaBlock = {
 function makeApprovals(overrides: {
   positionModule?: bigint;
   treasuryModule?: bigint;
-  oracleModule?: bigint;
 } = {}): ApprovalsSnapshot {
   return {
     owner: OWNER,
@@ -58,24 +56,12 @@ function makeApprovals(overrides: {
         },
       },
     },
-    link: {
-      address: LINK,
-      decimals: 18,
-      allowances: {
-        oracleModule: {
-          spender: ORACLE_MODULE,
-          spenderModule: 'oracleModule',
-          raw: overrides.oracleModule ?? 0n,
-        },
-      },
-    },
   };
 }
 
 function makeBalances(overrides: {
   native?: bigint;
   usdc?: bigint;
-  link?: bigint;
   chainId?: number;
 } = {}): BalancesSnapshot {
   return {
@@ -83,9 +69,7 @@ function makeBalances(overrides: {
     chainId: overrides.chainId ?? 137,
     native: overrides.native ?? 0n,
     usdc: overrides.usdc ?? 0n,
-    link: overrides.link ?? 0n,
     usdcAddress: USDC,
-    linkAddress: LINK,
   };
 }
 
@@ -114,10 +98,9 @@ const HAPPY_CONTRACT_CHECK: ContractCheckResult = {
   ok: true,
   checked: [
     { name: 'USDC', address: USDC, hasCode: true },
-    { name: 'LINK', address: LINK, hasCode: true },
     { name: 'PositionModule', address: POSITION_MODULE, hasCode: true },
     { name: 'TreasuryModule', address: TREASURY_MODULE, hasCode: true },
-    { name: 'OracleModule', address: ORACLE_MODULE, hasCode: true },
+    { name: 'CreOracleReceiver', address: CRE_RECEIVER, hasCode: true },
     { name: 'OspexCore', address: '0xECD12Af197FBF4C9F706B5Eb11a19c40Cfd643db', hasCode: true },
   ],
   missing: [],
@@ -181,12 +164,10 @@ describe('runDoctorChecks — happy path', () => {
       balances: makeBalances({
         native: 10n ** 18n,
         usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
       }),
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
       signerAddress: OWNER,
       ...HAPPY_CHAIN_PROBES,
@@ -211,14 +192,14 @@ describe('runDoctorChecks — happy path', () => {
     expect(c.blockingFor).toEqual(['matchCommitments', 'submitCommitments']);
   });
 
-  it('flags LINK as blocking createContests only — not match/submit', () => {
+  it('flags an unapproved TreasuryModule as blocking createContests only — not match/submit', () => {
     const checks = runDoctorChecks({
       apiOk: true,
-      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n, link: 0n }),
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
       approvals: makeApprovals({ positionModule: 50_000_000n }),
       signerAddress: OWNER,
     });
-    const c = findCheck(checks, 'balances.link');
+    const c = findCheck(checks, 'allowances.usdc_treasury');
     expect(c.status).toBe('fail');
     expect(c.blockingFor).toEqual(['createContests']);
   });
@@ -233,7 +214,7 @@ describe('runDoctorChecks — soft-fail on null snapshots', () => {
       approvals: makeApprovals({ positionModule: 50_000_000n }),
       signerAddress: OWNER,
     });
-    for (const id of ['balances.native', 'balances.usdc', 'balances.link']) {
+    for (const id of ['balances.native', 'balances.usdc']) {
       const c = findCheck(checks, id);
       expect(c.status, `${id} should skip when balances is null`).toBe('skip');
       expect(c.details).toContain('ECONNREFUSED');
@@ -251,7 +232,6 @@ describe('runDoctorChecks — soft-fail on null snapshots', () => {
     for (const id of [
       'allowances.usdc_position',
       'allowances.usdc_treasury',
-      'allowances.link_oracle',
     ]) {
       const c = findCheck(checks, id);
       expect(c.status, `${id} should skip when approvals is null`).toBe('skip');
@@ -300,12 +280,10 @@ describe('buildSummary — rollup math', () => {
       balances: makeBalances({
         native: 10n ** 18n,
         usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
       }),
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
       signerAddress: OWNER,
       ...HAPPY_CHAIN_PROBES,
@@ -318,17 +296,16 @@ describe('buildSummary — rollup math', () => {
     expect(s.byCapability.createContests.ok).toBe(true);
   });
 
-  it('LINK fail → createContests not ok, matchCommitments still ok (capability isolation)', () => {
+  it('TreasuryModule fail → createContests not ok, matchCommitments still ok (capability isolation)', () => {
     const checks = runDoctorChecks({
       apiOk: true,
       balances: makeBalances({
         native: 10n ** 18n,
         usdc: 10_000_000n,
-        link: 0n,
       }),
       approvals: makeApprovals({
         positionModule: 50_000_000n,
-        treasuryModule: 5_000_000n,
+        // treasuryModule unapproved → blocks createContests only.
       }),
       signerAddress: OWNER,
       ...HAPPY_CHAIN_PROBES,
@@ -337,8 +314,8 @@ describe('buildSummary — rollup math', () => {
     expect(s.byCapability.matchCommitments.ok).toBe(true);
     expect(s.byCapability.submitCommitments.ok).toBe(true);
     expect(s.byCapability.createContests.ok).toBe(false);
-    expect(s.byCapability.createContests.blockingChecks).toContain('balances.link');
-    // Worst status fail because LINK is fail somewhere.
+    expect(s.byCapability.createContests.blockingChecks).toContain('allowances.usdc_treasury');
+    // Worst status fail because the treasury allowance is fail somewhere.
     expect(s.worstStatus).toBe('fail');
     // Whole-envelope ok=false because there's a fail.
     expect(s.ok).toBe(false);
@@ -392,8 +369,8 @@ describe('buildSummary — rollup math', () => {
   it('counts every status accurately', () => {
     const checks = runDoctorChecks({
       apiOk: false, // 1 fail
-      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }), // gas ok, usdc ok, link fail
-      approvals: makeApprovals({ positionModule: 50_000_000n }), // position ok, treasury fail, oracle fail
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }), // gas ok, usdc ok
+      approvals: makeApprovals({ positionModule: 50_000_000n }), // position ok, treasury fail
       signerAddress: OWNER, // address ok
       ...HAPPY_CHAIN_PROBES, // PR 2+3 probes all ok
     });
@@ -403,7 +380,7 @@ describe('buildSummary — rollup math', () => {
     // PR 3: config.api_url + config.rpc_url = 2 ok
     // PR 4: signer.resolved + signer.password_source + signer.password_file_perms = 3 ok
     expect(s.counts.ok).toBe(13);
-    expect(s.counts.fail).toBe(4); // connectivity.api, balances.link, allowances.usdc_treasury, allowances.link_oracle
+    expect(s.counts.fail).toBe(2); // connectivity.api, allowances.usdc_treasury
     expect(s.counts.skip).toBe(0);
     expect(s.counts.warn).toBe(0);
   });
@@ -623,15 +600,15 @@ describe('PR 2: network.contracts_deployed check', () => {
         ok: false,
         checked: [
           { name: 'USDC', address: USDC, hasCode: true },
-          { name: 'LINK', address: LINK, hasCode: null }, // lookup errored
+          { name: 'CreOracleReceiver', address: CRE_RECEIVER, hasCode: null }, // lookup errored
         ],
         missing: [],
-        unknown: ['LINK'],
+        unknown: ['CreOracleReceiver'],
       },
     });
     const c = findCheck(checks, 'network.contracts_deployed');
     expect(c.status).toBe('warn');
-    expect(c.details).toMatch(/LINK/);
+    expect(c.details).toMatch(/CreOracleReceiver/);
     expect(c.error).toBeUndefined();
   });
 });
@@ -651,10 +628,8 @@ describe('PR 2: chain-mismatch cascade on balances + allowances', () => {
     for (const id of [
       'balances.native',
       'balances.usdc',
-      'balances.link',
       'allowances.usdc_position',
       'allowances.usdc_treasury',
-      'allowances.link_oracle',
     ]) {
       const c = findCheck(checks, id);
       expect(c.status, `${id} should warn on chain mismatch`).toBe('warn');
@@ -692,12 +667,10 @@ describe('PR 2: ready/exit agree with summary even on happy snapshot path', () =
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
       balances: makeBalances({
         native: 10n ** 18n,
         usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
       }),
       signerAddress: OWNER,
       expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
@@ -749,12 +722,10 @@ describe('PR 2: ready/exit agree with summary even on happy snapshot path', () =
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
       balances: makeBalances({
         native: 10n ** 18n,
         usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
       }),
       signerAddress: OWNER,
       meta: STUB_META,
@@ -773,12 +744,10 @@ describe('PR 2: ready/exit agree with summary even on happy snapshot path', () =
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
       balances: makeBalances({
         native: 10n ** 18n,
         usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
       }),
       signerAddress: OWNER,
       expectedChainId: HAPPY_EXPECTED_CHAIN_ID,
@@ -1034,12 +1003,10 @@ describe('PR 4: --strict + loose pw-file drives exit-1 via rollup', () => {
       balances: makeBalances({
         native: 10n ** 18n,
         usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
       }),
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
       signerAddress: OWNER,
       ...HAPPY_CHAIN_PROBES,

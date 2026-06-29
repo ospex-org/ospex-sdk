@@ -1,7 +1,7 @@
 /**
- * Contests namespace — composes the M4 contest creation lifecycle
- * (scripts, create, score) with read helpers (get, list, waitForVerified)
- * on a single `client.contests` object.
+ * Contests namespace — composes the R5/CRE contest creation lifecycle
+ * (create, score) with read helpers (get, list, waitForVerified) on a
+ * single `client.contests` object.
  *
  * Reads work without `rpcUrl` or `signer`. Write methods (create, score,
  * waitForVerified) throw `OspexConfigError` if either is missing — they
@@ -9,7 +9,6 @@
  * OspexClient doesn't construct a chain client until a write fires.
  */
 import type {
-  ApprovedScripts,
   Contest,
   ContestsListOptions,
   ContestUpdate,
@@ -22,7 +21,6 @@ import { contestToUpdate, decodeContestUpdate } from '../realtime/decoders.js';
 import { normalizeUint } from '../realtime/filters.js';
 import {
   approveFee,
-  approveLink,
   type ApproveArgs,
   type ApproveResult,
 } from './approve.js';
@@ -30,7 +28,6 @@ import { create, type CreateContestArgs, type CreateContestResult } from './crea
 import { get } from './get.js';
 import { list } from './list.js';
 import { score, type ScoreContestArgs, type ScoreContestResult } from './score.js';
-import { ScriptsCache } from './scripts.js';
 import {
   waitForVerified,
   type WaitForVerifiedOptions,
@@ -38,20 +35,9 @@ import {
 } from './waitForVerified.js';
 
 export class Contests {
-  private readonly cache = new ScriptsCache();
-
   constructor(private readonly ctx: ContestsContext) {}
 
   // ── Reads ─────────────────────────────────────────────────────────
-
-  scripts(): Promise<ApprovedScripts> {
-    return this.cache.get(this.ctx);
-  }
-
-  /** Drop the cached scripts() result — useful right after a re-sign. */
-  invalidateScriptsCache(): void {
-    this.cache.invalidate();
-  }
 
   get(contestId: string | number | bigint): Promise<Contest> {
     return get(this.ctx, contestId);
@@ -103,16 +89,11 @@ export class Contests {
   // ── Writes ────────────────────────────────────────────────────────
 
   create(args: CreateContestArgs): Promise<CreateContestResult> {
-    return create(this.ctx, args, this.cache);
+    return create(this.ctx, args);
   }
 
   score(args: ScoreContestArgs): Promise<ScoreContestResult> {
-    return score(this.ctx, args, this.cache);
-  }
-
-  /** Approve OracleModule to spend LINK from the connected wallet. */
-  approveLink(amount: ApproveArgs): Promise<ApproveResult> {
-    return approveLink(this.ctx, amount);
+    return score(this.ctx, args);
   }
 
   /** Approve TreasuryModule to spend USDC for the contest creation fee. */

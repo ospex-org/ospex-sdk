@@ -40,22 +40,17 @@ import {
 
 const INDENT = '  ';
 
-// "Effectively zero" thresholds — the same values the human renderer
-// uses to flag balances that LOOK like zero but technically aren't.
-// Sharing them with `computeReadiness` keeps the contract consistent:
-// the doctor must not say "ready to match" for a wallet whose POL
-// balance the same report annotates as "no gas — no tx will land".
+// "Effectively zero" threshold — the same value the human renderer
+// uses to flag a POL balance that LOOKS like zero but technically
+// isn't. Sharing it with `computeReadiness` keeps the contract
+// consistent: the doctor must not say "ready to match" for a wallet
+// whose POL balance the same report annotates as "no gas — no tx will
+// land".
 //
 //   POL_GAS_FLOOR_WEI:  1e14 wei = 0.0001 POL. Below this you can't
 //                       fund any realistic Polygon tx (even a simple
 //                       approve burns ~1.5e15 wei = 0.0015 POL).
-//   LINK_DUST_FLOOR_WEI: 1e12 wei = 1 µLINK. Below this the renderer
-//                       displays "0 LINK". A real Chainlink Functions
-//                       call costs ~1 LINK so this is a generous
-//                       lower bound — anything below it definitely
-//                       won't fund a contest creation.
 const POL_GAS_FLOOR_WEI = 100_000_000_000_000n;
-const LINK_DUST_FLOOR_WEI = 1_000_000_000_000n;
 
 // ── Readiness ──────────────────────────────────────────────────────
 
@@ -89,9 +84,9 @@ interface ReadinessInputs {
 
 /**
  * Capability matrix from the wallet snapshots. Thresholds match the
- * renderer's "effectively zero" cutoffs (POL_GAS_FLOOR_WEI,
- * LINK_DUST_FLOOR_WEI) so the doctor can never both flag a balance
- * as no-gas/dust AND report a capability as ready. apiOk=false flips
+ * renderer's "effectively zero" cutoff (POL_GAS_FLOOR_WEI) so the
+ * doctor can never both flag a balance as no-gas/dust AND report a
+ * capability as ready. apiOk=false flips
  * every capability to false because every Ospex write goes through
  * core-api.
  *
@@ -102,10 +97,8 @@ interface ReadinessInputs {
 export function computeReadiness({ approvals, balances, apiOk }: ReadinessInputs): Readiness {
   const hasGas = balances.native >= POL_GAS_FLOOR_WEI;
   const hasUsdc = balances.usdc > 0n;
-  const hasLink = balances.link >= LINK_DUST_FLOOR_WEI;
   const positionApproved = approvals.usdc.allowances.positionModule.raw > 0n;
   const treasuryApproved = approvals.usdc.allowances.treasuryModule.raw > 0n;
-  const oracleApproved = approvals.link.allowances.oracleModule.raw > 0n;
 
   // Matching as a taker pulls USDC from PositionModule, so the gating
   // primitives are: API up, POL (gas), USDC (balance), PositionModule
@@ -126,14 +119,14 @@ export function computeReadiness({ approvals, balances, apiOk }: ReadinessInputs
   // match on its key — and the SDK preflights it on submit.
   const submitReasons: string[] = [...matchReasons];
 
-  // Creating contests requires API up (script approvals are served
-  // from core-api), LINK + Oracle for the Chainlink Functions call,
-  // plus USDC + Treasury for the creation fee.
+  // Creating contests is permissionless under R5/CRE: it needs API up
+  // (the gameId is resolved via core-api), POL for gas, and — to pay the
+  // USDC creation fee — both a USDC balance and a USDC → TreasuryModule
+  // allowance. There is NO LINK payment; CRE verify/score are funded
+  // off-chain by the workflow owner.
   const createReasons: string[] = [];
   if (!apiOk) createReasons.push('Core API unreachable');
   if (!hasGas) createReasons.push('no POL balance for gas');
-  if (!hasLink) createReasons.push('no LINK balance');
-  if (!oracleApproved) createReasons.push('OracleModule LINK not approved');
   if (!hasUsdc) createReasons.push('no USDC balance');
   if (!treasuryApproved) createReasons.push('TreasuryModule USDC not approved');
 
@@ -202,9 +195,10 @@ export function pickNextSuggestion(
     // Mark this softly — most users never need it.
     return {
       text:
-        'You\'re ready to match and submit commitments. Contest creation needs LINK + Oracle ' +
-        'approval; only set up if you plan to create contests yourself.',
-      command: 'ospex approvals setup --link 2',
+        'You\'re ready to match and submit commitments. Contest creation needs a USDC → ' +
+        'TreasuryModule approval for the creation fee; only set up if you plan to create ' +
+        'contests yourself.',
+      command: 'ospex approvals setup --fee-usdc 5',
       audience: 'operator',
     };
   }
@@ -225,13 +219,11 @@ export function pickNextSuggestion(
 export interface BalancesBlock {
   native: { raw: string; formatted: string; decimals: 18; symbol: string };
   usdc: { raw: string; formatted: string; decimals: 6; address: string };
-  link: { raw: string; formatted: string; decimals: 18; address: string };
 }
 
 export interface AllowancesBlock {
   usdcPositionModule: { raw: string; formatted: string; spender: string };
   usdcTreasuryModule: { raw: string; formatted: string; spender: string };
-  linkOracleModule: { raw: string; formatted: string; spender: string };
 }
 
 // PR 2: `config.chainId` is the first piece of structured config
@@ -509,12 +501,6 @@ function buildBalancesBlock(balances: BalancesSnapshot): BalancesBlock {
       decimals: 6,
       address: balances.usdcAddress,
     },
-    link: {
-      raw: balances.link.toString(),
-      formatted: trimDecimal(formatUnits(balances.link, 18), 6),
-      decimals: 18,
-      address: balances.linkAddress,
-    },
   };
 }
 
@@ -529,11 +515,6 @@ function buildAllowancesBlock(approvals: ApprovalsSnapshot): AllowancesBlock {
       approvals.usdc.allowances.treasuryModule.raw,
       approvals.usdc.allowances.treasuryModule.spender,
       6,
-    ),
-    linkOracleModule: serializeAllowance(
-      approvals.link.allowances.oracleModule.raw,
-      approvals.link.allowances.oracleModule.spender,
-      18,
     ),
   };
 }
@@ -583,14 +564,10 @@ function checkIdToReason(id: CheckId): string {
       return 'no POL balance for gas';
     case 'balances.usdc':
       return 'no USDC balance';
-    case 'balances.link':
-      return 'no LINK balance';
     case 'allowances.usdc_position':
       return 'PositionModule USDC not approved';
     case 'allowances.usdc_treasury':
       return 'TreasuryModule USDC not approved';
-    case 'allowances.link_oracle':
-      return 'OracleModule LINK not approved';
   }
 }
 
@@ -675,19 +652,6 @@ export function renderDoctorReport(
       `${INDENT}${report.balances.native.symbol.padEnd(8)} ${formatNative(report.balances.native)}\n`,
     );
     out.write(`${INDENT}${'USDC'.padEnd(8)} ${formatUsdcRow(report.balances.usdc)}\n`);
-    // The "only needed for contests" annotation fires when the user's
-    // LINK balance is below display precision — not strictly raw === 0.
-    // Address 0x..01 on mainnet has 6.45e-7 LINK from misdirected dust;
-    // raw is non-zero but visually it's "0 LINK", so the check has to
-    // mirror what the user actually sees. The same threshold gates
-    // `computeReadiness` so the doctor never says "ready to create
-    // contests" with a balance the renderer flagged as dust.
-    const linkEffectivelyZero = BigInt(report.balances.link.raw) < LINK_DUST_FLOOR_WEI;
-    out.write(
-      `${INDENT}${'LINK'.padEnd(8)} ${formatLinkRow(report.balances.link)}` +
-        (linkEffectivelyZero ? '    (only needed for contest creation/scoring)' : '') +
-        '\n',
-    );
   } else {
     out.write('\nBalances    (chain read failed — see Checks below)\n');
   }
@@ -699,9 +663,6 @@ export function renderDoctorReport(
     );
     out.write(
       `${INDENT}${'TreasuryModule'.padEnd(16)} (protocol fees):  ${formatUsdcAllowance(report.allowances.usdcTreasuryModule)}\n`,
-    );
-    out.write(
-      `${INDENT}${'OracleModule'.padEnd(16)} (Chainlink):       ${formatLinkAllowance(report.allowances.linkOracleModule)}\n`,
     );
   } else {
     out.write('\nAllowances  (chain read failed — see Checks below)\n');
@@ -746,10 +707,10 @@ function formatCapability(c: Capability): string {
 }
 
 function formatNative(b: BalancesBlock['native']): string {
-  // Same "below display precision = effectively zero" pattern as the
-  // LINK annotation, sharing POL_GAS_FLOOR_WEI with computeReadiness
-  // so the doctor never says "ready to match" while annotating the
-  // POL balance as "no gas — no tx will land".
+  // "below display precision = effectively zero" pattern, sharing
+  // POL_GAS_FLOOR_WEI with computeReadiness so the doctor never says
+  // "ready to match" while annotating the POL balance as "no gas — no
+  // tx will land".
   const effectivelyZero = BigInt(b.raw) < POL_GAS_FLOOR_WEI;
   return `${b.formatted} ${b.symbol}` + (effectivelyZero ? '    (no gas — no tx will land)' : '');
 }
@@ -758,20 +719,10 @@ function formatUsdcRow(b: BalancesBlock['usdc']): string {
   return `${b.formatted} USDC`;
 }
 
-function formatLinkRow(b: BalancesBlock['link']): string {
-  return `${b.formatted} LINK`;
-}
-
 function formatUsdcAllowance(a: { raw: string; formatted: string }): string {
   if (a.raw === '0') return '       0.000000 USDC    not approved';
   if (isMaxString(a.raw)) return 'unlimited (max) USDC    ok';
   return `${padDecimal(a.formatted, 6).padStart(15)} USDC    ok`;
-}
-
-function formatLinkAllowance(a: { raw: string; formatted: string }): string {
-  if (a.raw === '0') return '             0 LINK    not approved';
-  if (isMaxString(a.raw)) return 'unlimited (max) LINK    ok';
-  return `${a.formatted.padStart(15)} LINK    ok`;
 }
 
 const MAX_UINT256_STR = ((1n << 256n) - 1n).toString();

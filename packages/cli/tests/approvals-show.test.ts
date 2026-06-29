@@ -26,16 +26,13 @@ class StringSink extends Writable {
 const OWNER = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
 const POSITION_MODULE = '0x0DCd42f8609cd7884ddBa3481b03a78dfc88366c';
 const TREASURY_MODULE = '0xCB56CD2c509301e888965DD3A2E5C486Fe03a56e';
-const ORACLE_MODULE = '0x7e1397eD5b4c9f606DCF2EB0281485B2296E29Bb';
 const USDC = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
-const LINK = '0xb0897686c545045aFc77CF20eC7A532E3120E0F1';
 
 const MAX_UINT256 = (1n << 256n) - 1n;
 
 function makeSnapshot(overrides: {
   positionModule?: bigint;
   treasuryModule?: bigint;
-  oracleModule?: bigint;
   chainId?: number;
 } = {}): ApprovalsSnapshot {
   return {
@@ -57,22 +54,11 @@ function makeSnapshot(overrides: {
         },
       },
     },
-    link: {
-      address: LINK as `0x${string}`,
-      decimals: 18,
-      allowances: {
-        oracleModule: {
-          spender: ORACLE_MODULE as `0x${string}`,
-          spenderModule: 'oracleModule',
-          raw: overrides.oracleModule ?? 0n,
-        },
-      },
-    },
   };
 }
 
 describe('renderApprovalsSnapshot', () => {
-  it('renders headings, formatted USDC values, and the LINK section', () => {
+  it('renders headings and formatted USDC values', () => {
     const sink = new StringSink();
     renderApprovalsSnapshot(
       makeSnapshot({ positionModule: 50_000_000n, treasuryModule: 5_000_000n }),
@@ -86,19 +72,6 @@ describe('renderApprovalsSnapshot', () => {
     expect(sink.buf).toContain('TreasuryModule');
     expect(sink.buf).toContain('50.000000 USDC');
     expect(sink.buf).toContain('5.000000 USDC');
-    expect(sink.buf).toContain('LINK allowances');
-  });
-
-  it('hints at LINK being optional when the oracle allowance is zero', () => {
-    const sink = new StringSink();
-    renderApprovalsSnapshot(makeSnapshot(), sink);
-    expect(sink.buf).toContain('only needed if you create or score contests');
-  });
-
-  it('omits the LINK hint when the oracle allowance is non-zero', () => {
-    const sink = new StringSink();
-    renderApprovalsSnapshot(makeSnapshot({ oracleModule: 10n ** 18n }), sink);
-    expect(sink.buf).not.toContain('only needed if you create or score contests');
   });
 
   it('renders an unlimited (max) approval as such instead of a 78-digit number', () => {
@@ -137,9 +110,8 @@ describe('snapshotToJson', () => {
     expect(json.owner).toBe(OWNER);
     expect(json.chainId).toBe(137);
     expect(json.usdc.address).toBe(USDC);
-    expect(json.link.address).toBe(LINK);
     expect(json.usdc.allowances.positionModule.spender).toBe(POSITION_MODULE);
-    expect(json.link.allowances.oracleModule.spender).toBe(ORACLE_MODULE);
+    expect(json.usdc.allowances.treasuryModule.spender).toBe(TREASURY_MODULE);
   });
 
   it('round-trips through JSON.stringify with no BigInt errors', () => {
