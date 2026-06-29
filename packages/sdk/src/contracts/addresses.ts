@@ -38,26 +38,43 @@ export interface OspexAddresses {
   };
 }
 
+// Polygon mainnet — Round 5 (CRE oracle migration), live since 2026-06-28
+// (first tx block 89322650). Cross-checked against the contracts repo
+// docs/DEPLOYMENT.md and the DeployPolygonCre broadcast artifact.
 const POLYGON_MAINNET: OspexAddresses = {
-  matchingModule: '0x1B93579B044f0eE3c4C8a9F479A323DeF7770712',
-  positionModule: '0x0DCd42f8609cd7884ddBa3481b03a78dfc88366c',
-  usdc: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+  matchingModule: '0x46Af20B6307Aa0Ec13de10EF58a02c5F1b5C9559',
+  positionModule: '0x3C71fdB8ABF41487a512440e5ce6490158C26e56',
+  usdc: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', // native USDC — unchanged from R4
+  // DEAD: R4 Functions LINK token. R5/CRE has no caller LINK payment; this
+  // field is removed with the rest of the Functions surface in the CRE migration.
   linkToken: '0xb0897686c545045aFc77CF20eC7A532E3120E0F1',
-  ospexCore: '0xECD12Af197FBF4C9F706B5Eb11a19c40Cfd643db',
-  speculationModule: '0xd757387893E779AC35451CeA639a408A537b9a1B',
-  contestModule: '0x1Eb0048650380369C6F4239dE070114463626102',
-  leaderboardModule: '0x63f76D5796296FFB94132C6f70d3ff9c3c5a0DEF',
-  rulesModule: '0x05aF3d55F44CfaFA59c3B152A1547b5219d90f93',
-  treasuryModule: '0xCB56CD2c509301e888965DD3A2E5C486Fe03a56e',
-  secondaryMarketModule: '0xaD2B4437296B46a1b107Bb2dB7AC4082182b6059',
+  ospexCore: '0x40047BAFcdEd16C938058b7b67186299a2893561',
+  speculationModule: '0xEA21b58E91eDcA41d0c42A8655234F8A64fa31bc',
+  contestModule: '0x0f838AF735E95625905c6acFB887a2E9f4DB9216',
+  leaderboardModule: '0x02228F4bAB35d9631296C47C2103789474aD72ee',
+  rulesModule: '0x5a5662C8246Ed3dC2422Cc8f773564fA41b34723',
+  treasuryModule: '0x07f357e67cc9B48D029b1E4C9B7F45569a2eB85C',
+  secondaryMarketModule: '0xf779d82E9a11234767921A73913dAd429F140aFB',
+  // DEAD: R5 has no OracleModule (replaced by CreOracleReceiver at
+  // 0x06e3470012039797119Ae30e1236169304F9220C in the CRE_ORACLE_RECEIVER
+  // slot). This R4 address is retained only so the still-present Functions
+  // contest-create/score code compiles; both are removed in the CRE migration.
   oracleModule: '0x7e1397eD5b4c9f606DCF2EB0281485B2296E29Bb',
   scorers: {
-    moneyline: '0xd846B7FdbD8C9F67d1580B2C6a8Bd7Fdcb15390b',
-    spread: '0x99c5fF5131F269cA178e2Ea78f2a2A222a3a7d5e',
-    total: '0xC141679f09413EDe38E3Cd36a3e4aDE423827972',
+    moneyline: '0x59555106D4B5f1A797f3552f60ac418Eb6B6f6BD',
+    spread: '0x8f293da716164d5A32dc087A85e5164D929ae9D4',
+    total: '0xB4B1E2A2a75C34e9E4C5D3BB8A432aff973DaDa0',
   },
 };
 
+// ⚠ STALE — these are the PRE-R5 (R4-era) Amoy addresses. Amoy was redeployed
+// for the CRE migration, but the canonical R5 Amoy instance is currently
+// AMBIGUOUS: the DeployAmoyCre broadcast artifact shows OspexCore
+// 0xe35059…/CreOracleReceiver 0xec3d98…, while the migration notes cite a
+// different instance (OspexCore 0x4794De…/receiver 0x7529845C…) — multiple
+// Amoy redeploys disagree. Left un-refreshed deliberately rather than baking in
+// a guess; do NOT rely on chain 80002 for R5 integration testing until the live
+// Amoy instance is confirmed and these are updated. Mainnet (137) is R5-correct.
 const POLYGON_AMOY: OspexAddresses = {
   matchingModule: '0x36bc5693ee30cd65f8dce51bd48bc03815091a26',
   positionModule: '0xb7e1c99bb4490be17c9bf4003c0ada6b3b3c6480',
