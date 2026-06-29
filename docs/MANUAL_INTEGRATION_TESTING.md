@@ -1,10 +1,10 @@
 # Manual integration testing — `@ospex/sdk` + `@ospex/cli`
 
-> **⚠ Amoy posture (R5):** the chain-operation sections below (4–8) still target **Amoy**, which is **no longer actively supported** post-R5 — the SDK de-advertises it (it's gone from `ospex init` + the public docs), and the Amoy contract addresses referenced here may be stale (the canonical R5 Amoy instance is unconfirmed). Mainnet (137) is the only supported target. **Open maintainer decision:** re-target release validation to mainnet (real funds, small amounts) or stand up a fresh confirmed testnet rehearsal. Until that's decided, treat the Amoy sections as best-effort and verify addresses against a known-good deploy before running.
+> **Network:** release-validation integration testing runs on **Polygon mainnet (chainId 137) with real funds in small amounts** — Amoy is no longer actively supported (the SDK de-advertises it). The protocol **allows self-matching**, so a single minimally-funded wallet can exercise the full match/settle path against its own commitment (Section 6.5.3), keeping the on-ramp low-risk. Fund a throwaway test wallet with POL for gas plus a few native USDC; no faucet or mock token is involved.
 
 The canonical pre-release validation for the SDK + CLI. Walk every section in order before tagging a release; total runtime is 15-20 minutes. Each section names a prerequisite, a command, the expected output, and what to investigate if it fails.
 
-Why manual: the integration surface spans on-chain testnet state, the upstream odds writer, and core-api streaming — three external systems whose state we don't own. A scripted suite that "passes" while one is degraded is worse than no suite. This playbook is also exactly what a third-party SDK consumer would use to verify their own setup.
+Why manual: the integration surface spans on-chain mainnet state, the upstream odds writer, and core-api streaming — three external systems whose state we don't own. A scripted suite that "passes" while one is degraded is worse than no suite. This playbook is also exactly what a third-party SDK consumer would use to verify their own setup.
 
 A vitest harness lives at `packages/sdk/tests/integration/` (gated behind `OSPEX_INTEGRATION=1`) for regression-checking after a chain client refactor. It mirrors the *automatable* subset (chain ops only — no streaming, no upstream-odds dependence). It is **not** a substitute for this playbook.
 
@@ -20,12 +20,13 @@ A vitest harness lives at `packages/sdk/tests/integration/` (gated behind `OSPEX
 
 2. Configure `~/.ospex/config.json` via `ospex init`:
    - `apiUrl` defaults to production.
-   - **`rpcUrl` is required.** Use Alchemy / Infura / QuickNode for the test network. The public Polygon RPC (`polygon-rpc.com`) flakes mid-test and returns 401 since 2026-03.
-   - `chainId`: `137` for mainnet, `80002` for Amoy. Sections 4-8 assume Amoy.
+   - **`rpcUrl` is required.** Use a mainnet Polygon RPC from Alchemy / Infura / QuickNode. The public Polygon RPC (`polygon-rpc.com`) flakes mid-test and returns 401 since 2026-03.
+   - `chainId`: `137` (mainnet). Sections 4-8 run on mainnet.
 
-3. For the two-wallet match (Section 5): two funded Amoy wallets.
-   - Each needs POL for gas (Polygon faucet).
-   - Each needs mock USDC (mock token at `0xB1D1c0A8Cc8BB165b34735972E798f64A785eaF8`). If a public faucet/mint isn't exposed for that token, ask ops to seed the wallets.
+3. Funding (real funds, small amounts — no faucet, no mock token):
+   - Each test wallet needs POL for gas.
+   - Each test wallet needs native **USDC** (`0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359`) in small amounts (lot sizes here are sub-cent, e.g. `riskAmount=1000` ⇒ 0.001 USDC).
+   - **Self-matching** (one wallet matching its own commitment — see Section 6.5.3) lets you run the match/settle path with a **single** funded wallet and minimal USDC, instead of two wallets. Prefer this low-risk on-ramp; the two-wallet flow (Section 5) is only needed when you want maker and taker to be distinct addresses.
 
 4. Have `cast` (Foundry) installed for the on-chain validation queries in Section 5.
 
@@ -84,7 +85,7 @@ Verifies the Foundry-native, agent-friendly signing surface (`auth use-foundry`,
 | 2.5.5 | (POSIX only) `chmod 644 ~/.ospex/secrets/ospex-mit-test.pass`, then `ospex auth check --json` | `passwordFilePermissions.loose: true`. `warnings[]` contains a `chmod 600` hint. `errors: []`. `ok: true` (default mode is warn-and-proceed). | Default-mode permission warning. |
 | 2.5.6 | (POSIX only) `ospex auth check --strict --json` against the same 0644 pass file | Exit 1. `errors[]` contains `{ code: "password_file_permissions_loose", ... }`. `unlock.attempted: false`. **Restore `chmod 600` after this step.** | `--strict` CI gate. |
 | 2.5.7 | (POSIX only) `ospex doctor --strict` against a 0644 pass file (re-loosen briefly) | Stderr: `error (password_file_permissions_loose): ...`; exit 1 **before** any chain call. Restore `chmod 600` afterwards. | `doctor --strict` parity with `auth check --strict`. |
-| 2.5.8 | With the pin in place + a funded Amoy wallet + USDC allowance already approved (Section 4.1): `ospex commitments submit-raw <contestId> <scorer> <line> upper 250 1000` (use Section 4 inputs — `submit-raw` is the raw-tuple escape hatch and has no preview / no `--yes`, so it goes straight through). | Commitment hash printed; `status: open`. **No passphrase prompt.** | End-to-end non-interactive write path consuming the config-pinned signer. |
+| 2.5.8 | With the pin in place + a funded mainnet wallet + USDC allowance already approved (Section 4.1): `ospex commitments submit-raw <contestId> <scorer> <line> upper 250 1000` (use Section 4 inputs — `submit-raw` is the raw-tuple escape hatch and has no preview / no `--yes`, so it goes straight through). | Commitment hash printed; `status: open`. **No passphrase prompt.** | End-to-end non-interactive write path consuming the config-pinned signer. |
 | 2.5.9 | Pollute the env with a stale value to confirm precedence: `OSPEX_FOUNDRY_KEYSTORES_DIR=/never/used ospex auth check --json` | `resolution.foundryKeystoresDir.provenance === "env-OSPEX_FOUNDRY_KEYSTORES_DIR"`, `value === "/never/used"`. `resolution.keystore.exists: false`. `errors[]` contains `{ code: "keystore_not_found" }`. | Env-beats-config precedence + early-fail diagnostic. |
 | 2.5.10 | `ospex auth check --account different-account --password-file ~/.ospex/secrets/ospex-mit-test.pass --json` (account name that doesn't exist in `~/.foundry/keystores`) | `resolution.keystore.provenance === "flag-account"`, `exists: false`. `errors[]` contains `keystore_not_found`. The config pin is NOT applied to the wrong account (`resolution.expectedAddress.provenance === "none"`). | Per-invocation flag overrides + conditional `expectedAddress` lift. |
 | 2.5.11 | `ospex auth clear-foundry --all --json` | Exit 0. `~/.ospex/config.json` no longer carries `foundryAccount` / `passwordFile` / `foundryKeystoresDir` / `expectedAddress`. The legacy `keystorePath` (if set by `ospex init`) is preserved. | Tear-down + legacy preservation. |
@@ -107,13 +108,13 @@ If 3.2 produces nothing in 60s, check the upstream odds feed health and core-api
 
 ---
 
-## Section 4 — single-wallet chain ops (Amoy)
+## Section 4 — single-wallet chain ops (mainnet)
 
 Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end before introducing a second wallet.
 
 | # | Command | Expected | Validates |
 |---|---|---|---|
-| 4.1 | `ospex commitments approve max --yes` | tx submitted, receipt confirmed; verify on Amoy Polygonscan that `allowance(walletA, PositionModule)` is `2^256-1` | Signer + chain client + ERC20 ABI + USDC + PositionModule address resolution. (`--yes` skips the confirmation prompt; interactive runs render a preview block before sending.) |
+| 4.1 | `ospex commitments approve max --yes` | tx submitted, receipt confirmed; verify on Polygonscan that `allowance(walletA, PositionModule)` is `2^256-1` | Signer + chain client + ERC20 ABI + USDC + PositionModule address resolution. (`--yes` skips the confirmation prompt; interactive runs render a preview block before sending.) |
 | 4.2 | `ospex commitments submit-raw <contestId> <scorerAddr> <lineTicks> upper 250 1000` | Prints commitment hash + `status: open` | Nonce-floor read + EIP-712 typed-data + sign + hash + POST + idempotency. (Raw form is used here because the test exercises the canonical-tuple surface directly; production users should prefer the high-level `submit`.) |
 | 4.3 | `ospex commitments list --maker <walletA> --raw` | Row appears with `status='open'`, matching `risk`/`odds` columns, and `remaining = risk` (nothing filled yet) | Indexer-free read path. `--raw` keeps the protocol-native columns — the default taker view inverts odds for the matcher's perspective and is the wrong frame for inspecting your own maker rows. |
 | 4.4 | Re-run 4.2 with **identical** inputs | Same commitment hash returned, no duplicate row | Server-side dedup on hash. |
@@ -121,13 +122,13 @@ Wallet A only. Verifies `approve` + `submit` + off-chain `cancel` end-to-end bef
 | 4.6 | `ospex commitments list --maker <walletA> --status cancelled --raw` | Row now appears with `status='cancelled'`. (The default status filter is `open,partially_filled`; cancelled rows require an explicit `--status cancelled`. `--raw` keeps the status column visible — the default taker view drops it.) | Cancel propagation. |
 | 4.7 | `ospex commitments cancel <hash>` again | `{ ok: true }` (idempotent) | API CAS guard. |
 
-**Picking inputs for 4.2**: contest id from `ospex contests list` — the network comes from `chainId` in `~/.ospex/config.json` (`80002` for Amoy per the prereqs); there is no `--chain-id` flag. Assumes Amoy contests are seeded; otherwise ask ops to seed one. Scorer = one of the three Amoy scorer addresses (moneyline `0x2e6f…`, spread `0x0de8…`, total `0xac2e…`). `oddsTick=250` ⇒ 2.50 odds; `riskAmount=1000` ⇒ 0.001 USDC (lot-size aligned).
+**Picking inputs for 4.2**: contest id from `ospex contests list` — the network comes from `chainId` in `~/.ospex/config.json` (`137` for mainnet per the prereqs); there is no `--chain-id` flag. If no live contest is open, create one with `ospex contests create` (or pick an existing one from `ospex contests list`). Scorer = one of the three mainnet scorer addresses (moneyline `0x59555106D4B5f1A797f3552f60ac418Eb6B6f6BD`, spread `0x8f293da716164d5A32dc087A85e5164D929ae9D4`, total `0xB4B1E2A2a75C34e9E4C5D3BB8A432aff973DaDa0`). `oddsTick=250` ⇒ 2.50 odds; `riskAmount=1000` ⇒ 0.001 USDC (lot-size aligned).
 
 ---
 
-## Section 5 — two-wallet match (Amoy)
+## Section 5 — two-wallet match (mainnet)
 
-The flow that proves funds actually move.
+The flow that proves funds actually move. (If you only need to prove the match/settle path, the single-wallet self-match in Section 6.5.3 covers it with minimal funding — use two wallets here only when maker and taker must be distinct addresses.)
 
 | # | Step | Expected | Validates |
 |---|---|---|---|
@@ -136,15 +137,15 @@ The flow that proves funds actually move.
 | 5.3 | Wallet B: `ospex commitments match <hashFromA>` (or its 0x+8hex prefix) | Preview block prints to stderr with both `taker risks` and `maker fill` lines; prompt to confirm. After Y, if allowance was missing prompts to approve, prints both tx hashes; otherwise prints just the match tx hash. | Prefix resolution + `prepareMatch` preview + match math + tx broadcast. |
 | 5.3a | Wallet B: `ospex commitments match <prefixFromA> --json` (no `--yes`) | Preview envelope on stdout — `AgentEnvelope<MatchPreview>` with `schemaVersion: 2`, `stage: 'preview'`, `payload: MatchPreview`; no transaction sent. The signer may unlock once to derive the taker address — same as `commitments submit --json` — but only when a non-interactive credential is available. To run cleanly without a passphrase prompt, use one of (preferred → legacy): `--expected-address <0x…>` (no unlock at all); a Foundry account pinned via `ospex auth use-foundry`; per-invocation `--account <name> --password-file <path>`; or, as a legacy fallback, a pre-cached session from `ospex wallet unlock` (15-min TTL). The "Resolved <prefix> → <fullHash>" echo (if prefix used) appears on stderr only — `... --json | jq .` parses cleanly. | `--json`-alone = preview-only (no tx); lazy-unlock contract for non-TTY runs. |
 | 5.3b | Wallet B: `ospex commitments match <prefixFromA> --yes --json` | Result envelope on stdout — `schemaVersion: 2`, `stage: 'execute'`, `payload.preview` mirroring the §5.3a preview, `payload.result: { txHash, status, blockNumber, takerRiskWei6, fillMakerRiskWei6 }`, and the on-chain transaction recorded under `effects[]`. | `--yes --json` = execute + emit. |
-| 5.4 | `cast call <MatchingModuleAmoy> "s_filledRisk(bytes32)(uint256)" <hashFromA> --rpc-url <rpcUrl>` | Non-zero, equal to `fillMakerRisk` from the match tx | Contract observed the fill. |
-| 5.5 | `cast call <PositionModuleAmoy> "getPosition(uint256,address,uint8)(uint256,uint256,address,uint32,bool,uint8)" <speculationId> <walletA> <makerPositionType> --rpc-url <rpcUrl>` (verify exact signature against `IPositionModule.sol`) | Position with `riskAmount = fillMakerRisk` | Maker side recorded. |
+| 5.4 | `cast call <MatchingModule> "s_filledRisk(bytes32)(uint256)" <hashFromA> --rpc-url <rpcUrl>` (mainnet addresses below) | Non-zero, equal to `fillMakerRisk` from the match tx | Contract observed the fill. |
+| 5.5 | `cast call <PositionModule> "getPosition(uint256,address,uint8)(uint256,uint256,address,uint32,bool,uint8)" <speculationId> <walletA> <makerPositionType> --rpc-url <rpcUrl>` (verify exact signature against `IPositionModule.sol`) | Position with `riskAmount = fillMakerRisk` | Maker side recorded. |
 | 5.6 | Same as 5.5 for wallet B with the **opposite** `positionType` | Position with `riskAmount = takerRisk` | Taker side recorded. |
 | 5.7 | `ospex commitments list --maker <walletA> --status open,partially_filled,filled --raw` | Row now `status='partially_filled'` (or `'filled'` if 5.3 took it all); `remaining` column reflects the unfilled wei6 amount (or zero on full fill). `--raw` is required for the status / risk / remaining columns; the explicit `--status` list adds `filled` so a fully-filled row still appears. | Indexer projected the event (allow ~30s). |
 | 5.8 | `ospex positions status <walletB>` | Reflects the new position. | `positions.status` post-match. |
 
-**JSON-RPC success alone does NOT count.** All four of 5.4–5.7 must hold. Addresses to use:
-- Amoy MatchingModule: `0x36bc5693ee30cd65f8dce51bd48bc03815091a26`
-- Amoy PositionModule: `0xb7e1c99bb4490be17c9bf4003c0ada6b3b3c6480`
+**JSON-RPC success alone does NOT count.** All four of 5.4–5.7 must hold. Mainnet addresses to use (canonical list in `packages/sdk/src/contracts/addresses.ts`):
+- MatchingModule: `0x46Af20B6307Aa0Ec13de10EF58a02c5F1b5C9559`
+- PositionModule: `0x3C71fdB8ABF41487a512440e5ce6490158C26e56`
 
 ---
 
@@ -202,7 +203,7 @@ The error code is in `error (CODE): message` format — confirm both the message
 
 Verifies position lifecycle: `settleSpeculation` (permissionless) followed by `claimPosition` (permissioned to the holder, but no allowance needed — payout flows OUT of PositionModule, never in).
 
-This section needs an actual settled-or-pending-settle position on Amoy (or a previously matched position whose contest has been scored). Two cases:
+This section needs an actual settled-or-pending-settle position on mainnet (or a previously matched position whose contest has been scored). Two cases:
 
 **Case A — A pendingSettle position already exists for your wallet.**
 
@@ -252,15 +253,15 @@ If the indexer already moved the row to `claimable`, you'll see the equivalent s
 | 9D.2 | Re-run 9D.1 | Prints `outcome=alreadyClaimed`, **no txHash, no payout, no error** (NOT an `AlreadyClaimed` revert) | Idempotent re-claim — a pre-flight `getPosition.claimed` read short-circuits the duplicate tx. Under `--json`: `ok:true`, a `claim-skipped-already-claimed` info warning, empty `effects[]`, `payout:null`. |
 | 9D.3 | `ospex claim <speculationIdNotYetSettled> --type upper` | CLI prints "This position requires settlement first. Run `ospex settle ...`" then surfaces `OspexChainError` (`NotSettled`) | `NotSettled` stays loud (only `AlreadyClaimed` is benign); no auto-settle. The hint now uses typed `isNotSettledRevert`, not message-string matching. |
 
-**Pass criterion**: at least one real settle + claim was executed end-to-end on Amoy via `ospex claim-all` (Case A or B), and the resulting `claimed=true` row is visible in Supabase via `ospex positions list <walletA>` plus on-chain via `cast call`. If no settled position exists at release time, this section is allowed to be marked "manual verification required at first real settlement" in the release ticket — the dry-run path (9A.2) can be exercised independently.
+**Pass criterion**: at least one real settle + claim was executed end-to-end on mainnet via `ospex claim-all` (Case A or B), and the resulting `claimed=true` row is visible in Supabase via `ospex positions list <walletA>` plus on-chain via `cast call`. If no settled position exists at release time, this section is allowed to be marked "manual verification required at first real settlement" in the release ticket — the dry-run path (9A.2) can be exercised independently.
 
 ---
 
-## Section 10 — on-chain cancel (mainnet or Amoy)
+## Section 10 — on-chain cancel (mainnet)
 
 Validates `commitments.cancelOnchain`, `commitments.raiseMinNonce`, `commitments.cancelAllOnSpeculation`, and `commitments.getNonceFloor`. The contract has no `AlreadyCancelled` revert path, so re-cancelling is a *success* — that's a deliberate observation point in 10.4.
 
-Prereq: a funded test wallet (gas + a few USDC for the submits) on the chosen network. Mainnet contract addresses are in `packages/sdk/src/contracts/addresses.ts`; Amoy uses the same surface so the section runs on either.
+Prereq: a funded test wallet (gas + a few USDC for the submits) on mainnet. Mainnet contract addresses are in `packages/sdk/src/contracts/addresses.ts`.
 
 | # | Step | Expected | Validates |
 |---|---|---|---|
@@ -307,8 +308,8 @@ Copy this into the release ticket:
 [ ] Section 2 — Wallet lifecycle (legacy)
 [ ] Section 2.5 — Non-interactive Foundry signer
 [ ] Section 3 — odds streaming
-[ ] Section 4 — Single-wallet chain ops (Amoy)
-[ ] Section 5 — Two-wallet match (Amoy)
+[ ] Section 4 — Single-wallet chain ops (mainnet)
+[ ] Section 5 — Two-wallet match (mainnet)
 [ ] Section 6 — Partial fill
 [ ] Section 7 — Failure modes
 [ ] Section 9 — settle + claim (or manual-verification-deferred note)
