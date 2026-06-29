@@ -155,6 +155,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex contests show <contestId>` | One contest with its full orderbook. |
 | `ospex contests create --game-id <id>` (or `--game <slug-or-id>`) | Submit `CreOracleReceiver.createContestAndRequestVerify`. Permissionless; the caller pays the USDC contest-creation fee (allowance to TreasuryModule). `gameId` is the stable id from `ospex games list`; the SDK resolves the three external IDs server-side. `--game` is a resolver alias accepting either a slug or a UUID. |
 | `ospex contests score <contestId>` | Submit `CreOracleReceiver.requestScore`. Permissionless and free; reverts until the contest's on-chain start time has passed. |
+| `ospex contests update-markets <contestId>` | Submit `CreOracleReceiver.requestMarketUpdate` to refresh a Verified contest's market lines. Permissionless and free; the refreshed odds land via the CRE oracle ~30–90s later (check with `ospex odds show <contestId>`). |
 | `ospex contests wait-verified <contestId>` | Poll until the contest reaches Verified state. |
 | `ospex games list [--sport --hours --creatable-only]` | Upcoming games on the schedule. The `creatable` column flags rows that can be passed to `contests create --game-id`; pass `--creatable-only` to narrow to those rows. |
 | `ospex speculations list [--contest --sport --status --limit --offset]` | List speculations across one or more contests. |
@@ -229,7 +230,7 @@ Out of the current public surface, deferred work:
 - **Cross-process nonce coordination.** A pluggable `nonceProvider` for callers distributing submits across hosts. Today, callers serialize per `(maker, speculationKey)` themselves.
 - **Read-only nonce-floor endpoint.** A `GET /v1/makers/:address/nonce-floor` API path so callers without an RPC URL can read the floor without an `eth_call`.
 - **Bulk on-chain claim.** Multicall3-based bulk claim flow.
-- **`requestMarketUpdate`.** The CRE oracle exposes a permissionless `requestMarketUpdate(contestId)` (refresh a Verified contest's market lines); an SDK method + CLI command for it is a follow-up.
+- **Contest watcher.** A long-running `ospex contests watch` that auto-fires `update-markets` / `score` on a schedule, and a `contests` / `speculations` SSE stream so `wait-verified` can subscribe instead of poll.
 - **Secondary-market position UX.** SecondaryMarketModule integration.
 
 Contributions welcome on any of these — see [`CONTRIBUTING.md`](./CONTRIBUTING.md).

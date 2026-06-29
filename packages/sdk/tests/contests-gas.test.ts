@@ -1,12 +1,15 @@
 /**
- * Outer-tx gas wiring on `contests.create` / `contests.score` (R5/CRE):
+ * Outer-tx gas wiring on `contests.create` / `contests.score` /
+ * `contests.requestMarketUpdate` (R5/CRE):
  *
  *   1. `create()` forwards the hardcoded outer-tx gas
  *      `OSPEX_CREATE_CONTEST_TX_GAS = 2_000_000n` to buildSignAndSend.
  *   2. `score()` forwards the hardcoded outer-tx gas
  *      `OSPEX_SCORE_CONTEST_TX_GAS = 1_000_000n` to buildSignAndSend.
+ *   3. `requestMarketUpdate()` forwards the same `OSPEX_SCORE_CONTEST_TX_GAS`
+ *      (shared light-request budget) to buildSignAndSend.
  *
- * Both wiring tests mock `buildSignAndSend` so the test stops after
+ * The wiring tests mock `buildSignAndSend` so the test stops after
  * calldata build but before chain submit. The full pipeline (real RPC +
  * CRE oracle report) is exercised in `docs/MANUAL_INTEGRATION_TESTING.md`.
  * There is no `--gas-limit` / Chainlink Functions callback gas under CRE —
@@ -21,6 +24,7 @@ vi.mock('../src/commitments/sendTx.js', () => ({
 
 import { create } from '../src/contests/create.js';
 import { score } from '../src/contests/score.js';
+import { requestMarketUpdate } from '../src/contests/marketUpdate.js';
 import { buildSignAndSend } from '../src/commitments/sendTx.js';
 import {
   OSPEX_CREATE_CONTEST_TX_GAS,
@@ -140,5 +144,23 @@ describe('contests gas — outer-tx gas wiring', () => {
       expect.objectContaining({ gas: OSPEX_SCORE_CONTEST_TX_GAS }),
     );
     expect(OSPEX_SCORE_CONTEST_TX_GAS).toBe(1_000_000n);
+  });
+
+  it('requestMarketUpdate() forwards gas: OSPEX_SCORE_CONTEST_TX_GAS (no estimateGas)', async () => {
+    vi.mocked(buildSignAndSend).mockResolvedValue({
+      txHash: ('0x' + 'cc'.repeat(32)) as `0x${string}`,
+      receipt: { status: 'success', logs: [] },
+    } as unknown as Awaited<ReturnType<typeof buildSignAndSend>>);
+    const ctx = makeCtx();
+
+    // requestMarketUpdate() throws after buildSignAndSend (parseRequestNonce
+    // finds no CreOracleRequested event in the empty `logs`), but the gas
+    // assertion fires before that point — mirroring create()'s test above.
+    await expect(requestMarketUpdate(ctx, { contestId: 1n })).rejects.toThrow();
+
+    expect(buildSignAndSend).toHaveBeenCalledTimes(1);
+    expect(buildSignAndSend).toHaveBeenCalledWith(
+      expect.objectContaining({ gas: OSPEX_SCORE_CONTEST_TX_GAS }),
+    );
   });
 });

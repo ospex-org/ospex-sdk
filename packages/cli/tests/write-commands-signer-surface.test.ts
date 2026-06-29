@@ -18,6 +18,7 @@ import { commitmentsSubmitCommand } from '../src/commands/commitments/submit.js'
 import { commitmentsSubmitRawCommand } from '../src/commands/commitments/submit-raw.js';
 import { contestCreateCommand } from '../src/commands/contests/create.js';
 import { contestScoreCommand } from '../src/commands/contests/score.js';
+import { contestUpdateMarketsCommand } from '../src/commands/contests/update-markets.js';
 import { positionsClaimCommand } from '../src/commands/positions/claim.js';
 import { positionsClaimAllCommand } from '../src/commands/positions/claim-all.js';
 import { positionsSettleCommand } from '../src/commands/positions/settle.js';
@@ -34,6 +35,7 @@ const WRITE_COMMANDS = [
   ['commitments submit-raw', commitmentsSubmitRawCommand],
   ['contests create', contestCreateCommand],
   ['contests score', contestScoreCommand],
+  ['contests update-markets', contestUpdateMarketsCommand],
   ['positions claim', positionsClaimCommand],
   ['positions claim-all', positionsClaimAllCommand],
   ['positions settle', positionsSettleCommand],

@@ -1,12 +1,12 @@
 /**
- * Contests namespace — composes the R5/CRE contest creation lifecycle
- * (create, score) with read helpers (get, list, waitForVerified) on a
- * single `client.contests` object.
+ * Contests namespace — composes the R5/CRE contest lifecycle
+ * (create, score, requestMarketUpdate) with read helpers (get, list,
+ * waitForVerified) on a single `client.contests` object.
  *
  * Reads work without `rpcUrl` or `signer`. Write methods (create, score,
- * waitForVerified) throw `OspexConfigError` if either is missing — they
- * resolve dependencies through ContestsContext lazily so the parent
- * OspexClient doesn't construct a chain client until a write fires.
+ * requestMarketUpdate, waitForVerified) throw `OspexConfigError` if either is
+ * missing — they resolve dependencies through ContestsContext lazily so the
+ * parent OspexClient doesn't construct a chain client until a write fires.
  */
 import type {
   Contest,
@@ -27,6 +27,11 @@ import {
 import { create, type CreateContestArgs, type CreateContestResult } from './create.js';
 import { get } from './get.js';
 import { list } from './list.js';
+import {
+  requestMarketUpdate,
+  type RequestMarketUpdateArgs,
+  type RequestMarketUpdateResult,
+} from './marketUpdate.js';
 import { score, type ScoreContestArgs, type ScoreContestResult } from './score.js';
 import {
   waitForVerified,
@@ -96,6 +101,15 @@ export class Contests {
     return score(this.ctx, args);
   }
 
+  /**
+   * Request a market-line refresh for a Verified contest (permissionless,
+   * free). Bumps the contest's market nonce and emits a CRE request; the
+   * refreshed odds land asynchronously via the CRE oracle report.
+   */
+  requestMarketUpdate(args: RequestMarketUpdateArgs): Promise<RequestMarketUpdateResult> {
+    return requestMarketUpdate(this.ctx, args);
+  }
+
   /** Approve TreasuryModule to spend USDC for the contest creation fee. */
   approveFee(amount: ApproveArgs): Promise<ApproveResult> {
     return approveFee(this.ctx, amount);
@@ -104,5 +118,6 @@ export class Contests {
 
 export type { ApproveArgs, ApproveResult } from './approve.js';
 export type { CreateContestArgs, CreateContestResult } from './create.js';
+export type { RequestMarketUpdateArgs, RequestMarketUpdateResult } from './marketUpdate.js';
 export type { ScoreContestArgs, ScoreContestResult } from './score.js';
 export type { WaitForVerifiedOptions, WaitForVerifiedResult } from './waitForVerified.js';

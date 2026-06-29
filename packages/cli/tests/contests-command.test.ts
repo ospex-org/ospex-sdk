@@ -8,10 +8,17 @@ import { describe, expect, it } from 'vitest';
 import { makeContestsCommand } from '../src/commands/contests/index.js';
 
 describe('makeContestsCommand', () => {
-  it('registers create / score / show / list / wait-verified as subcommands', () => {
+  it('registers create / score / update-markets / show / list / wait-verified as subcommands', () => {
     const root = makeContestsCommand();
     const names = root.commands.map((c) => c.name()).sort();
-    expect(names).toEqual(['create', 'list', 'score', 'show', 'wait-verified']);
+    expect(names).toEqual([
+      'create',
+      'list',
+      'score',
+      'show',
+      'update-markets',
+      'wait-verified',
+    ]);
   });
 
   it('command name is plural (contests, not contest)', () => {
@@ -38,6 +45,14 @@ describe('makeContestsCommand', () => {
     expect(score).toBeDefined();
     if (score === undefined) return;
     expect(score.helpInformation()).toMatch(/<contestId>/);
+  });
+
+  it('update-markets requires the contestId positional argument', () => {
+    const root = makeContestsCommand();
+    const updateMarkets = root.commands.find((c) => c.name() === 'update-markets');
+    expect(updateMarkets).toBeDefined();
+    if (updateMarkets === undefined) return;
+    expect(updateMarkets.helpInformation()).toMatch(/<contestId>/);
   });
 
   it('wait-verified accepts --timeout-seconds', () => {

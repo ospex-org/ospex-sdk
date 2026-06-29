@@ -98,6 +98,22 @@ export const VERIFY_CONTEST = registerNextCommand({
 });
 
 /**
+ * After `contests update-markets`, suggest reading the refreshed upstream
+ * reference odds for the contest. The CRE market refresh lands
+ * asynchronously, so this is the follow-up that confirms fresh lines.
+ */
+export const VERIFY_CONTEST_ODDS = registerNextCommand({
+  id: 'verify-contest-odds',
+  suggestedFor: 'verify',
+  safeToAutoRun: true,
+  render: (params: { contestId: string }) => ({
+    description: 'Verify the refreshed upstream reference odds for the contest.',
+    command: `ospex odds show ${params.contestId} --json`,
+    argv: ['odds', 'show', params.contestId, '--json'],
+  }),
+});
+
+/**
  * After `cancel-all`, suggest listing live commitments on the
  * speculation to confirm the bulk-invalidate worked.
  */

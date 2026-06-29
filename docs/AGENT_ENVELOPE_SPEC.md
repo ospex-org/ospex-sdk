@@ -410,7 +410,7 @@ Commands listed below adopt the wrapper. Anything not listed either does not hav
 
 ### 4.3 Fire-and-forget writes
 
-`commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`, `claim`, `claim-all`, `settle`, `contests create`, `contests score`.
+`commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`, `claim`, `claim-all`, `settle`, `contests create`, `contests score`, `contests update-markets`.
 
 ### 4.4 Not in scope (intentionally)
 
@@ -452,6 +452,7 @@ Legend: `✓` populated · `∅` `null` / `[]` (does not apply) · `+` populated
 | `settle <id>` | execute | signer | false | false | ∅ | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ (info: already-settled / projection-lag-recovered) | ✓ (settle tx; ∅ when already-settled / pre-send recovery) | ✓ (next: `claim`) |
 | `contests create --game-id <…>` | execute | signer | false | false | ✓ (USDC creation fee; consumed when ok=true) | ∅ | ∅ | ✓ (created) | ∅ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ (next: `wait-verified`) |
 | `contests score <id>` | execute | signer | false | false | ∅ (free; no approvals) | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ |
+| `contests update-markets <id>` | execute | signer | false | false | ∅ (free; no approvals) | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ (next: `odds show`) |
 
 ### 5.3 Reads
 
