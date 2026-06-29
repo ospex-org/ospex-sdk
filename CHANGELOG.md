@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.8.0] — 2026-06-29
+
 ### Added
 
 - **`@ospex/sdk` + `@ospex/cli`: contest market-line refresh via `client.contests.requestMarketUpdate({ contestId })` and `ospex contests update-markets <contestId>`.** Submits `CreOracleReceiver.requestMarketUpdate(contestId)` — the third CRE request entrypoint alongside create (verify) and score. **Permissionless and free** (no USDC fee, no allowance, no LINK): it bumps the contest's on-chain market request nonce and emits a `CreOracleRequested` log that an off-chain Chainlink CRE workflow resolves by fetching current odds and reporting the refreshed market lines back via the KeystoneForwarder (~30–90s later; poll `client.odds.snapshot(contestId)` / `ospex odds show`). The contest must already be **Verified** — the call reverts `CreOracleReceiver__ContestNotVerified` otherwise, which the SDK lets surface rather than pre-checking (mirroring `score`'s premature-revert handling). `requestMarketUpdate` returns `{ contestId, requestNonce, txHash, receipt }` — `requestNonce` (the new latest market nonce, the on-chain bond a downstream watcher matches against `CreReportProcessed`) is parsed from the `CreOracleRequested(requestType=1)` event emitted by CreOracleReceiver. New public exports: `RequestMarketUpdateArgs`, `RequestMarketUpdateResult` (from `client.contests`). The CLI command mirrors `contests score` — a `<contestId>` positional, the shared signer-option group, `--json` as output-format-only (it always sends a tx); the `--json` execute envelope carries `action: 'contests.update-markets'`, a single `market-update-contest` transaction effect, `payload.requestNonce`, and a `verify-contest-odds` next-command (`ospex odds show <contestId> --json`). It reuses the `OSPEX_SCORE_CONTEST_TX_GAS` outer-tx budget (both are light request txs). Additive and backward-compatible.
