@@ -67,31 +67,35 @@ const POLYGON_MAINNET: OspexAddresses = {
   },
 };
 
-// ⚠ STALE — these are the PRE-R5 (R4-era) Amoy addresses. Amoy was redeployed
-// for the CRE migration, but the canonical R5 Amoy instance is currently
-// AMBIGUOUS: the DeployAmoyCre broadcast artifact shows OspexCore
-// 0xe35059…/CreOracleReceiver 0xec3d98…, while the migration notes cite a
-// different instance (OspexCore 0x4794De…/receiver 0x7529845C…) — multiple
-// Amoy redeploys disagree. Left un-refreshed deliberately rather than baking in
-// a guess; do NOT rely on chain 80002 for R5 integration testing until the live
-// Amoy instance is confirmed and these are updated. Mainnet (137) is R5-correct.
+// ⚠ Amoy (80002) is NOT actively supported — we do not vouch that it works.
+// Amoy was redeployed several times during R5 testing (some runs were throwaway,
+// and the most-recent full-protocol deploy was a mainnet rehearsal that isn't
+// guaranteed to have a live CRE oracle behind it). Mainnet (137) is the ONLY
+// supported target; user-facing docs + the CLI should not steer anyone here
+// (Amoy is de-advertised in the Functions→CRE migration). These are the
+// most-recent Amoy addresses on record (DeployAmoyCre broadcast, 2026-06-27
+// 18:47 UTC) — kept current per "if we must reference one, use the latest", but
+// treat them as best-effort. `oracleModule`/`linkToken` are dead R4 fields (see
+// mainnet) removed with the rest of the Functions surface.
 const POLYGON_AMOY: OspexAddresses = {
-  matchingModule: '0x36bc5693ee30cd65f8dce51bd48bc03815091a26',
-  positionModule: '0xb7e1c99bb4490be17c9bf4003c0ada6b3b3c6480',
-  usdc: '0xB1D1c0A8Cc8BB165b34735972E798f64A785eaF8',
-  linkToken: '0x0Fd9e8d3aF1aaee056EB9e802c3A762a667b1904',
-  ospexCore: '0xd47456f17b8f1d232799ae8670330b76a924422e',
-  speculationModule: '0x8a757a818b765a8fcb483042af2f514aeb647580',
-  contestModule: '0xb6dbd31fc14841777cf3c5e06b31685630d08b69',
-  leaderboardModule: '0x274fc351aa6960a5742bd997b75490a9ac324e23',
-  rulesModule: '0x2bcd9098add5e3aecea27d2e4d72f9fb18738634',
-  treasuryModule: '0x85478f81d395eaf8819119491b1257e6dbf1f662',
-  secondaryMarketModule: '0x988707212e45d26e8635356ec6650150fc9466ae',
+  matchingModule: '0xE35333e11F65811EaFEB757b14668fEd0094C1Ef',
+  positionModule: '0xef9036B6Fd822ca5140b3909f8d36f6E2d12Ae2F',
+  usdc: '0xB1D1c0A8Cc8BB165b34735972E798f64A785eaF8', // mock USDC — unchanged
+  linkToken: '0x0Fd9e8d3aF1aaee056EB9e802c3A762a667b1904', // DEAD (R4; no CRE LINK) — removed in the CRE migration
+  ospexCore: '0xE35059DeD09ceC91c6B479169c442712E3C968F4',
+  speculationModule: '0x4F98e520E566Fc9c36276D8c832Fe89489ece727',
+  contestModule: '0x665027D9D8AEdE296254312e2c1F95a9cd256ccf',
+  leaderboardModule: '0x9A4EE9e998290Cc9F99632dBA62E4C70Fc20cA61',
+  rulesModule: '0x0093e70cF18745ac80017ac2658b85A586ff2E1F',
+  treasuryModule: '0xc18Fb80Da257543626D92cb6CA65151B5abC017A',
+  secondaryMarketModule: '0xe42651cf0b508401804DAED5307FC466e046a24d',
+  // DEAD: R5 has no OracleModule (CreOracleReceiver is 0xec3d98… on Amoy);
+  // retained only so the Functions code compiles; removed in the CRE migration.
   oracleModule: '0x0508d9147d1f4c34866550a6f5877bb3aa57a33e',
   scorers: {
-    moneyline: '0x2e6fd04bf32e2ffd46aad9549d86ab619938167b',
-    spread: '0x0de8b42fe14bf008ef26a510e45f663f083ebd77',
-    total: '0xac2ec406c3f1ade03f5e25233b7379faa0fae85b',
+    moneyline: '0x6a273F3E42c1ba212035829b32a73D1E1ef0480e',
+    spread: '0xAE0273AF7085bF34AB345209c893bA087Ef23529',
+    total: '0x6B9F7886f6400d9e65194a6762FEDA61D1582Ff8',
   },
 };
 
