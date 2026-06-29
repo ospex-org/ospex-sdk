@@ -4,7 +4,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### Fixed
+
+- **`@ospex/sdk`: on-chain contract addresses now point at the live R5 (CRE) Polygon-mainnet deploy — the published table was still the retired R4 deployment, so every signed/on-chain action targeted dead contracts.** `getAddresses(137)` returned the pre-R5 module addresses (OspexCore `0xECD12…`, MatchingModule `0x1B935…`, etc.). Because the EIP-712 commitment domain derives `verifyingContract` from `addresses.matchingModule`, the SDK signed commitments against the **R4 MatchingModule** — so `ospex-core-api` (cut over to R5) and the R5 MatchingModule both rejected the recovered signer, and `commitments.match`/`submit`, `positions.claim`/`settle`, and the approvals/balances reads all addressed the wrong contracts. Refreshed every Polygon-mainnet (137) module address to the R5 deploy (first tx block 89322650), cross-checked against the contracts repo `docs/DEPLOYMENT.md` and the `DeployPolygonCre` broadcast artifact. **Amoy (80002) is set to the most-recent testnet deploy (2026-06-27) but flagged NOT actively supported** — Amoy was redeployed several times during R5 testing and the latest full-protocol deploy isn't guaranteed to have a live CRE oracle behind it; mainnet (137) is the only supported target. Amoy will be de-advertised from the docs/CLI in the Functions→CRE migration. The dead `oracleModule` / `linkToken` fields are retained for now (still referenced by the Functions-era contest-create/score code) and are removed in the forthcoming Functions→CRE oracle migration.
 
 ## [0.7.1] — 2026-06-17
 

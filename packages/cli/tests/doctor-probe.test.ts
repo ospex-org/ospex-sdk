@@ -190,7 +190,7 @@ describe('probeContractsDeployed', () => {
   });
 
   it('returns ok=false with data.missing when a contract has empty bytecode', async () => {
-    const POSITION_MODULE_LOWER = '0x0dcd42f8609cd7884ddba3481b03a78dfc88366c';
+    const POSITION_MODULE_LOWER = '0x3c71fdb8abf41487a512440e5ce6490158c26e56'; // R5 PositionModule
     restore = installFetchMock(({ method, params }) => {
       if (method === 'eth_getCode') {
         const [address] = params as [string];
@@ -286,7 +286,7 @@ describe('probeContractsDeployed → checkNetworkContractsDeployed (integration)
   });
 
   it('confirmed empty bytecode on one address → check returns fail with contract_not_deployed', async () => {
-    const POSITION_LOWER = '0x0dcd42f8609cd7884ddba3481b03a78dfc88366c';
+    const POSITION_LOWER = '0x3c71fdb8abf41487a512440e5ce6490158c26e56'; // R5 PositionModule
     restore = installFetchMock(({ method, params }) => {
       if (method === 'eth_getCode') {
         const [address] = params as [string];
