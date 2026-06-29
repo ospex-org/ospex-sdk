@@ -36,16 +36,18 @@ export const SPECULATION_CREATION_FEE_MAKER_SHARE_WEI6: Record<ChainId, bigint> 
 
 /**
  * Transaction-level gas budget for the CRE oracle request entrypoints
- * (`createContestAndRequestVerify` / `requestScore` on CreOracleReceiver).
- * These are the EVM gas the outer tx may use. `eth_estimateGas` is unreliable
- * in this region across some Polygon RPCs (Infura strips revert data; public
- * RPCs hit state-history issues), so these empirically-safe ceilings bypass
- * estimateGas for these specific txs. EIP-1559 refunds the unused portion, so
- * paying the ceiling is bounded by actual consumption. (Create does more work
- * — contest record + USDC creation fee + request event; score only sets a
- * flag + emits — hence the lower score budget.)
+ * (`createContestAndRequestVerify` / `requestScore` / `requestMarketUpdate`
+ * on CreOracleReceiver). These are the EVM gas the outer tx may use.
+ * `eth_estimateGas` is unreliable in this region across some Polygon RPCs
+ * (Infura strips revert data; public RPCs hit state-history issues), so these
+ * empirically-safe ceilings bypass estimateGas for these specific txs. EIP-1559
+ * refunds the unused portion, so paying the ceiling is bounded by actual
+ * consumption. (Create does more work — contest record + USDC creation fee +
+ * request event; score and market-update only bump a flag/nonce + emit — hence
+ * the lower shared budget for the two light request entrypoints.)
  */
 export const OSPEX_CREATE_CONTEST_TX_GAS = 2_000_000n as const;
+/** Shared by `requestScore` and `requestMarketUpdate` — both light request txs. */
 export const OSPEX_SCORE_CONTEST_TX_GAS = 1_000_000n as const;
 
 /** Default verify-pending timeout for waitForVerified — ~2x typical CRE report latency. */

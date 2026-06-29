@@ -4,6 +4,7 @@
  *   - contests create (incl. approve-effect prepending for the USDC
  *     creation-fee allowance loop)
  *   - contests score (free under R5/CRE — no approval effects)
+ *   - contests update-markets (free under R5/CRE — carries requestNonce)
  */
 
 import { describe, expect, it } from 'vitest';
@@ -13,6 +14,7 @@ import {
   toContestCreateAgentEnvelope,
 } from '../src/commands/contests/create.js';
 import { toContestScoreAgentEnvelope } from '../src/commands/contests/score.js';
+import { toContestUpdateMarketsAgentEnvelope } from '../src/commands/contests/update-markets.js';
 
 const POLYGON = 137 as const;
 const SIGNER: Hex = '0xaabbccddeeff00112233445566778899aabbccdd';
@@ -148,6 +150,49 @@ describe('toContestScoreAgentEnvelope', () => {
   it('envelope.ok=false when score reverts', () => {
     const env = toContestScoreAgentEnvelope(
       makeScoreResult({ receipt: { status: 'reverted', blockNumber: 1000n } }),
+      { chainId: POLYGON, signerAddress: SIGNER },
+    );
+    expect(env.ok).toBe(false);
+    expect(env.effects[0]?.status).toBe('reverted');
+  });
+});
+
+describe('toContestUpdateMarketsAgentEnvelope', () => {
+  function makeUpdateResult(overrides: Record<string, unknown> = {}) {
+    return {
+      contestId: 9001n,
+      requestNonce: 3n,
+      txHash: '0xupdate',
+      receipt: { status: 'success', blockNumber: 1000n } as never,
+      ...overrides,
+    } as never;
+  }
+
+  it('action contests.update-markets, single market-update-contest effect (free under CRE)', () => {
+    const env = toContestUpdateMarketsAgentEnvelope(makeUpdateResult(), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+    });
+    expect(env.action).toBe('contests.update-markets');
+    expect(env.stage).toBe('execute');
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.purpose).toBe('market-update-contest');
+    expect(env.payload.contestId).toBe('9001');
+    expect(env.payload.requestNonce).toBe('3');
+  });
+
+  it('nextCommands suggests verify-contest-odds', () => {
+    const env = toContestUpdateMarketsAgentEnvelope(makeUpdateResult(), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+    });
+    expect(env.nextCommands[0]?.id).toBe('verify-contest-odds');
+    expect(env.nextCommands[0]?.argv).toContain('9001');
+  });
+
+  it('envelope.ok=false when the update reverts', () => {
+    const env = toContestUpdateMarketsAgentEnvelope(
+      makeUpdateResult({ receipt: { status: 'reverted', blockNumber: 1000n } }),
       { chainId: POLYGON, signerAddress: SIGNER },
     );
     expect(env.ok).toBe(false);

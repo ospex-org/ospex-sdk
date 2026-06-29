@@ -37,6 +37,7 @@ import {
   toContestCreateAgentEnvelope,
 } from '../src/commands/contests/create.js';
 import { toContestScoreAgentEnvelope } from '../src/commands/contests/score.js';
+import { toContestUpdateMarketsAgentEnvelope } from '../src/commands/contests/update-markets.js';
 import { deriveRemediationNextCommands } from '../src/lib/nextCommandTemplates.js';
 
 const POLYGON = 137 as const;
@@ -212,6 +213,19 @@ describe('PR-7 wiring: success envelopes carry the right verify suggestions', ()
       { chainId: POLYGON, signerAddress: SIGNER },
     );
     expect(env.nextCommands[0]?.id).toBe('verify-contest');
+  });
+
+  it('contests.update-markets → verify-contest-odds', () => {
+    const env = toContestUpdateMarketsAgentEnvelope(
+      {
+        contestId: 9001n,
+        requestNonce: 3n,
+        txHash: '0xupdate',
+        receipt: { status: 'success', blockNumber: 1000n } as never,
+      } as never,
+      { chainId: POLYGON, signerAddress: SIGNER },
+    );
+    expect(env.nextCommands[0]?.id).toBe('verify-contest-odds');
   });
 });
 

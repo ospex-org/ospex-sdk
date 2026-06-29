@@ -42,6 +42,7 @@ const STUB_PARAMS: Record<string, unknown> = {
   'verify-allowances': { address: '0x' + 'cd'.repeat(20) },
   'verify-position-status': { address: '0x' + 'cd'.repeat(20) },
   'verify-contest': { contestId: '42' },
+  'verify-contest-odds': { contestId: '42' },
   'verify-commitments-empty': {
     maker: '0x' + 'cd'.repeat(20),
     contestId: '42',
