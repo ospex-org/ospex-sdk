@@ -21,8 +21,12 @@ import { z } from 'zod';
 import { loadConfigFile, saveConfigFile, type CliConfigFile } from '../lib/config.js';
 import { promptValue, promptYesNo } from '../lib/prompt.js';
 
-const ALLOWED_CHAIN_IDS = [137, 80002] as const;
-const chainIdSchema = z.enum(['137', '80002']);
+// Polygon mainnet (137) is the only supported network. Amoy (80002) is
+// NOT advertised here — `init` never steers a user to a testnet that may
+// error (the type plumbing still carries 80002 as a power-user escape
+// hatch via OSPEX_CHAIN_ID, but `init` won't write it).
+const ALLOWED_CHAIN_IDS = [137] as const;
+const chainIdSchema = z.enum(['137']);
 
 const optionsSchema = z.object({
   apiUrl: z.string().url().optional(),
@@ -36,7 +40,7 @@ export const initCommand = new Command('init')
   .description('Interactive setup for ~/.ospex/config.json (apiUrl, rpcUrl, chainId, keystorePath).')
   .option('--api-url <url>', 'core-api URL (defaults to production)')
   .option('--rpc-url <url>', 'Polygon RPC URL (Alchemy / Infura / QuickNode recommended)')
-  .option('--chain-id <id>', '137 (mainnet) or 80002 (amoy)')
+  .option('--chain-id <id>', '137 (Polygon mainnet) — the only supported network')
   .option('--keystore-path <path>', 'Foundry-managed keystore path (e.g. ~/.foundry/keystores/<name>)')
   .option('-y, --yes', 'accept all defaults non-interactively (still requires --rpc-url)')
   .action(async (rawOpts) => {
@@ -45,22 +49,10 @@ export const initCommand = new Command('init')
 
     const next: CliConfigFile = { ...existing };
 
-    // Chain id first — defaults flow off it.
-    let chainIdStr: string;
-    if (opts.chainId !== undefined) {
-      chainIdStr = opts.chainId;
-    } else if (opts.yes === true) {
-      chainIdStr = String(existing.chainId ?? 137);
-    } else {
-      chainIdStr = await promptValue(
-        'Network — 137 (Polygon mainnet) or 80002 (Polygon Amoy)',
-        String(existing.chainId ?? 137),
-      );
-    }
-    if (chainIdStr !== '137' && chainIdStr !== '80002') {
-      throw new Error(`chainId must be 137 or 80002 (got "${chainIdStr}").`);
-    }
-    next.chainId = Number(chainIdStr) as (typeof ALLOWED_CHAIN_IDS)[number];
+    // Polygon mainnet is the only supported network — no picker. The
+    // `--chain-id` option only accepts `137` (the zod schema rejects
+    // anything else), so we always persist 137.
+    next.chainId = 137 as (typeof ALLOWED_CHAIN_IDS)[number];
 
     // API URL — fine to default to prod.
     if (opts.apiUrl !== undefined) {

@@ -14,16 +14,10 @@
  * `ContestStatus` mirrors `OspexTypes.ContestStatus` (`unverified`,
  * `verified`, `scored`, `voided`) and matches the lowercase string in
  * `Contest.status`.
- *
- * `ScriptApproval` / `ApprovedScripts` mirror what core-api returns
- * from `GET /v1/contests/scripts/approved` and what the SDK feeds into
- * `OracleModule.createContestFromOracle`'s `approvals` calldata struct.
  */
 
 import type { Commitment } from './commitment.js';
 import type { MarketType } from './odds.js';
-import type { Network } from './protocol.js';
-import type { Hex } from './signer.js';
 
 export type ContestStatus = 'unverified' | 'verified' | 'scored' | 'voided';
 
@@ -56,9 +50,9 @@ export interface Speculation {
 
 /**
  * Small parent contest context attached by `client.speculations.get`.
- * The common "what game is this on?" question — source hashes /
- * lifecycle timestamps stay on the contest detail endpoint. Team
- * UUIDs come from the games-row join; null when no game linkage exists.
+ * The common "what game is this on?" question — lifecycle timestamps
+ * stay on the contest detail endpoint. Team UUIDs come from the
+ * games-row join; null when no game linkage exists.
  */
 export interface SpeculationParentContext {
   contestId: string;
@@ -118,16 +112,10 @@ export interface Contest {
   rundownId?: string | null;
   /** External Sportspage id the contest was created against. */
   sportspageId?: string | null;
-  /** Wallet that called createContestFromOracle. Lower-case hex string. */
+  /** Wallet that called createContestAndRequestVerify. Lower-case hex string. */
   contestCreator?: string;
   /** Resolved league enum string ("nfl", "nba", … "unknown"). */
   leagueId?: string;
-  /** keccak256 of the verify Chainlink Functions JS source. */
-  verifySourceHash?: string | null;
-  /** keccak256 of the market-update Chainlink Functions JS source. */
-  marketUpdateSourceHash?: string | null;
-  /** keccak256 of the score Chainlink Functions JS source. */
-  scoreContestSourceHash?: string | null;
   /** Final away-team score, populated on CONTEST_SCORES_SET. */
   awayScore?: number | null;
   /** Final home-team score, populated on CONTEST_SCORES_SET. */
@@ -187,25 +175,4 @@ export interface ContestsListOptions {
   hours?: number;
   limit?: number;
   offset?: number;
-}
-
-export interface ScriptApproval {
-  scriptHash: Hex;
-  /** 0 = VERIFY, 1 = MARKET_UPDATE, 2 = SCORE. */
-  purpose: 0 | 1 | 2;
-  /** 0 = Unknown / wildcard. */
-  leagueId: number;
-  version: number;
-  /** Unix seconds. 0 = permanent. */
-  validUntil: number;
-  signature: Hex;
-  sourceUrl: string;
-}
-
-export interface ApprovedScripts {
-  network: Network;
-  approvedSigner: Hex;
-  verify: ScriptApproval;
-  marketUpdate: ScriptApproval;
-  score: ScriptApproval;
 }

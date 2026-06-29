@@ -127,9 +127,9 @@ export interface AgentEnvelope<TPayload = unknown> {
 /**
  * Why an approval row exists. Superset of the v1 `ApprovalPurpose`:
  * v1 only ever surfaced `commitment-risk` + `lazy-creation-fee`. v2
- * extends to contest-lifecycle approvals (LINK → OracleModule and
- * USDC → TreasuryModule for contest creation; LINK → OracleModule
- * for contest scoring).
+ * extends to the contest-creation fee approval (USDC → TreasuryModule).
+ * Under R5/CRE there is no LINK approval — contest verify/score are
+ * permissionless and funded off-chain by the workflow owner.
  *
  * Forward-compatible — new values may be added; consumers MUST log
  * + ignore unknown.
@@ -137,25 +137,22 @@ export interface AgentEnvelope<TPayload = unknown> {
 export type AgentApprovalPurpose =
   | 'commitment-risk'
   | 'lazy-creation-fee'
-  | 'contest-creation-usdc'
-  | 'contest-creation-link'
-  | 'contest-scoring-link';
+  | 'contest-creation-usdc';
 
 /** Symbolic spender label — saves agents a module-address-book lookup. */
 export type AgentApprovalSpenderLabel =
   | 'PositionModule'
-  | 'TreasuryModule'
-  | 'OracleModule';
+  | 'TreasuryModule';
 
 export interface ApprovalRequirement {
   token: Hex;
-  tokenSymbol: 'USDC' | 'LINK';
+  tokenSymbol: 'USDC';
   spender: Hex;
   spenderLabel: AgentApprovalSpenderLabel;
   purpose: AgentApprovalPurpose;
   /** wei (token's native decimals) as decimal string. */
   requiredWei: string;
-  /** Formatted with token's native decimals (USDC 6dp, LINK 18dp). */
+  /** Formatted with token's native decimals (USDC 6dp). */
   requiredHuman: string;
   currentWei: string;
   currentHuman: string;
@@ -185,7 +182,6 @@ export interface EstimatedCosts {
     source: 'rpc-estimateGas';
   } | null;
   usdcFees: AgentUsdcFee[];
-  linkFees: AgentLinkFee[];
 }
 
 export interface AgentUsdcFee {
@@ -202,14 +198,6 @@ export interface AgentUsdcFee {
    */
   conditional: boolean;
   note?: string;
-}
-
-export interface AgentLinkFee {
-  purpose: 'contest-verification' | 'contest-scoring';
-  /** wei (18dp) as decimal string. */
-  amountWei: string;
-  /** Formatted, 18dp. */
-  amountLINK: string;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -254,7 +242,6 @@ export type AgentBlockingCapability =
  *   `'expiry-after-match-time'` — from `SubmitPreview.expiry.afterMatchTime`.
  *   `'allowance-short'` — derived from any `approvalRequirements[].needsApproval`.
  *   `'nonce-floor-stale'` — `nonce-floor` read when chain > supabase.
- *   `'verify-script-expiring-soon'` — from `contests scripts` (T-30d).
  *   `'password-file-permissions-loose'` — from `auth check` (blocking under `--strict`).
  *
  * Catalog left as a wide `string` so additive expansion in any PR

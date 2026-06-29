@@ -4,7 +4,7 @@ From zero to your first bet on Polygon mainnet in about ten minutes. The shared 
 
 - **[Match an existing commitment](#match-an-existing-commitment)** — fastest. You take the other side of a bet someone else has posted. Read this first if you're a casual bettor.
 - **[Submit your own commitments](#submit-your-own-commitments)** — set the price yourself; wait for someone to fill it.
-- **[Create a contest](#create-a-contest)** — advanced. Mainnet only today (Amoy contracts are wired but script approvals aren't yet committed — see that section). Requires LINK.
+- **[Create a contest](#create-a-contest)** — advanced. Permissionless; the caller pays a small USDC creation fee (no LINK).
 
 After matching or submitting, see **[After the game: score, settle, claim](#after-the-game-score-settle-claim)** to collect winnings.
 
@@ -20,11 +20,10 @@ Ospex never asks for your private key. You manage your wallet entirely via Found
 - **Polygon RPC URL** — Alchemy, Infura, or QuickNode. The public Polygon RPC has been returning 401 since 2026-03; don't use it.
 - **A wallet** funded with:
   - **POL** — gas.
-  - **USDC** — the risk you're committing.
-  - **LINK** — only required if you want to *create* a contest. You don't need LINK to bet on contests someone else created.
+  - **USDC** — the risk you're committing (and, if you *create* a contest, the small USDC creation fee).
 - **Node.js** ≥ 20.
 
-This guide assumes Polygon mainnet (chain id 137). For Polygon Amoy testnet substitute `chainId=80002`. The bettor and maker paths (commitments, positions, leaderboard, odds) work on both networks. `contests create` / `contests score` are mainnet-only today — the Amoy contracts are deployed but the EIP-712 script approvals served by `ospex-core-api` haven't been generated against the current `OracleModule` deploy. **Most agents don't need to test create/score** — validate end-to-end by matching an open commitment whose preview shows `tradeAction: 'trade-only'` (the speculation already exists), where your only costs are gas and the commitment risk you commit. If the preview shows `trade-and-create-speculation` instead, the SDK preflight will quote the TreasuryModule creation-fee approval before signing.
+This guide assumes Polygon mainnet (chain id 137) — the supported network. Contest create/score are permissionless under the R5 Chainlink CRE oracle: `contests create` charges only a USDC creation fee (allowance to TreasuryModule; the SDK preflight quotes it before signing), and `contests score` is free. **Most agents don't need to test create/score** — validate end-to-end by matching an open commitment whose preview shows `tradeAction: 'trade-only'` (the speculation already exists), where your only costs are gas and the commitment risk you commit. If the preview shows `trade-and-create-speculation` instead, the SDK preflight will quote the TreasuryModule creation-fee approval before signing.
 
 ## Vocabulary
 
@@ -91,7 +90,7 @@ cast wallet import ospex-test --interactive
 
 Either way, Foundry now owns an encrypted v3 keystore at `~/.foundry/keystores/ospex-test`.
 
-Fund the printed address with POL (gas), USDC (your stake), and — if you plan to create a contest — LINK.
+Fund the printed address with POL (gas) and USDC (your stake — plus the small USDC creation fee if you plan to create a contest).
 
 ## Configure Ospex
 
@@ -101,7 +100,7 @@ ospex init
 
 Answer the prompts:
 
-- **Network** — `137` for mainnet, `80002` for Amoy.
+- **Network** — `137` (Polygon mainnet, the supported network).
 - **API URL** — accept the default (production).
 - **RPC URL** — paste your Alchemy / Infura / QuickNode URL.
 - **Keystore path** — paste `~/.foundry/keystores/ospex-test` (or whatever name you used in the previous step). Leading `~/` is expanded.
@@ -155,7 +154,7 @@ ospex auth check --sign-challenge
 ospex doctor
 ```
 
-Reports network status, balances (POL/USDC/LINK), allowances, and a "Ready to" matrix. Exit 0 means the wallet is **baseline-ready** to match commitments; each specific match still preflights exact balance, allowance, expiry, and fee requirements at submit/match time. The report's bottom **Next step** line points at exactly the command that unlocks the next capability when something's missing.
+Reports network status, balances (POL/USDC), allowances, and a "Ready to" matrix. Exit 0 means the wallet is **baseline-ready** to match commitments; each specific match still preflights exact balance, allowance, expiry, and fee requirements at submit/match time. The report's bottom **Next step** line points at exactly the command that unlocks the next capability when something's missing.
 
 Re-run after each step in the path sections below to confirm progress; it's also the canonical agent guard:
 
@@ -378,17 +377,17 @@ Same arguments mirror the on-chain `OspexCommitment` struct. No preview block, n
 
 ## Create a contest
 
-Permissionless contest creation. Anyone can create a contest, but it requires LINK (for the Chainlink Functions verification call) and a USDC fee read from `TreasuryModule.s_feeRates(0)` at runtime (1 USDC on Polygon mainnet at time of writing). **Mainnet only today** — the Amoy contracts are deployed but the script approvals that `OracleModule.createContestFromOracle` requires haven't been signed against the current deploy and committed to `ospex-core-api`. The SDK's allowance preflight quotes the exact LINK and USDC amounts you need to fund before signing. **Skip this section if you just want to bet** — the bettor and maker paths above don't need any of this, and most integrations can validate end-to-end against existing contests.
+Permissionless contest creation. Anyone can create a contest. Under the R5 Chainlink CRE oracle there is **no LINK and no script approval** — the only cost beyond gas is a USDC creation fee read from `TreasuryModule.s_feeRates(0)` at runtime (1 USDC on Polygon mainnet at time of writing). The SDK's allowance preflight quotes the exact USDC amount you need to fund before signing. **Skip this section if you just want to bet** — the bettor and maker paths above don't need any of this, and most integrations can validate end-to-end against existing contests.
 
-### 1. Set up the operator-grade approvals
+### 1. Set up the contest-creation approval
 
-Add LINK + Oracle approval on top of the bettor setup:
+Add the USDC creation-fee budget on top of the bettor setup:
 
 ```bash
-ospex approvals setup --risk-usdc 200 --fee-usdc 5 --link 2 --yes
+ospex approvals setup --risk-usdc 200 --fee-usdc 5 --yes
 ```
 
-This approves PositionModule (bets), TreasuryModule (contest creation + lazy spec creation fees), and OracleModule (LINK for Chainlink Functions). `ospex approvals show` will reflect all three.
+This approves PositionModule (bets) and TreasuryModule (contest creation + lazy spec creation fees). `ospex approvals show` will reflect both.
 
 ### 2. Pick a game
 
@@ -409,7 +408,7 @@ The slug is mutable (the writer renames doubleheaders), so for anything you pers
 
 Once `contests create` returns a `contestId`, the writer populates current_odds within ~30s. You can use those reference odds as a starting price for your first commitment on the new contest — see [Submit your own commitments](#submit-your-own-commitments).
 
-`ospex contests create` waits for the Chainlink Functions verification callback by default and prints the new `contestId` only after `contestStatus=Verified` lands on chain (typically 10–30s). Pass `--no-wait` if you'd rather get the txHash immediately and poll separately with `ospex contests wait-verified <contestId>` — useful for scripted flows.
+`ospex contests create` waits for the Chainlink CRE verification report by default and prints the new `contestId` only after `contestStatus=Verified` lands on chain (typically 10–30s). Pass `--no-wait` if you'd rather get the txHash immediately and poll separately with `ospex contests wait-verified <contestId>` — useful for scripted flows.
 
 The three external IDs the contract requires (rundown / sportspage / jsonodds) are resolved server-side from the gameId; you never deal with them directly.
 
@@ -425,7 +424,7 @@ Once the underlying game ends, three permissionless on-chain steps move funds ba
 ospex contests score <contestId>
 ```
 
-Submits an `OracleModule.scoreContestFromOracle` tx. Burns LINK + Chainlink Functions; usually whoever cares about settling first runs this. (If you only ever bet on contests other people created, you may never need to do this — operators or other players typically score them.)
+Submits a `CreOracleReceiver.requestScore` tx — permissionless and free (no fee, no LINK). The contest must already be Verified, and the call reverts until its on-chain start time has passed (request it after the game has started). Usually whoever cares about settling first runs this. (If you only ever bet on contests other people created, you may never need to do this — operators or other players typically score them.)
 
 ### 2. Settle each scored speculation
 
@@ -537,7 +536,7 @@ The CLI separates **one-shot user actions** (request → reply → exits) from *
 | Goal | Command |
 |---|---|
 | Check setup readiness for a wallet | `ospex doctor [--address <addr>]` |
-| Bulk-approve USDC + LINK budgets | `ospex approvals setup --risk-usdc <n> [--fee-usdc <n>] [--link <n>]` |
+| Bulk-approve USDC budgets | `ospex approvals setup --risk-usdc <n> [--fee-usdc <n>]` |
 | Inspect approvals for any wallet | `ospex approvals show [--address <addr>]` |
 | See current upstream reference odds for a contest | `ospex odds show <contestId>` |
 | Take an open commitment as the counterparty | `ospex commitments match <hash-or-prefix>` |
@@ -565,10 +564,10 @@ The full command reference is in the [README](../README.md).
 
 **`Failed to decrypt keystore`** — wrong passphrase, or the file is not a v3 keystore. Foundry always produces v3; this is almost always the passphrase.
 
-**`OspexAllowanceError: insufficient allowance`** — `ospex commitments submit` (high-level) prompts for an approval and runs it before signing, so this should be rare. Interactive runs default the amount prompt to the exact-required value — type `max` instead if you want unlimited. Non-interactive runs (`--yes`) default to exact-required; pass `--approve-max` alongside `--yes` for unlimited. For scripted flows that approve out-of-band, run `ospex approvals setup --risk-usdc <n>` (decimal USDC) for the multi-spender path, or `ospex commitments approve <decimal-usdc|max>` for the single-spender shortcut (use `commitments approve-raw <wei6>` if you already have 6-decimal-units integers). If you're creating contests, the LINK and USDC allowances target different modules (OracleModule and TreasuryModule, respectively); the CLI prompts on demand.
+**`OspexAllowanceError: insufficient allowance`** — `ospex commitments submit` (high-level) prompts for an approval and runs it before signing, so this should be rare. Interactive runs default the amount prompt to the exact-required value — type `max` instead if you want unlimited. Non-interactive runs (`--yes`) default to exact-required; pass `--approve-max` alongside `--yes` for unlimited. For scripted flows that approve out-of-band, run `ospex approvals setup --risk-usdc <n>` (decimal USDC) for the multi-spender path, or `ospex commitments approve <decimal-usdc|max>` for the single-spender shortcut (use `commitments approve-raw <wei6>` if you already have 6-decimal-units integers). If you're creating contests, the USDC creation fee targets TreasuryModule (distinct from the PositionModule bet-risk allowance); the CLI prompts on demand.
 
 **`OspexChainError: <selector>`** — a transaction reverted. The selector usually decodes to a known contract error (e.g., `MatchingModule__NonceMustIncrease`). Read the printed reason; if unclear, file an issue with the tx hash.
 
-**`ospex doctor` says "Core API unreachable"** — every Ospex write goes through the public API (commitment posting, contest script approvals). Wallet state on-chain is fine; retry shortly. If it persists, the API may be temporarily down.
+**`ospex doctor` says "Core API unreachable"** — every Ospex write goes through the public API (commitment posting, game/contest resolution). Wallet state on-chain is fine; retry shortly. If it persists, the API may be temporarily down.
 
 **Public RPC errors / 401s** — you're using a public Polygon RPC. Switch to Alchemy / Infura / QuickNode in `ospex init`.

@@ -2,10 +2,14 @@
  * Tests for the `ospex approvals setup` planner, parsers, and renderer.
  * Covers:
  *
- *   - parseUsdcInput / parseLinkInput strict parsing rules
+ *   - parseUsdcInput strict parsing rules
  *   - buildSetupPlan auto-include rule, skip-already-approved,
  *     skip-not-requested, max handling, no-op detection
  *   - renderSetupPlan / setupPlanToJson output shapes
+ *
+ * (R5/CRE: USDC is the only approval token — the LINK / OracleModule
+ * dimension was retired with the Functions oracle, so the planner now
+ * has two dimensions: PositionModule (risk) + TreasuryModule (fees).)
  *
  * The CLI command itself is exercised end-to-end via the manual
  * smoke test (real Polygon mainnet read).
@@ -17,7 +21,6 @@ import { maxUint256 } from 'viem';
 import type { ApprovalsSnapshot } from '@ospex/sdk';
 import {
   buildSetupPlan,
-  parseLinkInput,
   parseUsdcInput,
 } from '../src/lib/approvalsPlan.js';
 import {
@@ -38,14 +41,11 @@ class StringSink extends Writable {
 const OWNER = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
 const POSITION_MODULE = '0x0DCd42f8609cd7884ddBa3481b03a78dfc88366c';
 const TREASURY_MODULE = '0xCB56CD2c509301e888965DD3A2E5C486Fe03a56e';
-const ORACLE_MODULE = '0x7e1397eD5b4c9f606DCF2EB0281485B2296E29Bb';
 const USDC = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
-const LINK = '0xb0897686c545045aFc77CF20eC7A532E3120E0F1';
 
 function makeSnapshot(overrides: {
   positionModule?: bigint;
   treasuryModule?: bigint;
-  oracleModule?: bigint;
 } = {}): ApprovalsSnapshot {
   return {
     owner: OWNER as `0x${string}`,
@@ -63,17 +63,6 @@ function makeSnapshot(overrides: {
           spender: TREASURY_MODULE as `0x${string}`,
           spenderModule: 'treasuryModule',
           raw: overrides.treasuryModule ?? 0n,
-        },
-      },
-    },
-    link: {
-      address: LINK as `0x${string}`,
-      decimals: 18,
-      allowances: {
-        oracleModule: {
-          spender: ORACLE_MODULE as `0x${string}`,
-          spenderModule: 'oracleModule',
-          raw: overrides.oracleModule ?? 0n,
         },
       },
     },
@@ -111,17 +100,6 @@ describe('parseUsdcInput', () => {
   });
 });
 
-describe('parseLinkInput', () => {
-  it('parses LINK at 18 decimals', () => {
-    expect(parseLinkInput('2')).toEqual({ kind: 'amount', raw: 2n * 10n ** 18n });
-    expect(parseLinkInput('0.5')).toEqual({ kind: 'amount', raw: 5n * 10n ** 17n });
-  });
-
-  it('rejects > 18 decimals', () => {
-    expect(() => parseLinkInput('0.' + '0'.repeat(18) + '1')).toThrow();
-  });
-});
-
 describe('buildSetupPlan — auto-include rule', () => {
   it('auto-includes a 1 USDC fee budget when --risk-usdc is set alone', () => {
     const plan = buildSetupPlan({ riskUsdc: '50' }, makeSnapshot());
@@ -142,34 +120,11 @@ describe('buildSetupPlan — auto-include rule', () => {
     expect(treasury.autoIncluded).toBe(false);
   });
 
-  it('does NOT auto-include when only --fee-usdc / --link is set (no risk)', () => {
+  it('does NOT auto-include when only --fee-usdc is set (no risk)', () => {
     const planFee = buildSetupPlan({ feeUsdc: '5' }, makeSnapshot());
     expect(planFee.items.find((i) => i.spenderModule === 'treasuryModule')!.autoIncluded).toBe(false);
-
-    const planLink = buildSetupPlan({ link: '2' }, makeSnapshot());
-    expect(planLink.items.find((i) => i.spenderModule === 'treasuryModule')!.autoIncluded).toBe(false);
-    expect(planLink.items.find((i) => i.spenderModule === 'treasuryModule')!.action.kind).toBe(
-      'skip-not-requested',
-    );
-  });
-
-  // Regression: the auto-include rule must NOT trigger when --link is
-  // set (the casual-bettor exemption applies only when riskUsdc is the
-  // ONLY dimension). A user passing --risk-usdc + --link is in
-  // operator territory and should be explicit about every dimension —
-  // surprise USDC approvals next to a contest-creation setup is a
-  // financial-UX bug.
-  it('does NOT auto-include fee when --risk-usdc + --link are set together', () => {
-    const plan = buildSetupPlan({ riskUsdc: '50', link: '2' }, makeSnapshot());
-    const treasury = plan.items.find((i) => i.spenderModule === 'treasuryModule')!;
-    expect(treasury.action.kind).toBe('skip-not-requested');
-    expect(treasury.autoIncluded).toBe(false);
-    // Sanity: the two dimensions the user DID set are still send.
-    const position = plan.items.find((i) => i.spenderModule === 'positionModule')!;
-    const oracle = plan.items.find((i) => i.spenderModule === 'oracleModule')!;
-    expect(position.action.kind).toBe('send');
-    expect(oracle.action.kind).toBe('send');
-    expect(plan.willSendCount).toBe(2);
+    const position = planFee.items.find((i) => i.spenderModule === 'positionModule')!;
+    expect(position.action.kind).toBe('skip-not-requested');
   });
 });
 
@@ -233,24 +188,22 @@ describe('buildSetupPlan — max handling', () => {
   });
 });
 
-describe('buildSetupPlan — three-dimension flag mode', () => {
-  it('handles all three dimensions explicitly', () => {
+describe('buildSetupPlan — two-dimension flag mode', () => {
+  it('handles both dimensions explicitly', () => {
     const plan = buildSetupPlan(
-      { riskUsdc: '50', feeUsdc: '5', link: '2' },
+      { riskUsdc: '50', feeUsdc: '5' },
       makeSnapshot(),
     );
-    expect(plan.willSendCount).toBe(3);
+    expect(plan.willSendCount).toBe(2);
     expect(plan.items[0]!.spenderModule).toBe('positionModule');
     expect(plan.items[1]!.spenderModule).toBe('treasuryModule');
-    expect(plan.items[2]!.spenderModule).toBe('oracleModule');
   });
 
-  it('orders items consistently (position, treasury, oracle)', () => {
-    const plan = buildSetupPlan({ link: '2' }, makeSnapshot());
+  it('orders items consistently (position, treasury)', () => {
+    const plan = buildSetupPlan({ feeUsdc: '5' }, makeSnapshot());
     expect(plan.items.map((i) => i.spenderModule)).toEqual([
       'positionModule',
       'treasuryModule',
-      'oracleModule',
     ]);
   });
 
@@ -265,17 +218,16 @@ describe('buildSetupPlan — three-dimension flag mode', () => {
 describe('renderSetupPlan', () => {
   it('renders Send / Skip lines and module labels', () => {
     const sink = new StringSink();
-    const plan = buildSetupPlan({ riskUsdc: '50' }, makeSnapshot());
+    // risk send + fee explicitly skipped → one Send, one Skip.
+    const plan = buildSetupPlan({ riskUsdc: '50', feeUsdc: '0' }, makeSnapshot());
     renderSetupPlan(plan, sink);
     expect(sink.buf).toContain('Approval setup plan for ');
     expect(sink.buf).toContain('Polygon mainnet');
     expect(sink.buf).toContain('PositionModule');
     expect(sink.buf).toContain('TreasuryModule');
-    expect(sink.buf).toContain('OracleModule');
     expect(sink.buf).toContain('Send');
     expect(sink.buf).toContain('Skip');
     expect(sink.buf).toContain('50.000000 USDC');
-    expect(sink.buf).toContain('1.000000 USDC');
   });
 
   it('flags an auto-included fee with "auto-included alongside --risk-usdc"', () => {
@@ -358,7 +310,6 @@ describe('setupPlanToJson', () => {
     const plan = buildSetupPlan({}, makeSnapshot());
     const json = setupPlanToJson(plan);
     expect(json.items.map((i) => i.spenderModule).sort()).toEqual([
-      'oracleModule',
       'positionModule',
       'treasuryModule',
     ]);

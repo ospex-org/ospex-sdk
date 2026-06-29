@@ -2,10 +2,9 @@
  * `client.approvals.read({ owner? })` — single round-trip read of
  * every Ospex-relevant allowance for one wallet.
  *
- * Three reads run in parallel:
+ * Two reads run in parallel:
  *   - USDC → PositionModule (bet risk)
  *   - USDC → TreasuryModule (contest creation + lazy spec creation fees)
- *   - LINK → OracleModule   (Chainlink Functions per-call payment)
  *
  * The owner argument is optional. When omitted, the configured signer's
  * address is used; passing it explicitly avoids a passphrase prompt
@@ -39,19 +38,12 @@ export async function read(
   }
 
   const usdc = addresses.usdc as Hex;
-  const link = addresses.linkToken as Hex;
   const positionModule = addresses.positionModule as Hex;
   const treasuryModule = addresses.treasuryModule as Hex;
-  const oracleModule = addresses.oracleModule as Hex;
 
-  const [
-    usdcPositionModule,
-    usdcTreasuryModule,
-    linkOracleModule,
-  ] = await Promise.all([
+  const [usdcPositionModule, usdcTreasuryModule] = await Promise.all([
     readAllowance(publicClient, usdc, owner, positionModule),
     readAllowance(publicClient, usdc, owner, treasuryModule),
-    readAllowance(publicClient, link, owner, oracleModule),
   ]);
 
   const positionEntry: AllowanceEntry = {
@@ -64,11 +56,6 @@ export async function read(
     spenderModule: 'treasuryModule',
     raw: usdcTreasuryModule,
   };
-  const oracleEntry: AllowanceEntry = {
-    spender: oracleModule,
-    spenderModule: 'oracleModule',
-    raw: linkOracleModule,
-  };
 
   return {
     owner,
@@ -79,13 +66,6 @@ export async function read(
       allowances: {
         positionModule: positionEntry,
         treasuryModule: treasuryEntry,
-      },
-    },
-    link: {
-      address: link,
-      decimals: 18,
-      allowances: {
-        oracleModule: oracleEntry,
       },
     },
   };

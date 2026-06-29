@@ -19,7 +19,7 @@ const MAX_UINT256 = (1n << 256n) - 1n;
 // reduce the stored value, so an "unlimited" approval can drift to any
 // value high enough to make the original a near-certain match. The
 // 2^248 threshold below is conservative: only a max-style approval can
-// realistically reach it given USDC/LINK supply caps.
+// realistically reach it given USDC supply caps.
 const NEAR_MAX_THRESHOLD = 1n << 248n;
 
 export interface JsonAllowanceEntry {
@@ -40,13 +40,6 @@ export interface JsonApprovalsSnapshot {
       treasuryModule: JsonAllowanceEntry;
     };
   };
-  link: {
-    address: string;
-    decimals: 18;
-    allowances: {
-      oracleModule: JsonAllowanceEntry;
-    };
-  };
 }
 
 export function isMaxAllowance(raw: bigint): boolean {
@@ -55,7 +48,6 @@ export function isMaxAllowance(raw: bigint): boolean {
 
 export function snapshotToJson(snapshot: ApprovalsSnapshot): JsonApprovalsSnapshot {
   const usdc = snapshot.usdc.allowances;
-  const link = snapshot.link.allowances;
   return {
     owner: snapshot.owner,
     chainId: snapshot.chainId,
@@ -65,13 +57,6 @@ export function snapshotToJson(snapshot: ApprovalsSnapshot): JsonApprovalsSnapsh
       allowances: {
         positionModule: serializeEntry(usdc.positionModule.spender, usdc.positionModule.raw, 6),
         treasuryModule: serializeEntry(usdc.treasuryModule.spender, usdc.treasuryModule.raw, 6),
-      },
-    },
-    link: {
-      address: snapshot.link.address,
-      decimals: 18,
-      allowances: {
-        oracleModule: serializeEntry(link.oracleModule.spender, link.oracleModule.raw, 18),
       },
     },
   };
@@ -93,16 +78,6 @@ export function renderApprovalsSnapshot(
     `${INDENT}${'TreasuryModule'.padEnd(16)} (protocol fees):  ${formatUsdc(usdc.treasuryModule.raw)}    ${shortAddr(usdc.treasuryModule.spender)}\n`,
   );
 
-  const link = snapshot.link.allowances;
-  out.write('\nLINK allowances\n');
-  out.write(
-    `${INDENT}${'OracleModule'.padEnd(16)} (Chainlink):       ${formatLink(link.oracleModule.raw)}    ${shortAddr(link.oracleModule.spender)}\n`,
-  );
-  if (link.oracleModule.raw === 0n) {
-    out.write(
-      `${INDENT}${''.padEnd(16)}                    (only needed if you create or score contests)\n`,
-    );
-  }
   out.write(
     '\nRun `ospex approvals setup` to add or increase approvals (does not lower).\n' +
       'For balances + readiness, run `ospex doctor`.\n',
@@ -284,8 +259,7 @@ function formatTokenAmount(raw: bigint, decimals: number, tokenLabel: string): s
 
 function moduleDisplayName(spender: PlanItem['spenderModule']): string {
   if (spender === 'positionModule') return 'PositionModule';
-  if (spender === 'treasuryModule') return 'TreasuryModule';
-  return 'OracleModule';
+  return 'TreasuryModule';
 }
 
 function serializeEntry(spender: string, raw: bigint, decimals: number): JsonAllowanceEntry {
@@ -300,13 +274,6 @@ function serializeEntry(spender: string, raw: bigint, decimals: number): JsonAll
 function formatUsdc(raw: bigint): string {
   if (isMaxAllowance(raw)) return 'unlimited (max) USDC';
   return `${padDecimal(formatUnits(raw, 6), 6)} USDC`;
-}
-
-function formatLink(raw: bigint): string {
-  if (isMaxAllowance(raw)) return 'unlimited (max) LINK';
-  // 6 fractional digits is plenty for LINK display — the token is 18
-  // decimals but per-call payments are sub-LINK. Trimmed for readability.
-  return `${trimDecimal(formatUnits(raw, 18), 6)} LINK`;
 }
 
 function padDecimal(value: string, fractionDigits: number): string {

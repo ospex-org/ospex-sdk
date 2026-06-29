@@ -1,41 +1,19 @@
 /**
- * create() input validation. The full happy path requires a viem
+ * create() input validation (R5/CRE). The full happy path requires a viem
  * PublicClient + Signer + on-chain readContract chain that's prohibitive
- * to mock for unit tests. We cover:
+ * to mock for unit tests. We cover the pre-flight validation that runs
+ * before any signer / chain interaction:
  *   - missing gameId → throws OspexValidationError
  *   - game.canCreateContest=false → throws with descriptive reason
- *   - approvals expired → throws OspexScriptApprovalError(reason='expired')
  * Integration of the full pipeline is exercised manually per
  * docs/MANUAL_INTEGRATION_TESTING.md.
  */
 import { describe, expect, it } from 'vitest';
 import { create } from '../src/contests/create.js';
-import { OspexScriptApprovalError, OspexValidationError } from '../src/errors.js';
-import { ScriptsCache } from '../src/contests/scripts.js';
+import { OspexValidationError } from '../src/errors.js';
 import type { ContestsContext } from '../src/contests/context.js';
-import type { ApprovedScripts } from '../src/types/contest.js';
 import type { Game } from '../src/types/game.js';
-import type { ContestsApi } from '../src/api/contests.js';
 import type { GamesApi } from '../src/api/games.js';
-
-function buildApprovals(verifyValidUntil: number): ApprovedScripts {
-  const stub: ApprovedScripts['verify'] = {
-    scriptHash: '0xec6a7e9cdffa09fdcaa611220e2c99ba0ec58cc082812a01b5d321ccc1e5ebcf',
-    purpose: 0,
-    leagueId: 0,
-    version: 1,
-    validUntil: verifyValidUntil,
-    signature: '0xdead',
-    sourceUrl: 'https://example.com/verify.js',
-  };
-  return {
-    network: 'polygon',
-    approvedSigner: '0xfd6C7Fc1F182de53AA636584f1c6B80d9D885886',
-    verify: stub,
-    marketUpdate: { ...stub, purpose: 1, validUntil: 0 },
-    score: { ...stub, purpose: 2, validUntil: 0 },
-  };
-}
 
 function buildGame(overrides: Partial<Game> = {}): Game {
   return {
@@ -55,15 +33,11 @@ function buildGame(overrides: Partial<Game> = {}): Game {
   };
 }
 
-function makeCtx(approvals: ApprovedScripts, game: Game = buildGame()): ContestsContext {
-  const contestsApi = {
-    scripts: async () => approvals,
-  } as unknown as ContestsApi;
+function makeCtx(game: Game = buildGame()): ContestsContext {
   const gamesApi = {
     get: async () => game,
   } as unknown as GamesApi;
   return {
-    contestsApi,
     gamesApi,
     getChainId: () => 137 as const,
   } as unknown as ContestsContext;
@@ -71,50 +45,16 @@ function makeCtx(approvals: ApprovedScripts, game: Game = buildGame()): Contests
 
 describe('contests.create — validation', () => {
   it('throws OspexValidationError when gameId is missing', async () => {
-    const cache = new ScriptsCache();
-    const ctx = makeCtx(buildApprovals(2_000_000_000));
+    const ctx = makeCtx();
     // @ts-expect-error — exercising the runtime guard for callers that
     // ignore the type and pass {} (e.g. JS consumers).
-    await expect(create(ctx, {}, cache)).rejects.toBeInstanceOf(OspexValidationError);
+    await expect(create(ctx, {})).rejects.toBeInstanceOf(OspexValidationError);
   });
 
   it('throws OspexValidationError when game.canCreateContest is false', async () => {
-    const cache = new ScriptsCache();
     const ctx = makeCtx(
-      buildApprovals(2_000_000_000),
       buildGame({ canCreateContest: false, contestCreated: true, contestId: '12' }),
     );
-    await expect(create(ctx, { gameId: 'abc' }, cache)).rejects.toBeInstanceOf(OspexValidationError);
-  });
-
-  it('throws OspexScriptApprovalError(reason=expired) when verify approval is past validUntil', async () => {
-    const cache = new ScriptsCache();
-    // Past timestamp — 2020-01-01.
-    const ctx = makeCtx(buildApprovals(1_577_836_800));
-    await expect(
-      create(ctx, { gameId: 'abc' }, cache),
-    ).rejects.toBeInstanceOf(OspexScriptApprovalError);
-    try {
-      await create(ctx, { gameId: 'abc' }, cache);
-    } catch (err) {
-      expect((err as OspexScriptApprovalError).reason).toBe('expired');
-    }
-  });
-
-  it('treats validUntil=0 as permanent (no expiry check failure)', async () => {
-    const cache = new ScriptsCache();
-    const approvals = buildApprovals(0);
-    const ctx = makeCtx(approvals);
-    // Will fail later at fetchSource (no network) — but NOT with
-    // OspexScriptApprovalError(reason=expired), proving the expiry
-    // check accepted validUntil=0.
-    await expect(create(ctx, { gameId: 'abc' }, cache)).rejects.toThrow();
-    try {
-      await create(ctx, { gameId: 'abc' }, cache);
-    } catch (err) {
-      const isExpired =
-        err instanceof OspexScriptApprovalError && err.reason === 'expired';
-      expect(isExpired).toBe(false);
-    }
+    await expect(create(ctx, { gameId: 'abc' })).rejects.toBeInstanceOf(OspexValidationError);
   });
 });

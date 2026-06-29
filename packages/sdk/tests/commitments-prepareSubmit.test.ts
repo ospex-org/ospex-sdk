@@ -43,7 +43,6 @@ const ADDRESSES = {
   matchingModule: '0x'.padEnd(42, '1') as Hex,
   positionModule: '0x'.padEnd(42, '2') as Hex,
   usdc: '0x'.padEnd(42, '3') as Hex,
-  linkToken: '0x'.padEnd(42, '4') as Hex,
   ospexCore: '0x'.padEnd(42, '5') as Hex,
   speculationModule: '0x'.padEnd(42, '6') as Hex,
   contestModule: '0x'.padEnd(42, '7') as Hex,
@@ -51,7 +50,7 @@ const ADDRESSES = {
   rulesModule: '0x'.padEnd(42, '9') as Hex,
   treasuryModule: '0x'.padEnd(42, 'b') as Hex,
   secondaryMarketModule: '0x'.padEnd(42, 'c') as Hex,
-  oracleModule: '0x'.padEnd(42, 'd') as Hex,
+  creOracleReceiver: '0x'.padEnd(42, 'd') as Hex,
   scorers: {
     moneyline: '0x'.padEnd(42, 'e') as Hex,
     spread: '0x'.padEnd(42, 'f') as Hex,

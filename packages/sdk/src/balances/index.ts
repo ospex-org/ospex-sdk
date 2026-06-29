@@ -1,7 +1,7 @@
 /**
- * Balances namespace — wallet-centric POL / USDC / LINK reads. Pairs
- * with `client.approvals.read()` to give consumers a complete "what
- * does this wallet currently look like?" view in two parallel-runnable
+ * Balances namespace — wallet-centric POL / USDC reads. Pairs with
+ * `client.approvals.read()` to give consumers a complete "what does
+ * this wallet currently look like?" view in two parallel-runnable
  * SDK calls.
  *
  * Read-only. The `setup`-style write surface for funding (e.g. wrap
@@ -18,10 +18,10 @@ export class Balances {
   constructor(private readonly ctx: BalancesContext) {}
 
   /**
-   * Read POL (native gas), USDC, and LINK balances for `owner` — or
-   * the configured signer's address when `owner` is omitted. Three
-   * on-chain reads run in parallel; passing `owner` keeps the call
-   * fully read-only and skips any signer lookup.
+   * Read POL (native gas) and USDC balances for `owner` — or the
+   * configured signer's address when `owner` is omitted. Two on-chain
+   * reads run in parallel; passing `owner` keeps the call fully
+   * read-only and skips any signer lookup.
    */
   read(args: ReadBalancesArgs = {}): Promise<BalancesSnapshot> {
     return read(this.ctx, args);

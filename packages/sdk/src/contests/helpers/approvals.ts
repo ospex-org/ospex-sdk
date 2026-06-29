@@ -1,21 +1,19 @@
 /**
- * LINK + USDC pre-flight checks for contest creation / scoring.
+ * USDC pre-flight check for contest creation.
  *
- * - LINK is approved to OracleModule (the modifier `handleLinkPayment`
- *   pulls via `safeTransferFrom(msg.sender, address(this), payment)` —
- *   `address(this)` is OracleModule, so OracleModule is the spender).
- * - USDC is approved to TreasuryModule for the contest creation fee.
- *   `TreasuryModule.processFee` calls `i_token.safeTransferFrom(payer,
- *   i_protocolReceiver, amount)` — `i_token.safeTransferFrom` runs in
- *   TreasuryModule's context, so TreasuryModule is the spender.
+ * USDC is approved to TreasuryModule for the contest creation fee.
+ * `TreasuryModule.processFee` calls `i_token.safeTransferFrom(payer,
+ * i_protocolReceiver, amount)` — `i_token.safeTransferFrom` runs in
+ * TreasuryModule's context, so TreasuryModule is the spender.
  *
- *   Note: this differs from the M2 commitments fee path where
- *   PositionModule is the spender. The contest creation fee path is
- *   distinct.
+ * Note: this differs from the M2 commitments fee path where
+ * PositionModule is the spender. The contest creation fee path is
+ * distinct. (R5/CRE creation is permissionless and charges only this
+ * USDC fee — there is no LINK payment.)
  */
 import type { PublicClient } from 'viem';
 import { erc20Abi } from '../../contracts/abi/erc20.js';
-import { OspexAllowanceError, OspexSubscriptionError } from '../../errors.js';
+import { OspexAllowanceError } from '../../errors.js';
 import type { Hex } from '../../types/signer.js';
 
 interface BalanceAndAllowance {
@@ -44,28 +42,6 @@ export async function readBalanceAndAllowance(
     }) as Promise<bigint>,
   ]);
   return { balance, allowance };
-}
-
-export async function assertLinkSufficient(
-  publicClient: PublicClient,
-  link: Hex,
-  owner: Hex,
-  oracleModule: Hex,
-  required: bigint,
-): Promise<void> {
-  const { balance, allowance } = await readBalanceAndAllowance(publicClient, link, owner, oracleModule);
-  if (balance < required) {
-    throw new OspexSubscriptionError(
-      `Insufficient LINK balance. Required ${required}, current ${balance}. Fund the wallet ${owner} with LINK.`,
-      { reason: 'link_balance_insufficient' },
-    );
-  }
-  if (allowance < required) {
-    throw new OspexAllowanceError(
-      `Insufficient LINK allowance. Required ${required}, current ${allowance}. Approve OracleModule (${oracleModule}) for LINK.`,
-      { required, current: allowance, spender: oracleModule, token: link },
-    );
-  }
 }
 
 export async function assertUsdcSufficient(

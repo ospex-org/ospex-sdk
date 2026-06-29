@@ -1,5 +1,7 @@
 # Manual integration testing — `@ospex/sdk` + `@ospex/cli`
 
+> **⚠ Amoy posture (R5):** the chain-operation sections below (4–8) still target **Amoy**, which is **no longer actively supported** post-R5 — the SDK de-advertises it (it's gone from `ospex init` + the public docs), and the Amoy contract addresses referenced here may be stale (the canonical R5 Amoy instance is unconfirmed). Mainnet (137) is the only supported target. **Open maintainer decision:** re-target release validation to mainnet (real funds, small amounts) or stand up a fresh confirmed testnet rehearsal. Until that's decided, treat the Amoy sections as best-effort and verify addresses against a known-good deploy before running.
+
 The canonical pre-release validation for the SDK + CLI. Walk every section in order before tagging a release; total runtime is 15-20 minutes. Each section names a prerequisite, a command, the expected output, and what to investigate if it fails.
 
 Why manual: the integration surface spans on-chain testnet state, the upstream odds writer, and core-api streaming — three external systems whose state we don't own. A scripted suite that "passes" while one is degraded is worse than no suite. This playbook is also exactly what a third-party SDK consumer would use to verify their own setup.
@@ -18,7 +20,7 @@ A vitest harness lives at `packages/sdk/tests/integration/` (gated behind `OSPEX
 
 2. Configure `~/.ospex/config.json` via `ospex init`:
    - `apiUrl` defaults to production.
-   - **`rpcUrl` is required.** Use Alchemy / Infura / QuickNode for the test network. Public RPCs (`polygon-rpc.com`, `rpc-amoy.polygon.technology`) flake mid-test and `polygon-rpc.com` returns 401 since 2026-03.
+   - **`rpcUrl` is required.** Use Alchemy / Infura / QuickNode for the test network. The public Polygon RPC (`polygon-rpc.com`) flakes mid-test and returns 401 since 2026-03.
    - `chainId`: `137` for mainnet, `80002` for Amoy. Sections 4-8 assume Amoy.
 
 3. For the two-wallet match (Section 5): two funded Amoy wallets.
@@ -214,7 +216,7 @@ This section needs an actual settled-or-pending-settle position on Amoy (or a pr
 
 **Case B — Need to create a pendingSettle position from scratch.**
 
-Requires the contest to be `Verified` and have `start_time` already in the past so `scoreContestFromOracle` is callable. The full create→submit→match→score→settle→claim cycle depends on contest creation and operator scoring access. If you have neither, document the run as "manual verification deferred" in the release ticket and revisit on the next operator scoring cycle.
+Requires the contest to be `Verified` and have `start_time` already in the past so `CreOracleReceiver.requestScore` is callable. Scoring is permissionless under R5/CRE — anyone can call `ospex contests score <contestId>` once the start time has passed; there is no operator gate. The full create→submit→match→score→settle→claim cycle depends on contest creation. If you can't run it now, document the run as "manual verification deferred" in the release ticket and revisit on the next scoring cycle.
 
 For partial verification right now:
 

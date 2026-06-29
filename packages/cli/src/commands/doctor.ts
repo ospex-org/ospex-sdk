@@ -1,9 +1,8 @@
 /**
  * `ospex doctor` — comprehensive readiness check for the configured
- * wallet. Composes Core API health + USDC/LINK approvals + POL/USDC/
- * LINK balances into a single report and tells the user (or agent)
- * whether they can match commitments, submit new ones, or create
- * contests right now.
+ * wallet. Composes Core API health + USDC approvals + POL/USDC balances
+ * into a single report and tells the user (or agent) whether they can
+ * match commitments, submit new ones, or create contests right now.
  *
  * Read-only. `--address <addr>` keeps the call fully read-only and
  * avoids a Foundry-keystore passphrase prompt; without it, the

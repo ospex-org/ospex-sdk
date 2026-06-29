@@ -119,7 +119,7 @@ new OspexClient({
   apiUrl: 'https://staging-api.example',  // defaults to the production core-api URL
   signer: myCustomSigner,                 // required for any chain write
   rpcUrl: 'https://polygon-mainnet.g.alchemy.com/v2/<key>', // required for chain ops
-  chainId: 137,                           // 137 (mainnet) or 80002 (amoy); default 137
+  chainId: 137,                           // Polygon mainnet (the supported network); default 137
   timeoutMs: 10_000,
 });
 ```
@@ -130,7 +130,7 @@ The keystore location follows the same precedence: `OSPEX_KEYSTORE_PATH` env var
 
 ### About `rpcUrl`
 
-Every chain operation (`commitments.submit`, `match`, `approve`) needs an RPC URL — the SDK uses it to read allowance and nonce floor, and to broadcast signed transactions. **Use Alchemy, Infura, or QuickNode in production.** The public Polygon RPCs (`polygon-rpc.com`, `rpc-amoy.polygon.technology`) are rate-limited and prone to drops, and `polygon-rpc.com` has been returning 401 since 2026-03.
+Every chain operation (`commitments.submit`, `match`, `approve`) needs an RPC URL — the SDK uses it to read allowance and nonce floor, and to broadcast signed transactions. **Use Alchemy, Infura, or QuickNode in production.** The public Polygon RPC (`polygon-rpc.com`) is rate-limited, prone to drops, and has been returning 401 since 2026-03.
 
 There is intentionally no public-RPC default. `ospex init` requires you to enter a value.
 
@@ -153,10 +153,9 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex health` | API liveness probe. |
 | `ospex contests list [--sport --status --hours --limit --offset]` | Lists upcoming contests with their speculations. |
 | `ospex contests show <contestId>` | One contest with its full orderbook. |
-| `ospex contests create --game-id <id>` (or `--game <slug-or-id>`) | Submit `OracleModule.createContestFromOracle`. `gameId` is the stable id from `ospex games list`; the SDK resolves the three external IDs server-side. `--game` is a resolver alias accepting either a slug or a UUID. Mainnet only today — Amoy contracts are wired but script approvals haven't been signed against the current `OracleModule` deploy ([Roadmap](#roadmap)). |
-| `ospex contests score <contestId>` | Submit `OracleModule.scoreContestFromOracle`. |
+| `ospex contests create --game-id <id>` (or `--game <slug-or-id>`) | Submit `CreOracleReceiver.createContestAndRequestVerify`. Permissionless; the caller pays the USDC contest-creation fee (allowance to TreasuryModule). `gameId` is the stable id from `ospex games list`; the SDK resolves the three external IDs server-side. `--game` is a resolver alias accepting either a slug or a UUID. |
+| `ospex contests score <contestId>` | Submit `CreOracleReceiver.requestScore`. Permissionless and free; reverts until the contest's on-chain start time has passed. |
 | `ospex contests wait-verified <contestId>` | Poll until the contest reaches Verified state. |
-| `ospex contests scripts` | Show the EIP-712 script approvals (debug). |
 | `ospex games list [--sport --hours --creatable-only]` | Upcoming games on the schedule. The `creatable` column flags rows that can be passed to `contests create --game-id`; pass `--creatable-only` to narrow to those rows. |
 | `ospex speculations list [--contest --sport --status --limit --offset]` | List speculations across one or more contests. |
 | `ospex speculations show <speculationId>` | One speculation with its orderbook + parent contest context. |
@@ -172,7 +171,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex commitments cancel-all --contest-id --scorer --line --new-min-nonce [--dry-run]` | Bulk-cancel every open commitment from this maker on one speculation by raising the on-chain nonce floor. `--new-min-nonce` is required (the SDK does not auto-compute — see [`docs/AGENT_CONTRACT.md` §1.5](./docs/AGENT_CONTRACT.md)). |
 | `ospex commitments nonce-floor --maker --contest-id --scorer --line` | Read the current on-chain `s_minNonces[maker][specKey]`. |
 | `ospex commitments fillability <hash-or-prefix> [--risk-usdc <decimal>] [--taker <addr>] [--json]` | Advisory, read-only check of whether a taker can fill this commitment right now — reads maker/taker USDC balance + PositionModule allowance and liveness and returns a structured verdict (fillable / not-fillable / unknown), no tx. Resolves over all statuses; needs an `rpcUrl`. `--json` emits a v2 `AgentEnvelope` (`action: commitments.fillability`, stage `read`). Point-in-time — funding can change before the fill. |
-| `ospex approvals setup [--risk-usdc <n>] [--fee-usdc <n>] [--link <n>] [--yes --json]` | One-shot multi-spender approval orchestration (PositionModule / TreasuryModule / OracleModule). Recommended baseline. |
+| `ospex approvals setup [--risk-usdc <n>] [--fee-usdc <n>] [--yes --json]` | One-shot multi-spender USDC approval orchestration (PositionModule / TreasuryModule). Recommended baseline. |
 | `ospex approvals show [--address <addr>]` | Read-only allowance snapshot for a wallet. |
 | `ospex positions list <address>` | Position history for an address. |
 | `ospex positions status <address>` | Three-bucket categorization: active / pendingSettle / claimable. |
@@ -218,7 +217,7 @@ For the full SDK-level trust-boundary description (how `KeystoreSigner` holds de
 
 Unit tests run via `yarn test`. The most important one is the EIP-712 hash vector test in [`packages/sdk/tests/chain-eip712.test.ts`](./packages/sdk/tests/chain-eip712.test.ts) — it pins the SDK's typed-data declaration against the contract's `COMMITMENT_TYPEHASH` and cross-validates with ethers, so any drift in field order or types fails CI before a single bad commitment hits the wire.
 
-Integration coverage is a documented manual flow at [`docs/MANUAL_INTEGRATION_TESTING.md`](./docs/MANUAL_INTEGRATION_TESTING.md). Walk it (15-20 minutes against Polygon Amoy) before tagging a release.
+Integration coverage is a documented manual flow at [`docs/MANUAL_INTEGRATION_TESTING.md`](./docs/MANUAL_INTEGRATION_TESTING.md). Walk it (15-20 minutes against Polygon mainnet) before tagging a release.
 
 CI runs install / build / typecheck / test on every PR — see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
 
@@ -230,7 +229,7 @@ Out of the current public surface, deferred work:
 - **Cross-process nonce coordination.** A pluggable `nonceProvider` for callers distributing submits across hosts. Today, callers serialize per `(maker, speculationKey)` themselves.
 - **Read-only nonce-floor endpoint.** A `GET /v1/makers/:address/nonce-floor` API path so callers without an RPC URL can read the floor without an `eth_call`.
 - **Bulk on-chain claim.** Multicall3-based bulk claim flow.
-- **Polygon Amoy script approvals for contest creation.** `contests create` and `contests score` work on mainnet only today. The Amoy contracts are wired identically, but the EIP-712 script approvals served by `ospex-core-api` are mainnet-only — the API's `scriptApprovals.amoy` bundle is `null`, so calling against Amoy throws `OspexScriptApprovalError(reason: 'not_configured')`. Most agent integrations don't need the create/score path — validate end-to-end by matching an open commitment whose preview shows `tradeAction: 'trade-only'` (the speculation already exists), where your only costs are gas and the commitment risk. A lazy match (preview shows `trade-and-create-speculation`) additionally pulls a TreasuryModule creation-fee approval; the SDK preflight quotes the exact amount before signing. Amoy support lands when approvals are signed against the current `OracleModule` deploy and committed to the API.
+- **`requestMarketUpdate`.** The CRE oracle exposes a permissionless `requestMarketUpdate(contestId)` (refresh a Verified contest's market lines); an SDK method + CLI command for it is a follow-up.
 - **Secondary-market position UX.** SecondaryMarketModule integration.
 
 Contributions welcome on any of these — see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
@@ -242,7 +241,7 @@ By using this SDK and CLI you acknowledge:
 - **Experimental software.** Ospex is experimental and ships **without warranty**, express or implied. See [`LICENSE`](./LICENSE).
 - **Sole control of your wallet.** You — and only you — control your private key, your approvals, and your transactions. The SDK never asks for or persists a raw private key in its public interface. The legacy CLI session cache (`ospex wallet unlock`) writes a decrypted private key to `~/.ospex/session` for 15 minutes; the recommended Foundry-keystore path avoids this.
 - **Financial risk.** Wagering, approvals, and on-chain transactions carry financial risk. Approvals can be exploited by malicious frontends or scripts; bugs in this SDK could cause loss of funds. Approve only the amount you're willing to risk; revoke approvals you no longer need. Use the public `ospex doctor` and `ospex approvals show` commands to audit your wallet's exposure at any time.
-- **No guarantees.** No guarantee of liquidity, settlement timing, odds accuracy, indexer projection latency, RPC availability, or profit. The protocol settles via Chainlink Functions on a best-effort basis; outages happen.
+- **No guarantees.** No guarantee of liquidity, settlement timing, odds accuracy, indexer projection latency, RPC availability, or profit. The protocol resolves contests via a Chainlink CRE oracle on a best-effort basis; outages happen.
 - **Local law compliance.** You are responsible for complying with the laws of your jurisdiction. This software does not enforce geofencing, KYC, or any other regulatory check. Don't use it where you shouldn't.
 - **Not financial or legal advice.** Nothing in this repository constitutes financial, legal, or tax advice.
 

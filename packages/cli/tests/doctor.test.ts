@@ -3,6 +3,11 @@
  * report rendering. The actual SDK reads (`approvals.read`,
  * `balances.read`, `health.check`) are exercised in the SDK suite;
  * here we test the CLI's pure transforms on synthetic snapshots.
+ *
+ * (R5/CRE: contest creation is permissionless and carries no LINK
+ * payment — createContests readiness gates on API + POL + a USDC →
+ * TreasuryModule allowance only. The LINK balance / OracleModule
+ * allowance dimensions were retired with the Functions oracle.)
  */
 
 import { describe, expect, it } from 'vitest';
@@ -32,9 +37,9 @@ class StringSink extends Writable {
 const OWNER = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
 const POSITION_MODULE = '0x0DCd42f8609cd7884ddBa3481b03a78dfc88366c';
 const TREASURY_MODULE = '0xCB56CD2c509301e888965DD3A2E5C486Fe03a56e';
-const ORACLE_MODULE = '0x7e1397eD5b4c9f606DCF2EB0281485B2296E29Bb';
+const CRE_RECEIVER = '0x06e3470012039797119Ae30e1236169304F9220C';
+const OSPEX_CORE = '0x40047BAFcdEd16C938058b7b67186299a2893561';
 const USDC = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
-const LINK = '0xb0897686c545045aFc77CF20eC7A532E3120E0F1';
 
 // PR 2: tests that assert happy-path `ready` or "no Next step" must
 // supply probe data — otherwise the new structured checks
@@ -54,10 +59,10 @@ const HAPPY_CONTRACT_CHECK: ContractCheckResult = {
   ok: true,
   checked: [
     { name: 'USDC', address: USDC as `0x${string}`, hasCode: true },
-    { name: 'LINK', address: LINK as `0x${string}`, hasCode: true },
     { name: 'PositionModule', address: POSITION_MODULE as `0x${string}`, hasCode: true },
     { name: 'TreasuryModule', address: TREASURY_MODULE as `0x${string}`, hasCode: true },
-    { name: 'OracleModule', address: ORACLE_MODULE as `0x${string}`, hasCode: true },
+    { name: 'CreOracleReceiver', address: CRE_RECEIVER as `0x${string}`, hasCode: true },
+    { name: 'OspexCore', address: OSPEX_CORE as `0x${string}`, hasCode: true },
   ],
   missing: [],
   unknown: [],
@@ -104,7 +109,6 @@ const HAPPY_PROBES = {
 function makeApprovals(overrides: {
   positionModule?: bigint;
   treasuryModule?: bigint;
-  oracleModule?: bigint;
 } = {}): ApprovalsSnapshot {
   return {
     owner: OWNER as `0x${string}`,
@@ -125,24 +129,12 @@ function makeApprovals(overrides: {
         },
       },
     },
-    link: {
-      address: LINK as `0x${string}`,
-      decimals: 18,
-      allowances: {
-        oracleModule: {
-          spender: ORACLE_MODULE as `0x${string}`,
-          spenderModule: 'oracleModule',
-          raw: overrides.oracleModule ?? 0n,
-        },
-      },
-    },
   };
 }
 
 function makeBalances(overrides: {
   native?: bigint;
   usdc?: bigint;
-  link?: bigint;
   chainId?: number;
 } = {}): BalancesSnapshot {
   return {
@@ -150,9 +142,7 @@ function makeBalances(overrides: {
     chainId: overrides.chainId ?? 137,
     native: overrides.native ?? 0n,
     usdc: overrides.usdc ?? 0n,
-    link: overrides.link ?? 0n,
     usdcAddress: USDC as `0x${string}`,
-    linkAddress: LINK as `0x${string}`,
   };
 }
 
@@ -190,32 +180,23 @@ describe('computeReadiness', () => {
     expect(r.submitCommitments.ok).toBe(true);
   });
 
-  it('reports no for create when LINK or Oracle is missing', () => {
+  it('reports no for create when the TreasuryModule USDC allowance is missing', () => {
+    const r = computeReadiness({
+      approvals: makeApprovals({ positionModule: 50_000_000n }),
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
+      apiOk: true,
+    });
+    expect(r.createContests.ok).toBe(false);
+    expect(r.createContests.reasons).toContain('TreasuryModule USDC not approved');
+  });
+
+  it('reports yes for all three when every primitive is satisfied (no LINK under CRE)', () => {
     const r = computeReadiness({
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
       }),
       balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
-      apiOk: true,
-    });
-    expect(r.createContests.ok).toBe(false);
-    expect(r.createContests.reasons).toContain('no LINK balance');
-    expect(r.createContests.reasons).toContain('OracleModule LINK not approved');
-  });
-
-  it('reports yes for all three when every primitive is satisfied', () => {
-    const r = computeReadiness({
-      approvals: makeApprovals({
-        positionModule: 50_000_000n,
-        treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
-      }),
-      balances: makeBalances({
-        native: 10n ** 18n,
-        usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
-      }),
       apiOk: true,
     });
     expect(r.matchCommitments.ok).toBe(true);
@@ -247,29 +228,6 @@ describe('computeReadiness', () => {
     expect(r.matchCommitments.ok).toBe(true);
   });
 
-  // Symmetric to the POL fix. A wallet with sub-µLINK from misdirected
-  // dust looks like "0 LINK" in the renderer; createContests must not
-  // be reported ready.
-  it('a 1-wei LINK balance fails createContests (below the 1e12 wei dust floor)', () => {
-    const r = computeReadiness({
-      approvals: makeApprovals({
-        positionModule: 50_000_000n,
-        treasuryModule: 5_000_000n,
-        oracleModule: 1n,
-      }),
-      balances: makeBalances({
-        native: 10n ** 18n,
-        usdc: 10_000_000n,
-        link: 1n,
-      }),
-      apiOk: true,
-    });
-    expect(r.createContests.ok).toBe(false);
-    expect(r.createContests.reasons).toContain('no LINK balance');
-    // Sanity: matching is still ok — LINK doesn't gate the bettor path.
-    expect(r.matchCommitments.ok).toBe(true);
-  });
-
   // apiOk=false must flip every capability because every Ospex write
   // goes through the core API.
   it('apiOk=false fails all three capabilities even with healthy chain state', () => {
@@ -277,13 +235,8 @@ describe('computeReadiness', () => {
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
-      balances: makeBalances({
-        native: 10n ** 18n,
-        usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
-      }),
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
       apiOk: false,
     });
     expect(r.matchCommitments.ok).toBe(false);
@@ -327,19 +280,16 @@ describe('pickNextSuggestion', () => {
     expect(sug?.audience).toBe('bettor');
   });
 
-  it('returns the operator hint when bettor path is fully ready but contest path is not', () => {
+  it('returns the operator hint (fee-usdc) when bettor path is ready but contest path is not', () => {
     const inputs = {
-      approvals: makeApprovals({
-        positionModule: 50_000_000n,
-        treasuryModule: 5_000_000n,
-      }),
+      approvals: makeApprovals({ positionModule: 50_000_000n }),
       balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
       apiOk: true,
     };
     const r = computeReadiness(inputs);
     const sug = pickNextSuggestion(inputs, r);
     expect(sug?.audience).toBe('operator');
-    expect(sug?.command).toContain('--link');
+    expect(sug?.command).toContain('--fee-usdc');
   });
 
   it('returns null when every capability is satisfied', () => {
@@ -347,13 +297,8 @@ describe('pickNextSuggestion', () => {
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
-      balances: makeBalances({
-        native: 10n ** 18n,
-        usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
-      }),
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
       apiOk: true,
     };
     const r = computeReadiness(inputs);
@@ -368,13 +313,8 @@ describe('pickNextSuggestion', () => {
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
-      balances: makeBalances({
-        native: 10n ** 18n,
-        usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
-      }),
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
       apiOk: false,
     };
     const r = computeReadiness(inputs);
@@ -415,11 +355,8 @@ describe('buildDoctorReport (JSON envelope)', () => {
 
   it('round-trips through JSON.stringify with no BigInt errors', () => {
     const report = buildDoctorReport({
-      approvals: makeApprovals({
-        positionModule: maxUint256,
-        oracleModule: 2n * 10n ** 18n,
-      }),
-      balances: makeBalances({ native: 10n ** 18n, link: 5n * 10n ** 18n }),
+      approvals: makeApprovals({ positionModule: maxUint256 }),
+      balances: makeBalances({ native: 10n ** 18n }),
       apiOk: false,
     });
     expect(() => JSON.stringify(report)).not.toThrow();
@@ -430,7 +367,7 @@ describe('buildDoctorReport (JSON envelope)', () => {
 
   it('embeds the readiness matrix and the suggestion in the same envelope', () => {
     const report = buildDoctorReport({
-      approvals: makeApprovals({ positionModule: 50_000_000n, treasuryModule: 5_000_000n }),
+      approvals: makeApprovals({ positionModule: 50_000_000n }),
       balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
       apiOk: true,
       ...HAPPY_PROBES,
@@ -449,13 +386,8 @@ describe('buildDoctorReport (JSON envelope)', () => {
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
-      balances: makeBalances({
-        native: 10n ** 18n,
-        usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
-      }),
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
       apiOk: false,
     });
     expect(report.api.ok).toBe(false);
@@ -473,13 +405,8 @@ describe('renderDoctorReport (human)', () => {
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
-      balances: makeBalances({
-        native: 10n ** 18n,
-        usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
-      }),
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
       apiOk: true,
     });
     renderDoctorReport(report, sink);
@@ -493,17 +420,6 @@ describe('renderDoctorReport (human)', () => {
     expect(sink.buf).toContain('match existing commitments');
     expect(sink.buf).toContain('submit new commitments');
     expect(sink.buf).toContain('create contests');
-  });
-
-  it('annotates a zero LINK balance as not-needed-for-most-users', () => {
-    const sink = new StringSink();
-    const report = buildDoctorReport({
-      approvals: makeApprovals({ positionModule: 50_000_000n }),
-      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
-      apiOk: true,
-    });
-    renderDoctorReport(report, sink);
-    expect(sink.buf).toContain('only needed for contest creation');
   });
 
   it('flags a zero POL balance with a hard-blocker hint', () => {
@@ -546,13 +462,8 @@ describe('renderDoctorReport (human)', () => {
       approvals: makeApprovals({
         positionModule: 50_000_000n,
         treasuryModule: 5_000_000n,
-        oracleModule: 2n * 10n ** 18n,
       }),
-      balances: makeBalances({
-        native: 10n ** 18n,
-        usdc: 10_000_000n,
-        link: 2n * 10n ** 18n,
-      }),
+      balances: makeBalances({ native: 10n ** 18n, usdc: 10_000_000n }),
       apiOk: true,
       ...HAPPY_PROBES,
     });

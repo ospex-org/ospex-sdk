@@ -1,11 +1,11 @@
 /**
  * Types for the balances snapshot — wallet-centric view of POL (native
- * gas), USDC, and LINK balances. Sibling of `ApprovalsSnapshot`;
- * together they back `ospex doctor`'s readiness view and any future
- * non-CLI consumer (market-maker, frontend) that needs the same
- * "what's in the wallet" check.
+ * gas) and USDC balances. Sibling of `ApprovalsSnapshot`; together they
+ * back `ospex doctor`'s readiness view and any future non-CLI consumer
+ * (market-maker, frontend) that needs the same "what's in the wallet"
+ * check.
  *
- * Kept minimal: raw bigint balances + the token addresses they were
+ * Kept minimal: raw bigint balances + the token address they were
  * read against. Display formatting is the consumer's job (the CLI
  * doctor does this with viem's `formatUnits`).
  */
@@ -24,12 +24,8 @@ export interface BalancesSnapshot {
   native: bigint;
   /** USDC balance in 6-decimal wei units. */
   usdc: bigint;
-  /** LINK balance in 18-decimal wei units. */
-  link: bigint;
   /** USDC token address (network-specific, sourced from the address book). */
   usdcAddress: Hex;
-  /** LINK token address (network-specific). */
-  linkAddress: Hex;
 }
 
 export interface ReadBalancesArgs {

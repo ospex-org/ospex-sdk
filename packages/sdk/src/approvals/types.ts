@@ -2,29 +2,29 @@
  * Types for the approvals snapshot — the cross-cutting view of
  * relevant ERC-20 allowances for an Ospex user wallet.
  *
- * Three spenders matter on Ospex:
+ * Two spenders matter on Ospex (both USDC):
  *
  *   - **USDC → PositionModule**  — pulled at match time as the
  *     maker/taker risk. Required for every commitment match.
  *   - **USDC → TreasuryModule**  — pulled at first match of a lazy
  *     speculation (maker/taker creation-fee split) AND at contest
  *     creation. One allowance covers both purposes.
- *   - **LINK → OracleModule**    — paid per Chainlink Functions call
- *     during contest creation and scoring. Only needed by users who
- *     create or score contests.
+ *
+ * (R5/CRE removed the LINK → OracleModule dimension — contest
+ * verify/score are permissionless and funded off-chain by the
+ * workflow owner.)
  *
  * The snapshot exposes raw bigint allowances so consumers can build
- * their own thresholds (the CLI `approvals show`, the upcoming
- * `doctor`, future market-maker readiness checks). Display formatting
- * is the consumer's job — see `formatUnits(value, 6)` etc.
+ * their own thresholds (the CLI `approvals show`, `doctor`, future
+ * market-maker readiness checks). Display formatting is the consumer's
+ * job — see `formatUnits(value, 6)` etc.
  */
 
 import type { Hex } from '../types/signer.js';
 
 export type ApprovalSpender =
   | 'positionModule'
-  | 'treasuryModule'
-  | 'oracleModule';
+  | 'treasuryModule';
 
 export interface AllowanceEntry {
   /** The spender contract address. */
@@ -34,7 +34,7 @@ export interface AllowanceEntry {
   /**
    * The current `allowance(owner, spender)` reading from the token
    * contract. Always in the token's native units (6 decimals for
-   * USDC, 18 for LINK). `0n` means no approval.
+   * USDC). `0n` means no approval.
    */
   raw: bigint;
 }
@@ -50,22 +50,12 @@ export interface UsdcAllowances {
   };
 }
 
-export interface LinkAllowances {
-  address: Hex;
-  decimals: 18;
-  allowances: {
-    /** Pulled per Chainlink Functions call (contest creation + scoring). */
-    oracleModule: AllowanceEntry;
-  };
-}
-
 export interface ApprovalsSnapshot {
   /** The wallet whose allowances were read. */
   owner: Hex;
   /** Chain id the snapshot was taken on. */
   chainId: number;
   usdc: UsdcAllowances;
-  link: LinkAllowances;
 }
 
 export interface ReadApprovalsArgs {

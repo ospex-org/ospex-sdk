@@ -82,9 +82,9 @@ Authoritative type source: [`packages/sdk/src/types/agentEnvelope.ts`](../packag
 ```ts
 interface ApprovalRequirement {
   token: `0x${string}`;
-  tokenSymbol: 'USDC' | 'LINK';
+  tokenSymbol: 'USDC';                  // USDC is the only Ospex approval token (R5/CRE)
   spender: `0x${string}`;
-  spenderLabel: 'PositionModule' | 'TreasuryModule' | 'OracleModule';
+  spenderLabel: 'PositionModule' | 'TreasuryModule';
   purpose: ApprovalPurpose;
   requiredWei: string;                  // decimal string (bigint-safe)
   requiredHuman: string;                // formatted with token's native decimals
@@ -96,9 +96,7 @@ interface ApprovalRequirement {
 type ApprovalPurpose =
   | 'commitment-risk'                   // USDC → PositionModule
   | 'lazy-creation-fee'                 // USDC → TreasuryModule (lazy match)
-  | 'contest-creation-usdc'             // USDC → TreasuryModule (contest create)
-  | 'contest-creation-link'             // LINK → OracleModule (contest create)
-  | 'contest-scoring-link';             // LINK → OracleModule (contest score)
+  | 'contest-creation-usdc';            // USDC → TreasuryModule (contest create)
 ```
 
 `spenderLabel` is mandatory — agents and humans should never need their own module address book to interpret an approval row.
@@ -124,12 +122,6 @@ interface EstimatedCosts {
     amountUSDC: string;                   // formatted, 6 fractional digits
     conditional: boolean;                 // true for lazy-creation (race condition)
     note?: string;                        // optional human one-liner
-  }>;
-
-  linkFees: Array<{
-    purpose: 'contest-verification' | 'contest-scoring';
-    amountWei: string;                    // 18dp LINK, decimal string
-    amountLINK: string;                   // formatted
   }>;
 }
 ```
@@ -204,7 +196,6 @@ Initial stable `warning.code` catalog (additive — consumers log + ignore unkno
 | `'expiry-after-match-time'` | `warning` | `SubmitPreview.expiry.afterMatchTime` |
 | `'allowance-short'` | `blocking` | derived from any `approvalRequirements[].needsApproval` |
 | `'nonce-floor-stale'` | `warning` | `nonce-floor` read when chain > supabase |
-| `'verify-script-expiring-soon'` | `warning` | `contests scripts` (T-30d) |
 | `'password-file-permissions-loose'` | `warning` (`blocking` under `--strict`) | `auth check` |
 | `'settle-skipped-already-settled'` | `info` | `claim-all` / `settle` — a pre-flight read found the speculation already settled, so the duplicate settle tx was skipped. `details: { speculationId, winSide, winSideContext, … }` (the structured Team Identity context — §2.7). |
 | `'projection-lag-recovered'` | `info` | `claim-all` / `settle` — a concurrent settle won a race mid-flight, an on-chain re-read confirmed it, and the command proceeded (claim-all → claim; settle → done). `details: { speculationId, winSide, winSideContext, … }` (the structured Team Identity context — §2.7). |
@@ -459,8 +450,8 @@ Legend: `✓` populated · `∅` `null` / `[]` (does not apply) · `+` populated
 | `claim-all --dry-run` | dry-run | subject | true | true | ∅ | ∅ | ✓ (planned total) | ∅ | ∅ | ∅ | ∅ | ✓ | ∅ | ✓ (execute form, `safeToAutoRun: false`) |
 | `claim-all` (live) | execute | signer | false | false | ∅ | ∅ | ✓ (summed; **fresh successful claims only**) | ∅ | ∅ | ∅ | ∅ | ✓ (info: settle + claim skips/recoveries) | ✓ (one transaction per landed leg, ordered; skipped/recovered legs emit no effect, a reverted-on-inclusion leg emits a `status:'reverted'` effect) | ✓ (verify via `positions status`) |
 | `settle <id>` | execute | signer | false | false | ∅ | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ (info: already-settled / projection-lag-recovered) | ✓ (settle tx; ∅ when already-settled / pre-send recovery) | ✓ (next: `claim`) |
-| `contests create --game-id <…>` | execute | signer | false | false | ✓ (LINK + USDC; consumed when ok=true) | ∅ | ∅ | ✓ (created) | ∅ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ (next: `wait-verified`) |
-| `contests score <id>` | execute | signer | false | false | ✓ (LINK; consumed) | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ |
+| `contests create --game-id <…>` | execute | signer | false | false | ✓ (USDC creation fee; consumed when ok=true) | ∅ | ∅ | ✓ (created) | ∅ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ (next: `wait-verified`) |
+| `contests score <id>` | execute | signer | false | false | ∅ (free; no approvals) | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ |
 
 ### 5.3 Reads
 
@@ -477,7 +468,6 @@ Legend: `✓` populated · `∅` `null` / `[]` (does not apply) · `+` populated
 | `commitments nonce-floor` | read | maker/subject/∅ | ∅ | ∅ | ✓ | ✓ | ∅ | ✓ | ✓ | `{ maker, contestId, scorer, lineTicks, minNonce }` |
 | `contests list` | read | none | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ (e.g. `contests create`) | `Contest[]` |
 | `contests show <id>` | read | none | ∅ | ∅ | ✓ | ∅ | ∅ | ✓ | ✓ | `Contest` |
-| `contests scripts` | read | none | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ (verify-script expiring) | ✓ | `ScriptApprovalsData` |
 | `contests wait-verified` | read | none | ∅ | ∅ | ✓ | ∅ | ∅ | ✓ (timeout warning) | ✓ (next: `contests show`) | `{ contestId, status }` |
 | `games list` | read | none | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ (e.g. `contests create --game-id`) | `Game[]` |
 | `leaderboard show` | read | none | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ (`window-too-short`) | ∅ | `LeaderboardEntry[]` |

@@ -287,18 +287,11 @@ describe('failure-envelope scenario 3: mid-flight failure after one successful e
     });
   });
 
-  it('preserves contests create approve effects when the create tx itself reverts', () => {
-    // contests create's retry loop may run LINK + USDC approves
-    // successfully, then the actual createContestFromOracle reverts
-    // (e.g. Chainlink subscription not funded). Both approves must
-    // appear in the failure envelope's effects[].
-    const linkApprove: AgentEffect = {
-      type: 'transaction',
-      purpose: 'approve-link',
-      ok: true,
-      txHash: '0xlink' as Hex,
-      status: 'confirmed',
-    };
+  it('preserves the contests create approve effect when the create tx itself reverts', () => {
+    // contests create's retry loop may run the USDC creation-fee approve
+    // successfully, then the actual createContestAndRequestVerify reverts.
+    // The approve must still appear in the failure envelope's effects[].
+    // (R5/CRE: USDC is the only approval — no LINK payment.)
     const usdcApprove: AgentEffect = {
       type: 'transaction',
       purpose: 'approve-usdc',
@@ -314,19 +307,15 @@ describe('failure-envelope scenario 3: mid-flight failure after one successful e
         wallet: SIGNER,
         walletRole: 'signer',
         signer: SIGNER,
-        effects: [linkApprove, usdcApprove],
-        error: new OspexChainError('createContestFromOracle reverted', {
-          reason: 'ScriptApprovalExpired',
-        }),
+        effects: [usdcApprove],
+        error: new OspexChainError('createContestAndRequestVerify reverted'),
       });
     });
     const env = parseEnvelope(stdout);
-    expect(env.effects).toHaveLength(2);
-    expect(env.effects[0]?.purpose).toBe('approve-link');
-    expect(env.effects[1]?.purpose).toBe('approve-usdc');
-    expect(env.effects.every((e) => e.ok)).toBe(true); // both approves landed
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.purpose).toBe('approve-usdc');
+    expect(env.effects.every((e) => e.ok)).toBe(true); // the approve landed
     expect(env.errors[0]?.code).toBe('CHAIN_ERROR');
-    expect(env.errors[0]?.details).toMatchObject({ reason: 'ScriptApprovalExpired' });
   });
 
   // review blocker regression: when contests create's verification
@@ -606,11 +595,11 @@ describe('failure-envelope scenario 3: mid-flight failure after one successful e
   });
 
   it('contests create: verification fails AFTER create tx — single envelope with create-contest preserved', () => {
-    const linkApprove: AgentEffect = {
+    const usdcApprove: AgentEffect = {
       type: 'transaction',
-      purpose: 'approve-link',
+      purpose: 'approve-usdc',
       ok: true,
-      txHash: '0xlink' as Hex,
+      txHash: '0xusdc' as Hex,
       blockNumber: '999',
       status: 'confirmed',
     };
@@ -630,7 +619,7 @@ describe('failure-envelope scenario 3: mid-flight failure after one successful e
         wallet: SIGNER,
         walletRole: 'signer',
         signer: SIGNER,
-        effects: [linkApprove, createContestEffect],
+        effects: [usdcApprove, createContestEffect],
         // waitForVerified timed out / threw after the create tx landed.
         // The error here is whatever waitForVerified surfaced.
         error: new OspexChainError(
@@ -647,7 +636,7 @@ describe('failure-envelope scenario 3: mid-flight failure after one successful e
     expect(env.ok).toBe(false);
     expect(env.action).toBe('contests.create');
     expect(env.effects).toHaveLength(2);
-    expect(env.effects[0]?.purpose).toBe('approve-link');
+    expect(env.effects[0]?.purpose).toBe('approve-usdc');
     expect(env.effects[0]?.ok).toBe(true);
     // The create tx — the bit the review flagged as missing.
     expect(env.effects[1]?.purpose).toBe('create-contest');

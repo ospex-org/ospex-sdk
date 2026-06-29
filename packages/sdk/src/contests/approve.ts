@@ -1,13 +1,11 @@
 /**
- * `client.contests.approveLink(amount | 'max')` — approve OracleModule
- * to spend LINK (per-call payment in `handleLinkPayment`).
- *
  * `client.contests.approveFee(amount | 'max')` — approve TreasuryModule
  * to spend USDC for the contest creation fee. Distinct from the
  * commitments USDC approval (which targets PositionModule).
  *
  * The SDK never auto-approves; the CLI prompts on OspexAllowanceError
- * and calls these as the user-confirmed remediation.
+ * and calls this as the user-confirmed remediation. (R5/CRE removed the
+ * LINK approval — contest creation/scoring carries no LINK payment.)
  */
 import { encodeFunctionData, maxUint256, type Hash, type TransactionReceipt } from 'viem';
 import { erc20Abi } from '../contracts/abi/erc20.js';
@@ -59,11 +57,6 @@ async function approveErc20(
     data,
   });
   return { txHash, receipt, spender, token, amount: amountWei };
-}
-
-export function approveLink(ctx: ContestsContext, amount: ApproveArgs): Promise<ApproveResult> {
-  const { linkToken, oracleModule } = ctx.getAddresses();
-  return approveErc20(ctx, linkToken, oracleModule, amount);
 }
 
 export function approveFee(ctx: ContestsContext, amount: ApproveArgs): Promise<ApproveResult> {

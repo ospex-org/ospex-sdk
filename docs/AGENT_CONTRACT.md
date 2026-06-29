@@ -701,8 +701,6 @@ import {
   OspexSigningError,
   OspexAllowanceError,
   OspexChainError,
-  OspexScriptApprovalError,
-  OspexSubscriptionError,
   OspexStreamError,
   OspexSignerResolutionError,
 } from '@ospex/sdk';
@@ -729,8 +727,6 @@ try {
 | `SIGNING_ERROR` | `OspexSigningError` | — | Keystore decrypt failed (wrong passphrase), EIP-712 sign failed. |
 | `ALLOWANCE_INSUFFICIENT` | `OspexAllowanceError` | `required: bigint`, `current: bigint`, `spender`, `token` | Pre-flight allowance shortfall. SDK never auto-approves. |
 | `CHAIN_ERROR` | `OspexChainError` | `reason?`, `revertReason?`, `txHash?`, `receiptStatus?`, `receiptBlockNumber?`, `causeChain?` | RPC error, revert, receipt status reverted. `txHash` is present whenever a tx was broadcast — a revert, a confirmed-but-post-parse-failed send, OR a receipt-wait timeout — so it is **not** by itself proof of a revert. `receiptStatus` (`'success'` \| `'reverted'`) is the discriminator: `'reverted'` = the tx reverted on-chain; `'success'` = the tx CONFIRMED but a post-send step (e.g. event parse) failed; **absent** = no receipt was observed (the broadcast landed a hash but the wait timed out / dropped — on-chain status UNKNOWN). `causeChain[]` (when present) surfaces the underlying viem / transport error with `name` / `status` / `shortMessage` so agents can classify rate-limit vs timeout vs underpriced without parsing the wrapper message. |
-| `SCRIPT_APPROVAL_INVALID` | `OspexScriptApprovalError` | `reason: 'hash_mismatch' \| 'expired' \| 'not_configured'`, `expectedHash?`, `actualHash?` | Chainlink Functions ScriptApproval is unusable. |
-| `SUBSCRIPTION_ERROR` | `OspexSubscriptionError` | `reason: 'link_balance_insufficient' \| 'consumer_not_registered' \| 'subscription_id_missing'`, `subscriptionId?` | Chainlink Functions subscription unusable. |
 | `STREAM_ERROR` | `OspexStreamError` | `reason: 'connection_failed' \| 'capacity_exceeded' \| 'fatal'`, `status?`, `phase?: 'token-mint' \| 'token-refresh' \| 'connect' \| 'snapshot-page' \| 'decode' \| 'dispatch'` | An Ospex SSE stream failed (odds or a protocol `subscribe`). `reason` discriminates retry-vs-stop (`connection_failed` / `capacity_exceeded` retried; `fatal` ends the subscription). `phase` (v0.5.2+) is populated by `client.ownState.subscribe` so composite-health-gate consumers can latch on the failure phase without parsing messages; other resource streams leave it undefined. Delivered to `onError`. |
 | `SIGNER_RESOLUTION_ERROR` | `OspexSignerResolutionError` | `reason`, `path?`, `expectedAddress?`, `actualAddress?`, `mode?` | Non-interactive Foundry-keystore signer resolution failed (missing path / file, wrong passphrase, address mismatch, conflicting flags, or — under `--strict` — loose password-file perms). See §4. |
 | `UNKNOWN_ERROR` | — (CLI `--json` envelope fallback; **not** an `OspexError`) | `causeChain?` | The CLI caught a thrown value that was not an `OspexError` — a native `Error`, or a non-`Error` throw. The `--json` envelope's `errors[]` falls back to this code (with the sanitized `message`) so the structured-error contract holds even on an unexpected throw. Indicates an unanticipated failure, not a routed SDK error. |
@@ -774,8 +770,6 @@ New reason codes are additive (forward-compatible).
 | `CHAIN_ERROR` with `txHash` + `receiptStatus: 'success'` | No — the tx CONFIRMED on-chain; only a post-send step (e.g. event parse) failed. The on-chain effect already happened — reconcile state, do **not** re-send. |
 | `CHAIN_ERROR` with `txHash`, no `receiptStatus` | Not without polling first — the tx was broadcast but its receipt wasn't observed (wait timeout / transport drop) and it MAY still be mined. Poll the chain for `txHash` before any retry. |
 | `CHAIN_ERROR` without `txHash` | Sometimes — see "Safe retry rule" below. |
-| `SCRIPT_APPROVAL_INVALID` with `reason === 'expired'` | Wait for re-sign + redeploy of `ospex-core-api`. |
-| `SUBSCRIPTION_ERROR` with `reason === 'link_balance_insufficient'` | Yes after funding the wallet with LINK. |
 | `SIGNER_RESOLUTION_ERROR` (any `reason`) | No — fix the configuration. Surface to the operator rather than retrying. |
 | `UNKNOWN_ERROR` | No automatic retry — an unexpected throw the SDK did not classify. Inspect `message` + `details.causeChain[]` and surface to the operator; do not blindly re-issue. |
 
@@ -842,7 +836,6 @@ The SDK's threat model is "the host machine is honest, the user's wallet is sove
 | **CLI session cache (`ospex wallet unlock`)** | Writes the **decrypted private key** to `~/.ospex/session` as plain JSON, mode `0600`, 15-minute TTL (parent dir mode `0700`). Mode `0600` makes the file unreadable by *other* users on the host but does NOT protect against any process running as the same user — those can read it for the duration of the unlock. The Foundry-keystore path with non-interactive credentials (flag / env / `auth use-foundry`-pinned `passwordFile`) avoids this trade-off entirely; the legacy session-cache path is kept for backwards compatibility but is not the recommended posture. New `wallet unlock` users should consider `ospex auth use-foundry --account <name> --password-file <path>` instead — same passphrase storage on disk (the `.pass` file), no decrypted key on disk. |
 | RPC URL | **Caller-supplied.** No public-RPC default; `ospex init` prompts for one. The SDK uses the URL only as a viem `PublicClient` transport. |
 | Live odds + protocol streams | Core-api Server-Sent Events over the configured API base URL — no separate credentials, no database access. The SDK opens the SSE endpoints directly and never holds a database key. |
-| Chainlink Functions encrypted secrets | Fetched from a public alias (`secrets.ospex.org`) and passed verbatim into `OracleModule.createContestFromOracle`. The SDK never sees the plaintext. |
 | API base URL | Defaults to `https://api.ospex.org`. Override at construction. |
 
 The SDK has no module-level state. Multiple `OspexClient` instances are fully isolated — including per-instance nonce counters (see §10).
@@ -1010,6 +1003,6 @@ single envelope for `odds show`        AgentEnvelope<OddsShowEnvelope>; NOT NDJS
 non-interactive signing                --account + --password-file (or auth use-foundry pin); see §4
 auth check                             Diagnostic that mirrors loadSigner's resolution ladder; emits AgentEnvelope<AuthCheckPayload>
 err.code                               Switch on this for routing
-err.reason                             Switch on this for fine dispatch (chain/script-approval/subscription/signer-resolution)
+err.reason                             Switch on this for fine dispatch (chain/stream/own-state/signer-resolution)
 schemaVersion: 3                       Will signal the next breaking envelope change (not before v1.0.0)
 ```

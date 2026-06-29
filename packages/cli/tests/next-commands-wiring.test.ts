@@ -176,7 +176,6 @@ describe('PR-7 wiring: success envelopes carry the right verify suggestions', ()
       {
         contestId: 9001n,
         txHash: '0xcreate',
-        requestId: '0xreq',
         receipt: { status: 'success', blockNumber: 1000n } as never,
       } as never,
       { chainId: POLYGON, signerAddress: SIGNER, verification: null },
@@ -191,7 +190,6 @@ describe('PR-7 wiring: success envelopes carry the right verify suggestions', ()
       {
         contestId: 9001n,
         txHash: '0xcreate',
-        requestId: '0xreq',
         receipt: { status: 'success', blockNumber: 1000n } as never,
       } as never,
       {
@@ -209,7 +207,6 @@ describe('PR-7 wiring: success envelopes carry the right verify suggestions', ()
       {
         contestId: 9001n,
         txHash: '0xscore',
-        requestId: '0xreq',
         receipt: { status: 'success', blockNumber: 1000n } as never,
       } as never,
       { chainId: POLYGON, signerAddress: SIGNER },
@@ -292,19 +289,6 @@ describe('PR-7 wiring: deriveRemediationNextCommands', () => {
     const out = deriveRemediationNextCommands(err, POLYGON);
     expect(out[0]?.id).toBe('remediate-approve-treasury');
     expect(out[0]?.argv).toContain('0.250000');
-  });
-
-  it('OracleModule allowance shortfall → remediate-approve-link with formatted LINK', () => {
-    const addresses = getAddresses(POLYGON);
-    const err = new OspexAllowanceError('short', {
-      required: 2_500_000_000_000_000_000n, // 2.5 LINK in wei
-      current: 0n,
-      spender: addresses.oracleModule,
-      token: addresses.linkToken,
-    });
-    const out = deriveRemediationNextCommands(err, POLYGON);
-    expect(out[0]?.id).toBe('remediate-approve-link');
-    expect(out[0]?.argv).toContain('2.5');
   });
 
   it('non-allowance error → empty array (no remediation known)', () => {

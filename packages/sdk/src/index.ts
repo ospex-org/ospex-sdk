@@ -20,17 +20,13 @@ export {
   OspexSigningError,
   OspexAllowanceError,
   OspexChainError,
-  OspexScriptApprovalError,
   OspexSignerResolutionError,
-  OspexSubscriptionError,
   OspexStreamError,
   OspexOwnStateError,
 } from './errors.js';
 export type {
   OspexErrorCode,
-  OspexScriptApprovalReason,
   OspexSignerResolutionReason,
-  OspexSubscriptionReason,
   OspexStreamReason,
   OspexStreamErrorPhase,
   OspexOwnStateReason,
@@ -64,8 +60,6 @@ export type {
   SpeculationDetail,
   SpeculationParentContext,
   SpeculationsListOptions,
-  ScriptApproval,
-  ApprovedScripts,
   // fills
   Fill,
   // streams
@@ -148,7 +142,6 @@ export type {
   AgentApprovalSpenderLabel,
   EstimatedCosts,
   AgentUsdcFee,
-  AgentLinkFee,
   AgentPayout,
   AgentWarning,
   AgentWarningCode,
@@ -327,16 +320,15 @@ export type {
 
 // Approvals snapshot — used by `ospex approvals show`, `ospex doctor`,
 // and any consumer that needs a readiness view of the configured
-// wallet's USDC + LINK allowances against Ospex modules.
+// wallet's USDC allowances against Ospex modules.
 export type {
   AllowanceEntry,
   ApprovalSpender,
   ApprovalsSnapshot,
-  LinkAllowances,
   ReadApprovalsArgs,
   UsdcAllowances,
 } from './approvals/index.js';
 
-// Balances snapshot — wallet-centric POL / USDC / LINK reads. Pairs
+// Balances snapshot — wallet-centric POL / USDC reads. Pairs
 // with the approvals snapshot for `ospex doctor`'s readiness view.
 export type { BalancesSnapshot, ReadBalancesArgs } from './balances/index.js';

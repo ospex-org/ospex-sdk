@@ -10,7 +10,7 @@
  * calls MUST use `gameId`.
  *
  * `externalIds` exposes all three feed identifiers needed by
- * `OracleModule.createContestFromOracle`. End-user-facing tools should
+ * `CreOracleReceiver.createContestAndRequestVerify`. End-user-facing tools should
  * generally hide them from display — the canonical UX is "user passes
  * gameId; SDK fetches externalIds; SDK builds the contract call." The
  * field is kept on the public type for symmetry with the existing

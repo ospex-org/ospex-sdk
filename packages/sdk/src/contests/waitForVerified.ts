@@ -2,7 +2,7 @@
  * `client.contests.waitForVerified(contestId)` — polls
  * ContestModule.getContest on-chain until the status reaches Verified
  * (or beyond — Scored / Voided also resolve so the call never spins
- * after a contest has terminal-progressed past the Chainlink callback).
+ * after a contest has terminal-progressed past the CRE report).
  *
  * On-chain (not Supabase) by design: pre-flight §3 noted the indexer
  * can race with games and park CONTEST_VERIFIED in pending_events for
@@ -20,7 +20,7 @@ import type { Hex } from '../types/signer.js';
 import type { ContestsContext } from './context.js';
 
 export interface WaitForVerifiedOptions {
-  /** Default 120_000 ms (~2x typical Chainlink callback). */
+  /** Default 120_000 ms (~2x typical CRE report latency). */
   timeoutMs?: number;
   /** Default 4_000 ms. */
   pollIntervalMs?: number;
@@ -69,7 +69,7 @@ export async function waitForVerified(
     if (Date.now() + pollIntervalMs > deadline) {
       throw new OspexChainError(
         `Contest ${id} did not reach Verified within ${timeoutMs} ms. ` +
-          'Run `ospex contests wait-verified <id>` again or check the Chainlink Functions request status.',
+          'Run `ospex contests wait-verified <id>` again or check the CRE oracle report status.',
       );
     }
     await sleep(pollIntervalMs);

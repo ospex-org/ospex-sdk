@@ -1,12 +1,10 @@
 /**
  * `client.balances.read({ owner? })` — single round-trip read of the
- * three balances `ospex doctor` cares about: native gas (POL), USDC,
- * LINK.
+ * two balances `ospex doctor` cares about: native gas (POL) and USDC.
  *
- * Three reads run in parallel:
+ * Two reads run in parallel:
  *   - native: publicClient.getBalance({ address })
  *   - USDC:   ERC20.balanceOf(owner)
- *   - LINK:   ERC20.balanceOf(owner)
  *
  * Like `client.approvals.read()`, passing `owner` keeps the call fully
  * read-only and avoids a Foundry-keystore passphrase prompt.
@@ -33,18 +31,11 @@ export async function read(
   }
 
   const usdc = addresses.usdc as Hex;
-  const link = addresses.linkToken as Hex;
 
-  const [native, usdcBalance, linkBalance] = await Promise.all([
+  const [native, usdcBalance] = await Promise.all([
     publicClient.getBalance({ address: owner }),
     publicClient.readContract({
       address: usdc,
-      abi: erc20Abi,
-      functionName: 'balanceOf',
-      args: [owner],
-    }) as Promise<bigint>,
-    publicClient.readContract({
-      address: link,
       abi: erc20Abi,
       functionName: 'balanceOf',
       args: [owner],
@@ -56,8 +47,6 @@ export async function read(
     chainId,
     native,
     usdc: usdcBalance,
-    link: linkBalance,
     usdcAddress: usdc,
-    linkAddress: link,
   };
 }

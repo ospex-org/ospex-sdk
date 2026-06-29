@@ -273,7 +273,7 @@ export interface PreviewRaw {
 export type ApprovalPurpose = 'commitment-risk' | 'lazy-creation-fee';
 
 export interface PreviewApproval {
-  token: 'USDC' | 'LINK';
+  token: 'USDC';
   spender: string;
   /** wei (token's native decimals) as decimal string. */
   required: string;
