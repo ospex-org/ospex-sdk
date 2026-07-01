@@ -299,6 +299,11 @@ export interface SpeculationBody {
   awayLine?: number;
   homeLine?: number;
   speculationStatus: 0 | 1;
+  // Settlement outcome (core-api #41+). Projected from the same row as
+  // speculationStatus, so speculationStatus===1 ⟺ winSide!==null.
+  winSide: 'away' | 'home' | 'over' | 'under' | 'push' | 'void' | null;
+  settledAt: string | null;
+  voided: boolean;
   orderbook?: CommitmentBody[];
 }
 

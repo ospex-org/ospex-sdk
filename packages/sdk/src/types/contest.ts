@@ -22,6 +22,15 @@ import type { MarketType } from './odds.js';
 export type ContestStatus = 'unverified' | 'verified' | 'scored' | 'voided';
 
 /**
+ * On-chain `WinSide` enum. `'tbd'` is the pre-settlement sentinel; the SDK
+ * never surfaces it — {@link Speculation.winSide} maps `'tbd'` to `null`.
+ */
+export type WinSide = 'tbd' | 'away' | 'home' | 'over' | 'under' | 'push' | 'void';
+
+/** A settled `WinSide` — every value except the `'tbd'` sentinel. */
+export type SettledWinSide = Exclude<WinSide, 'tbd'>;
+
+/**
  * A single bettable line on a contest. Mirrors the on-chain
  * `Speculation` struct (`contestId` is field 1, hence always populated
  * here too — a Speculation is meaningful standalone).
@@ -43,8 +52,25 @@ export interface Speculation {
   line: number | null;
   awayLine?: number;
   homeLine?: number;
-  /** 0 = open (taking commitments), 1 = closed (settled or scored). */
+  /**
+   * 0 = open (taking commitments), 1 = closed (settled on-chain via
+   * `settleSpeculation`).
+   */
   speculationStatus: 0 | 1;
+  /**
+   * The settled outcome, or `null` while the speculation is still open.
+   * `'push'`/`'void'` are settled outcomes (non-null). For spread/total/push/void
+   * this cannot be recomputed from the contest score alone, so it is the
+   * authoritative winner signal.
+   *
+   * INVARIANT: `speculationStatus === 1` ⟺ `winSide !== null` (core-api projects
+   * both from the same atomic row).
+   */
+  winSide: SettledWinSide | null;
+  /** ISO-8601 timestamp of the on-chain settlement, or `null` while open. */
+  settledAt: string | null;
+  /** True iff the speculation settled to `void` (equivalently `winSide === 'void'`). */
+  voided: boolean;
   orderbook?: Commitment[];
 }
 

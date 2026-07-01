@@ -55,6 +55,8 @@ export const speculationsShowCommand = new Command('show')
         type: detail.type,
         line: detail.line ?? '-',
         status: detail.speculationStatus === 0 ? 'open' : 'closed',
+        winSide: detail.winSide ?? '-',
+        settledAt: detail.settledAt != null ? formatMatchTime(detail.settledAt) : '-',
         contest: `${detail.contest.awayTeam} @ ${detail.contest.homeTeam} (${detail.contest.sport}, ${formatMatchTime(detail.contest.matchTime)}) — ${detail.contest.status}`,
         orderbookEntries: detail.orderbook.length,
       },
