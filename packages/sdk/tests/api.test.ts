@@ -55,6 +55,9 @@ describe('OspexClient API surface', () => {
                 awayLine: 3.5,
                 homeLine: -3.5,
                 speculationStatus: 0,
+                winSide: null,
+                settledAt: null,
+                voided: false,
               },
             ],
           },
@@ -132,6 +135,9 @@ describe('OspexClient API surface', () => {
             lineTicks: 0,
             line: null,
             speculationStatus: 0,
+            winSide: null,
+            settledAt: null,
+            voided: false,
           },
         ],
         pagination: { limit: 100, offset: 0, total: 1, hasMore: false },
@@ -142,6 +148,8 @@ describe('OspexClient API surface', () => {
     expect(specs).toHaveLength(1);
     expect(specs[0]!.speculationId).toBe('500');
     expect(specs[0]!.contestId).toBe('42');
+    expect(specs[0]!.winSide).toBeNull();
+    expect(specs[0]!.speculationStatus).toBe(0);
     const url = new URL(calls[0]!.url);
     expect(url.pathname).toBe('/v1/speculations');
     expect(url.searchParams.get('contestId')).toBe('42');
@@ -158,6 +166,9 @@ describe('OspexClient API surface', () => {
         lineTicks: 0,
         line: null,
         speculationStatus: 0,
+        winSide: null,
+        settledAt: null,
+        voided: false,
         orderbook: [],
         contest: {
           contestId: '42',
@@ -174,6 +185,40 @@ describe('OspexClient API surface', () => {
     expect(calls[0]!.url).toBe(`${apiUrl}/v1/speculations/500`);
     expect(detail.contest.awayTeam).toBe('Lakers');
     expect(detail.orderbook).toEqual([]);
+    expect(detail.winSide).toBeNull();
+    expect(detail.settledAt).toBeNull();
+  });
+
+  it('speculations.get surfaces the settled outcome (winSide/settledAt/voided) on a closed speculation', async () => {
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        speculationId: '2',
+        contestId: '2',
+        type: 'moneyline',
+        lineTicks: 0,
+        line: null,
+        speculationStatus: 1,
+        winSide: 'away',
+        settledAt: '2026-07-01T04:00:14+00:00',
+        voided: false,
+        orderbook: [],
+        contest: {
+          contestId: '2',
+          awayTeam: 'Chicago White Sox',
+          homeTeam: 'Baltimore Orioles',
+          sport: 'mlb',
+          matchTime: '2026-06-30T22:35:00Z',
+          status: 'scored',
+        },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const detail = await client.speculations.get('2');
+    expect(detail.speculationStatus).toBe(1);
+    expect(detail.winSide).toBe('away');
+    expect(detail.settledAt).toBe('2026-07-01T04:00:14+00:00');
+    expect(detail.voided).toBe(false);
   });
 
   it('commitments.list passes the speculationId filter through', async () => {

@@ -55,6 +55,8 @@ export type {
   Contest,
   ContestUpdate,
   ContestStatus,
+  WinSide,
+  SettledWinSide,
   ContestsListOptions,
   Speculation,
   SpeculationDetail,

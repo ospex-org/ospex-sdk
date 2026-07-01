@@ -84,6 +84,12 @@ export function toSpeculation(body: SpeculationBody): Speculation {
     lineTicks: body.lineTicks,
     line: body.line,
     speculationStatus: body.speculationStatus,
+    // `?? null` / `?? false` degrade gracefully if talking to a pre-#41
+    // core-api that omits these; a current server always returns them, and
+    // then speculationStatus===1 ⟺ winSide!==null holds.
+    winSide: body.winSide ?? null,
+    settledAt: body.settledAt ?? null,
+    voided: body.voided ?? false,
   };
   if (body.awayLine !== undefined) out.awayLine = body.awayLine;
   if (body.homeLine !== undefined) out.homeLine = body.homeLine;

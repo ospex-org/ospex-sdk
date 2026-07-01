@@ -4,7 +4,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### Added
+
+- **`@ospex/sdk` + `@ospex/cli`: `Speculation` now carries the settlement outcome — `winSide`, `settledAt`, and `voided`.** A read of a settled speculation (`client.speculations.get`/`list`, and the `speculations[]` embedded in `client.contests.get`/`list`) previously exposed only `speculationStatus` (`0` open / `1` closed) with **no way to tell who won**. `winSide` is the authoritative on-chain outcome — `'away'`/`'home'`/`'over'`/`'under'`/`'push'`/`'void'`, or `null` while open — and for spread/total/push/void it **cannot** be recomputed from the contest score client-side, so it is the field to route settlement on. `settledAt` is the ISO settlement timestamp (`null` while open); `voided` is `true` iff `winSide === 'void'`. **Invariant: `speculationStatus === 1` ⟺ `winSide !== null`** — core-api projects both from the same atomic row, so a closed speculation always carries its winner. New public type exports: `WinSide` (`'tbd' | 'away' | 'home' | 'over' | 'under' | 'push' | 'void'`) and `SettledWinSide` (the same minus `'tbd'`). `ospex speculations show` / `list` display a `winSide` column. Additive and backward-compatible; the fields are populated by a core-api carrying the matching projection (ospex-core-api #41) and degrade to `null`/`false` against an older server. `scoredAt` is **not** added to the speculation — it is a contest-level field, read it from `client.contests.get` (`scoredAt`).
 
 ## [0.8.0] — 2026-06-29
 

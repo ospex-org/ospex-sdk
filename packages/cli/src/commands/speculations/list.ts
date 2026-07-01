@@ -68,6 +68,7 @@ export const speculationsListCommand = new Command('list')
         type: s.type,
         line: s.line ?? '-',
         status: s.speculationStatus === 0 ? 'open' : 'closed',
+        winSide: s.winSide ?? '-',
       })),
       { json: false },
     );

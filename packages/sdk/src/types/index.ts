@@ -47,6 +47,8 @@ export type {
 export type { LeaderboardEntry } from './leaderboard.js';
 export type {
   ContestStatus,
+  WinSide,
+  SettledWinSide,
   Contest,
   ContestUpdate,
   Speculation,
