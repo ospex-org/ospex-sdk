@@ -92,6 +92,11 @@ export const contestScoreCommand = addSignerOptions(
     // on a dropped CRE callback (requestScore is idempotent + free).
     let scoring: WaitForScoredOutcome | null = null;
     let scoringError: unknown = null;
+    // The auto re-request (a SECOND requestScore tx sent when the first CRE
+    // callback drops) — captured so its tx lands in the envelope's effects[]
+    // ledger too, not just the first score tx. An execute envelope must record
+    // EVERY on-chain write the command performed.
+    let reRequestResult: ContestScoreResult | null = null;
     if (wantWait) {
       const waitOpts: Parameters<typeof client.contests.waitForScored>[1] = {};
       if (opts.waitTimeoutSeconds !== undefined) waitOpts.timeoutMs = opts.waitTimeoutSeconds * 1000;
@@ -115,11 +120,12 @@ export const contestScoreCommand = addSignerOptions(
           );
         }
         try {
-          await client.contests.score({ contestId });
+          reRequestResult = await client.contests.score({ contestId });
         } catch {
           // The re-request can revert if the contest JUST scored/voided
           // (or on the start-time guard) — harmless; the poll below reads
-          // the authoritative on-chain state either way.
+          // the authoritative on-chain state either way. A revert leaves
+          // reRequestResult null (no tx landed → nothing to add to effects[]).
         }
         try {
           scoring = await client.contests.waitForScored(contestId, waitOpts);
@@ -153,7 +159,8 @@ export const contestScoreCommand = addSignerOptions(
       // Single-envelope discipline (the create double-envelope bug is the
       // cautionary tale): when the wait leg fails AFTER the score tx
       // landed, emit exactly ONE failure envelope that PRESERVES the
-      // score-contest tx effect and points at the standalone poll helper.
+      // score-contest tx effect(s) — including the auto re-request tx when it
+      // landed — and points at the standalone poll helper.
       if (scoringError !== null) {
         emitJsonFailure({
           action: 'contests.score',
@@ -164,7 +171,9 @@ export const contestScoreCommand = addSignerOptions(
           signer: signerForEnvelope,
           requiresSignature: true,
           requiresTransaction: true,
-          effects: [buildScoreContestEffect(result)],
+          effects: reRequestResult
+            ? [buildScoreContestEffect(result), buildScoreContestEffect(reRequestResult)]
+            : [buildScoreContestEffect(result)],
           nextCommands: [
             COMPLETE_CONTESTS_WAIT_SCORED.build({ contestId: contestId.toString() }),
           ],
@@ -177,6 +186,7 @@ export const contestScoreCommand = addSignerOptions(
           chainId,
           signerAddress: signerForEnvelope,
           scoring,
+          reRequestResult,
         }),
       );
       return;
@@ -241,6 +251,13 @@ export interface ToContestScoreEnvelopeArgs {
   signerAddress: Hex;
   /** The resolved `--wait` outcome (scored / voided), or null/omitted. */
   scoring?: WaitForScoredOutcome | null;
+  /**
+   * The auto re-request result (`score --wait` sent a second `requestScore`
+   * after the first CRE callback dropped), or null/omitted when none landed.
+   * When present, its tx is added to `effects[]` as a second `score-contest`
+   * effect so the ledger records every on-chain write.
+   */
+  reRequestResult?: ContestScoreResult | null;
 }
 
 export function toContestScoreAgentEnvelope(
@@ -248,6 +265,11 @@ export function toContestScoreAgentEnvelope(
   args: ToContestScoreEnvelopeArgs,
 ): AgentEnvelope<ContestScorePayload> {
   const scoreEffect = buildScoreContestEffect(result);
+  // The auto re-request (score --wait on a dropped callback) is a SECOND on-chain
+  // score tx — record it in the effects ledger too, when it landed.
+  const effects = args.reRequestResult
+    ? [scoreEffect, buildScoreContestEffect(args.reRequestResult)]
+    : [scoreEffect];
   const contestIdStr = result.contestId.toString();
   const scoringBlock: ContestScoringBlock | null = args.scoring
     ? {
@@ -270,7 +292,7 @@ export function toContestScoreAgentEnvelope(
     wallet: args.signerAddress,
     walletRole: 'signer',
     signer: args.signerAddress,
-    effects: [scoreEffect],
+    effects,
     warnings,
     nextCommands: [VERIFY_CONTEST.build({ contestId: contestIdStr })],
     payload: {

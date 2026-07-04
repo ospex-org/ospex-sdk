@@ -184,6 +184,24 @@ export type {
 // a subpath.
 export type { SubmitResult, RawSubmitArgs } from './commitments/submitRaw.js';
 
+// Contest operation arg / result + wait-poll option types, re-exported from the
+// contests namespace so consumers can name the shapes returned by
+// client.contests.{create, score, requestMarketUpdate, waitForVerified,
+// waitForScored, scoreStatus} without reaching into subpath modules.
+export type {
+  CreateContestArgs,
+  CreateContestResult,
+  ScoreContestArgs,
+  ScoreContestResult,
+  RequestMarketUpdateArgs,
+  RequestMarketUpdateResult,
+  WaitForVerifiedOptions,
+  WaitForVerifiedResult,
+  WaitForScoredOptions,
+  WaitForScoredResult,
+  ScoreStatusResult,
+} from './contests/index.js';
+
 // Resolver-layer surface — preview model + high-level submit args + the
 // resolver primitives. CLI and external agents render text from
 // SubmitPreview; the CLI's --json emits a v2 AgentEnvelope wrapping it (see

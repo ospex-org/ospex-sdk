@@ -150,6 +150,31 @@ describe('toContestScoreAgentEnvelope', () => {
     expect(env.effects[0]?.purpose).toBe('score-contest');
   });
 
+  it('records a SECOND score-contest effect when --wait auto-re-requested and that tx landed', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult({ txHash: '0xfirst' }), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+      scoring: { contestId: 9001n, status: 'scored', awayScore: 4, homeScore: 2 },
+      reRequestResult: makeScoreResult({ txHash: '0xrerequest' }),
+    });
+    // Both on-chain score txs are in the effects[] ledger (the execute-envelope
+    // side-effect contract records every write the command performed).
+    expect(env.effects).toHaveLength(2);
+    expect(env.effects.map((e) => e.purpose)).toEqual(['score-contest', 'score-contest']);
+    expect(env.effects.map((e) => e.txHash)).toEqual(['0xfirst', '0xrerequest']);
+  });
+
+  it('keeps a single score-contest effect when --wait did NOT re-request (reRequestResult null)', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult({ txHash: '0xfirst' }), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+      scoring: { contestId: 9001n, status: 'scored', awayScore: 4, homeScore: 2 },
+      reRequestResult: null,
+    });
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.txHash).toBe('0xfirst');
+  });
+
   it('envelope.ok=false when score reverts', () => {
     const env = toContestScoreAgentEnvelope(
       makeScoreResult({ receipt: { status: 'reverted', blockNumber: 1000n } }),

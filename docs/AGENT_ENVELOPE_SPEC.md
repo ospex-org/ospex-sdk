@@ -201,6 +201,7 @@ Initial stable `warning.code` catalog (additive — consumers log + ignore unkno
 | `'projection-lag-recovered'` | `info` | `claim-all` / `settle` — a concurrent settle won a race mid-flight, an on-chain re-read confirmed it, and the command proceeded (claim-all → claim; settle → done). `details: { speculationId, winSide, winSideContext, … }` (the structured Team Identity context — §2.7). |
 | `'claim-skipped-already-claimed'` | `info` | `claim-all` / `claim` — a pre-flight `getPosition.claimed` read found the position already claimed, so the duplicate claim tx was skipped. **No payout** (the contract zeroes economic fields post-claim; never fabricated). `details: { speculationId, positionType / positionId, … }` (`claim` adds `positionSideContext`; `claim-all` adds `winSideContext` — §2.7). |
 | `'claim-recovered-already-claimed'` | `info` | `claim-all` / `claim` — a benign already-claimed (concurrent caller, rerun, `claimable`-projection lag) won a race mid-flight; an on-chain re-read confirmed it and the command proceeded. **No payout.** A reverted-on-inclusion claim this wallet broadcast also emits a `status:'reverted'` `claim-position` effect (gas spent). `details: { speculationId, positionType / positionId, … }` (`claim` adds `positionSideContext`; `claim-all` adds `winSideContext` — §2.7). |
+| `'contest-voided'` | `info` | `contests score --wait` / `contests wait-scored` — the contest resolved **Voided** (terminal for scoring; it will never be Scored). On `score --wait` the score tx still succeeded, so the envelope stays `ok: true` with this info warning (NOT a failure). (`contests score-status` reports `status: 'voided'` in its payload directly and emits no warning.) `details: { contestId }`. |
 
 `errors[]` uses the existing `OspexError.code` taxonomy (`'API_ERROR'`, `'ALLOWANCE_INSUFFICIENT'`, `'CHAIN_ERROR'`, etc. — see [`AGENT_CONTRACT.md` §7](./AGENT_CONTRACT.md)). New codes are additive.
 
@@ -400,7 +401,7 @@ Commands listed below adopt the wrapper. Anything not listed either does not hav
 
 ### 4.1 Reads
 
-`health`, `doctor`, `auth check`, `approvals show`, `wallet address`, `commitments list`, `commitments show`, `commitments fillability`, `commitments nonce-floor`, `contests list`, `contests show`, `contests scripts`, `contests wait-verified`, `games list`, `leaderboard show`, `odds show`, `positions list`, `positions status`, `positions history`, `speculations list`, `speculations show`.
+`health`, `doctor`, `auth check`, `approvals show`, `wallet address`, `commitments list`, `commitments show`, `commitments fillability`, `commitments nonce-floor`, `contests list`, `contests show`, `contests scripts`, `contests wait-verified`, `contests wait-scored`, `contests score-status`, `games list`, `leaderboard show`, `odds show`, `positions list`, `positions status`, `positions history`, `speculations list`, `speculations show`.
 
 ### 4.2 Preview-bearing writes
 
@@ -451,8 +452,10 @@ Legend: `✓` populated · `∅` `null` / `[]` (does not apply) · `+` populated
 | `claim-all` (live) | execute | signer | false | false | ∅ | ∅ | ✓ (summed; **fresh successful claims only**) | ∅ | ∅ | ∅ | ∅ | ✓ (info: settle + claim skips/recoveries) | ✓ (one transaction per landed leg, ordered; skipped/recovered legs emit no effect, a reverted-on-inclusion leg emits a `status:'reverted'` effect) | ✓ (verify via `positions status`) |
 | `settle <id>` | execute | signer | false | false | ∅ | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ (info: already-settled / projection-lag-recovered) | ✓ (settle tx; ∅ when already-settled / pre-send recovery) | ✓ (next: `claim`) |
 | `contests create --game-id <…>` | execute | signer | false | false | ✓ (USDC creation fee; consumed when ok=true) | ∅ | ∅ | ✓ (created) | ∅ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ (next: `wait-verified`) |
-| `contests score <id>` | execute | signer | false | false | ∅ (free; no approvals) | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ |
+| `contests score <id>` | execute | signer | false | false | ∅ (free; no approvals) | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ (+ info `contest-voided` on a voided `--wait` resolution) | ✓ (transaction; a 2nd `score-contest` tx when `--wait` auto-re-requests) | ✓ |
 | `contests update-markets <id>` | execute | signer | false | false | ∅ (free; no approvals) | ∅ | ∅ | ✓ | ✓ | ∅ | ∅ | ✓ | ✓ (transaction) | ✓ (next: `odds show`) |
+
+`contests score` is fire-and-return by default; **`--wait`** (opt-in) polls on-chain until Scored, then adds a `scoring: { status, awayScore, homeScore } | null` block to the payload (`null` on the plain call — additive). Because the CRE score report rides a best-effort log trigger that can drop, on a first-window timeout `--wait` **re-requests scoring once** (idempotent + free) before a second window — so a `--wait` execute envelope can carry **two** `score-contest` effects (both txs the command sent, in order). If both windows time out it emits a **single** failure envelope preserving the first `score-contest` effect and pointing `nextCommands` at `wait-scored`. A **Voided** resolution stays `ok: true` with the info `contest-voided` warning.
 
 ### 5.3 Reads
 
@@ -470,6 +473,8 @@ Legend: `✓` populated · `∅` `null` / `[]` (does not apply) · `+` populated
 | `contests list` | read | none | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ (e.g. `contests create`) | `Contest[]` |
 | `contests show <id>` | read | none | ∅ | ∅ | ✓ | ∅ | ∅ | ✓ | ✓ | `Contest` |
 | `contests wait-verified` | read | none | ∅ | ∅ | ✓ | ∅ | ∅ | ✓ (timeout warning) | ✓ (next: `contests show`) | `{ contestId, status }` |
+| `contests wait-scored` | read | none | ∅ | ∅ | ✓ | ∅ | ∅ | ✓ (info `contest-voided` on a voided resolution) | ∅ | `{ contestId, status, awayScore, homeScore }` |
+| `contests score-status` | read | none | ∅ | ∅ | ✓ | ∅ | ∅ | ∅ | ∅ | `{ contestId, status, scored, awayScore, homeScore }` |
 | `games list` | read | none | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ (e.g. `contests create --game-id`) | `Game[]` |
 | `leaderboard show` | read | none | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ (`window-too-short`) | ∅ | `LeaderboardEntry[]` |
 | `odds show <id>` | read | none | ∅ | ∅ | ✓ | ∅ | ∅ | ✓ (stale data, no jsonoddsId) | ✓ (next: `odds watch`) | `OddsShowEnvelope` |

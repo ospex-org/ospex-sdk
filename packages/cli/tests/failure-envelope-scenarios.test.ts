@@ -653,14 +653,17 @@ describe('failure-envelope scenario 3: mid-flight failure after one successful e
     // envelope that preserves the confirmed score-contest tx — mirroring
     // the create wait-timeout contract (no double envelope; the landed tx
     // is not dropped to stderr).
-    const scoreContestEffect: AgentEffect = {
+    // Both on-chain score txs are recorded: the first requestScore AND the auto
+    // re-request the command sent after the first callback dropped (Hermes PR172
+    // blocker 1 — the execute-envelope ledger must not drop the second tx).
+    const mkScoreEffect = (txHash: string): AgentEffect => ({
       type: 'transaction',
       purpose: 'score-contest',
       ok: true,
-      txHash: '0xscore' as Hex,
+      txHash: txHash as Hex,
       blockNumber: '1000',
       status: 'confirmed',
-    };
+    });
     const stdout = captureStdout(() => {
       emitJsonFailure({
         action: 'contests.score',
@@ -671,7 +674,7 @@ describe('failure-envelope scenario 3: mid-flight failure after one successful e
         signer: SIGNER,
         requiresSignature: true,
         requiresTransaction: true,
-        effects: [scoreContestEffect],
+        effects: [mkScoreEffect('0xscore'), mkScoreEffect('0xrerequest')],
         error: new OspexChainError('Contest 9001 did not reach Scored within 120000 ms.'),
       });
     });
@@ -682,11 +685,11 @@ describe('failure-envelope scenario 3: mid-flight failure after one successful e
     const env = parseEnvelope(trimmed);
     expect(env.ok).toBe(false);
     expect(env.action).toBe('contests.score');
-    expect(env.effects).toHaveLength(1);
-    expect(env.effects[0]?.purpose).toBe('score-contest');
-    expect(env.effects[0]?.ok).toBe(true);
-    expect(env.effects[0]?.txHash).toBe('0xscore');
-    expect(env.effects[0]?.status).toBe('confirmed');
+    // Both score txs preserved in the ledger, single envelope.
+    expect(env.effects).toHaveLength(2);
+    expect(env.effects.map((e) => e.purpose)).toEqual(['score-contest', 'score-contest']);
+    expect(env.effects.map((e) => e.txHash)).toEqual(['0xscore', '0xrerequest']);
+    expect(env.effects.every((e) => e.ok && e.status === 'confirmed')).toBe(true);
     expect(env.errors[0]?.code).toBe('CHAIN_ERROR');
   });
 });
