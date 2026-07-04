@@ -204,6 +204,12 @@ export const contestScoreCommand = addSignerOptions(
     if (scoringError !== null) throw scoringError;
     } catch (err) {
       if (wantJson) {
+        // If the INITIAL requestScore tx was BROADCAST before this threw (it reverted
+        // on inclusion, or its receipt wait failed after `sendRawTransaction` succeeded),
+        // that's a real on-chain write — preserve it in effects[] (the ledger contract),
+        // not only as `errors[].details.txHash`. A pre-broadcast / signer failure carries
+        // no txHash → no effect.
+        const scoreEffect = scoreContestEffectFromError(err);
         emitJsonFailure({
           action: 'contests.score',
           stage: 'execute',
@@ -220,6 +226,7 @@ export const contestScoreCommand = addSignerOptions(
           // false` defaults.
           requiresSignature: true,
           requiresTransaction: true,
+          effects: scoreEffect ? [scoreEffect] : [],
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
@@ -354,31 +361,42 @@ export function buildScoreContestEffects(
 }
 
 /**
- * The auto re-request's `score-contest` effect, from EITHER a resolved result OR a
- * thrown `OspexChainError` that still carried a `txHash`: a tx that reverted on inclusion
- * (`status: 'reverted'`, receipt present) or one whose receipt wait failed after broadcast
- * (`status: 'submitted'`, outcome unobserved). Both spent a tx that MUST stay in the
- * effects ledger. A pre-broadcast failure (no `txHash`) broadcast nothing → `null`.
+ * Build a `score-contest` effect from a THROWN `OspexChainError` that still carried a
+ * `txHash`: a tx that reverted on inclusion (`status: 'reverted'`, receipt present) or one
+ * whose receipt wait failed after broadcast (`status: 'submitted'`, outcome unobserved).
+ * Both broadcast a real tx that MUST stay in the effects ledger. Returns `null` for a
+ * pre-broadcast failure (no `txHash`) or any non-chain error — nothing was broadcast.
+ * Used for BOTH the initial `requestScore` tx (the command's outer catch) and the auto
+ * re-request tx.
+ */
+export function scoreContestEffectFromError(error: unknown): AgentEffect | null {
+  if (error instanceof OspexChainError && error.txHash !== undefined) {
+    const reverted = error.receipt?.status === 'reverted';
+    const effect: AgentEffect = {
+      type: 'transaction',
+      purpose: 'score-contest',
+      ok: false, // reverted, or broadcast with an unobserved receipt — not a confirmed success
+      txHash: error.txHash as Hex,
+      status: reverted ? 'reverted' : 'submitted',
+      errorCode: errorToAgentError(error).code,
+    };
+    if (error.receipt !== undefined) {
+      effect.blockNumber = error.receipt.blockNumber.toString();
+    }
+    return effect;
+  }
+  return null; // pre-broadcast / no tx → nothing to record
+}
+
+/**
+ * The auto re-request's `score-contest` effect, from EITHER a resolved result OR a thrown
+ * error (delegates to {@link scoreContestEffectFromError}). A pre-broadcast failure (no
+ * `txHash`) broadcast nothing → `null`.
  */
 export function buildReRequestScoreEffect(
   reRequestResult: ContestScoreResult | null,
   reRequestError: unknown,
 ): AgentEffect | null {
   if (reRequestResult) return buildScoreContestEffect(reRequestResult);
-  if (reRequestError instanceof OspexChainError && reRequestError.txHash !== undefined) {
-    const reverted = reRequestError.receipt?.status === 'reverted';
-    const effect: AgentEffect = {
-      type: 'transaction',
-      purpose: 'score-contest',
-      ok: false, // reverted, or broadcast with an unobserved receipt — not a confirmed success
-      txHash: reRequestError.txHash as Hex,
-      status: reverted ? 'reverted' : 'submitted',
-      errorCode: errorToAgentError(reRequestError).code,
-    };
-    if (reRequestError.receipt !== undefined) {
-      effect.blockNumber = reRequestError.receipt.blockNumber.toString();
-    }
-    return effect;
-  }
-  return null; // pre-broadcast / no tx → nothing to record
+  return scoreContestEffectFromError(reRequestError);
 }
