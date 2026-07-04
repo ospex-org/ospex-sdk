@@ -53,3 +53,12 @@ export const OSPEX_SCORE_CONTEST_TX_GAS = 1_000_000n as const;
 /** Default verify-pending timeout for waitForVerified — ~2x typical CRE report latency. */
 export const DEFAULT_VERIFICATION_TIMEOUT_MS = 120_000 as const;
 export const DEFAULT_VERIFICATION_POLL_INTERVAL_MS = 4_000 as const;
+
+/**
+ * Default score-pending timeout/poll for waitForScored — ~2x the typical
+ * CRE score-report latency (~30-90 s). A dropped CRE callback is handled
+ * by re-requesting scoring (idempotent + free) at the CLI layer, not by
+ * a longer wait here; the poll bound stays a clean typed timeout.
+ */
+export const DEFAULT_SCORING_TIMEOUT_MS = 120_000 as const;
+export const DEFAULT_SCORING_POLL_INTERVAL_MS = 4_000 as const;

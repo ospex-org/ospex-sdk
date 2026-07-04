@@ -645,4 +645,48 @@ describe('failure-envelope scenario 3: mid-flight failure after one successful e
     expect(env.effects[1]?.status).toBe('confirmed');
     expect(env.errors[0]?.code).toBe('CHAIN_ERROR');
   });
+
+  it('contests score --wait: scoring poll fails AFTER the score tx (and re-request) — single envelope with score-contest preserved', () => {
+    // `score --wait` sent requestScore (confirmed), the CRE report didn't
+    // land within the first window, a re-request was sent, and the second
+    // poll ALSO timed out. The action must emit exactly ONE failure
+    // envelope that preserves the confirmed score-contest tx — mirroring
+    // the create wait-timeout contract (no double envelope; the landed tx
+    // is not dropped to stderr).
+    const scoreContestEffect: AgentEffect = {
+      type: 'transaction',
+      purpose: 'score-contest',
+      ok: true,
+      txHash: '0xscore' as Hex,
+      blockNumber: '1000',
+      status: 'confirmed',
+    };
+    const stdout = captureStdout(() => {
+      emitJsonFailure({
+        action: 'contests.score',
+        stage: 'execute',
+        chainId: POLYGON,
+        wallet: SIGNER,
+        walletRole: 'signer',
+        signer: SIGNER,
+        requiresSignature: true,
+        requiresTransaction: true,
+        effects: [scoreContestEffect],
+        error: new OspexChainError('Contest 9001 did not reach Scored within 120000 ms.'),
+      });
+    });
+    const trimmed = stdout.trim();
+    expect(() => JSON.parse(trimmed)).not.toThrow();
+    // Single envelope — no second object appended.
+    expect(trimmed.match(/\}\s*\{/)).toBeNull();
+    const env = parseEnvelope(trimmed);
+    expect(env.ok).toBe(false);
+    expect(env.action).toBe('contests.score');
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.purpose).toBe('score-contest');
+    expect(env.effects[0]?.ok).toBe(true);
+    expect(env.effects[0]?.txHash).toBe('0xscore');
+    expect(env.effects[0]?.status).toBe('confirmed');
+    expect(env.errors[0]?.code).toBe('CHAIN_ERROR');
+  });
 });

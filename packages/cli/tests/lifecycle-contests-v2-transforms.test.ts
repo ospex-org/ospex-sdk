@@ -13,7 +13,10 @@ import {
   buildCreateContestEffect,
   toContestCreateAgentEnvelope,
 } from '../src/commands/contests/create.js';
-import { toContestScoreAgentEnvelope } from '../src/commands/contests/score.js';
+import {
+  buildScoreContestEffect,
+  toContestScoreAgentEnvelope,
+} from '../src/commands/contests/score.js';
 import { toContestUpdateMarketsAgentEnvelope } from '../src/commands/contests/update-markets.js';
 
 const POLYGON = 137 as const;
@@ -154,6 +157,76 @@ describe('toContestScoreAgentEnvelope', () => {
     );
     expect(env.ok).toBe(false);
     expect(env.effects[0]?.status).toBe('reverted');
+  });
+
+  it('payload.scoring is null for the fire-and-return call (no --wait)', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult(), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+    });
+    expect(env.payload.scoring).toBeNull();
+    expect(env.warnings).toEqual([]);
+  });
+
+  it('payload carries the scoring block + real scores when --wait resolved Scored', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult(), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+      scoring: { contestId: 9001n, status: 'scored', awayScore: 4, homeScore: 2 },
+    });
+    expect(env.payload.scoring).toEqual({ status: 'scored', awayScore: 4, homeScore: 2 });
+    expect(env.ok).toBe(true);
+    expect(env.warnings).toEqual([]);
+  });
+
+  it('surfaces a 0-0 final as real scores (not null) when --wait resolved Scored', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult(), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+      scoring: { contestId: 9001n, status: 'scored', awayScore: 0, homeScore: 0 },
+    });
+    expect(env.payload.scoring).toEqual({ status: 'scored', awayScore: 0, homeScore: 0 });
+  });
+
+  it('voided --wait resolution: info warning, scoring.status=voided, envelope still ok', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult(), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+      scoring: { contestId: 9001n, status: 'voided', awayScore: null, homeScore: null },
+    });
+    expect(env.payload.scoring?.status).toBe('voided');
+    expect(env.ok).toBe(true); // the score REQUEST tx succeeded; voided is a terminal outcome
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0]?.code).toBe('contest-voided');
+    expect(env.warnings[0]?.severity).toBe('info');
+  });
+});
+
+describe('buildScoreContestEffect', () => {
+  it('builds a confirmed score-contest effect from a successful result', () => {
+    const eff = buildScoreContestEffect({
+      contestId: 9001n,
+      txHash: '0xscore',
+      receipt: { status: 'success', blockNumber: 1000n } as never,
+    } as never);
+    expect(eff).toEqual({
+      type: 'transaction',
+      purpose: 'score-contest',
+      ok: true,
+      txHash: '0xscore',
+      blockNumber: '1000',
+      status: 'confirmed',
+    });
+  });
+
+  it('builds a reverted score-contest effect when receipt status is reverted', () => {
+    const eff = buildScoreContestEffect({
+      contestId: 9001n,
+      txHash: '0xscore',
+      receipt: { status: 'reverted', blockNumber: 1000n } as never,
+    } as never);
+    expect(eff.ok).toBe(false);
+    expect(eff.status).toBe('reverted');
   });
 });
 

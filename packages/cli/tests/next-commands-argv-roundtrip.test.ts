@@ -55,6 +55,7 @@ const STUB_PARAMS: Record<string, unknown> = {
   },
   'complete-claim-all': { address: '0x' + 'cd'.repeat(20) },
   'complete-contests-wait-verified': { contestId: '42' },
+  'complete-contests-wait-scored': { contestId: '42' },
   'remediate-approve-position': { requiredUsdc: '25.000000' },
   'remediate-approve-treasury': { requiredUsdc: '1.000000' },
   'remediate-cancel-onchain': { hash: '0x' + 'ab'.repeat(32) },

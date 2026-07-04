@@ -213,6 +213,24 @@ export const COMPLETE_CONTESTS_WAIT_VERIFIED = registerNextCommand({
   }),
 });
 
+/**
+ * After `contests score --wait` timed out (the CRE score report didn't
+ * land within the poll window, even after the one auto re-request),
+ * suggest the standalone polling helper. Idempotent to keep re-running —
+ * an unscored contest auto-voids + refunds after the void cooldown.
+ */
+export const COMPLETE_CONTESTS_WAIT_SCORED = registerNextCommand({
+  id: 'complete-contests-wait-scored',
+  suggestedFor: 'complete',
+  safeToAutoRun: false,
+  render: (params: { contestId: string }) => ({
+    description:
+      'Poll on-chain ContestModule.getContest until the contest reaches Scored (or Voided).',
+    command: `ospex contests wait-scored ${params.contestId} --json`,
+    argv: ['contests', 'wait-scored', params.contestId, '--json'],
+  }),
+});
+
 /* ------------------------------------------------------------------------- */
 /* remediate-* — fix a known local blocker (safeToAutoRun: false)           */
 /* ------------------------------------------------------------------------- */
