@@ -18,6 +18,7 @@
 import { Command, Option } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import {
+  OspexChainError,
   type AgentEffect,
   type AgentEnvelope,
   type AgentWarning,
@@ -28,6 +29,7 @@ import {
 import {
   buildAgentEnvelope,
   emitJsonFailure,
+  errorToAgentError,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -95,8 +97,11 @@ export const contestScoreCommand = addSignerOptions(
     // The auto re-request (a SECOND requestScore tx sent when the first CRE
     // callback drops) — captured so its tx lands in the envelope's effects[]
     // ledger too, not just the first score tx. An execute envelope must record
-    // EVERY on-chain write the command performed.
+    // EVERY on-chain write the command performed. `reRequestError` preserves a
+    // re-request that threw AFTER broadcasting (reverted, or receipt-unobserved) so
+    // its txHash is still recorded — a thrown OspexChainError with a txHash is a real tx.
     let reRequestResult: ContestScoreResult | null = null;
+    let reRequestError: unknown = null;
     if (wantWait) {
       const waitOpts: Parameters<typeof client.contests.waitForScored>[1] = {};
       if (opts.waitTimeoutSeconds !== undefined) waitOpts.timeoutMs = opts.waitTimeoutSeconds * 1000;
@@ -121,11 +126,14 @@ export const contestScoreCommand = addSignerOptions(
         }
         try {
           reRequestResult = await client.contests.score({ contestId });
-        } catch {
-          // The re-request can revert if the contest JUST scored/voided
-          // (or on the start-time guard) — harmless; the poll below reads
-          // the authoritative on-chain state either way. A revert leaves
-          // reRequestResult null (no tx landed → nothing to add to effects[]).
+        } catch (err) {
+          // The re-request may still have BROADCAST a tx — reverted on inclusion, or
+          // its receipt wait failed after `sendRawTransaction` succeeded (an
+          // OspexChainError carrying a txHash). Both are real on-chain writes, so
+          // capture the error and preserve its txHash in effects[] (per the ledger
+          // contract); only a pre-broadcast failure (no txHash) is a true no-op. The
+          // flow continues either way — the poll below reads the authoritative state.
+          reRequestError = err;
         }
         try {
           scoring = await client.contests.waitForScored(contestId, waitOpts);
@@ -171,9 +179,7 @@ export const contestScoreCommand = addSignerOptions(
           signer: signerForEnvelope,
           requiresSignature: true,
           requiresTransaction: true,
-          effects: reRequestResult
-            ? [buildScoreContestEffect(result), buildScoreContestEffect(reRequestResult)]
-            : [buildScoreContestEffect(result)],
+          effects: buildScoreContestEffects(result, reRequestResult, reRequestError),
           nextCommands: [
             COMPLETE_CONTESTS_WAIT_SCORED.build({ contestId: contestId.toString() }),
           ],
@@ -187,6 +193,7 @@ export const contestScoreCommand = addSignerOptions(
           signerAddress: signerForEnvelope,
           scoring,
           reRequestResult,
+          reRequestError,
         }),
       );
       return;
@@ -258,6 +265,13 @@ export interface ToContestScoreEnvelopeArgs {
    * effect so the ledger records every on-chain write.
    */
   reRequestResult?: ContestScoreResult | null;
+  /**
+   * The auto re-request's error when it threw AFTER broadcasting (reverted on
+   * inclusion, or its receipt wait failed). When it carries a `txHash`, that tx is
+   * recorded as a second `score-contest` effect too (`status: 'reverted'` /
+   * `'submitted'`, `ok: false`). A pre-broadcast failure (no `txHash`) adds nothing.
+   */
+  reRequestError?: unknown;
 }
 
 export function toContestScoreAgentEnvelope(
@@ -266,10 +280,10 @@ export function toContestScoreAgentEnvelope(
 ): AgentEnvelope<ContestScorePayload> {
   const scoreEffect = buildScoreContestEffect(result);
   // The auto re-request (score --wait on a dropped callback) is a SECOND on-chain
-  // score tx — record it in the effects ledger too, when it landed.
-  const effects = args.reRequestResult
-    ? [scoreEffect, buildScoreContestEffect(args.reRequestResult)]
-    : [scoreEffect];
+  // score tx — record it in the effects ledger too, whether it resolved, reverted,
+  // or was broadcast-but-unconfirmed.
+  const reRequestEffect = buildReRequestScoreEffect(args.reRequestResult ?? null, args.reRequestError);
+  const effects = reRequestEffect ? [scoreEffect, reRequestEffect] : [scoreEffect];
   const contestIdStr = result.contestId.toString();
   const scoringBlock: ContestScoringBlock | null = args.scoring
     ? {
@@ -320,4 +334,51 @@ export function buildScoreContestEffect(result: ContestScoreResult): AgentEffect
     blockNumber: result.receipt.blockNumber.toString(),
     status,
   };
+}
+
+/**
+ * The full `score-contest` effects ledger for a `--wait` run: the first `requestScore`
+ * tx, plus the auto re-request tx when `--wait` sent one — whether it RESOLVED, REVERTED
+ * on inclusion, or was broadcast-but-its-receipt-unobserved (all real on-chain writes).
+ * A pre-broadcast re-request failure (no txHash) produced no tx, so nothing is appended.
+ */
+export function buildScoreContestEffects(
+  result: ContestScoreResult,
+  reRequestResult: ContestScoreResult | null,
+  reRequestError: unknown,
+): AgentEffect[] {
+  const effects = [buildScoreContestEffect(result)];
+  const reEffect = buildReRequestScoreEffect(reRequestResult, reRequestError);
+  if (reEffect) effects.push(reEffect);
+  return effects;
+}
+
+/**
+ * The auto re-request's `score-contest` effect, from EITHER a resolved result OR a
+ * thrown `OspexChainError` that still carried a `txHash`: a tx that reverted on inclusion
+ * (`status: 'reverted'`, receipt present) or one whose receipt wait failed after broadcast
+ * (`status: 'submitted'`, outcome unobserved). Both spent a tx that MUST stay in the
+ * effects ledger. A pre-broadcast failure (no `txHash`) broadcast nothing → `null`.
+ */
+export function buildReRequestScoreEffect(
+  reRequestResult: ContestScoreResult | null,
+  reRequestError: unknown,
+): AgentEffect | null {
+  if (reRequestResult) return buildScoreContestEffect(reRequestResult);
+  if (reRequestError instanceof OspexChainError && reRequestError.txHash !== undefined) {
+    const reverted = reRequestError.receipt?.status === 'reverted';
+    const effect: AgentEffect = {
+      type: 'transaction',
+      purpose: 'score-contest',
+      ok: false, // reverted, or broadcast with an unobserved receipt — not a confirmed success
+      txHash: reRequestError.txHash as Hex,
+      status: reverted ? 'reverted' : 'submitted',
+      errorCode: errorToAgentError(reRequestError).code,
+    };
+    if (reRequestError.receipt !== undefined) {
+      effect.blockNumber = reRequestError.receipt.blockNumber.toString();
+    }
+    return effect;
+  }
+  return null; // pre-broadcast / no tx → nothing to record
 }

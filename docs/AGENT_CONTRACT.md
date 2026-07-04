@@ -159,7 +159,9 @@ type ContestScorePayload = {
   //     A voided resolution adds an info `contest-voided` warning; the envelope stays ok:true.
   //     Under `--wait`, effects[] records EVERY score-contest tx the command sent — including the
   //     one auto-re-request fired on a dropped first-window CRE callback (so a two-tx run has two
-  //     `score-contest` effects). Scores are null unless status === 'scored'.
+  //     `score-contest` effects). The re-request effect is recorded even if that tx reverted
+  //     (`status:'reverted'`, ok:false) or its receipt wasn't observed (`status:'submitted'`, ok:false);
+  //     only a pre-broadcast failure (no txHash) adds nothing. Scores are null unless status === 'scored'.
 };
 
 // contests wait-scored <id> --json   →  AgentEnvelope<{ contestId, status: 'scored'|'voided', awayScore: number|null, homeScore: number|null }>
