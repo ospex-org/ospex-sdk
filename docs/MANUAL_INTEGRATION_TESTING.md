@@ -217,7 +217,7 @@ This section needs an actual settled-or-pending-settle position on mainnet (or a
 
 **Case B — Need to create a pendingSettle position from scratch.**
 
-Requires the contest to be `Verified` and have `start_time` already in the past so `CreOracleReceiver.requestScore` is callable. Scoring is permissionless under R5/CRE — anyone can call `ospex contests score <contestId>` once the start time has passed; there is no operator gate. The full create→submit→match→score→settle→claim cycle depends on contest creation. If you can't run it now, document the run as "manual verification deferred" in the release ticket and revisit on the next scoring cycle.
+Requires the contest to be `Verified` and have `start_time` already in the past so `CreOracleReceiver.requestScore` is callable. Scoring is permissionless under R5/CRE — anyone can call `ospex contests score <contestId>` once the start time has passed; there is no operator gate. Instead of hand-polling `ospex contests show` for `status === 'scored'`, use `ospex contests score <contestId> --wait` (sends `requestScore`, then blocks until Scored, auto re-requesting once on a dropped CRE callback) or, to pick up a request fired earlier, `ospex contests wait-scored <contestId>`; `ospex contests score-status <contestId>` is a signer-free one-shot check of the on-chain scoring state + final scores. The full create→submit→match→score→settle→claim cycle depends on contest creation. If you can't run it now, document the run as "manual verification deferred" in the release ticket and revisit on the next scoring cycle.
 
 For partial verification right now:
 

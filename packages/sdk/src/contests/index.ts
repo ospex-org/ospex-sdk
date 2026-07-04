@@ -33,6 +33,12 @@ import {
   type RequestMarketUpdateResult,
 } from './marketUpdate.js';
 import { score, type ScoreContestArgs, type ScoreContestResult } from './score.js';
+import { scoreStatus, type ScoreStatusResult } from './scoreStatus.js';
+import {
+  waitForScored,
+  type WaitForScoredOptions,
+  type WaitForScoredResult,
+} from './waitForScored.js';
 import {
   waitForVerified,
   type WaitForVerifiedOptions,
@@ -91,6 +97,28 @@ export class Contests {
     return waitForVerified(this.ctx, contestId, options);
   }
 
+  /**
+   * Poll on-chain ContestModule.getContest until the contest reaches
+   * Scored (mirrors {@link waitForVerified}). A `voided` contest is
+   * terminal-for-scoring and resolves immediately (never spins to the
+   * timeout); `unverified` / `verified` keep polling; the poll bound
+   * throws a typed `OspexChainError`. Reads only — no signer.
+   */
+  waitForScored(
+    contestId: bigint | string | number,
+    options: WaitForScoredOptions = {},
+  ): Promise<WaitForScoredResult> {
+    return waitForScored(this.ctx, contestId, options);
+  }
+
+  /**
+   * One-shot, non-blocking on-chain read of a contest's scoring state +
+   * final scores. Never throws on "not scored yet". Reads only — no signer.
+   */
+  scoreStatus(contestId: bigint | string | number): Promise<ScoreStatusResult> {
+    return scoreStatus(this.ctx, contestId);
+  }
+
   // ── Writes ────────────────────────────────────────────────────────
 
   create(args: CreateContestArgs): Promise<CreateContestResult> {
@@ -120,4 +148,6 @@ export type { ApproveArgs, ApproveResult } from './approve.js';
 export type { CreateContestArgs, CreateContestResult } from './create.js';
 export type { RequestMarketUpdateArgs, RequestMarketUpdateResult } from './marketUpdate.js';
 export type { ScoreContestArgs, ScoreContestResult } from './score.js';
+export type { ScoreStatusResult } from './scoreStatus.js';
+export type { WaitForScoredOptions, WaitForScoredResult } from './waitForScored.js';
 export type { WaitForVerifiedOptions, WaitForVerifiedResult } from './waitForVerified.js';

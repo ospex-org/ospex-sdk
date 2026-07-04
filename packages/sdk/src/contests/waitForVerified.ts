@@ -8,16 +8,14 @@
  * can race with games and park CONTEST_VERIFIED in pending_events for
  * up to ~1 hour; the on-chain read is authoritative.
  */
-import type { PublicClient } from 'viem';
-import { contestModuleAbi } from '../contracts/abi/index.js';
 import {
   DEFAULT_VERIFICATION_POLL_INTERVAL_MS,
   DEFAULT_VERIFICATION_TIMEOUT_MS,
 } from '../contracts/constants.js';
 import { OspexChainError } from '../errors.js';
 import type { ContestStatus } from '../types/contest.js';
-import type { Hex } from '../types/signer.js';
 import type { ContestsContext } from './context.js';
+import { readContestOnChain } from './onchainRead.js';
 
 export interface WaitForVerifiedOptions {
   /** Default 120_000 ms (~2x typical CRE report latency). */
@@ -31,17 +29,6 @@ export interface WaitForVerifiedOptions {
 export interface WaitForVerifiedResult {
   contestId: bigint;
   status: ContestStatus;
-}
-
-const STATUS_BY_ENUM: Record<number, ContestStatus> = {
-  0: 'unverified',
-  1: 'verified',
-  2: 'scored',
-  3: 'voided',
-};
-
-interface ContestStruct {
-  contestStatus: number;
 }
 
 export async function waitForVerified(
@@ -62,9 +49,9 @@ export async function waitForVerified(
   // Then we sleep + re-read in a loop until verified-or-better, or
   // timeout.
   while (true) {
-    const status = await readStatus(publicClient, contestModule, id);
-    if (status !== 'unverified') {
-      return { contestId: id, status };
+    const { contestStatus } = await readContestOnChain(publicClient, contestModule, id);
+    if (contestStatus !== 'unverified') {
+      return { contestId: id, status: contestStatus };
     }
     if (Date.now() + pollIntervalMs > deadline) {
       throw new OspexChainError(
@@ -74,33 +61,6 @@ export async function waitForVerified(
     }
     await sleep(pollIntervalMs);
   }
-}
-
-async function readStatus(
-  publicClient: PublicClient,
-  contestModule: Hex,
-  contestId: bigint,
-): Promise<ContestStatus> {
-  let result: ContestStruct;
-  try {
-    result = (await publicClient.readContract({
-      address: contestModule,
-      abi: contestModuleAbi,
-      functionName: 'getContest',
-      args: [contestId],
-    })) as ContestStruct;
-  } catch (err) {
-    throw new OspexChainError(`Failed to read contest ${contestId} from ContestModule.`, {
-      cause: err,
-    });
-  }
-  const status = STATUS_BY_ENUM[result.contestStatus];
-  if (status === undefined) {
-    throw new OspexChainError(
-      `Contest ${contestId} returned unrecognized status enum ${result.contestStatus}.`,
-    );
-  }
-  return status;
 }
 
 function defaultSleep(ms: number): Promise<void> {

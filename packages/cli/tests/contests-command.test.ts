@@ -8,15 +8,17 @@ import { describe, expect, it } from 'vitest';
 import { makeContestsCommand } from '../src/commands/contests/index.js';
 
 describe('makeContestsCommand', () => {
-  it('registers create / score / update-markets / show / list / wait-verified as subcommands', () => {
+  it('registers create / score / score-status / update-markets / show / list / wait-verified / wait-scored as subcommands', () => {
     const root = makeContestsCommand();
     const names = root.commands.map((c) => c.name()).sort();
     expect(names).toEqual([
       'create',
       'list',
       'score',
+      'score-status',
       'show',
       'update-markets',
+      'wait-scored',
       'wait-verified',
     ]);
   });
@@ -61,6 +63,34 @@ describe('makeContestsCommand', () => {
     expect(wait).toBeDefined();
     if (wait === undefined) return;
     expect(wait.helpInformation()).toMatch(/--timeout-seconds/);
+  });
+
+  it('score exposes an opt-in --wait flag (default stays fire-and-return)', () => {
+    const root = makeContestsCommand();
+    const score = root.commands.find((c) => c.name() === 'score');
+    expect(score).toBeDefined();
+    if (score === undefined) return;
+    const help = score.helpInformation();
+    expect(help).toMatch(/--wait\b/);
+    expect(help).toMatch(/--wait-timeout-seconds/);
+  });
+
+  it('wait-scored accepts --timeout-seconds and requires the contestId positional', () => {
+    const root = makeContestsCommand();
+    const wait = root.commands.find((c) => c.name() === 'wait-scored');
+    expect(wait).toBeDefined();
+    if (wait === undefined) return;
+    const help = wait.helpInformation();
+    expect(help).toMatch(/--timeout-seconds/);
+    expect(help).toMatch(/<contestId>/);
+  });
+
+  it('score-status requires the contestId positional argument (signer-free read)', () => {
+    const root = makeContestsCommand();
+    const status = root.commands.find((c) => c.name() === 'score-status');
+    expect(status).toBeDefined();
+    if (status === undefined) return;
+    expect(status.helpInformation()).toMatch(/<contestId>/);
   });
 
   it('create --no-wait registers as a negate option mapping to attribute `wait`', () => {

@@ -32,6 +32,7 @@ import {
   type Hex,
 } from '@ospex/sdk';
 import { emitJsonFailure } from '../src/lib/agentEnvelope.js';
+import { scoreContestEffectFromError } from '../src/commands/contests/score.js';
 
 const POLYGON = 137 as const;
 const SIGNER: Hex = '0xaabbccddeeff00112233445566778899aabbccdd';
@@ -644,5 +645,116 @@ describe('failure-envelope scenario 3: mid-flight failure after one successful e
     expect(env.effects[1]?.txHash).toBe('0xcreate');
     expect(env.effects[1]?.status).toBe('confirmed');
     expect(env.errors[0]?.code).toBe('CHAIN_ERROR');
+  });
+
+  it('contests score --wait: scoring poll fails AFTER the score tx (and re-request) — single envelope with score-contest preserved', () => {
+    // `score --wait` sent requestScore (confirmed), the CRE report didn't
+    // land within the first window, a re-request was sent, and the second
+    // poll ALSO timed out. The action must emit exactly ONE failure
+    // envelope that preserves the confirmed score-contest tx — mirroring
+    // the create wait-timeout contract (no double envelope; the landed tx
+    // is not dropped to stderr).
+    // Both on-chain score txs are recorded: the first requestScore AND the auto
+    // re-request the command sent after the first callback dropped (Hermes PR172
+    // blocker 1 — the execute-envelope ledger must not drop the second tx).
+    const mkScoreEffect = (txHash: string): AgentEffect => ({
+      type: 'transaction',
+      purpose: 'score-contest',
+      ok: true,
+      txHash: txHash as Hex,
+      blockNumber: '1000',
+      status: 'confirmed',
+    });
+    const stdout = captureStdout(() => {
+      emitJsonFailure({
+        action: 'contests.score',
+        stage: 'execute',
+        chainId: POLYGON,
+        wallet: SIGNER,
+        walletRole: 'signer',
+        signer: SIGNER,
+        requiresSignature: true,
+        requiresTransaction: true,
+        effects: [mkScoreEffect('0xscore'), mkScoreEffect('0xrerequest')],
+        error: new OspexChainError('Contest 9001 did not reach Scored within 120000 ms.'),
+      });
+    });
+    const trimmed = stdout.trim();
+    expect(() => JSON.parse(trimmed)).not.toThrow();
+    // Single envelope — no second object appended.
+    expect(trimmed.match(/\}\s*\{/)).toBeNull();
+    const env = parseEnvelope(trimmed);
+    expect(env.ok).toBe(false);
+    expect(env.action).toBe('contests.score');
+    // Both score txs preserved in the ledger, single envelope.
+    expect(env.effects).toHaveLength(2);
+    expect(env.effects.map((e) => e.purpose)).toEqual(['score-contest', 'score-contest']);
+    expect(env.effects.map((e) => e.txHash)).toEqual(['0xscore', '0xrerequest']);
+    expect(env.effects.every((e) => e.ok && e.status === 'confirmed')).toBe(true);
+    expect(env.errors[0]?.code).toBe('CHAIN_ERROR');
+  });
+
+  // The INITIAL requestScore tx failing AFTER broadcast (the command's outer catch) —
+  // reverted on inclusion or receipt-unobserved — must land in effects[], not only in
+  // errors[].details.txHash (Hermes PR172 re-review; same ledger invariant as the re-request).
+  it.each([
+    {
+      label: 'initial score reverted on inclusion (txHash + reverted receipt)',
+      err: new OspexChainError('Transaction reverted on-chain.', {
+        txHash: '0xrev',
+        receipt: { status: 'reverted', blockNumber: 4242n } as never,
+      }),
+      status: 'reverted' as const,
+      txHash: '0xrev',
+    },
+    {
+      label: 'initial score broadcast but receipt unobserved (txHash, no receipt)',
+      err: new OspexChainError('broadcast but receipt wait failed', { txHash: '0xpending' }),
+      status: 'submitted' as const,
+      txHash: '0xpending',
+    },
+  ])('contests score --json: $label → the broadcast tx is preserved in effects[]', ({ err, status, txHash }) => {
+    // Mirrors the command's outer catch: build the effect from the thrown error and pass it.
+    const effect = scoreContestEffectFromError(err);
+    const stdout = captureStdout(() => {
+      emitJsonFailure({
+        action: 'contests.score',
+        stage: 'execute',
+        chainId: POLYGON,
+        wallet: SIGNER,
+        walletRole: 'signer',
+        signer: SIGNER,
+        requiresSignature: true,
+        requiresTransaction: true,
+        effects: effect ? [effect] : [],
+        error: err,
+      });
+    });
+    const env = parseEnvelope(stdout.trim());
+    expect(env.ok).toBe(false);
+    expect(env.effects).toHaveLength(1); // the broadcast tx is in the LEDGER, not dropped
+    expect(env.effects[0]).toMatchObject({ purpose: 'score-contest', ok: false, txHash, status });
+    expect(env.errors[0]?.code).toBe('CHAIN_ERROR');
+  });
+
+  it('contests score --json: a pre-broadcast / signer failure (no txHash) carries NO effect (nothing was broadcast)', () => {
+    const err = new OspexChainError('Pre-send chain reads failed (nonce read): rpc down');
+    expect(scoreContestEffectFromError(err)).toBeNull();
+    const effect = scoreContestEffectFromError(err);
+    const stdout = captureStdout(() => {
+      emitJsonFailure({
+        action: 'contests.score',
+        stage: 'execute',
+        chainId: POLYGON,
+        wallet: SIGNER,
+        walletRole: 'signer',
+        signer: SIGNER,
+        requiresSignature: true,
+        requiresTransaction: true,
+        effects: effect ? [effect] : [],
+        error: err,
+      });
+    });
+    expect(parseEnvelope(stdout.trim()).effects).toEqual([]);
   });
 });

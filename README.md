@@ -154,9 +154,11 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex contests list [--sport --status --hours --limit --offset]` | Lists upcoming contests with their speculations. |
 | `ospex contests show <contestId>` | One contest with its full orderbook. |
 | `ospex contests create --game-id <id>` (or `--game <slug-or-id>`) | Submit `CreOracleReceiver.createContestAndRequestVerify`. Permissionless; the caller pays the USDC contest-creation fee (allowance to TreasuryModule). `gameId` is the stable id from `ospex games list`; the SDK resolves the three external IDs server-side. `--game` is a resolver alias accepting either a slug or a UUID. |
-| `ospex contests score <contestId>` | Submit `CreOracleReceiver.requestScore`. Permissionless and free; reverts until the contest's on-chain start time has passed. |
+| `ospex contests score <contestId> [--wait --wait-timeout-seconds <n> --poll-interval-seconds <n>]` | Submit `CreOracleReceiver.requestScore`. Permissionless and free; reverts until the contest's on-chain start time has passed. `--wait` (opt-in; default stays fire-and-return) then polls on-chain until Scored, auto-re-requesting once if the CRE report drops, and adds a `scoring` block to the `--json` payload. |
 | `ospex contests update-markets <contestId>` | Submit `CreOracleReceiver.requestMarketUpdate` to refresh a Verified contest's market lines. Permissionless and free; the refreshed odds land via the CRE oracle ~30–90s later (check with `ospex odds show <contestId>`). |
 | `ospex contests wait-verified <contestId>` | Poll until the contest reaches Verified state. |
+| `ospex contests wait-scored <contestId>` | Signer-free blocking poll until the contest reaches Scored (or Voided) — the read twin of `wait-verified`, for picking up an earlier `score` without re-sending it. |
+| `ospex contests score-status <contestId>` | Signer-free one-shot on-chain read of the scoring state + final scores (`status`, `scored`, `awayScore`, `homeScore`). Reads on-chain (authoritative), so a "not scored" answer can't be a stale indexer projection. |
 | `ospex games list [--sport --hours --creatable-only]` | Upcoming games on the schedule. The `creatable` column flags rows that can be passed to `contests create --game-id`; pass `--creatable-only` to narrow to those rows. |
 | `ospex speculations list [--contest --sport --status --limit --offset]` | List speculations across one or more contests. |
 | `ospex speculations show <speculationId>` | One speculation with its orderbook + parent contest context. |

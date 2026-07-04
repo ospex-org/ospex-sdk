@@ -8,16 +8,28 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { AgentEffect, Hex } from '@ospex/sdk';
+import { OspexChainError, type AgentEffect, type Hex } from '@ospex/sdk';
 import {
   buildCreateContestEffect,
   toContestCreateAgentEnvelope,
 } from '../src/commands/contests/create.js';
-import { toContestScoreAgentEnvelope } from '../src/commands/contests/score.js';
+import {
+  buildReRequestScoreEffect,
+  buildScoreContestEffect,
+  toContestScoreAgentEnvelope,
+} from '../src/commands/contests/score.js';
 import { toContestUpdateMarketsAgentEnvelope } from '../src/commands/contests/update-markets.js';
 
 const POLYGON = 137 as const;
 const SIGNER: Hex = '0xaabbccddeeff00112233445566778899aabbccdd';
+
+// The re-request `score()` error shapes the ledger must preserve when a tx was broadcast.
+const SCORE_REVERTED_ERR = new OspexChainError('Transaction reverted on-chain.', {
+  txHash: '0xrev',
+  receipt: { status: 'reverted', blockNumber: 1234n } as never,
+});
+const SCORE_UNKNOWN_ERR = new OspexChainError('broadcast but receipt wait failed', { txHash: '0xpending' });
+const SCORE_PRE_BROADCAST_ERR = new OspexChainError('Pre-send chain reads failed (nonce read): rpc down');
 
 function approveUsdcEffect(txHash: string): AgentEffect {
   return {
@@ -147,6 +159,43 @@ describe('toContestScoreAgentEnvelope', () => {
     expect(env.effects[0]?.purpose).toBe('score-contest');
   });
 
+  it('records a SECOND score-contest effect when --wait auto-re-requested and that tx landed', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult({ txHash: '0xfirst' }), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+      scoring: { contestId: 9001n, status: 'scored', awayScore: 4, homeScore: 2 },
+      reRequestResult: makeScoreResult({ txHash: '0xrerequest' }),
+    });
+    // Both on-chain score txs are in the effects[] ledger (the execute-envelope
+    // side-effect contract records every write the command performed).
+    expect(env.effects).toHaveLength(2);
+    expect(env.effects.map((e) => e.purpose)).toEqual(['score-contest', 'score-contest']);
+    expect(env.effects.map((e) => e.txHash)).toEqual(['0xfirst', '0xrerequest']);
+  });
+
+  it('records a re-request that THREW-after-broadcast (reverted) as a SECOND score-contest effect — a broadcast tx is never dropped from the ledger (Hermes PR172 re-review)', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult({ txHash: '0xfirst' }), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+      scoring: { contestId: 9001n, status: 'scored', awayScore: 4, homeScore: 2 },
+      reRequestError: SCORE_REVERTED_ERR, // the re-request broadcast a tx that reverted on inclusion
+    });
+    expect(env.effects).toHaveLength(2);
+    expect(env.effects[1]).toMatchObject({ purpose: 'score-contest', ok: false, txHash: '0xrev', status: 'reverted' });
+    expect(env.ok).toBe(true); // the FIRST requestScore tx succeeded — a reverted re-request doesn't flip the envelope
+  });
+
+  it('keeps a single score-contest effect when --wait did NOT re-request (reRequestResult null)', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult({ txHash: '0xfirst' }), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+      scoring: { contestId: 9001n, status: 'scored', awayScore: 4, homeScore: 2 },
+      reRequestResult: null,
+    });
+    expect(env.effects).toHaveLength(1);
+    expect(env.effects[0]?.txHash).toBe('0xfirst');
+  });
+
   it('envelope.ok=false when score reverts', () => {
     const env = toContestScoreAgentEnvelope(
       makeScoreResult({ receipt: { status: 'reverted', blockNumber: 1000n } }),
@@ -154,6 +203,105 @@ describe('toContestScoreAgentEnvelope', () => {
     );
     expect(env.ok).toBe(false);
     expect(env.effects[0]?.status).toBe('reverted');
+  });
+
+  it('payload.scoring is null for the fire-and-return call (no --wait)', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult(), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+    });
+    expect(env.payload.scoring).toBeNull();
+    expect(env.warnings).toEqual([]);
+  });
+
+  it('payload carries the scoring block + real scores when --wait resolved Scored', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult(), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+      scoring: { contestId: 9001n, status: 'scored', awayScore: 4, homeScore: 2 },
+    });
+    expect(env.payload.scoring).toEqual({ status: 'scored', awayScore: 4, homeScore: 2 });
+    expect(env.ok).toBe(true);
+    expect(env.warnings).toEqual([]);
+  });
+
+  it('surfaces a 0-0 final as real scores (not null) when --wait resolved Scored', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult(), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+      scoring: { contestId: 9001n, status: 'scored', awayScore: 0, homeScore: 0 },
+    });
+    expect(env.payload.scoring).toEqual({ status: 'scored', awayScore: 0, homeScore: 0 });
+  });
+
+  it('voided --wait resolution: info warning, scoring.status=voided, envelope still ok', () => {
+    const env = toContestScoreAgentEnvelope(makeScoreResult(), {
+      chainId: POLYGON,
+      signerAddress: SIGNER,
+      scoring: { contestId: 9001n, status: 'voided', awayScore: null, homeScore: null },
+    });
+    expect(env.payload.scoring?.status).toBe('voided');
+    expect(env.ok).toBe(true); // the score REQUEST tx succeeded; voided is a terminal outcome
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0]?.code).toBe('contest-voided');
+    expect(env.warnings[0]?.severity).toBe('info');
+  });
+});
+
+describe('buildScoreContestEffect', () => {
+  it('builds a confirmed score-contest effect from a successful result', () => {
+    const eff = buildScoreContestEffect({
+      contestId: 9001n,
+      txHash: '0xscore',
+      receipt: { status: 'success', blockNumber: 1000n } as never,
+    } as never);
+    expect(eff).toEqual({
+      type: 'transaction',
+      purpose: 'score-contest',
+      ok: true,
+      txHash: '0xscore',
+      blockNumber: '1000',
+      status: 'confirmed',
+    });
+  });
+
+  it('builds a reverted score-contest effect when receipt status is reverted', () => {
+    const eff = buildScoreContestEffect({
+      contestId: 9001n,
+      txHash: '0xscore',
+      receipt: { status: 'reverted', blockNumber: 1000n } as never,
+    } as never);
+    expect(eff.ok).toBe(false);
+    expect(eff.status).toBe('reverted');
+  });
+});
+
+describe('buildReRequestScoreEffect (the auto re-request effect, from a resolved result OR a thrown OspexChainError)', () => {
+  it('resolved re-request → a confirmed score-contest effect', () => {
+    const eff = buildReRequestScoreEffect(
+      { contestId: 9001n, txHash: '0xok', receipt: { status: 'success', blockNumber: 2000n } as never } as never,
+      null,
+    );
+    expect(eff).toMatchObject({ purpose: 'score-contest', ok: true, txHash: '0xok', status: 'confirmed', blockNumber: '2000' });
+  });
+
+  it('re-request REVERTED on inclusion (txHash + reverted receipt) → recorded as a reverted, ok:false effect — NOT dropped', () => {
+    const eff = buildReRequestScoreEffect(null, SCORE_REVERTED_ERR);
+    expect(eff).toMatchObject({ purpose: 'score-contest', ok: false, txHash: '0xrev', status: 'reverted', blockNumber: '1234' });
+    expect(eff?.errorCode).toBe('CHAIN_ERROR');
+  });
+
+  it('re-request BROADCAST but receipt unobserved (txHash, no receipt) → recorded as a submitted, ok:false effect — NOT dropped', () => {
+    const eff = buildReRequestScoreEffect(null, SCORE_UNKNOWN_ERR);
+    expect(eff).toMatchObject({ purpose: 'score-contest', ok: false, txHash: '0xpending', status: 'submitted' });
+    expect(eff?.blockNumber).toBeUndefined(); // never confirmed → no block number
+    expect(eff?.errorCode).toBe('CHAIN_ERROR');
+  });
+
+  it('PRE-BROADCAST re-request failure (no txHash) / non-chain error / no error → null (no tx broadcast → nothing to record)', () => {
+    expect(buildReRequestScoreEffect(null, SCORE_PRE_BROADCAST_ERR)).toBeNull();
+    expect(buildReRequestScoreEffect(null, new Error('plain non-chain error'))).toBeNull();
+    expect(buildReRequestScoreEffect(null, null)).toBeNull();
   });
 });
 

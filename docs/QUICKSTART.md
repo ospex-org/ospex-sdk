@@ -426,6 +426,14 @@ ospex contests score <contestId>
 
 Submits a `CreOracleReceiver.requestScore` tx — permissionless and free (no fee, no LINK). The contest must already be Verified, and the call reverts until its on-chain start time has passed (request it after the game has started). Usually whoever cares about settling first runs this. (If you only ever bet on contests other people created, you may never need to do this — operators or other players typically score them.)
 
+The score report lands **asynchronously** (~30–90s later, via the CRE oracle); `score` returns as soon as the request tx confirms. To block until the contest is actually **Scored**, add `--wait` — it polls on-chain and, because the CRE report rides a best-effort trigger that can occasionally drop, re-requests scoring once if the first window elapses before surfacing a timeout:
+
+```bash
+ospex contests score <contestId> --wait
+```
+
+To observe scoring separately — e.g. after a `score` you fired without `--wait` — `ospex contests wait-scored <contestId>` blocks (signer-free) until Scored or Voided, and `ospex contests score-status <contestId>` is a one-shot read of the current state + final scores. Human output names the actual teams with their away/home roles; `--json` keeps the raw on-chain numbers.
+
 ### 2. Settle each scored speculation
 
 ```bash
