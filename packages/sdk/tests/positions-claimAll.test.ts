@@ -8,7 +8,7 @@
  * receipts can be flipped per-tx to simulate partial failures.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   encodeAbiParameters,
   encodeEventTopics,
@@ -111,6 +111,7 @@ interface PlannedTx {
 type SpecReadSeq = Array<
   | { speculationStatus: number; winSide: number }
   | { claimed: boolean }
+  | { readError: string }
 >;
 
 function fakeContext({
@@ -118,6 +119,8 @@ function fakeContext({
   plannedTxs,
   specStates = {},
   onReadContract,
+  estimateGasOutcomes = [],
+  onEstimateGas,
 }: {
   claimParams: ClaimParams;
   plannedTxs: PlannedTx[];
@@ -125,15 +128,19 @@ function fakeContext({
    * re-read on a settle revert). Only consulted for pendingSettle
    * entries. */
   specStates?: Record<string, SpecReadSeq>;
-  /** Invoked at the start of every getSpeculation read — used to assert
-   * read-only modes (dry-run) never touch the chain. */
-  onReadContract?: () => void;
+  /** Invoked at the start of every contract read — used to assert read order
+   * and that read-only modes (dry-run) never touch the chain. */
+  onReadContract?: (functionName: string) => void;
+  /** Per-estimate outcome in call order. An omitted/exhausted entry succeeds. */
+  estimateGasOutcomes?: Array<'success' | 'chain-error'>;
+  onEstimateGas?: (callIndex: number) => void;
 }): PositionsContext {
   let txIndex = 0;
+  let estimateGasIndex = 0;
   const specReadIdx: Record<string, number> = {};
   const publicClient = {
-    readContract: async ({ args }: { args: readonly unknown[] }) => {
-      onReadContract?.();
+    readContract: async ({ args, functionName }: { args: readonly unknown[]; functionName: string }) => {
+      onReadContract?.(functionName);
       const id = String(args[0]);
       const seq = specStates[id];
       if (!seq || seq.length === 0) {
@@ -141,7 +148,9 @@ function fakeContext({
       }
       const i = specReadIdx[id] ?? 0;
       specReadIdx[id] = i + 1;
-      return seq[Math.min(i, seq.length - 1)];
+      const value = seq[Math.min(i, seq.length - 1)]!;
+      if ('readError' in value) throw new Error(value.readError);
+      return value;
     },
     sendRawTransaction: async () => {
       const idx = txIndex;
@@ -171,7 +180,17 @@ function fakeContext({
     },
     getTransactionCount: async () => 7,
     estimateFeesPerGas: async () => ({ maxFeePerGas: 50n, maxPriorityFeePerGas: 1n }),
-    estimateGas: async () => 80_000n,
+    estimateGas: async () => {
+      const callIndex = estimateGasIndex;
+      estimateGasIndex += 1;
+      onEstimateGas?.(callIndex);
+      if (estimateGasOutcomes[callIndex] === 'chain-error') {
+        throw Object.assign(new Error('Execution reverted for an unknown reason.'), {
+          shortMessage: 'Execution reverted for an unknown reason.',
+        });
+      }
+      return 80_000n;
+    },
   } as unknown as PublicClient;
 
   const signer: Signer = {
@@ -283,7 +302,12 @@ describe('positions.claimAll', () => {
         ],
       },
       // Pre-flight read: speculation 2 is still Open → settle proceeds.
-      specStates: { '2': [{ speculationStatus: 0, winSide: 0 }] },
+      specStates: {
+        '2': [
+          { speculationStatus: 0, winSide: 0 },
+          { speculationStatus: 1, winSide: 1 },
+        ],
+      },
       plannedTxs: [
         { status: 'success', logs: [makeSettledLog(2n, 1)] },
         {
@@ -308,6 +332,375 @@ describe('positions.claimAll', () => {
     expect(result.totals.alreadySettled).toBe(0);
     expect(result.totals.recoveredAlreadySettled).toBe(0);
     expect(result.totals.claimedFresh).toBe(1);
+  });
+
+  it('re-reads authoritative settled state after its own confirmed settle before estimating the claim', async () => {
+    const reads: string[] = [];
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `20_${SIGNER_ADDR}_0`,
+            speculationId: '20',
+            description: 'Away moneyline — Won (needs settle)',
+            bucket: 'pendingSettle',
+            result: 'won',
+            estimatedPayoutUSDC: 2,
+            estimatedPayoutWei6: '2000000',
+            txParams: [
+              { method: 'settleSpeculation', target: 'SpeculationModule', args: { speculationId: '20' } },
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '20', positionType: 0 } },
+            ],
+          },
+        ],
+      },
+      specStates: {
+        '20': [
+          { speculationStatus: 0, winSide: 0 },
+          { speculationStatus: 1, winSide: 1 },
+          { claimed: false },
+        ],
+      },
+      plannedTxs: [
+        { status: 'success', logs: [makeSettledLog(20n, 1)] },
+        { status: 'success', logs: [makeClaimedLog(20n, SIGNER_ADDR as `0x${string}`, 0, 2_000_000n)] },
+      ],
+      onReadContract: (functionName) => reads.push(functionName),
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+
+    expect(result.success).toBe(true);
+    expect(reads.slice(0, 3)).toEqual(['getSpeculation', 'getSpeculation', 'getPosition']);
+  });
+
+  it('waits for a lagging post-receipt read to expose Closed before estimating the claim', async () => {
+    vi.useFakeTimers();
+    try {
+      let estimateCalls = 0;
+      const ctx = fakeContext({
+        claimParams: {
+          address: SIGNER_ADDR,
+          positions: [
+            {
+              positionId: `23_${SIGNER_ADDR}_0`,
+              speculationId: '23',
+              description: 'Away moneyline — Won (closed-state replica lag)',
+              bucket: 'pendingSettle',
+              result: 'won',
+              estimatedPayoutUSDC: 2,
+              estimatedPayoutWei6: '2000000',
+              txParams: [
+                { method: 'settleSpeculation', target: 'SpeculationModule', args: { speculationId: '23' } },
+                { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '23', positionType: 0 } },
+              ],
+            },
+          ],
+        },
+        specStates: {
+          '23': [
+            { speculationStatus: 0, winSide: 0 },
+            { speculationStatus: 0, winSide: 0 },
+            { speculationStatus: 1, winSide: 1 },
+            { claimed: false },
+          ],
+        },
+        onEstimateGas: () => { estimateCalls += 1; },
+        plannedTxs: [
+          { status: 'success', logs: [makeSettledLog(23n, 1)] },
+          { status: 'success', logs: [makeClaimedLog(23n, SIGNER_ADDR as `0x${string}`, 0, 2_000_000n)] },
+        ],
+      });
+
+      const resultPromise = claimAll(ctx, { address: SIGNER_ADDR });
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(estimateCalls).toBe(1); // settle only; claim is still gated
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await resultPromise;
+
+      expect(result.success).toBe(true);
+      expect(estimateCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops before claim estimation when an own settle never becomes authoritatively Closed', async () => {
+    vi.useFakeTimers();
+    try {
+      let estimateCalls = 0;
+      const reads: string[] = [];
+      const ctx = fakeContext({
+        claimParams: {
+          address: SIGNER_ADDR,
+          positions: [
+            {
+              positionId: `25_${SIGNER_ADDR}_0`,
+              speculationId: '25',
+              description: 'Away moneyline — Won (persistent open read)',
+              bucket: 'pendingSettle',
+              result: 'won',
+              estimatedPayoutUSDC: 2,
+              estimatedPayoutWei6: '2000000',
+              txParams: [
+                { method: 'settleSpeculation', target: 'SpeculationModule', args: { speculationId: '25' } },
+                { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '25', positionType: 0 } },
+              ],
+            },
+          ],
+        },
+        specStates: {
+          '25': [
+            { speculationStatus: 0, winSide: 0 },
+            { speculationStatus: 0, winSide: 0 },
+            { speculationStatus: 0, winSide: 0 },
+          ],
+        },
+        onEstimateGas: () => { estimateCalls += 1; },
+        onReadContract: (functionName) => reads.push(functionName),
+        plannedTxs: [{ status: 'success', logs: [makeSettledLog(25n, 1)] }],
+      });
+
+      const resultPromise = claimAll(ctx, { address: SIGNER_ADDR });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(estimateCalls).toBe(1); // settle only
+      expect(reads).toEqual(['getSpeculation', 'getSpeculation']);
+
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(estimateCalls).toBe(1);
+      expect(reads).toEqual(['getSpeculation', 'getSpeculation']);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await resultPromise;
+
+      expect(result.success).toBe(false);
+      expect(estimateCalls).toBe(1); // no claim estimate
+      expect(reads).toEqual(['getSpeculation', 'getSpeculation', 'getSpeculation']);
+      expect(reads).not.toContain('getPosition');
+      expect(result.entries[0]!.steps.map((s) => [s.name, s.outcome])).toEqual([
+        ['settleSpeculation', 'sent'],
+        ['claimPosition', 'failed'],
+      ]);
+      expect(result.entries[0]!.error?.message).toContain('claim was not estimated');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops before claim estimation when post-receipt Closed reads are unavailable', async () => {
+    vi.useFakeTimers();
+    try {
+      let estimateCalls = 0;
+      const reads: string[] = [];
+      const ctx = fakeContext({
+        claimParams: {
+          address: SIGNER_ADDR,
+          positions: [
+            {
+              positionId: `26_${SIGNER_ADDR}_0`,
+              speculationId: '26',
+              description: 'Away moneyline — Won (closed read unavailable)',
+              bucket: 'pendingSettle',
+              result: 'won',
+              estimatedPayoutUSDC: 2,
+              estimatedPayoutWei6: '2000000',
+              txParams: [
+                { method: 'settleSpeculation', target: 'SpeculationModule', args: { speculationId: '26' } },
+                { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '26', positionType: 0 } },
+              ],
+            },
+          ],
+        },
+        specStates: {
+          '26': [
+            { speculationStatus: 0, winSide: 0 },
+            { readError: 'RPC replica unavailable' },
+          ],
+        },
+        onEstimateGas: () => { estimateCalls += 1; },
+        onReadContract: (functionName) => reads.push(functionName),
+        plannedTxs: [{ status: 'success', logs: [makeSettledLog(26n, 1)] }],
+      });
+
+      const resultPromise = claimAll(ctx, { address: SIGNER_ADDR });
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await resultPromise;
+
+      expect(result.success).toBe(false);
+      expect(estimateCalls).toBe(1); // settle only; read failure never opens a claim path
+      expect(reads).toEqual(['getSpeculation', 'getSpeculation', 'getSpeculation']);
+      expect(reads).not.toContain('getPosition');
+      expect(result.entries[0]!.steps.map((s) => [s.name, s.outcome])).toEqual([
+        ['settleSpeculation', 'sent'],
+        ['claimPosition', 'failed'],
+      ]);
+      expect(result.entries[0]!.error?.message).toContain('claim was not estimated');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not retry an estimate CHAIN_ERROR for a claimable entry without a same-run settle', async () => {
+    let estimateCalls = 0;
+    const ctx = fakeContext({
+      claimParams: {
+        address: SIGNER_ADDR,
+        positions: [
+          {
+            positionId: `24_${SIGNER_ADDR}_0`,
+            speculationId: '24',
+            description: 'Away moneyline — claimable without settle',
+            bucket: 'claimable',
+            result: 'won',
+            estimatedPayoutUSDC: 2,
+            estimatedPayoutWei6: '2000000',
+            txParams: [
+              { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '24', positionType: 0 } },
+            ],
+          },
+        ],
+      },
+      specStates: { '24': [{ claimed: false }] },
+      estimateGasOutcomes: ['chain-error'],
+      onEstimateGas: () => { estimateCalls += 1; },
+      plannedTxs: [],
+    });
+
+    const result = await claimAll(ctx, { address: SIGNER_ADDR });
+
+    expect(result.success).toBe(false);
+    expect(estimateCalls).toBe(1);
+    expect(result.entries[0]!.steps).toEqual([
+      expect.objectContaining({ name: 'claimPosition', outcome: 'failed', errorCode: 'CHAIN_ERROR' }),
+    ]);
+  });
+
+  it('retries one pre-send estimate CHAIN_ERROR after an own settle, after about ten seconds and a settled-state re-read', async () => {
+    vi.useFakeTimers();
+    try {
+      let estimateCalls = 0;
+      const reads: string[] = [];
+      const ctx = fakeContext({
+        claimParams: {
+          address: SIGNER_ADDR,
+          positions: [
+            {
+              positionId: `21_${SIGNER_ADDR}_0`,
+              speculationId: '21',
+              description: 'Over total — Won (settle replica lag)',
+              bucket: 'pendingSettle',
+              result: 'won',
+              estimatedPayoutUSDC: 1.91,
+              estimatedPayoutWei6: '1910000',
+              txParams: [
+                { method: 'settleSpeculation', target: 'SpeculationModule', args: { speculationId: '21' } },
+                { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '21', positionType: 0 } },
+              ],
+            },
+          ],
+        },
+        specStates: {
+          '21': [
+            { speculationStatus: 0, winSide: 0 },
+            { speculationStatus: 1, winSide: 3 },
+            { claimed: false },
+            { speculationStatus: 1, winSide: 3 },
+            { claimed: false },
+          ],
+        },
+        estimateGasOutcomes: ['success', 'chain-error', 'success'],
+        onEstimateGas: () => { estimateCalls += 1; },
+        onReadContract: (functionName) => reads.push(functionName),
+        plannedTxs: [
+          { status: 'success', logs: [makeSettledLog(21n, 3)] },
+          { status: 'success', logs: [makeClaimedLog(21n, SIGNER_ADDR as `0x${string}`, 0, 1_910_000n)] },
+        ],
+      });
+
+      const resultPromise = claimAll(ctx, { address: SIGNER_ADDR });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(estimateCalls).toBe(2); // settle + first claim estimate failure
+      expect(reads).toEqual(['getSpeculation', 'getSpeculation', 'getPosition']);
+
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(estimateCalls).toBe(2); // retry still gated by the full delay
+      expect(reads).toEqual(['getSpeculation', 'getSpeculation', 'getPosition']);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await resultPromise;
+
+      expect(result.success).toBe(true);
+      expect(estimateCalls).toBe(3); // settle, failed claim estimate, one retry
+      expect(reads).toEqual([
+        'getSpeculation', // settle pre-flight
+        'getSpeculation', // post-receipt closed-state confirmation
+        'getPosition', // first claim pre-flight
+        'getSpeculation', // retry-time closed-state confirmation
+        'getPosition', // final claim pre-flight
+      ]);
+      expect(result.entries[0]!.steps.map((s) => [s.name, s.outcome])).toEqual([
+        ['settleSpeculation', 'sent'],
+        ['claimPosition', 'sent'],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries that attributable estimate failure only once, then leaves the entry failed', async () => {
+    vi.useFakeTimers();
+    try {
+      let estimateCalls = 0;
+      const ctx = fakeContext({
+        claimParams: {
+          address: SIGNER_ADDR,
+          positions: [
+            {
+              positionId: `22_${SIGNER_ADDR}_0`,
+              speculationId: '22',
+              description: 'Over total — Won (persistent estimate failure)',
+              bucket: 'pendingSettle',
+              result: 'won',
+              estimatedPayoutUSDC: 1.91,
+              estimatedPayoutWei6: '1910000',
+              txParams: [
+                { method: 'settleSpeculation', target: 'SpeculationModule', args: { speculationId: '22' } },
+                { method: 'claimPosition', target: 'PositionModule', args: { speculationId: '22', positionType: 0 } },
+              ],
+            },
+          ],
+        },
+        specStates: {
+          '22': [
+            { speculationStatus: 0, winSide: 0 },
+            { speculationStatus: 1, winSide: 3 },
+            { claimed: false },
+            { speculationStatus: 1, winSide: 3 },
+            { claimed: false },
+          ],
+        },
+        estimateGasOutcomes: ['success', 'chain-error', 'chain-error'],
+        onEstimateGas: () => { estimateCalls += 1; },
+        plannedTxs: [
+          { status: 'success', logs: [makeSettledLog(22n, 3)] },
+        ],
+      });
+
+      const resultPromise = claimAll(ctx, { address: SIGNER_ADDR });
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await resultPromise;
+
+      expect(result.success).toBe(false);
+      expect(estimateCalls).toBe(3);
+      expect(result.entries[0]!.steps.map((s) => [s.name, s.outcome])).toEqual([
+        ['settleSpeculation', 'sent'],
+        ['claimPosition', 'failed'],
+      ]);
+      expect(result.entries[0]!.error?.code).toBe('CHAIN_ERROR');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('skips an already-settled speculation and proceeds straight to claim', async () => {
@@ -485,7 +878,10 @@ describe('positions.claimAll', () => {
         ],
       },
       specStates: {
-        '10': [{ speculationStatus: 0, winSide: 0 }], // Open → settle sent (fresh)
+        '10': [
+          { speculationStatus: 0, winSide: 0 },
+          { speculationStatus: 1, winSide: 1 },
+        ], // Open → settle sent (fresh), then authoritative closed re-read
         '11': [{ speculationStatus: 1, winSide: 2 }], // Closed pre-flight → skipped
         '12': [
           { speculationStatus: 0, winSide: 0 }, // Open pre-flight

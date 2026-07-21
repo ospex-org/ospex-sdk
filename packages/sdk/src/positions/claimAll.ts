@@ -21,6 +21,13 @@
  *      read back, and the SDK never fabricates one). A genuine settle/claim
  *      failure (`NotSettled`, `NoPayout`, RPC error, …) halts THIS entry
  *      only; the loop moves on so one bad position can't block the rest.
+ *      After THIS sweep freshly settles a speculation, claim-all requires
+ *      the successful settle receipt and an authoritative closed-state
+ *      re-read before it estimates the claim. If that immediately-following
+ *      claim still hits a pre-send estimateGas CHAIN_ERROR (for example a
+ *      lagging RPC replica), it waits 10 seconds, confirms closed state
+ *      again, and retries the claim exactly once. No other claim failure is
+ *      retried, and a second estimate failure remains a normal failed entry.
  *   3. Aggregate per-entry success/failure into the result array. Each
  *      entry carries an explicit `steps[]` record of what actually
  *      happened (sent / skipped / recovered / failed) so consumers
@@ -53,9 +60,12 @@ import {
 } from '../errors.js';
 import { ensureSpeculationSettled, type EnsureSettledResult } from './ensureSettled.js';
 import { ensurePositionClaimed, type EnsureClaimedResult } from './ensureClaimed.js';
+import { readSpeculationState } from './readSpeculation.js';
 import type { SettleResult } from './settle.js';
 import type { PositionsContext } from './context.js';
 import type { ClaimParamEntry } from '../types/position.js';
+
+const SAME_RUN_SETTLE_RETRY_DELAY_MS = 10_000;
 
 export interface ClaimAllArgs {
   /**
@@ -374,12 +384,18 @@ async function runEntry(
   entry: ClaimParamEntry,
   result: ClaimAllEntryResult,
 ): Promise<void> {
+  // Set only when THIS entry broadcast a settle and received a successful
+  // mined receipt. A stale `pendingSettle` skip/recovery is intentionally not
+  // eligible for the narrow estimate retry below.
+  let ownSettledSpeculationId: bigint | undefined;
+
   for (const step of entry.txParams) {
     if (step.method === 'settleSpeculation') {
+      const speculationId = BigInt(step.args.speculationId);
       let r: EnsureSettledResult;
       try {
         r = await ensureSpeculationSettled(ctx, {
-          speculationId: BigInt(step.args.speculationId),
+          speculationId,
         });
       } catch (err) {
         result.steps.push(failedStep('settleSpeculation', err));
@@ -387,6 +403,18 @@ async function runEntry(
       }
       result.winSide = r.winSide;
       if (r.outcome === 'settled') {
+        // `settleSpeculation` normally guarantees this invariant. Assert it
+        // here because the following claim retry is allowed ONLY when our own
+        // settle receipt is mined successfully — never from a bare hash or an
+        // unknown/reverted receipt.
+        if (r.receipt?.status !== 'success') {
+          const receiptError = new OspexChainError(
+            `claimAll: own settle for speculation ${speculationId} did not return a successful mined receipt.`,
+            r.txHash !== undefined ? { txHash: r.txHash } : undefined,
+          );
+          result.steps.push(failedStep('settleSpeculation', receiptError));
+          throw receiptError;
+        }
         // `txHash` is always present on the 'settled' outcome.
         result.txHashes.push(r.txHash as string);
         result.steps.push({
@@ -395,6 +423,7 @@ async function runEntry(
           txHash: r.txHash as string,
           winSide: r.winSide,
         });
+        ownSettledSpeculationId = speculationId;
       } else if (r.outcome === 'alreadySettled') {
         result.steps.push({
           name: 'settleSpeculation',
@@ -414,12 +443,20 @@ async function runEntry(
         result.steps.push(recoveredStep);
       }
     } else if (step.method === 'claimPosition') {
+      const speculationId = BigInt(step.args.speculationId);
       let r: EnsureClaimedResult;
       try {
-        r = await ensurePositionClaimed(ctx, {
-          speculationId: BigInt(step.args.speculationId),
-          positionType: step.args.positionType,
-        });
+        if (ownSettledSpeculationId === speculationId) {
+          // The settle sender already waited for its receipt. Now require the
+          // same RPC surface to expose Closed before estimating the dependent
+          // claim. A lagging first read gets one bounded 10-second re-read.
+          await confirmOwnSettleVisible(ctx, speculationId);
+        }
+        r = await claimWithBoundedSameRunSettleRetry(
+          ctx,
+          { speculationId, positionType: step.args.positionType },
+          ownSettledSpeculationId === speculationId,
+        );
       } catch (err) {
         result.steps.push(failedStep('claimPosition', err));
         throw err;
@@ -469,6 +506,78 @@ async function runEntry(
       );
     }
   }
+}
+
+/**
+ * Confirm that an own, successfully-mined settle is visible as Closed before
+ * attempting the dependent claim. Replica lag gets one bounded re-read after
+ * the same delay used by the estimate retry; persistent ambiguity stays loud.
+ */
+async function confirmOwnSettleVisible(
+  ctx: PositionsContext,
+  speculationId: bigint,
+): Promise<void> {
+  if (await isSpeculationClosed(ctx, speculationId)) return;
+  await sleep(SAME_RUN_SETTLE_RETRY_DELAY_MS);
+  if (await isSpeculationClosed(ctx, speculationId)) return;
+  throw new OspexChainError(
+    `claimAll: speculation ${speculationId} was settled by this run, but a closed-state re-read was not confirmed after ${SAME_RUN_SETTLE_RETRY_DELAY_MS}ms; claim was not estimated.`,
+  );
+}
+
+/**
+ * One narrow retry carve-out: only a pre-send estimateGas CHAIN_ERROR on the
+ * claim immediately following THIS run's confirmed settle. Wait ~10s, re-read
+ * Closed, then call the idempotent claim path one final time. The retry call is
+ * not wrapped again, so a second failure is terminal for the entry.
+ */
+async function claimWithBoundedSameRunSettleRetry(
+  ctx: PositionsContext,
+  args: { speculationId: bigint; positionType: 0 | 1 },
+  ownSettleConfirmed: boolean,
+): Promise<EnsureClaimedResult> {
+  try {
+    return await ensurePositionClaimed(ctx, args);
+  } catch (err) {
+    if (!ownSettleConfirmed || !isPreSendEstimateChainError(err)) throw err;
+    await sleep(SAME_RUN_SETTLE_RETRY_DELAY_MS);
+    if (!(await isSpeculationClosed(ctx, args.speculationId))) {
+      throw new OspexChainError(
+        `claimAll: speculation ${args.speculationId} was not confirmed closed before the single claim retry.`,
+        { cause: err },
+      );
+    }
+    return ensurePositionClaimed(ctx, args);
+  }
+}
+
+async function isSpeculationClosed(
+  ctx: PositionsContext,
+  speculationId: bigint,
+): Promise<boolean> {
+  try {
+    const publicClient = ctx.requireChainClient();
+    const { speculationModule } = ctx.getAddresses();
+    const state = await readSpeculationState(publicClient, speculationModule, speculationId);
+    return state.status === 'closed';
+  } catch {
+    return false;
+  }
+}
+
+/** A retryable claim estimate has no broadcast hash/receipt and carries the
+ * structured SDK CHAIN_ERROR wrapper emitted specifically by estimateGas. */
+function isPreSendEstimateChainError(err: unknown): err is OspexChainError {
+  return (
+    err instanceof OspexChainError &&
+    err.txHash === undefined &&
+    err.receipt === undefined &&
+    err.message.startsWith('Pre-send chain reads failed (estimateGas):')
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function errorCodeOf(err: unknown): string {

@@ -180,7 +180,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex positions status <address>` | Three-bucket categorization: active / pendingSettle / claimable. |
 | `ospex positions history <address>` | Full claim/settlement history. |
 | `ospex claim <speculationId> --type upper\|lower` | Claim one specific winning position. Top-level for ergonomics — not under `positions`. |
-| `ospex claim-all [--address <addr>] [--dry-run]` | Sweep every claimable position for a wallet (settles where needed; skips a speculation already settled by someone else). Top-level. |
+| `ospex claim-all [--address <addr>] [--dry-run]` | Sweep every claimable position for a wallet (settles where needed; skips a speculation already settled by someone else). After a same-run settle it confirms the mined receipt + on-chain closed state before claiming; only an immediate pre-send claim-estimate `CHAIN_ERROR` gets one bounded retry after 10 seconds. Top-level. |
 | `ospex settle <speculationId>` | Permissionlessly settle a scored speculation. Idempotent — an already-settled speculation is a no-op success, not an error. Top-level. |
 | `ospex leaderboard show` | Top entries on the active leaderboard. |
 | `ospex odds show <contestId> [--json] [--market moneyline\|spread\|total]` | One-shot snapshot of upstream reference odds (moneyline / spread / total) for a contest's underlying game. Both American and decimal odds; `--json` emits a single envelope. `--market` narrows the human render to one market (no effect on `--json` — the envelope stays stable for agents). Use this to decide a commitment price. |
