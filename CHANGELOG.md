@@ -4,7 +4,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### Fixed
+
+- **`@ospex/sdk`: `positions.claimAll` now closes the same-run settle→claim RPC-replica race without weakening other stop rules.** When a pending-settle entry is freshly settled by that sweep, claim-all requires the successful mined settle receipt and an authoritative on-chain `Closed` re-read before estimating the dependent claim. If that immediately-following claim still returns a pre-send `estimateGas` `CHAIN_ERROR` with no transaction hash or receipt, claim-all waits 10 seconds, confirms `Closed` again, and retries the claim exactly once. A second estimate failure, a claimable-only failure, nonce/fee read failure, broadcast/receipt ambiguity, or inclusion-time revert is not retried and remains a failed entry.
 
 ## [0.10.0] — 2026-07-04
 
