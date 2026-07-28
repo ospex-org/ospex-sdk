@@ -199,7 +199,7 @@ interface PreviewCounterparty extends Omit<PreviewYou, 'address'> {
 
 On `MatchPreview` the viewer is the taker (`you.role === 'taker'`) and the counterparty is the named maker. On `SubmitPreview` the viewer is the maker (`you.role === 'maker'`) and the counterparty is a hypothetical full-fill taker (`address: null`). The shape is uniform across both envelopes so polyglot agent code can dispatch on one accessor path.
 
-USDC values inside `you` / `counterparty` are always 6 fractional digits, produced by `wei6ToDecimalUSDC` — concise formats (`"5.00"`) appear only in human renderers, never in JSON. Every one carries a paired `wei6` field; **read that with `BigInt()`** rather than re-parsing the decimal string (see [Numeric-field rule](#numeric-field-rule)). If you do parse the string, use `usdcDecimalToAmountWei6`, not `usdcDecimalToWei6`: the latter additionally enforces the 100-wei6 lot rule that applies only to a maker's signed `riskAmount`, and taker-side amounts routinely sit off that grid (a taker's risk is `min(takerDesiredRisk, fillMakerRisk × (oddsTick − 100) / 100)`, which is lot-aligned only by coincidence). Neither parser accepts `'0.000000'`.
+USDC values inside `you` / `counterparty` are always 6 fractional digits, produced by `wei6ToDecimalUSDC` — concise formats (`"5.00"`) appear only in human renderers, never in JSON. Every one carries a paired `wei6` field on the same object; **read that with `BigInt()`** rather than re-parsing the decimal string. (`outcomes[]` sits alongside these blocks but is NOT covered by that guarantee — see the exception table under [Numeric-field rule](#numeric-field-rule).) If you do parse the string, use `usdcDecimalToAmountWei6`, not `usdcDecimalToWei6`: the latter additionally enforces the 100-wei6 lot rule that applies only to a maker's signed `riskAmount`, and taker-side amounts routinely sit off that grid (a taker's risk is `min(takerDesiredRisk, fillMakerRisk × (oddsTick − 100) / 100)`, which is lot-aligned only by coincidence). Neither parser accepts `'0.000000'`.
 
 The perspective fields are **optional on the payload**. The `@ospex/sdk` exports `computeMatchYouView(preview)` and `computeSubmitYouView(preview)` — pure accessors that return the view directly when present and backfill from the legacy `makerSide` / `takerSide` / `odds` / `economics` (or `side` / `economics` on submit) blocks when absent. Agents consuming either shape call one helper and never branch.
 
@@ -257,7 +257,15 @@ Every value that may exceed `Number.MAX_SAFE_INTEGER` is a **decimal string** (`
 
 USDC formatted strings are six fractional digits: `'1.000000'`, `'0.250000'`. `wei6ToDecimalUSDC` produces them from any bigint.
 
-**To go back the other way, read the paired `*Wei6` field with `BigInt()`.** That is exact for every emitted value and never throws — `BigInt(preview.economics.takerRiskWei6)`, `BigInt(preview.speculation.creationFee.viewerShareWei6)`. The decimal string is for display.
+**To go back the other way, read the paired integer with `BigInt()`.** Most USDC strings have one — `<name>USDC` ↔ `<name>Wei6`, and inside `you` / `counterparty` the pair is `{ wei6, usdc }` on the same object. That path is exact and never throws: `BigInt(preview.economics.takerRiskWei6)`, `BigInt(preview.you.risk.wei6)`. The decimal string is for display.
+
+**Three fields have no paired integer** (the set is pinned by a test, so it cannot grow silently):
+
+| Field | Sign | How to decode |
+|---|---|---|
+| `economics.takerProfitOnWinUSDC` | always positive | `usdcDecimalToAmountWei6`, or exactly `= fillMakerRiskWei6` |
+| `economics.takerReturnOnWinUSDC` | always positive | `usdcDecimalToAmountWei6`, or exactly `= takerRiskWei6 + fillMakerRiskWei6` |
+| `outcomes[].payoutUSDC` | **signed** — `'lose'` rows are the negated risk | neither parser accepts it; strip the sign, or derive from the perspective's unsigned `risk.wei6` / `profit.wei6` |
 
 `usdcDecimalToAmountWei6` inverts `wei6ToDecimalUSDC` **for positive amounts only**. It is an input validator for user-supplied amounts, so it refuses zero and negatives: a documented emission like `creationFee.viewerShareUSDC: '0.000000'` (non-lazy speculation, or a viewer with no share) does **not** parse. Use it for values a human or agent typed, not for decoding a payload. (`usdcDecimalToWei6` is the maker-risk parser: it additionally enforces the 100-wei6 lot rule and rejects off-grid amounts such as a `takerRiskUSDC` of `'0.999936'`.)
 

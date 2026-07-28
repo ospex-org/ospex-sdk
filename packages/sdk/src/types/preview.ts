@@ -300,11 +300,14 @@ export interface PreviewOutcome {
    * Formatted USDC string. For 'lose' shows the negative risk; for 'push'
    * shows the stake returned.
    *
-   * **Signed, and the only USDC field with no paired `*Wei6` twin.** A
-   * `'lose'` row is `wei6ToDecimalUSDC(-risk)` — e.g. `'-7.700000'` — which
-   * neither `usdcDecimalToAmountWei6` nor `usdcDecimalToWei6` will parse
-   * (both accept positive amounts only). Consumers needing the integer
-   * should take the sign off the string themselves, or derive it from the
+   * **Signed, and one of three USDC fields with no paired `*Wei6` twin**
+   * (the others are `economics.takerProfitOnWinUSDC` and
+   * `economics.takerReturnOnWinUSDC`, which are always positive and so do
+   * parse). A `'lose'` row is `wei6ToDecimalUSDC(-risk)` — e.g.
+   * `'-7.700000'` — which NEITHER `usdcDecimalToAmountWei6` nor
+   * `usdcDecimalToWei6` will parse, since both accept positive amounts
+   * only. This is the one USDC string in a preview that has no sanctioned
+   * decode path: take the sign off it yourself, or derive it from the
    * perspective's `risk.wei6` / `profit.wei6`, which are unsigned and
    * paired.
    */

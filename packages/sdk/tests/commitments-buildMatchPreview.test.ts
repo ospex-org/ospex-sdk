@@ -895,7 +895,13 @@ describe('buildMatchPreview — the emitted USDC-string domain vs. what parses',
     }
     if (typeof node === 'object') {
       for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-        if (k.endsWith('USDC') && typeof v === 'string') out.push({ path: `${path}.${k}`, value: v });
+        // BOTH naming conventions: `xUSDC` at the top level, and the
+        // `{ wei6, usdc }` pair inside you/counterparty PerspectiveAmounts.
+        // An earlier version of this walker was case-sensitive on `USDC` and
+        // silently skipped every PerspectiveAmount.
+        if ((k.endsWith('USDC') || k === 'usdc') && typeof v === 'string') {
+          out.push({ path: `${path}.${k}`, value: v });
+        }
         else collectUsdcStrings(v, `${path}.${k}`, out);
       }
     }
@@ -954,5 +960,79 @@ describe('buildMatchPreview — the emitted USDC-string domain vs. what parses',
     expect(lose!.payoutUSDC.startsWith('-')).toBe(true);
     expect(lose!.payoutUSDC).toBe(`-${p.economics.takerRiskUSDC}`);
     expect(() => usdcDecimalToAmountWei6(lose!.payoutUSDC)).toThrow(/must be positive/);
+  });
+});
+
+describe('buildMatchPreview — which USDC strings carry a paired integer', () => {
+  /**
+   * The public JSDoc and AGENT_CONTRACT tell agents to decode USDC amounts
+   * via the paired `*Wei6` field. That rule has exactly three exceptions,
+   * and this test PINS THE EXCEPTION SET so a fourth cannot appear without
+   * failing here and forcing the docs to be updated. Naming a specific
+   * exception in prose is what put this claim wrong twice.
+   */
+  const UNPAIRED = [
+    '$.economics.takerProfitOnWinUSDC',
+    '$.economics.takerReturnOnWinUSDC',
+    '$.outcomes[*].payoutUSDC',
+  ];
+
+  function classify(node: unknown, path: string, paired: Set<string>, unpaired: Set<string>): void {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) {
+      for (const v of node) classify(v, `${path}[*]`, paired, unpaired);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    const rec = node as Record<string, unknown>;
+    const keys = Object.keys(rec);
+    for (const k of keys) {
+      const v = rec[k];
+      if (typeof v === 'string' && (k.endsWith('USDC') || k === 'usdc')) {
+        const twin = k === 'usdc' ? 'wei6' : `${k.slice(0, -4)}Wei6`;
+        const has = keys.includes(twin) && typeof rec[twin] === 'string';
+        (has ? paired : unpaired).add(`${path}.${k}`);
+      } else {
+        classify(v, `${path}.${k}`, paired, unpaired);
+      }
+    }
+  }
+
+  it('the set of USDC fields WITHOUT a paired integer is exactly the documented three', () => {
+    const paired = new Set<string>();
+    const unpaired = new Set<string>();
+    for (const args of [
+      baseArgs(),
+      baseArgs({ speculation: { mode: 'lazy' } }),
+      baseArgs({ commitment: makeCommitment({ marketType: 'spread', lineTicks: -35 }) }),
+      baseArgs({ commitment: makeCommitment({ marketType: 'total', lineTicks: 85 }) }),
+      baseArgs({ takerDesiredRiskWei6: 150n }),
+    ]) {
+      classify(buildMatchPreview(args), '$', paired, unpaired);
+    }
+
+    expect([...unpaired].sort()).toEqual([...UNPAIRED].sort());
+    // Non-vacuous: the paired majority is real, so the general rule is worth
+    // stating and the exception list is genuinely an exception list.
+    expect(paired.size).toBeGreaterThan(10);
+    // And the `{ wei6, usdc }` convention is in the paired set, not skipped.
+    expect([...paired]).toContain('$.you.risk.usdc');
+  });
+
+  it('the two unpaired ECONOMICS fields are positive and derivable from paired ones', () => {
+    // The docs tell agents to derive these rather than parse them; that
+    // advice is only safe if the derivation is exact. Sweep, do not sample.
+    for (let oddsTick = 101; oddsTick <= 3000; oddsTick += 23) {
+      const p = buildMatchPreview(baseArgs({ commitment: makeCommitment({ oddsTick }) }));
+      const fill = BigInt(p.economics.fillMakerRiskWei6);
+      const risk = BigInt(p.economics.takerRiskWei6);
+
+      // profit-on-win === fillMakerRisk (zero-vig), return === risk + profit.
+      expect(usdcDecimalToAmountWei6(p.economics.takerProfitOnWinUSDC)).toBe(fill);
+      expect(usdcDecimalToAmountWei6(p.economics.takerReturnOnWinUSDC)).toBe(risk + fill);
+      // Positive, hence parseable — unlike payoutUSDC.
+      expect(p.economics.takerProfitOnWinUSDC.startsWith('-')).toBe(false);
+      expect(p.economics.takerReturnOnWinUSDC.startsWith('-')).toBe(false);
+    }
   });
 });
