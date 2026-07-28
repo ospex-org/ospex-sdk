@@ -19,7 +19,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildMatchPreview } from '../src/commitments/buildMatchPreview.js';
 import { buildSubmitPreview } from '../src/commitments/buildSubmitPreview.js';
-import { usdcDecimalToAmountWei6 } from '../src/commitments/decimals.js';
+import { usdcDecimalToAmountWei6, wei6ToDecimalUSDC } from '../src/commitments/decimals.js';
 
 const FAR_FUTURE_ISO = '2099-05-08T02:00:00Z';
 const A40 = (c: string) => `0x${c.repeat(40)}` as `0x${string}`;
@@ -198,6 +198,92 @@ describe('USDC field pairing — what holds across BOTH envelopes', () => {
     };
     for (const o of all) collect(o, '$');
     expect([...new Set(signed)]).toEqual(['$.outcomes[*].payoutUSDC']);
+  });
+
+  it('every unpaired field except payoutUSDC has an exact integer source elsewhere', () => {
+    /**
+     * This replaces sign claims. "Always positive" kept being wrong — the
+     * builders accept degenerate-but-supported inputs (a zero creation fee,
+     * a risk small enough that profit floors to zero) that make these fields
+     * `'0.000000'`. Naming the integer SOURCE is sign-agnostic and therefore
+     * cannot rot the same way.
+     */
+    // MatchPreview: perspective blocks carry the taker's numbers.
+    for (const args of [matchArgs(), matchArgs({ speculation: { mode: 'lazy' } })]) {
+      const mp = buildMatchPreview(args) as unknown as {
+        economics: Record<string, string>;
+        you: { profit: { wei6: string }; totalReturn: { wei6: string } };
+      };
+      expect(BigInt(mp.you.profit.wei6)).toBe(BigInt(mp.economics.fillMakerRiskWei6));
+      expect(usdcDecimalToAmountWei6(mp.economics.takerProfitOnWinUSDC)).toBe(
+        BigInt(mp.you.profit.wei6),
+      );
+      expect(BigInt(mp.you.totalReturn.wei6)).toBe(
+        BigInt(mp.economics.takerRiskWei6) + BigInt(mp.economics.fillMakerRiskWei6),
+      );
+      expect(usdcDecimalToAmountWei6(mp.economics.takerReturnOnWinUSDC)).toBe(
+        BigInt(mp.you.totalReturn.wei6),
+      );
+    }
+
+    // SubmitPreview, INCLUDING the degenerate cases the builder supports.
+    const submitCases = [
+      submitArgs({ speculation: LAZY }),
+      submitArgs({ speculation: LAZY, extra: { makerCreationFeeWei6: 0n } }),
+      submitArgs({ speculation: LAZY, extra: { riskWei6: 1n, oddsTick: 101 } }),
+      submitArgs({ speculation: LAZY, extra: { riskWei6: 0n } }),
+    ];
+    let sawZero = 0;
+    for (const args of submitCases) {
+      const sp = buildSubmitPreview(args) as unknown as {
+        economics: Record<string, string>;
+        you: { profit: { wei6: string }; totalReturn: { wei6: string } };
+        counterparty: { risk: { wei6: string } };
+        market: {
+          speculation: {
+            makerCreationFeeUSDC: string;
+            creationFee: { makerShareWei6: string };
+          };
+        };
+      };
+      const fee = sp.market.speculation;
+      const decimals = [
+        sp.economics.counterpartyRiskUSDC,
+        sp.economics.profitUSDC,
+        sp.economics.returnUSDC,
+        fee.makerCreationFeeUSDC,
+      ];
+      if (decimals.some((d) => d === '0.000000')) sawZero += 1;
+
+      // The documented integer sources, asserted exactly — sign-agnostic.
+      expect(sp.economics.counterpartyRiskUSDC).toBe(wei6ToDecimalUSDC(BigInt(sp.counterparty.risk.wei6)));
+      expect(sp.economics.profitUSDC).toBe(wei6ToDecimalUSDC(BigInt(sp.you.profit.wei6)));
+      expect(sp.economics.returnUSDC).toBe(wei6ToDecimalUSDC(BigInt(sp.you.totalReturn.wei6)));
+      expect(fee.makerCreationFeeUSDC).toBe(wei6ToDecimalUSDC(BigInt(fee.creationFee.makerShareWei6)));
+    }
+    // Non-vacuous: the zero cases really are reachable, which is exactly why
+    // the docs must not call these fields "always positive".
+    expect(sawZero).toBeGreaterThan(0);
+  });
+
+  it('the supported zero inputs really do emit "0.000000" that no parser accepts', () => {
+    // buildSubmitPreview explicitly allows makerCreationFeeWei6: 0n (a
+    // fee-disabled chain). Pin the emission AND the refusal.
+    const zeroFee = buildSubmitPreview(
+      submitArgs({ speculation: LAZY, extra: { makerCreationFeeWei6: 0n } }),
+    ) as unknown as { market: { speculation: { makerCreationFeeUSDC: string } } };
+    expect(zeroFee.market.speculation.makerCreationFeeUSDC).toBe('0.000000');
+    expect(() =>
+      usdcDecimalToAmountWei6(zeroFee.market.speculation.makerCreationFeeUSDC),
+    ).toThrow(/must be positive/);
+
+    // And profit floors to zero at the protocol's minimum odds.
+    const tiny = buildSubmitPreview(
+      submitArgs({ speculation: LAZY, extra: { riskWei6: 1n, oddsTick: 101 } }),
+    ) as unknown as { economics: Record<string, string> };
+    expect(tiny.economics.profitUSDC).toBe('0.000000');
+    expect(tiny.economics.counterpartyRiskUSDC).toBe('0.000000');
+    expect(() => usdcDecimalToAmountWei6(tiny.economics.profitUSDC)).toThrow(/must be positive/);
   });
 
   it('an unpaired field parses IFF it is positive — only lose rows are not', () => {

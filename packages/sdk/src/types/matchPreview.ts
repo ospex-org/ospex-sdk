@@ -26,10 +26,13 @@
  * Three fields have NO paired integer IN THIS ENVELOPE (pinned by
  * `usdc-field-pairing.test.ts`; `SubmitPreview` has a different, larger
  * set — do not treat this list as global):
- *   - `economics.takerProfitOnWinUSDC` and `economics.takerReturnOnWinUSDC`
- *     — always positive, so `usdcDecimalToAmountWei6` decodes them; or
- *     derive exactly, since profit-on-win is `fillMakerRiskWei6` and
- *     return-on-win is `takerRiskWei6 + fillMakerRiskWei6`.
+ *   - `economics.takerProfitOnWinUSDC` — read `you.profit.wei6`, which
+ *     equals `economics.fillMakerRiskWei6`.
+ *   - `economics.takerReturnOnWinUSDC` — read `you.totalReturn.wei6`,
+ *     which equals `takerRiskWei6 + fillMakerRiskWei6`.
+ *     (Use the integer source rather than parsing. `SubmitPreview`'s
+ *     equivalents can legitimately be `'0.000000'`, which no parser
+ *     accepts; sourcing the integer is sign-agnostic and cannot rot.)
  *   - `outcomes[].payoutUSDC` — SIGNED per row: `'win'` / `'push'` rows
  *     are positive and parse, while a `'lose'` row is the negated risk
  *     (e.g. `'-7.700000'`) and NEITHER parser accepts it. Strip the sign

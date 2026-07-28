@@ -302,8 +302,10 @@ export interface PreviewOutcome {
    *
    * **Has no paired `*Wei6` twin, and is the only SIGNED USDC string either
    * preview envelope emits.** (`MatchPreview` and `SubmitPreview` each have
-   * other unpaired USDC fields, but they differ between the two and are all
-   * positive — see `AGENT_CONTRACT.md`.)
+   * other unpaired USDC fields; the sets differ, they are NOT all positive —
+   * a fee-disabled chain or a sub-lot risk yields `'0.000000'` — and each
+   * has an exact integer source elsewhere in the payload. See
+   * `AGENT_CONTRACT.md`.)
    *
    * `'win'` and `'push'` rows are positive and parse normally. A `'lose'`
    * row is `wei6ToDecimalUSDC(-risk)` — e.g. `'-7.700000'` — which NEITHER

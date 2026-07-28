@@ -263,25 +263,29 @@ USDC formatted strings are six fractional digits: `'1.000000'`, `'0.250000'`. `w
 
 The two preview envelopes are enumerated below, and each list is pinned by a test (`usdc-field-pairing.test.ts`) so it cannot drift silently. Other envelope types are **not** enumerated here.
 
+Each unpaired field still has an exact integer available **elsewhere in the same payload** — use that rather than parsing the decimal. These equivalences are asserted by the same test.
+
 **`MatchPreview` — 3 unpaired:**
 
-| Field | Sign | How to decode |
-|---|---|---|
-| `economics.takerProfitOnWinUSDC` | always positive | `usdcDecimalToAmountWei6`, or exactly `= fillMakerRiskWei6` |
-| `economics.takerReturnOnWinUSDC` | always positive | `usdcDecimalToAmountWei6`, or exactly `= takerRiskWei6 + fillMakerRiskWei6` |
-| `outcomes[].payoutUSDC` | **signed per row** | see below |
+| Field | Integer source in the same payload |
+|---|---|
+| `economics.takerProfitOnWinUSDC` | `you.profit.wei6` (equals `economics.fillMakerRiskWei6`) |
+| `economics.takerReturnOnWinUSDC` | `you.totalReturn.wei6` (equals `takerRiskWei6 + fillMakerRiskWei6`) |
+| `outcomes[].payoutUSDC` | **none** — see below |
 
 **`SubmitPreview` — 5 unpaired (a different, larger set):**
 
-| Field | Sign | How to decode |
-|---|---|---|
-| `economics.counterpartyRiskUSDC` | always positive | `usdcDecimalToAmountWei6` |
-| `economics.profitUSDC` | always positive | `usdcDecimalToAmountWei6` |
-| `economics.returnUSDC` | always positive | `usdcDecimalToAmountWei6` |
-| `market.speculation.makerCreationFeeUSDC` | always positive; **lazy mode only** | `usdcDecimalToAmountWei6` |
-| `outcomes[].payoutUSDC` | **signed per row** | see below |
+| Field | Integer source in the same payload |
+|---|---|
+| `economics.counterpartyRiskUSDC` | `counterparty.risk.wei6` |
+| `economics.profitUSDC` | `you.profit.wei6` |
+| `economics.returnUSDC` | `you.totalReturn.wei6` |
+| `market.speculation.makerCreationFeeUSDC` (**lazy mode only**) | `market.speculation.creationFee.makerShareWei6` |
+| `outcomes[].payoutUSDC` | **none** — see below |
 
-`outcomes[].payoutUSDC` is the one field shared by both, and the only **signed** USDC string either envelope emits: `'win'` and `'push'` rows are positive and parse normally, while a `'lose'` row is the negated risk (e.g. `'-7.700000'`) and parses under **neither** parser. Strip the sign yourself, or derive it from the perspective's unsigned `risk.wei6` / `profit.wei6`.
+> **Do not assume these are positive.** The builders accept supported inputs that make them exactly `'0.000000'`: a fee-disabled chain (`makerCreationFeeWei6: 0n`) zeroes `makerCreationFeeUSDC`, and a risk small enough that profit floors to zero (`riskWei6: 1n` at `oddsTick` 101) zeroes `profitUSDC` and `counterpartyRiskUSDC`. `usdcDecimalToAmountWei6` refuses zero — which is exactly why the integer source above, not the parser, is the guidance.
+
+`outcomes[].payoutUSDC` is the one field shared by both envelopes, the only **signed** USDC string either emits, and the only one with no integer source: `'win'` and `'push'` rows are positive and parse normally, while a `'lose'` row is the negated risk (e.g. `'-7.700000'`) and parses under **neither** parser. Strip the sign yourself, or derive it from the perspective's unsigned `risk.wei6` / `profit.wei6`.
 
 `usdcDecimalToAmountWei6` inverts `wei6ToDecimalUSDC` **for positive amounts only**. It is an input validator for user-supplied amounts, so it refuses zero and negatives: a documented emission like `creationFee.viewerShareUSDC: '0.000000'` (non-lazy speculation, or a viewer with no share) does **not** parse. Use it for values a human or agent typed, not for decoding a payload. (`usdcDecimalToWei6` is the maker-risk parser: it additionally enforces the 100-wei6 lot rule and rejects off-grid amounts such as a `takerRiskUSDC` of `'0.999936'`.)
 
