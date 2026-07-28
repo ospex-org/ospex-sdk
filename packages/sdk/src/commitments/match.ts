@@ -25,9 +25,20 @@ import type { Hex } from '../types/signer.js';
 export interface MatchArgs {
   /**
    * Optional override of the taker's desired risk (USDC, 6 decimals).
-   * Defaults to the commitment's full remaining capacity. Clamped to
-   * `commitment.remainingRiskAmount`. Zero is rejected as a validation
-   * error.
+   * **Omit it to fill the commitment's full remaining capacity** — that is
+   * the only way to say "take whatever is left".
+   *
+   * An explicit value is **NOT** clamped to `commitment.remainingRiskAmount`.
+   * If its lot-rounded maker leg exceeds what remains, the match is **refused**
+   * with `OspexValidationError`, thrown by the pure preview builder before any
+   * transaction is constructed, signed, or broadcast — **no gas is spent**.
+   * Note the refusal is not free of I/O: `prepareMatch` runs first, so the
+   * commitment + contest API reads and the read-only RPC allowance preflight
+   * have already happened by then. Zero is likewise rejected.
+   *
+   * (A different, downward-only adjustment does exist: after lot rounding the
+   * derived taker risk is capped to this value, so you never pay more than
+   * you asked for. That is not a clamp to the maker's remaining capacity.)
    */
   takerDesiredRisk?: bigint;
 }

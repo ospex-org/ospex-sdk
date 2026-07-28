@@ -33,7 +33,7 @@
  *
  * Authoritative semantics are the same as before: once
  * `s_cancelledCommitments[hash]` is set, `matchCommitment` reverts with
- * `MatchingModule__CommitmentCancelled` (MatchingModule.sol:490). The
+ * `MatchingModule__CommitmentCancelled`. The
  * off-chain DELETE only stops the API relay from rebroadcasting — it
  * does NOT prevent a taker who already holds the signed payload from
  * matching the commitment.

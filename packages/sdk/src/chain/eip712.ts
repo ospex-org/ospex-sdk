@@ -173,7 +173,7 @@ export function hashStreamChallenge(
  *
  * This is the lookup key for `s_minNonces[maker][speculationKey]` and
  * matches the Supabase `speculation_key` column. Mirrors the contract
- * derivation at MatchingModule.sol:477-483.
+ * derivation in MatchingModule (`keccak256(abi.encode(contestId, scorer, lineTicks))`, as used by `raiseMinNonce` / `cancelCommitment`).
  */
 export function deriveSpeculationKey(
   contestId: bigint,

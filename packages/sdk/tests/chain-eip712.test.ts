@@ -3,7 +3,7 @@
  *
  * The "hash vector" test pins the SDK's typed-data encoding against
  * the contract's COMMITMENT_TYPEHASH (verbatim from
- * MatchingModule.sol:43-56). If anyone reorders fields, renames a
+ * MatchingModule.COMMITMENT_TYPEHASH). If anyone reorders fields, renames a
  * field, or changes a type, the typehash diverges and these tests
  * catch it before a single bad commitment hits the wire.
  *
@@ -31,7 +31,7 @@ import {
 } from '../src/chain/eip712.js';
 import type { Hex } from '../src/types/signer.js';
 
-// Verbatim from MatchingModule.sol:43-56. Any drift between this
+// Verbatim from MatchingModule.COMMITMENT_TYPEHASH. Any drift between this
 // string and the contract's keccak256 input means the SDK and the
 // contract disagree on what they're hashing.
 const COMMITMENT_TYPEHASH_STRING =

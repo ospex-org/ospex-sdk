@@ -605,3 +605,61 @@ describe('prepareMatch — redacted commitment refusal', () => {
     });
   });
 });
+
+describe('prepareMatch — an oversized taker risk is refused AFTER read-only preflight', () => {
+  // This pins the exact wording on MatchArgs.takerDesiredRisk and
+  // PrepareMatchArgs.takerDesiredRiskWei6.
+  //
+  // A first pass at those docs claimed the refusal happens "before any signing
+  // or RPC". The no-signing / no-broadcast / no-gas half is true; the "no RPC"
+  // half is NOT, because buildMatchPreview is the LAST thing prepareMatch
+  // calls — the commitment + contest reads and the allowance preflight have
+  // already run. Fixing a doc-untruth by writing a new one is the failure this
+  // test exists to prevent, in both directions:
+  //   - move the size check earlier and `reads` goes to 0 → this fails, and
+  //     whoever moved it must update the docs to match.
+  //   - let it reach signing → the signer assertion fails.
+  it('refuses, having already done the contest + allowance reads, and never signs', async () => {
+    let signerCalls = 0;
+    const { ctx, contestsGet, reads } = buildContext();
+    const instrumented: CommitmentsContext = {
+      ...ctx,
+      requireSigner: () => {
+        signerCalls += 1;
+        return ctx.requireSigner();
+      },
+    };
+
+    await expect(
+      prepareMatch(instrumented, {
+        commitment: makeCommitment(),
+        taker: TAKER,
+        // Maker has 1.0 USDC remaining at tick 250 → full take is 1.5 USDC.
+        // Ask for double what the maker can support.
+        takerDesiredRiskWei6: 3_000_000n,
+      }),
+    ).rejects.toThrow(/not in \(0, remaining=/);
+
+    // The documented cost of the refusal: read-only preflight DID happen.
+    expect(contestsGet).toHaveBeenCalledTimes(1);
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every((r) => r.functionName === 'allowance')).toBe(true);
+
+    // The documented GUARANTEE: nothing on the write path was touched.
+    expect(signerCalls).toBe(0);
+  });
+
+  it('an in-range taker risk proceeds past the same point', async () => {
+    // Positive control — the reads above are not evidence of a refusal, they
+    // happen on the success path too. Without this, the test above would still
+    // pass if prepareMatch were broken to reject everything.
+    const { ctx, reads } = buildContext();
+    const preview = await prepareMatch(ctx, {
+      commitment: makeCommitment(),
+      taker: TAKER,
+      takerDesiredRiskWei6: 1_500_000n,
+    });
+    expect(BigInt(preview.economics.fillMakerRiskWei6)).toBe(1_000_000n);
+    expect(reads.length).toBeGreaterThan(0);
+  });
+});
