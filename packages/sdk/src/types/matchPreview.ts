@@ -23,15 +23,18 @@
  * inside `you` / `counterparty` the pair is `{ wei6, usdc }` on the same
  * object. **Decode those with `BigInt(...)`** — exact, never throws.
  *
- * Three fields have NO paired integer (the set is pinned by a test):
+ * Three fields have NO paired integer IN THIS ENVELOPE (pinned by
+ * `usdc-field-pairing.test.ts`; `SubmitPreview` has a different, larger
+ * set — do not treat this list as global):
  *   - `economics.takerProfitOnWinUSDC` and `economics.takerReturnOnWinUSDC`
  *     — always positive, so `usdcDecimalToAmountWei6` decodes them; or
  *     derive exactly, since profit-on-win is `fillMakerRiskWei6` and
  *     return-on-win is `takerRiskWei6 + fillMakerRiskWei6`.
- *   - `outcomes[].payoutUSDC` — SIGNED (`'lose'` rows are the negated
- *     risk, e.g. `'-7.700000'`), so NEITHER parser accepts it. Strip the
- *     sign yourself, or derive it from the perspective's unsigned
- *     `risk.wei6` / `profit.wei6`.
+ *   - `outcomes[].payoutUSDC` — SIGNED per row: `'win'` / `'push'` rows
+ *     are positive and parse, while a `'lose'` row is the negated risk
+ *     (e.g. `'-7.700000'`) and NEITHER parser accepts it. Strip the sign
+ *     yourself, or derive it from the perspective's unsigned `risk.wei6` /
+ *     `profit.wei6`.
  *
  * Do not assume any decimal string parses: `wei6ToDecimalUSDC` is total,
  * but the SDK's parsers validate user-supplied input and accept POSITIVE

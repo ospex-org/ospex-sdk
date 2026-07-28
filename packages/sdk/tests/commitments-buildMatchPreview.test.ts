@@ -963,62 +963,13 @@ describe('buildMatchPreview — the emitted USDC-string domain vs. what parses',
   });
 });
 
-describe('buildMatchPreview — which USDC strings carry a paired integer', () => {
+describe('buildMatchPreview — the two unpaired economics USDC fields', () => {
   /**
-   * The public JSDoc and AGENT_CONTRACT tell agents to decode USDC amounts
-   * via the paired `*Wei6` field. That rule has exactly three exceptions,
-   * and this test PINS THE EXCEPTION SET so a fourth cannot appear without
-   * failing here and forcing the docs to be updated. Naming a specific
-   * exception in prose is what put this claim wrong twice.
+   * The full paired/unpaired classification for BOTH preview envelopes lives
+   * in `usdc-field-pairing.test.ts`. This covers the MatchPreview-specific
+   * consequence: the docs tell agents to DERIVE these two rather than parse
+   * them, which is only safe advice if the derivation is exact.
    */
-  const UNPAIRED = [
-    '$.economics.takerProfitOnWinUSDC',
-    '$.economics.takerReturnOnWinUSDC',
-    '$.outcomes[*].payoutUSDC',
-  ];
-
-  function classify(node: unknown, path: string, paired: Set<string>, unpaired: Set<string>): void {
-    if (node === null || node === undefined) return;
-    if (Array.isArray(node)) {
-      for (const v of node) classify(v, `${path}[*]`, paired, unpaired);
-      return;
-    }
-    if (typeof node !== 'object') return;
-    const rec = node as Record<string, unknown>;
-    const keys = Object.keys(rec);
-    for (const k of keys) {
-      const v = rec[k];
-      if (typeof v === 'string' && (k.endsWith('USDC') || k === 'usdc')) {
-        const twin = k === 'usdc' ? 'wei6' : `${k.slice(0, -4)}Wei6`;
-        const has = keys.includes(twin) && typeof rec[twin] === 'string';
-        (has ? paired : unpaired).add(`${path}.${k}`);
-      } else {
-        classify(v, `${path}.${k}`, paired, unpaired);
-      }
-    }
-  }
-
-  it('the set of USDC fields WITHOUT a paired integer is exactly the documented three', () => {
-    const paired = new Set<string>();
-    const unpaired = new Set<string>();
-    for (const args of [
-      baseArgs(),
-      baseArgs({ speculation: { mode: 'lazy' } }),
-      baseArgs({ commitment: makeCommitment({ marketType: 'spread', lineTicks: -35 }) }),
-      baseArgs({ commitment: makeCommitment({ marketType: 'total', lineTicks: 85 }) }),
-      baseArgs({ takerDesiredRiskWei6: 150n }),
-    ]) {
-      classify(buildMatchPreview(args), '$', paired, unpaired);
-    }
-
-    expect([...unpaired].sort()).toEqual([...UNPAIRED].sort());
-    // Non-vacuous: the paired majority is real, so the general rule is worth
-    // stating and the exception list is genuinely an exception list.
-    expect(paired.size).toBeGreaterThan(10);
-    // And the `{ wei6, usdc }` convention is in the paired set, not skipped.
-    expect([...paired]).toContain('$.you.risk.usdc');
-  });
-
   it('the two unpaired ECONOMICS fields are positive and derivable from paired ones', () => {
     // The docs tell agents to derive these rather than parse them; that
     // advice is only safe if the derivation is exact. Sweep, do not sample.

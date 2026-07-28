@@ -300,16 +300,18 @@ export interface PreviewOutcome {
    * Formatted USDC string. For 'lose' shows the negative risk; for 'push'
    * shows the stake returned.
    *
-   * **Signed, and one of three USDC fields with no paired `*Wei6` twin**
-   * (the others are `economics.takerProfitOnWinUSDC` and
-   * `economics.takerReturnOnWinUSDC`, which are always positive and so do
-   * parse). A `'lose'` row is `wei6ToDecimalUSDC(-risk)` — e.g.
-   * `'-7.700000'` — which NEITHER `usdcDecimalToAmountWei6` nor
-   * `usdcDecimalToWei6` will parse, since both accept positive amounts
-   * only. This is the one USDC string in a preview that has no sanctioned
-   * decode path: take the sign off it yourself, or derive it from the
-   * perspective's `risk.wei6` / `profit.wei6`, which are unsigned and
-   * paired.
+   * **Has no paired `*Wei6` twin, and is the only SIGNED USDC string either
+   * preview envelope emits.** (`MatchPreview` and `SubmitPreview` each have
+   * other unpaired USDC fields, but they differ between the two and are all
+   * positive — see `AGENT_CONTRACT.md`.)
+   *
+   * `'win'` and `'push'` rows are positive and parse normally. A `'lose'`
+   * row is `wei6ToDecimalUSDC(-risk)` — e.g. `'-7.700000'` — which NEITHER
+   * `usdcDecimalToAmountWei6` nor `usdcDecimalToWei6` will parse, since
+   * both accept positive amounts only. That row is the one string in either
+   * envelope with no sanctioned decode path: take the sign off it yourself,
+   * or derive it from the perspective's `risk.wei6` / `profit.wei6`, which
+   * are unsigned and paired.
    */
   payoutUSDC: string;
 }
