@@ -172,13 +172,48 @@ The shortest path to your first bet — three or four commands once setup is don
 
 ### 1. Set up approvals
 
-One-line bulk approve, with sensible defaults:
+One line covers both allowances Ospex needs:
 
 ```bash
-ospex approvals setup --risk-usdc 50 --yes
+ospex approvals setup --risk-usdc 50 --fee-usdc 5 --yes
 ```
 
-This approves **PositionModule** for 50 USDC (your bet risk pool — the contract pulls from this allowance both when you match someone else's commitment and when one of your own commitments is filled). When `--risk-usdc` is set alone, a small `--fee-usdc` budget is auto-included so the next match doesn't trigger a mid-bet approval prompt for the lazy speculation creation fee; pass `--fee-usdc 0` to opt out, or run `ospex approvals show` to verify what landed.
+Two independent spenders, one flag each:
+
+| Flag | Spender | What it pays for |
+|---|---|---|
+| `--risk-usdc` | **PositionModule** | Your bet risk pool. Pulled when you match someone else's commitment, and when one of your own commitments is filled. |
+| `--fee-usdc` | **TreasuryModule** | Protocol fees: 1 USDC to create a contest, and 0.25 USDC per side of the speculation creation fee. |
+
+**Approve a fee budget if you might be first to a market.** The speculation creation fee is charged lazily — the *first* commitment match on a given market pays it, 0.25 USDC from each side. If your TreasuryModule allowance doesn't cover your share, that match reverts. Later matches on an already-created market are free, so a wallet that only ever takes existing lines can skip `--fee-usdc`; a wallet that opens markets cannot.
+
+The two flags are independent. Passing one leaves the other allowance untouched — approving bet risk never implies a fee approval. Run `ospex approvals show` to verify what landed.
+
+`approvals setup` only ever **raises** an allowance. It will not lower one, and an explicit `0` is refused rather than silently doing nothing. To revoke, see [Revoking approvals](#revoking-approvals) below.
+
+#### Revoking approvals
+
+`approvals setup` is a one-way tool — it raises allowances and never lowers them. Winding one back down is a separate operation, and the two spenders have separate surfaces:
+
+```bash
+# PositionModule (bet risk) — revoke to zero.
+ospex commitments approve 0 --yes
+
+# TreasuryModule (protocol fees) — no CLI wrapper; go through the token.
+cast send <USDC> "approve(address,uint256)" <TreasuryModule> 0 \
+  --rpc-url <your-rpc> --account <your-keystore>
+```
+
+Programmatic equivalent of the second one, if you already have a client:
+
+```ts
+await client.commitments.approveCreationFee(0n);   // USDC.approve(TreasuryModule, 0)
+```
+
+Two things to know before you rely on this:
+
+- **`approvals setup --risk-usdc 0 --fee-usdc 0` is not a revocation.** It is refused with an error. Prior to 0.11.0 it silently exited 0 with a green, zero-send envelope while both allowances stayed live — if you have a script that reads that as proof of revocation, it never was.
+- **A green envelope is not revocation evidence.** Confirm with an independent read: `ospex approvals show --address <wallet>`, or `allowance(owner, spender)` straight off the token.
 
 ### 2. Find a commitment
 
@@ -228,8 +263,10 @@ Set the price yourself; wait for a taker to fill the other side. The maker path 
 Same one-liner as the bettor path; size the risk budget for the total liability you're willing to have on the orderbook at once:
 
 ```bash
-ospex approvals setup --risk-usdc 200 --yes
+ospex approvals setup --risk-usdc 200 --fee-usdc 5 --yes
 ```
+
+Makers should always carry a fee budget. Submitting a commitment at a price nobody has quoted yet makes you the market's opener, so your side of the 0.25 USDC speculation creation fee comes due on its first match.
 
 ### 2. Pick a price
 
@@ -480,7 +517,7 @@ If none of those resolve, the command errors out with `non_interactive_password_
 
 `--yes --json` runs the full flow and emits `{ schemaVersion, …, payload: { preview, result, fundability, preflightFundability?, approvalRemediation? } }` on stdout. `fundability` is the **effective send-time** advisory submit-preflight verdict — a post-approval re-check when the auto-approve loop confirmed any tx, the pre-approval verdict when no approve was needed, and `null` when skipped with `--force` / `--skip-fundability-preflight`. `match` is structurally identical (`fillability` / `preflightFillability` / `approvalRemediation`). The "Resolved <prefix> → <fullHash>" echo (when a prefix is passed) goes to stderr so stdout stays parseable JSON.
 
-`--approve-max` is the non-interactive shortcut for unlimited USDC approval; without it, `--yes` approves the exact amount needed. (Mostly redundant if the agent runs `ospex approvals setup --risk-usdc <n> --yes` once during init.)
+`--approve-max` is the non-interactive shortcut for unlimited USDC approval; without it, `--yes` approves the exact amount needed. (Mostly redundant if the agent runs `ospex approvals setup --risk-usdc <n> --fee-usdc <n> --yes` once during init. Agents that submit commitments should set both — the fee dimension is not implied by the risk dimension, and an agent opening a new market pays its side of the creation fee on that market's first match.)
 
 For machine-readable wallet/readiness state:
 
@@ -544,7 +581,7 @@ The CLI separates **one-shot user actions** (request → reply → exits) from *
 | Goal | Command |
 |---|---|
 | Check setup readiness for a wallet | `ospex doctor [--address <addr>]` |
-| Bulk-approve USDC budgets | `ospex approvals setup --risk-usdc <n> [--fee-usdc <n>]` |
+| Bulk-approve USDC budgets | `ospex approvals setup [--risk-usdc <n>] [--fee-usdc <n>]` (independent dimensions; raises only) |
 | Inspect approvals for any wallet | `ospex approvals show [--address <addr>]` |
 | See current upstream reference odds for a contest | `ospex odds show <contestId>` |
 | Take an open commitment as the counterparty | `ospex commitments match <hash-or-prefix>` |
@@ -572,7 +609,7 @@ The full command reference is in the [README](../README.md).
 
 **`Failed to decrypt keystore`** — wrong passphrase, or the file is not a v3 keystore. Foundry always produces v3; this is almost always the passphrase.
 
-**`OspexAllowanceError: insufficient allowance`** — `ospex commitments submit` (high-level) prompts for an approval and runs it before signing, so this should be rare. Interactive runs default the amount prompt to the exact-required value — type `max` instead if you want unlimited. Non-interactive runs (`--yes`) default to exact-required; pass `--approve-max` alongside `--yes` for unlimited. For scripted flows that approve out-of-band, run `ospex approvals setup --risk-usdc <n>` (decimal USDC) for the multi-spender path, or `ospex commitments approve <decimal-usdc|max>` for the single-spender shortcut (use `commitments approve-raw <wei6>` if you already have 6-decimal-units integers). If you're creating contests, the USDC creation fee targets TreasuryModule (distinct from the PositionModule bet-risk allowance); the CLI prompts on demand.
+**`OspexAllowanceError: insufficient allowance`** — `ospex commitments submit` (high-level) prompts for an approval and runs it before signing, so this should be rare. Interactive runs default the amount prompt to the exact-required value — type `max` instead if you want unlimited. Non-interactive runs (`--yes`) default to exact-required; pass `--approve-max` alongside `--yes` for unlimited. For scripted flows that approve out-of-band, run `ospex approvals setup --risk-usdc <n> --fee-usdc <n>` (decimal USDC) for the multi-spender path, or `ospex commitments approve <decimal-usdc|max>` for the single-spender shortcut (use `commitments approve-raw <wei6>` if you already have 6-decimal-units integers). The fee dimension is independent — `--risk-usdc` alone approves PositionModule and nothing else. If you're creating contests, or may be first to a market, the USDC fee targets TreasuryModule (distinct from the PositionModule bet-risk allowance); the CLI prompts on demand.
 
 **`OspexChainError: <selector>`** — a transaction reverted. The selector usually decodes to a known contract error (e.g., `MatchingModule__NonceMustIncrease`). Read the printed reason; if unclear, file an issue with the tx hash.
 

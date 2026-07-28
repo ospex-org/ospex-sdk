@@ -95,7 +95,6 @@ export interface JsonSetupPlanItem {
   purpose: string;
   currentRaw: string;
   currentFormatted: string;
-  autoIncluded: boolean;
   action:
     | { kind: 'send'; targetRaw: string; targetFormatted: string; targetIsMax: boolean }
     | { kind: 'skip-already-approved'; targetRaw: string; targetFormatted: string }
@@ -170,7 +169,6 @@ function planItemToJson(item: PlanItem): JsonSetupPlanItem {
     purpose: item.purpose,
     currentRaw: item.currentRaw.toString(),
     currentFormatted: formatUnits(item.currentRaw, item.decimals),
-    autoIncluded: item.autoIncluded,
   };
 
   if (item.action.kind === 'send') {
@@ -231,11 +229,6 @@ function renderPlanItemLine(item: PlanItem): string {
       : `${formatTokenAmount(item.action.targetRaw, item.decimals, tokenLabel)}`;
     const head = `${INDENT}Send  ${moduleLabel}  →  ${amount.padEnd(24)}${item.purpose}`;
     const sub: string[] = [];
-    if (item.autoIncluded) {
-      sub.push(
-        `${INDENT}                              (auto-included alongside --risk-usdc; pass --fee-usdc 0 to skip)`,
-      );
-    }
     if (item.currentRaw > 0n) {
       sub.push(
         `${INDENT}                              currently ${formatTokenAmount(item.currentRaw, item.decimals, tokenLabel)} approved`,

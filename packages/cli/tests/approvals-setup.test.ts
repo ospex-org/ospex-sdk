@@ -2,8 +2,8 @@
  * Tests for the `ospex approvals setup` planner, parsers, and renderer.
  * Covers:
  *
- *   - parseUsdcInput strict parsing rules
- *   - buildSetupPlan auto-include rule, skip-already-approved,
+ *   - parseUsdcInput strict parsing rules, incl. the explicit-zero refusal
+ *   - buildSetupPlan dimension orthogonality, skip-already-approved,
  *     skip-not-requested, max handling, no-op detection
  *   - renderSetupPlan / setupPlanToJson output shapes
  *
@@ -18,7 +18,7 @@
 import { describe, expect, it } from 'vitest';
 import { Writable } from 'node:stream';
 import { maxUint256 } from 'viem';
-import type { ApprovalsSnapshot } from '@ospex/sdk';
+import { OspexValidationError, type ApprovalsSnapshot } from '@ospex/sdk';
 import {
   buildSetupPlan,
   parseUsdcInput,
@@ -80,13 +80,42 @@ describe('parseUsdcInput', () => {
     expect(parseUsdcInput('max')).toEqual({ kind: 'max' });
   });
 
-  it('returns skip for undefined, empty string, "skip", and "0"', () => {
+  it('returns skip for undefined, empty string, and "skip"', () => {
     expect(parseUsdcInput(undefined)).toEqual({ kind: 'skip' });
     expect(parseUsdcInput('')).toEqual({ kind: 'skip' });
     expect(parseUsdcInput(' ')).toEqual({ kind: 'skip' });
     expect(parseUsdcInput('skip')).toEqual({ kind: 'skip' });
-    expect(parseUsdcInput('0')).toEqual({ kind: 'skip' });
-    expect(parseUsdcInput('0.0')).toEqual({ kind: 'skip' });
+  });
+
+  it('REFUSES an explicit zero rather than collapsing it into skip', () => {
+    // The regression this command shipped with: an explicit 0 parsed to
+    // `skip`, so `--risk-usdc 0 --fee-usdc 0 --yes --json` returned a
+    // green zero-send envelope while both allowances stayed live.
+    for (const zero of ['0', '0.0', '0.000000', ' 0 ']) {
+      expect(() => parseUsdcInput(zero)).toThrow(OspexValidationError);
+      expect(() => parseUsdcInput(zero)).toThrow(/is not a revocation/);
+    }
+  });
+
+  it('names the originating flag in the refusal when one is supplied', () => {
+    expect(() => parseUsdcInput('0', '--fee-usdc')).toThrow(/`--fee-usdc 0` is not a revocation/);
+    expect(() => parseUsdcInput('0', '--fee-usdc')).toThrow(/omit --fee-usdc \(or pass "skip"\)/);
+  });
+
+  it('tells an interactive caller to answer "skip", not to omit a flag', () => {
+    expect(() => parseUsdcInput('0')).toThrow(/answer "skip"/);
+    expect(() => parseUsdcInput('0')).not.toThrow(/omit --/);
+  });
+
+  it('points the refusal at both real revocation surfaces', () => {
+    // PositionModule has a CLI revoke; TreasuryModule does not, so the
+    // message must not imply `approvals setup` can do either.
+    expect(() => parseUsdcInput('0')).toThrow(/ospex commitments approve 0/);
+    expect(() => parseUsdcInput('0')).toThrow(/approve\(TreasuryModule, 0\)/);
+  });
+
+  it('throws typed OspexValidationError (not a bare Error) on bad shape', () => {
+    expect(() => parseUsdcInput('nope')).toThrow(OspexValidationError);
   });
 
   it('rejects negatives, exponents, commas, more than 6 decimals', () => {
@@ -100,31 +129,50 @@ describe('parseUsdcInput', () => {
   });
 });
 
-describe('buildSetupPlan — auto-include rule', () => {
-  it('auto-includes a 1 USDC fee budget when --risk-usdc is set alone', () => {
+describe('buildSetupPlan — the two dimensions are orthogonal', () => {
+  it('--risk-usdc alone touches PositionModule ONLY (no implied fee approval)', () => {
     const plan = buildSetupPlan({ riskUsdc: '50' }, makeSnapshot());
-    expect(plan.willSendCount).toBe(2);
-    const treasury = plan.items.find((i) => i.spenderModule === 'treasuryModule')!;
-    expect(treasury.action.kind).toBe('send');
-    if (treasury.action.kind === 'send') {
-      expect(treasury.action.targetRaw).toBe(1_000_000n);
-    }
-    expect(treasury.autoIncluded).toBe(true);
-  });
-
-  it('does NOT auto-include when --fee-usdc is explicitly "0"', () => {
-    const plan = buildSetupPlan({ riskUsdc: '50', feeUsdc: '0' }, makeSnapshot());
     expect(plan.willSendCount).toBe(1);
+    const position = plan.items.find((i) => i.spenderModule === 'positionModule')!;
     const treasury = plan.items.find((i) => i.spenderModule === 'treasuryModule')!;
+    expect(position.action.kind).toBe('send');
     expect(treasury.action.kind).toBe('skip-not-requested');
-    expect(treasury.autoIncluded).toBe(false);
   });
 
-  it('does NOT auto-include when only --fee-usdc is set (no risk)', () => {
-    const planFee = buildSetupPlan({ feeUsdc: '5' }, makeSnapshot());
-    expect(planFee.items.find((i) => i.spenderModule === 'treasuryModule')!.autoIncluded).toBe(false);
-    const position = planFee.items.find((i) => i.spenderModule === 'positionModule')!;
+  it('--fee-usdc alone touches TreasuryModule ONLY', () => {
+    const plan = buildSetupPlan({ feeUsdc: '5' }, makeSnapshot());
+    expect(plan.willSendCount).toBe(1);
+    const position = plan.items.find((i) => i.spenderModule === 'positionModule')!;
+    const treasury = plan.items.find((i) => i.spenderModule === 'treasuryModule')!;
     expect(position.action.kind).toBe('skip-not-requested');
+    expect(treasury.action.kind).toBe('send');
+  });
+
+  it('an omitted dimension never sends, regardless of the other dimension', () => {
+    // Cross-dimension defaulting is exactly what was removed: no input
+    // to one flag can ever produce a send on the other spender.
+    for (const input of [{ riskUsdc: 'max' }, { riskUsdc: '0.000001' }, {}]) {
+      const treasury = buildSetupPlan(input, makeSnapshot()).items.find(
+        (i) => i.spenderModule === 'treasuryModule',
+      )!;
+      expect(treasury.action.kind).toBe('skip-not-requested');
+    }
+  });
+
+  it('refuses an explicit zero on either dimension instead of planning a no-op', () => {
+    expect(() => buildSetupPlan({ riskUsdc: '0' }, makeSnapshot())).toThrow(
+      OspexValidationError,
+    );
+    expect(() => buildSetupPlan({ feeUsdc: '0' }, makeSnapshot())).toThrow(
+      OspexValidationError,
+    );
+    // The reported repro: both explicit zeros, against live allowances.
+    expect(() =>
+      buildSetupPlan(
+        { riskUsdc: '0', feeUsdc: '0' },
+        makeSnapshot({ positionModule: 100_000_000n, treasuryModule: 5_000_000n }),
+      ),
+    ).toThrow(/is not a revocation/);
   });
 });
 
@@ -138,24 +186,29 @@ describe('buildSetupPlan — skip-already-approved', () => {
     expect(position.action.kind).toBe('skip-already-approved');
   });
 
-  it('still auto-includes fee even if Position already covered', () => {
+  it('skips fee when current >= requested', () => {
     const plan = buildSetupPlan(
-      { riskUsdc: '50' },
-      makeSnapshot({ positionModule: 100_000_000n }),
-    );
-    const treasury = plan.items.find((i) => i.spenderModule === 'treasuryModule')!;
-    expect(treasury.autoIncluded).toBe(true);
-    expect(treasury.action.kind).toBe('send');
-  });
-
-  it('skips fee when current >= auto-included target', () => {
-    const plan = buildSetupPlan(
-      { riskUsdc: '50' },
+      { riskUsdc: '50', feeUsdc: '1' },
       makeSnapshot({ treasuryModule: 5_000_000n }),
     );
     const treasury = plan.items.find((i) => i.spenderModule === 'treasuryModule')!;
     expect(treasury.action.kind).toBe('skip-already-approved');
-    expect(treasury.autoIncluded).toBe(true);
+  });
+
+  it('distinguishes skip-already-approved from skip-not-requested', () => {
+    // Both render as "Skip" but mean different things: one was asked for
+    // and is already covered, the other was never asked for at all.
+    const plan = buildSetupPlan(
+      { riskUsdc: '50' },
+      makeSnapshot({ positionModule: 100_000_000n, treasuryModule: 5_000_000n }),
+    );
+    expect(plan.items.find((i) => i.spenderModule === 'positionModule')!.action.kind).toBe(
+      'skip-already-approved',
+    );
+    expect(plan.items.find((i) => i.spenderModule === 'treasuryModule')!.action.kind).toBe(
+      'skip-not-requested',
+    );
+    expect(plan.willSendCount).toBe(0);
   });
 
   it('detects no-op when nothing needs to send', () => {
@@ -218,8 +271,8 @@ describe('buildSetupPlan — two-dimension flag mode', () => {
 describe('renderSetupPlan', () => {
   it('renders Send / Skip lines and module labels', () => {
     const sink = new StringSink();
-    // risk send + fee explicitly skipped → one Send, one Skip.
-    const plan = buildSetupPlan({ riskUsdc: '50', feeUsdc: '0' }, makeSnapshot());
+    // risk send + fee omitted → one Send, one Skip.
+    const plan = buildSetupPlan({ riskUsdc: '50' }, makeSnapshot());
     renderSetupPlan(plan, sink);
     expect(sink.buf).toContain('Approval setup plan for ');
     expect(sink.buf).toContain('Polygon mainnet');
@@ -230,12 +283,14 @@ describe('renderSetupPlan', () => {
     expect(sink.buf).toContain('50.000000 USDC');
   });
 
-  it('flags an auto-included fee with "auto-included alongside --risk-usdc"', () => {
+  it('never advertises an auto-include or a zero opt-out', () => {
+    // Negative control for the removed behaviour: the renderer used to
+    // print "(auto-included alongside --risk-usdc; pass --fee-usdc 0 to
+    // skip)", which is the idiom that taught operators `0` means skip.
     const sink = new StringSink();
-    const plan = buildSetupPlan({ riskUsdc: '50' }, makeSnapshot());
-    renderSetupPlan(plan, sink);
-    expect(sink.buf).toContain('auto-included alongside --risk-usdc');
-    expect(sink.buf).toContain('--fee-usdc 0 to skip');
+    renderSetupPlan(buildSetupPlan({ riskUsdc: '50' }, makeSnapshot()), sink);
+    expect(sink.buf).not.toContain('auto-included');
+    expect(sink.buf).not.toContain('--fee-usdc 0');
   });
 
   it('renders the "no-op" message when no items send', () => {
@@ -321,7 +376,7 @@ describe('setup envelope shape', () => {
   // `--yes --json` (executed) must be { schemaVersion, plan, [results] }
   // — schemaVersion at the envelope level, NOT inside the plan body.
   it('preview envelope shape: { schemaVersion: 1, plan: {...} }', () => {
-    const plan = buildSetupPlan({ riskUsdc: '50' }, makeSnapshot());
+    const plan = buildSetupPlan({ riskUsdc: '50', feeUsdc: '5' }, makeSnapshot());
     const env = buildSetupPreviewEnvelope(plan);
     expect(env.schemaVersion).toBe(1);
     expect(env.plan).toBeDefined();
@@ -331,7 +386,7 @@ describe('setup envelope shape', () => {
   });
 
   it('result envelope shape: { schemaVersion: 1, plan: {...}, results: [...] }', () => {
-    const plan = buildSetupPlan({ riskUsdc: '50' }, makeSnapshot());
+    const plan = buildSetupPlan({ riskUsdc: '50', feeUsdc: '5' }, makeSnapshot());
     const env = buildSetupResultEnvelope(plan, [
       {
         spenderModule: 'positionModule',
