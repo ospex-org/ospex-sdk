@@ -22,6 +22,7 @@ import type {
   BuildMatchPreviewArgs,
 } from '../src/types/matchPreview.js';
 import type { Commitment } from '../src/types/commitment.js';
+import { usdcDecimalToAmountWei6 } from '../src/commitments/decimals.js';
 
 const MAKER = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as `0x${string}`;
 const TAKER = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as `0x${string}`;
@@ -690,5 +691,146 @@ describe('buildMatchPreview — an explicit oversize is REFUSED, never clamped',
     expect(() => buildMatchPreview(baseArgs({ takerDesiredRiskWei6: 0n }))).toThrow(
       OspexValidationError,
     );
+  });
+});
+
+describe('buildMatchPreview — taker-risk round-trip (no lot rule on the taker leg)', () => {
+  /**
+   * The operator round-trip: run a preview, read back the taker risk it
+   * reported, and hand that exact number to a second run. This is how an
+   * orchestrator binds an execution to an already-validated preview.
+   *
+   * It goes through `usdcDecimalToAmountWei6` deliberately — that parse is
+   * the step the CLI performs on `--risk-usdc`, and it is the step that
+   * used to reject the preview's own output.
+   */
+  function roundTrip(oddsTick: number, remaining: string, desiredWei6: bigint) {
+    const args = (d: bigint) =>
+      baseArgs({
+        commitment: makeCommitment({
+          oddsTick,
+          riskAmount: remaining,
+          remainingRiskAmount: remaining,
+        }),
+        takerDesiredRiskWei6: d,
+      });
+    const first = buildMatchPreview(args(desiredWei6));
+    // Feed the REPORTED taker risk back through the CLI's own parser.
+    const reparsed = usdcDecimalToAmountWei6(first.economics.takerRiskUSDC);
+    const second = buildMatchPreview(args(reparsed));
+    return { first, second, reparsed };
+  }
+
+  it('is idempotent across a full sweep of odds and sizes (property, not sample)', () => {
+    let checked = 0;
+    let offGrid = 0;
+    let clampBound = 0;
+    for (let oddsTick = 101; oddsTick <= 10100; oddsTick += 37) {
+      for (const desired of [1n, 37n, 50n, 99n, 100n, 199n, 12_345n, 999_936n, 500_000n]) {
+        let r: ReturnType<typeof roundTrip>;
+        try {
+          r = roundTrip(oddsTick, '1000000', desired);
+        } catch (e) {
+          // buildMatchPreview refuses fills outside (0, remaining] — an
+          // interval bound, unrelated to the lot grid. Skip those. Assert
+          // the REASON too: OspexValidationError is also what a lot-size
+          // regression would throw, so a bare instanceof check would let
+          // one hide here as a skipped case.
+          expect(e).toBeInstanceOf(OspexValidationError);
+          expect((e as Error).message).not.toMatch(/lot size/);
+          continue;
+        }
+        expect(r.second.economics.fillMakerRiskWei6).toBe(r.first.economics.fillMakerRiskWei6);
+        expect(r.second.economics.takerRiskWei6).toBe(r.first.economics.takerRiskWei6);
+
+        // ABSOLUTE anchor, not just self-consistency: pin the reported taker
+        // risk to the contract's own formula, clamp included. Idempotence
+        // alone would still hold if the SDK's mirror of `matchCommitment`
+        // drifted, and `approvals[].required` on a match IS this number — an
+        // over-report would prompt for a larger allowance than the contract
+        // charges.
+        const profitTicks = BigInt(oddsTick) - 100n;
+        const fill = BigInt(r.first.economics.fillMakerRiskWei6);
+        const unclamped = (fill * profitTicks) / 100n;
+        const expected = unclamped > desired ? desired : unclamped;
+        expect(BigInt(r.first.economics.takerRiskWei6)).toBe(expected);
+        expect(BigInt(r.first.economics.takerRiskWei6)).toBeLessThanOrEqual(desired);
+        if (unclamped > desired) clampBound += 1;
+
+        if (r.reparsed % 100n !== 0n) offGrid += 1;
+        checked += 1;
+      }
+    }
+    // Meaningful coverage, and a real share of it is off the lot grid —
+    // i.e. these round-trips were impossible before the parser split.
+    expect(checked).toBeGreaterThan(500);
+    expect(offGrid).toBeGreaterThan(100);
+    // The clamp branch must actually be exercised, or `expected` above
+    // degenerates into the unclamped formula and pins only half the rule.
+    expect(clampBound).toBeGreaterThan(0);
+  });
+
+  it('emits and re-accepts the off-grid taker risk quoted in the issue (999936)', () => {
+    // oddsTick 244 → profitTicks 144. A fill of 694400 (lot-aligned) prices
+    // the taker at 694400 * 144 / 100 = 999936 — the value observed in the
+    // wild, 36 wei6 off the lot grid. The preview PRINTS it; before the
+    // parser split, handing it straight back was refused.
+    const r = roundTrip(244, '1000000', 999_936n);
+    expect(r.first.economics.takerRiskUSDC).toBe('0.999936');
+    expect(r.first.economics.fillMakerRiskWei6).toBe('694400');
+    expect(r.reparsed).toBe(999_936n);
+    expect(r.reparsed % 100n).toBe(36n); // genuinely off-grid
+    expect(r.second.economics.fillMakerRiskWei6).toBe(r.first.economics.fillMakerRiskWei6);
+  });
+
+  it('is idempotent even when the reported taker risk lands back ON the grid', () => {
+    // Same desired value at oddsTick 250 prices to 999900 — lot-aligned by
+    // coincidence. Idempotence must not depend on which side of the grid
+    // the number happens to fall.
+    const r = roundTrip(250, '1000000', 999_936n);
+    expect(r.reparsed).toBe(999_900n);
+    expect(r.reparsed % 100n).toBe(0n);
+    expect(r.second.economics.fillMakerRiskWei6).toBe(r.first.economics.fillMakerRiskWei6);
+  });
+
+  it('round-trips below decimal odds 2.00, where NO lot-aligned equivalent exists', () => {
+    // oddsTick 150 == decimal 1.50 → profitTicks 50. The taker amounts
+    // that produce a given fill span a window only `profitTicks` wide, so
+    // below 2.00 that window can contain no multiple of 100 at all.
+    const r = roundTrip(150, '1000000', 50n);
+    expect(r.first.economics.fillMakerRiskWei6).toBe('100');
+    expect(r.reparsed).toBe(50n);
+    expect(r.reparsed % 100n).toBe(50n); // off-grid
+    expect(r.second.economics.fillMakerRiskWei6).toBe('100');
+
+    // Prove the unreachability rather than asserting it: sweep every taker
+    // amount that yields this fill and confirm none is lot-aligned.
+    const producingThisFill: bigint[] = [];
+    for (let t = 1n; t <= 400n; t += 1n) {
+      try {
+        const p = buildMatchPreview(
+          baseArgs({
+            commitment: makeCommitment({ oddsTick: 150 }),
+            takerDesiredRiskWei6: t,
+          }),
+        );
+        if (p.economics.fillMakerRiskWei6 === '100') producingThisFill.push(t);
+      } catch {
+        /* outside (0, remaining] */
+      }
+    }
+    expect(producingThisFill.length).toBeGreaterThan(0);
+    expect(producingThisFill.filter((t) => t % 100n === 0n)).toEqual([]);
+  });
+
+  it('the minimum fill at oddsTick 101 is reachable ONLY at 1 wei6', () => {
+    // profitTicks = 1 → the window for fill=100 is exactly [1, 1]. Under a
+    // 100-wei6 lot rule on the taker leg this fill is inexpressible.
+    const p = buildMatchPreview(
+      baseArgs({ commitment: makeCommitment({ oddsTick: 101 }), takerDesiredRiskWei6: 1n }),
+    );
+    expect(p.economics.fillMakerRiskWei6).toBe('100');
+    expect(p.economics.takerRiskUSDC).toBe('0.000001');
+    expect(usdcDecimalToAmountWei6(p.economics.takerRiskUSDC)).toBe(1n);
   });
 });

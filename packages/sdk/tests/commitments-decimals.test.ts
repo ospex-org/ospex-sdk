@@ -16,6 +16,7 @@ import {
   tickToAmericanOdds,
   tickToDecimalOdds,
   usdcDecimalToWei6,
+  usdcDecimalToAmountWei6,
   wei6ToDecimalUSDC,
   lineDecimalToTicks,
   ticksToDecimalLine,
@@ -343,6 +344,78 @@ describe('usdcDecimalToWei6', () => {
     expect(usdcDecimalToWei6('1000000')).toBe(1_000_000_000_000n);
     // Largest lot-aligned value just below 1B USDC.
     expect(usdcDecimalToWei6('999999999.9999')).toBe(999_999_999_999_900n);
+  });
+});
+
+describe('usdcDecimalToAmountWei6', () => {
+  // The sibling parser for every USDC amount that is NOT a commitment's
+  // signed riskAmount: a taker's desired risk, an ERC-20 approve amount.
+  // It differs from usdcDecimalToWei6 in exactly one BEHAVIOURAL respect —
+  // no lot rule — and each test below pairs the relaxation with the negative
+  // control proving usdcDecimalToWei6 still refuses the same input. (The
+  // non-positive message also names a different subject; pinned below.)
+
+  it('accepts off-lot-grid amounts that usdcDecimalToWei6 refuses', () => {
+    const offGrid: Array<[string, bigint]> = [
+      ['0.000001', 1n], // 1 wei6 — a real takerRisk at oddsTick 101
+      ['0.000123', 123n],
+      ['0.000150', 150n], // the allowance-prompt default at oddsTick 250
+      ['0.999936', 999_936n], // the value quoted in the issue
+      ['4.999918', 4_999_918n], // the example in PerspectiveAmount's docstring
+    ];
+    for (const [input, expected] of offGrid) {
+      expect(usdcDecimalToAmountWei6(input)).toBe(expected);
+      // NEGATIVE CONTROL: the maker-risk parser must still refuse it.
+      expect(() => usdcDecimalToWei6(input)).toThrow(/lot size/);
+    }
+  });
+
+  it('agrees with usdcDecimalToWei6 on every lot-aligned value', () => {
+    // The relaxation must not change any value the strict parser accepts.
+    for (const input of ['1', '1.000000', '0.001', '0.0001', '25', '1000', '999999999.9999']) {
+      expect(usdcDecimalToAmountWei6(input)).toBe(usdcDecimalToWei6(input));
+    }
+  });
+
+  it('still rejects everything the strict parser rejects except the lot rule', () => {
+    // Precision.
+    expect(() => usdcDecimalToAmountWei6('1.0000001')).toThrow(OspexValidationError);
+    // Zero / negative.
+    expect(() => usdcDecimalToAmountWei6('0')).toThrow(/positive/);
+    expect(() => usdcDecimalToAmountWei6('0.000000')).toThrow(/positive/);
+    expect(() => usdcDecimalToAmountWei6('-1')).toThrow(/positive/);
+    expect(() => usdcDecimalToAmountWei6('-0.000001')).toThrow(/positive/);
+    // Malformed literals.
+    expect(() => usdcDecimalToAmountWei6('1e3')).toThrow(OspexValidationError);
+    expect(() => usdcDecimalToAmountWei6('1,000')).toThrow(OspexValidationError);
+    expect(() => usdcDecimalToAmountWei6('NaN')).toThrow(OspexValidationError);
+    expect(() => usdcDecimalToAmountWei6('Infinity')).toThrow(OspexValidationError);
+    expect(() => usdcDecimalToAmountWei6(' 1 ')).toThrow(OspexValidationError);
+    expect(() => usdcDecimalToAmountWei6('')).toThrow(OspexValidationError);
+    expect(() => usdcDecimalToAmountWei6('abc')).toThrow(OspexValidationError);
+  });
+
+  it('sweeps the wei6 space: accepts every residue, strict parser accepts only 0 mod 100', () => {
+    // Not a sampled example — every offset in a full lot is exercised.
+    let strictAccepted = 0;
+    for (let n = 1n; n <= 1000n; n += 1n) {
+      const input = wei6ToDecimalUSDC(n);
+      expect(usdcDecimalToAmountWei6(input)).toBe(n);
+      if (n % 100n === 0n) {
+        expect(usdcDecimalToWei6(input)).toBe(n);
+        strictAccepted += 1;
+      } else {
+        expect(() => usdcDecimalToWei6(input)).toThrow(/lot size/);
+      }
+    }
+    expect(strictAccepted).toBe(10);
+  });
+
+  it('reports a neutral subject — it is not always a "risk amount"', () => {
+    // Emitted verbatim at ERC-20 allowance prompts, where "Risk amount"
+    // would be wrong.
+    expect(() => usdcDecimalToAmountWei6('0')).toThrow(/USDC amount must be positive/);
+    expect(() => usdcDecimalToWei6('0')).toThrow(/Risk amount must be positive/);
   });
 });
 

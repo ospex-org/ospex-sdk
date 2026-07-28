@@ -19,7 +19,7 @@ import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
 import {
   OspexValidationError,
-  usdcDecimalToWei6,
+  usdcDecimalToAmountWei6,
   wei6ToDecimalUSDC,
   type FillabilityReason,
   type Hex,
@@ -93,7 +93,7 @@ export const commitmentsFillabilityCommand = addSignerOptions(
     taker,
   };
   if (opts.riskUsdc !== undefined) {
-    checkArgs.takerDesiredRiskWei6 = usdcDecimalToWei6(opts.riskUsdc);
+    checkArgs.takerDesiredRiskWei6 = usdcDecimalToAmountWei6(opts.riskUsdc);
   }
   const result = await client.commitments.checkCommitmentFillability(checkArgs);
 

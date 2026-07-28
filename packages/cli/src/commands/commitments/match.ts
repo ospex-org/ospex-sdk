@@ -45,7 +45,7 @@ import {
   OspexAPIError,
   OspexValidationError,
   computeMatchYouView,
-  usdcDecimalToWei6,
+  usdcDecimalToAmountWei6,
   wei6ToDecimalUSDC,
   type AgentEffect,
   type AgentEnvelope,
@@ -173,7 +173,7 @@ export const commitmentsMatchCommand = addSignerOptions(
       );
     }
 
-    // ── 1. Lazy signer split (spec §17.2). ─────────────────────────
+    // ── 1. Lazy signer split. ──────────────────────────────────────
     // Preview-only mode (`--json` without `--yes`): compute the
     // preview WITHOUT calling `loadSigner`. A hard review rule —
     // agents should never get an interactive
@@ -237,7 +237,7 @@ export const commitmentsMatchCommand = addSignerOptions(
       commitment,
     };
     if (opts.riskUsdc !== undefined) {
-      prepArgs.takerDesiredRiskWei6 = usdcDecimalToWei6(opts.riskUsdc);
+      prepArgs.takerDesiredRiskWei6 = usdcDecimalToAmountWei6(opts.riskUsdc);
     }
     if (previewOnly) {
       prepArgs.taker = wallet;
@@ -270,7 +270,7 @@ export const commitmentsMatchCommand = addSignerOptions(
       taker: preview.taker,
     };
     if (opts.riskUsdc !== undefined) {
-      fillArgs.takerDesiredRiskWei6 = usdcDecimalToWei6(opts.riskUsdc);
+      fillArgs.takerDesiredRiskWei6 = usdcDecimalToAmountWei6(opts.riskUsdc);
     }
     if (!skipFillability) {
       preflightFillability = await client.commitments.checkCommitmentFillability(fillArgs);
@@ -310,7 +310,7 @@ export const commitmentsMatchCommand = addSignerOptions(
     // commitment-risk → PositionModule (always present); lazy-creation-fee
     // → TreasuryModule (present iff speculation.mode === 'lazy').
     //
-    // Review fix: each approve tx is recorded as an
+    // Each approve tx is recorded as an
     // AgentEffect (collected in `approveEffects`, declared at the
     // top of the action so the failure-envelope catch can also
     // surface already-confirmed approves on a mid-flight throw)
@@ -354,7 +354,7 @@ export const commitmentsMatchCommand = addSignerOptions(
         } else {
           let parsed: bigint;
           try {
-            parsed = usdcDecimalToWei6(choice);
+            parsed = usdcDecimalToAmountWei6(choice);
           } catch {
             process.stderr.write(`Could not parse "${choice}" as a USDC amount.\n`);
             process.exit(1);

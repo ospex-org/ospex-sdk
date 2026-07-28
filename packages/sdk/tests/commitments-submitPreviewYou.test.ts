@@ -231,3 +231,70 @@ describe('computeSubmitYouView', () => {
     }
   });
 });
+
+describe('computeSubmitYouView — counterpartyRiskUSDC cross-check', () => {
+  /**
+   * The backfill re-derives the counterparty's risk with integer math and
+   * cross-checks it against the decimal string the envelope published.
+   *
+   * The counterparty on a SubmitPreview is a hypothetical taker, so that
+   * value carries no lot rule and is routinely sub-lot. Parsing it with
+   * the maker-risk parser threw on exactly those cases, and the catch
+   * added to absorb the throw also swallowed the drift error — leaving a
+   * check that could not fail. Both halves are pinned below: the honest
+   * sub-lot case must pass, and real drift must throw.
+   */
+  const legacyOf = (p: ReturnType<typeof buildSubmitPreview>) => ({
+    ...p,
+    you: undefined,
+    counterparty: undefined,
+  });
+
+  it('NEGATIVE CONTROL: an honest sub-lot counterparty risk is accepted', () => {
+    // riskWei6 100n at oddsTick 101 → profit 1 wei6 → "0.000001".
+    // Off the 100-wei6 grid, and entirely legitimate.
+    const p = buildSubmitPreview(baseArgs({ riskWei6: 100n, oddsTick: 101 }));
+    expect(p.economics.counterpartyRiskUSDC).toBe('0.000001');
+    const view = computeSubmitYouView(legacyOf(p));
+    expect(view.counterparty.risk.wei6).toBe('1');
+    expect(view.you.risk.wei6).toBe('100');
+  });
+
+  it('throws when counterpartyRiskUSDC actually disagrees with the integer math', () => {
+    const p = buildSubmitPreview(baseArgs());
+    const drifted = {
+      ...legacyOf(p),
+      economics: { ...p.economics, counterpartyRiskUSDC: '999.000000' },
+    };
+    expect(() => computeSubmitYouView(drifted)).toThrow(/disagrees with the BigInt-derived value/);
+  });
+
+  it('throws on a malformed counterpartyRiskUSDC rather than ignoring it', () => {
+    const p = buildSubmitPreview(baseArgs());
+    const broken = {
+      ...legacyOf(p),
+      economics: { ...p.economics, counterpartyRiskUSDC: 'not-a-number' },
+    };
+    // Match the PARSE message specifically: a bare .toThrow() would also be
+    // satisfied by the drift error, so a parser that silently returned a
+    // wrong bigint would still pass.
+    expect(() => computeSubmitYouView(broken)).toThrow(/Plain decimal strings only/);
+  });
+
+  it('sweeps risk x odds: every honest preview backfills, many of them sub-lot', () => {
+    let subLot = 0;
+    let total = 0;
+    for (const riskWei6 of [100n, 300n, 1_000n, 12_300n, 1_000_000n]) {
+      for (const oddsTick of [101, 105, 137, 150, 191, 200, 244, 250, 999, 10_100]) {
+        const p = buildSubmitPreview(baseArgs({ riskWei6, oddsTick }));
+        const counterpartyWei6 = (riskWei6 * BigInt(oddsTick - 100)) / 100n;
+        expect(() => computeSubmitYouView(legacyOf(p))).not.toThrow();
+        if (counterpartyWei6 % 100n !== 0n) subLot += 1;
+        total += 1;
+      }
+    }
+    // If this share were zero the negative control above would prove nothing.
+    expect(total).toBe(50);
+    expect(subLot).toBeGreaterThan(15);
+  });
+});

@@ -199,7 +199,7 @@ interface PreviewCounterparty extends Omit<PreviewYou, 'address'> {
 
 On `MatchPreview` the viewer is the taker (`you.role === 'taker'`) and the counterparty is the named maker. On `SubmitPreview` the viewer is the maker (`you.role === 'maker'`) and the counterparty is a hypothetical full-fill taker (`address: null`). The shape is uniform across both envelopes so polyglot agent code can dispatch on one accessor path.
 
-USDC values inside `you` / `counterparty` are always 6 fractional digits, round-tripping with `wei6ToDecimalUSDC` / `usdcDecimalToWei6` — concise formats (`"5.00"`) appear only in human renderers, never in JSON.
+USDC values inside `you` / `counterparty` are always 6 fractional digits, round-tripping with `wei6ToDecimalUSDC` / `usdcDecimalToAmountWei6` — concise formats (`"5.00"`) appear only in human renderers, never in JSON. Use `usdcDecimalToAmountWei6`, not `usdcDecimalToWei6`: the latter additionally enforces the 100-wei6 lot rule that applies only to a maker's signed `riskAmount`, and taker-side amounts routinely sit off that grid (a taker's risk is `min(takerDesiredRisk, fillMakerRisk × (oddsTick − 100) / 100)`, which is lot-aligned only by coincidence).
 
 The perspective fields are **optional on the payload**. The `@ospex/sdk` exports `computeMatchYouView(preview)` and `computeSubmitYouView(preview)` — pure accessors that return the view directly when present and backfill from the legacy `makerSide` / `takerSide` / `odds` / `economics` (or `side` / `economics` on submit) blocks when absent. Agents consuming either shape call one helper and never branch.
 
@@ -255,7 +255,7 @@ Every value that may exceed `Number.MAX_SAFE_INTEGER` is a **decimal string** (`
 - `blockNumber`, `takerRiskWei6`, `fillMakerRiskWei6`
 - `oddsTick` is a small int — emitted as a number, but adjacent USDC formatted strings (`riskUSDC: '1.000000'`) accompany it.
 
-USDC formatted strings are six fractional digits: `'1.000000'`, `'0.250000'`. Round-trip with `usdcDecimalToWei6` / `wei6ToDecimalUSDC` from the SDK barrel.
+USDC formatted strings are six fractional digits: `'1.000000'`, `'0.250000'`. Round-trip with `usdcDecimalToAmountWei6` / `wei6ToDecimalUSDC` from the SDK barrel. (`usdcDecimalToWei6` is the maker-risk parser — it also enforces the 100-wei6 lot rule and will reject off-grid amounts such as a `takerRiskUSDC` of `'0.999936'`.)
 
 ### `--json` always goes to stdout
 

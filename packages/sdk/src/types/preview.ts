@@ -304,7 +304,11 @@ export interface PreviewOutcome {
  * Wei6 integer + formatted decimal USDC string, used for every amount
  * surfaced inside the `you` / `counterparty` perspective blocks. The
  * `usdc` form is always 6 fractional digits (matches the agent
- * contract: `wei6ToDecimalUSDC` round-trip with `usdcDecimalToWei6`).
+ * contract: `wei6ToDecimalUSDC` round-trip with
+ * `usdcDecimalToAmountWei6`). These are arbitrary USDC amounts, not
+ * maker risk — as the `"4.999918"` example below shows, they are
+ * routinely off the 100-wei6 lot grid that `usdcDecimalToWei6`
+ * enforces, so that parser is the wrong one to round-trip them with.
  */
 export interface PerspectiveAmount {
   /** wei6 (USDC × 10^6) as a decimal string, BigInt-safe over JSON. */

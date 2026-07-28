@@ -337,19 +337,25 @@ export function parseOddsInput(input: string): number {
   return decimalOddsToTick(input);
 }
 
-// ── usdcDecimalToWei6 ──────────────────────────────────────────────────
+// ── USDC decimal parsing ───────────────────────────────────────────────
+//
+// Two parsers, differing ONLY in whether the 100-wei6 lot rule applies.
+// That rule is a property of a commitment's signed `riskAmount`, not of
+// USDC amounts in general: `MatchingModule._validateCommitment` reverts
+// `MatchingModule__InvalidLotSize` when `commitment.riskAmount %
+// ODDS_SCALE != 0`, and nothing else imposes a grid on a USDC value. In
+// particular `matchCommitment`'s only direct guard on the TAKER's
+// `takerDesiredRisk` is a zero check — the maker leg it derives is
+// floored to the lot by the contract itself, so an arbitrary taker
+// amount is correct by design.
+//
+// Pick by what the value BECOMES, not by which command parsed it.
 
 /**
- * Parse decimal USDC (max 6 fractional digits) into wei6 as bigint.
- * Validates lot size (`% 100n === 0n`, matches MatchingModule's
- * "riskAmount must be multiple of ODDS_SCALE") and rejects zero/negative.
- *
- *   "1"        → 1_000_000n
- *   "0.001"    → 1_000n
- *   "0"        throws risk_zero_or_negative
- *   "0.000123" throws lot_size_violation
+ * Shared decimal → wei6 conversion. Strict decimal string, at most 6
+ * fractional digits, must be positive. No protocol-specific rules.
  */
-export function usdcDecimalToWei6(input: string): bigint {
+function parseUsdcWei6(input: string, subject: string): bigint {
   const { negative, intPart, fracPart } = parseDecimalParts(input, true);
   if (fracPart.length > 6) {
     throw new OspexValidationError(`USDC accepts at most 6 decimal places, got "${input}".`);
@@ -360,14 +366,60 @@ export function usdcDecimalToWei6(input: string): bigint {
   let wei6 = intBig * 1_000_000n + fracBig;
   if (negative) wei6 = -wei6;
   if (wei6 <= 0n) {
-    throw new OspexValidationError(`Risk amount must be positive, got "${input}".`);
+    throw new OspexValidationError(`${subject} must be positive, got "${input}".`);
   }
+  return wei6;
+}
+
+/**
+ * Parse decimal USDC into wei6 for a value that becomes a commitment's
+ * signed `riskAmount` — i.e. the MAKER's risk. Enforces the 100-wei6
+ * lot rule on top of the shared parse, because a commitment that
+ * violates it is refused on chain by `MatchingModule__InvalidLotSize`.
+ *
+ * On the high-level submit path this is the ONLY place that check runs
+ * (`submitRaw` has its own `validateRiskAmount`), so do not relax it.
+ * For any other USDC amount — a taker's desired risk, an ERC-20
+ * allowance — use {@link usdcDecimalToAmountWei6} instead.
+ *
+ *   "1"        → 1_000_000n
+ *   "0.001"    → 1_000n
+ *   "0"        throws risk_zero_or_negative
+ *   "0.000123" throws lot_size_violation
+ */
+export function usdcDecimalToWei6(input: string): bigint {
+  const wei6 = parseUsdcWei6(input, 'Risk amount');
   if (wei6 % RISK_LOT_SIZE_WEI6 !== 0n) {
     throw new OspexValidationError(
-      `Risk amount "${input}" violates the 100-wei6 ($0.0001) lot size required by MatchingModule.`,
+      `Risk amount "${input}" violates the 100-wei6 ($0.0001) lot size MatchingModule ` +
+        `requires for a commitment's signed riskAmount.`,
     );
   }
   return wei6;
+}
+
+/**
+ * Parse decimal USDC into wei6 for any amount that is NOT a commitment's
+ * signed `riskAmount`: a taker's desired risk on `match` / `fillability`,
+ * or an ERC-20 approve amount at an allowance prompt. Behaviourally
+ * identical to {@link usdcDecimalToWei6} except that the 100-wei6 lot
+ * rule — which constrains only the maker's signed risk — is not applied
+ * (the non-positive message also names a neutral subject, since this one
+ * is emitted at allowance prompts where "risk amount" would be wrong).
+ *
+ * Sub-lot values here are routine, not exotic. A taker's risk is
+ * `min(takerDesiredRisk, fillMakerRisk × (oddsTick − 100) / 100)` — the
+ * clamp binds whenever lot-flooring the maker leg would otherwise price
+ * the taker above what they asked for — and neither branch lands on the
+ * 100-wei6 grid except by coincidence. Below decimal odds 2.00 there is
+ * frequently NO lot-aligned taker amount that produces a given fill.
+ *
+ *   "1"        → 1_000_000n
+ *   "0.000123" → 123n
+ *   "0"        throws amount_zero_or_negative
+ */
+export function usdcDecimalToAmountWei6(input: string): bigint {
+  return parseUsdcWei6(input, 'USDC amount');
 }
 
 /** Format wei6 as a decimal string with exactly 6 fractional digits. */

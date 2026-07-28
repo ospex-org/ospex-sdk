@@ -17,7 +17,9 @@
  * Wire safety: every numeric field that may exceed Number.MAX_SAFE_INTEGER
  * is a decimal string (e.g. `riskWei6: '1000000'`). USDC formatted
  * strings (`takerRiskUSDC: '1.000000'`) are produced via
- * `wei6ToDecimalUSDC` and round-trip with `usdcDecimalToWei6`.
+ * `wei6ToDecimalUSDC` and round-trip with `usdcDecimalToAmountWei6`.
+ * NOT with `usdcDecimalToWei6` — that one also enforces the maker's
+ * 100-wei6 lot rule, which a taker-side amount need not satisfy.
  */
 
 import type { PublicVisibleCommitment } from './commitment.js';

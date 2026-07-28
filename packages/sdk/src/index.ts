@@ -243,6 +243,7 @@ export {
   tickToAmericanOdds,
   tickToDecimalOdds,
   usdcDecimalToWei6,
+  usdcDecimalToAmountWei6,
   wei6ToDecimalUSDC,
   lineDecimalToTicks,
   ticksToDecimalLine,
