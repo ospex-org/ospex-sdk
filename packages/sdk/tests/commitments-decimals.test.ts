@@ -411,23 +411,27 @@ describe('usdcDecimalToAmountWei6', () => {
     expect(strictAccepted).toBe(10);
   });
 
-  it('inverts wei6ToDecimalUSDC for POSITIVE values only — zero is refused', () => {
+  it('inverts wei6ToDecimalUSDC for POSITIVE values only — zero and negatives are refused', () => {
     // The agent contract points consumers at the paired `*Wei6` field with
     // BigInt() precisely because of this asymmetry: wei6ToDecimalUSDC maps
     // ANY bigint to a string, but the parsers validate user-supplied input
     // and so refuse zero. Sweep rather than sample.
-    for (let n = 0n; n <= 300n; n += 1n) {
+    // Sweep the SIGNED range: the SDK emits negative USDC strings too
+    // (`outcomes[].payoutUSDC` on a 'lose' row is the negated risk).
+    for (let n = -300n; n <= 300n; n += 1n) {
       const emitted = wei6ToDecimalUSDC(n);
-      if (n === 0n) {
-        expect(emitted).toBe('0.000000');
-        expect(() => usdcDecimalToAmountWei6(emitted)).toThrow(/must be positive/);
-        expect(() => usdcDecimalToWei6(emitted)).toThrow(/must be positive/);
-      } else {
+      if (n > 0n) {
         expect(usdcDecimalToAmountWei6(emitted)).toBe(n);
+      } else {
+        expect(() => usdcDecimalToAmountWei6(emitted), emitted).toThrow(/must be positive/);
+        expect(() => usdcDecimalToWei6(emitted), emitted).toThrow(/must be positive/);
       }
-      // The documented always-works path.
+      // The documented always-works path, for every sign.
       expect(BigInt(n.toString())).toBe(n);
     }
+    expect(wei6ToDecimalUSDC(0n)).toBe('0.000000');
+    expect(wei6ToDecimalUSDC(-7_700_000n)).toBe('-7.700000');
+    expect(() => usdcDecimalToAmountWei6('-7.700000')).toThrow(/must be positive/);
   });
 
   it('reports a neutral subject — it is not always a "risk amount"', () => {

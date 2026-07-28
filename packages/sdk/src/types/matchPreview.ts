@@ -17,9 +17,20 @@
  * Wire safety: every numeric field that may exceed Number.MAX_SAFE_INTEGER
  * is a decimal string (e.g. `riskWei6: '1000000'`). USDC formatted
  * strings (`takerRiskUSDC: '1.000000'`) are produced via
- * `wei6ToDecimalUSDC` and round-trip with `usdcDecimalToAmountWei6`.
- * NOT with `usdcDecimalToWei6` — that one also enforces the maker's
- * 100-wei6 lot rule, which a taker-side amount need not satisfy.
+ * `wei6ToDecimalUSDC`.
+ *
+ * To decode one, read the paired `*Wei6` field with `BigInt()` — exact
+ * for every emitted value, never throws. Do NOT assume the decimal
+ * string parses: `wei6ToDecimalUSDC` is total, but the SDK's parsers
+ * validate user-supplied input and accept POSITIVE amounts only. This
+ * preview emits USDC strings they refuse —
+ *   - zero: `speculation.creationFee.*USDC` is `'0.000000'` whenever the
+ *     speculation already exists;
+ *   - negative: `outcomes[].payoutUSDC` on a `'lose'` row is the negated
+ *     risk, e.g. `'-7.700000'`.
+ * Reserve `usdcDecimalToAmountWei6` for amounts a human or agent typed.
+ * (`usdcDecimalToWei6` is narrower still — it additionally enforces the
+ * maker's 100-wei6 lot rule, which a taker-side amount need not satisfy.)
  */
 
 import type { PublicVisibleCommitment } from './commitment.js';

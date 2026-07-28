@@ -873,3 +873,86 @@ describe('buildMatchPreview — zero USDC strings are emitted but do NOT parse',
     );
   });
 });
+
+describe('buildMatchPreview — the emitted USDC-string domain vs. what parses', () => {
+  /**
+   * Walks a real preview and classifies EVERY key ending in `USDC`. This
+   * guards the class rather than the handful of fields anyone thought to
+   * enumerate: a future zero- or negative-valued USDC field is caught here
+   * without the test being updated.
+   *
+   * The public JSDoc on `MatchPreview` / `PerspectiveAmount` /
+   * `PreviewOutcome.payoutUSDC` promises exactly this shape — decode via
+   * the paired `*Wei6` field, because the parsers take positive input only.
+   */
+  type Found = { path: string; value: string };
+
+  function collectUsdcStrings(node: unknown, path = '$', out: Found[] = []): Found[] {
+    if (node === null || node === undefined) return out;
+    if (Array.isArray(node)) {
+      node.forEach((v, i) => collectUsdcStrings(v, `${path}[${i}]`, out));
+      return out;
+    }
+    if (typeof node === 'object') {
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+        if (k.endsWith('USDC') && typeof v === 'string') out.push({ path: `${path}.${k}`, value: v });
+        else collectUsdcStrings(v, `${path}.${k}`, out);
+      }
+    }
+    return out;
+  }
+
+  function toWei6(usdc: string): bigint {
+    const neg = usdc.startsWith('-');
+    const [int, frac] = (neg ? usdc.slice(1) : usdc).split('.');
+    const mag = BigInt(int!) * 1_000_000n + BigInt(frac!);
+    return neg ? -mag : mag;
+  }
+
+  it('every emitted *USDC string parses if and only if it is positive', () => {
+    const previews = [
+      buildMatchPreview(baseArgs()), // existing speculation -> zero fee strings
+      buildMatchPreview(baseArgs({ speculation: { mode: 'lazy' } })), // lazy -> non-zero fee
+      buildMatchPreview(baseArgs({ takerDesiredRiskWei6: 150n })), // off-grid taker risk
+      buildMatchPreview(
+        baseArgs({ commitment: makeCommitment({ marketType: 'spread', lineTicks: -35 }) }),
+      ), // spread -> a push row too
+    ];
+
+    let positive = 0;
+    let zero = 0;
+    let negative = 0;
+
+    for (const p of previews) {
+      for (const { path, value } of collectUsdcStrings(p)) {
+        // Every one is canonical 6dp, optionally signed.
+        expect(value, path).toMatch(/^-?\d+\.\d{6}$/);
+        const n = toWei6(value);
+        if (n > 0n) {
+          expect(usdcDecimalToAmountWei6(value), path).toBe(n);
+          positive += 1;
+        } else {
+          expect(() => usdcDecimalToAmountWei6(value), path).toThrow(/must be positive/);
+          if (n === 0n) zero += 1;
+          else negative += 1;
+        }
+      }
+    }
+
+    // Non-vacuous: all three classes genuinely occur in real output, so the
+    // "positive only" scoping in the public JSDoc is load-bearing, not
+    // defensive boilerplate.
+    expect(positive).toBeGreaterThan(0);
+    expect(zero).toBeGreaterThan(0);
+    expect(negative).toBeGreaterThan(0);
+  });
+
+  it('a lose row really is the negated risk, and it is refused', () => {
+    const p = buildMatchPreview(baseArgs());
+    const lose = p.outcomes?.find((o) => o.result === 'lose');
+    expect(lose).toBeDefined();
+    expect(lose!.payoutUSDC.startsWith('-')).toBe(true);
+    expect(lose!.payoutUSDC).toBe(`-${p.economics.takerRiskUSDC}`);
+    expect(() => usdcDecimalToAmountWei6(lose!.payoutUSDC)).toThrow(/must be positive/);
+  });
+});

@@ -296,19 +296,34 @@ export interface PreviewApproval {
 export interface PreviewOutcome {
   condition: string;
   result: OutcomeResult;
-  /** Formatted USDC string. For 'lose' shows the negative risk; for 'push' shows the stake returned. */
+  /**
+   * Formatted USDC string. For 'lose' shows the negative risk; for 'push'
+   * shows the stake returned.
+   *
+   * **Signed, and the only USDC field with no paired `*Wei6` twin.** A
+   * `'lose'` row is `wei6ToDecimalUSDC(-risk)` — e.g. `'-7.700000'` — which
+   * neither `usdcDecimalToAmountWei6` nor `usdcDecimalToWei6` will parse
+   * (both accept positive amounts only). Consumers needing the integer
+   * should take the sign off the string themselves, or derive it from the
+   * perspective's `risk.wei6` / `profit.wei6`, which are unsigned and
+   * paired.
+   */
   payoutUSDC: string;
 }
 
 /**
  * Wei6 integer + formatted decimal USDC string, used for every amount
  * surfaced inside the `you` / `counterparty` perspective blocks. The
- * `usdc` form is always 6 fractional digits (matches the agent
- * contract: `wei6ToDecimalUSDC` round-trip with
- * `usdcDecimalToAmountWei6`). These are arbitrary USDC amounts, not
- * maker risk — as the `"4.999918"` example below shows, they are
- * routinely off the 100-wei6 lot grid that `usdcDecimalToWei6`
- * enforces, so that parser is the wrong one to round-trip them with.
+ * `usdc` form is always 6 fractional digits, produced by
+ * `wei6ToDecimalUSDC`.
+ *
+ * **Decode via `wei6`, not `usdc`** — `BigInt(amount.wei6)` is exact and
+ * never throws. The decimal string is for display. If you do parse it,
+ * `usdcDecimalToAmountWei6` is the right parser (these are arbitrary USDC
+ * amounts, not maker risk — as the `"4.999918"` example below shows, they
+ * sit off the 100-wei6 lot grid that `usdcDecimalToWei6` enforces), but it
+ * accepts POSITIVE amounts only and so cannot decode every USDC string the
+ * SDK emits elsewhere. See `PreviewOutcome.payoutUSDC`.
  */
 export interface PerspectiveAmount {
   /** wei6 (USDC × 10^6) as a decimal string, BigInt-safe over JSON. */
