@@ -51,9 +51,19 @@ export interface PrepareMatchArgs {
   hash?: Hex;
   commitment?: Commitment;
   /**
-   * Optional override of the taker's desired risk in USDC wei6.
-   * Defaults to the commitment's full remaining capacity. Clamped to
-   * `commitment.remainingRiskAmount`.
+   * Optional override of the taker's desired risk in USDC wei6. **Omit it to
+   * fill the commitment's full remaining capacity** — the only way to say
+   * "take whatever is left", and the only form that cannot be refused for
+   * exceeding it.
+   *
+   * An explicit value is **NOT** clamped to `commitment.remainingRiskAmount`.
+   * One whose lot-rounded maker leg exceeds what remains throws
+   * `OspexValidationError` (`field: 'takerDesiredRiskWei6'`) from
+   * `buildMatchPreview` — a pure pre-signing check, so no transaction is sent.
+   *
+   * (After lot rounding the derived taker risk IS capped down to this value,
+   * so you never pay more than you asked for — a separate, downward-only
+   * adjustment, not a clamp to the maker's remaining capacity.)
    */
   takerDesiredRiskWei6?: bigint;
   /**

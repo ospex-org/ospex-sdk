@@ -4,7 +4,7 @@
  * The spender is ALWAYS PositionModule (NOT MatchingModule). This is
  * the most common new-integrator confusion — keep it pinned here.
  * MatchingModule never custodies funds; PositionModule's `recordFill`
- * is where `safeTransferFrom` happens (PositionModule.sol:444-445).
+ * is where `safeTransferFrom` happens (`PositionModule._recordFill`).
  */
 
 import type { PublicClient } from 'viem';

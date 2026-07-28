@@ -14,6 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { OspexValidationError } from '../src/errors.js';
 import {
   buildMatchPreview,
 } from '../src/commitments/buildMatchPreview.js';
@@ -618,5 +619,74 @@ describe('buildMatchPreview — snapshots from input commitment', () => {
     expect(p.chainId).toBe(137);
     expect(p.verifyingContract).toBe(MM);
     expect(p.commitment.commitmentHash).toBe(HASH);
+  });
+});
+
+describe('buildMatchPreview — an explicit oversize is REFUSED, never clamped', () => {
+  // These lock the JSDoc on MatchArgs.takerDesiredRisk,
+  // PrepareMatchArgs.takerDesiredRiskWei6, and
+  // CheckFillabilityArgs.takerDesiredRiskWei6, all three of which used to
+  // claim the value was "Clamped to `commitment.remainingRiskAmount`". It
+  // never was — it throws. That doc-untruth is the plausible root cause of an
+  // operator authoring a taker size larger than the maker's remaining quote
+  // could support, believing it would be clamped down.
+  //
+  // If a clamp is ever genuinely added, these tests fail and whoever adds it
+  // has to update the docs in the same change. That is the point of them.
+
+  it('throws rather than clamping when the desired risk exceeds remaining', () => {
+    // Maker has 1.0 USDC remaining at tick 250 → full take is 1.5 USDC taker
+    // risk. Ask for 3.0 USDC, i.e. double what the maker can support.
+    expect(() =>
+      buildMatchPreview(baseArgs({ takerDesiredRiskWei6: 3_000_000n })),
+    ).toThrow(/not in \(0, remaining=1000000\]/);
+  });
+
+  it('the refusal is a typed OspexValidationError on takerDesiredRiskWei6', () => {
+    try {
+      buildMatchPreview(baseArgs({ takerDesiredRiskWei6: 3_000_000n }));
+      throw new Error('expected buildMatchPreview to throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe('takerDesiredRiskWei6');
+      // "Match would revert:" is a PREDICTION from this pure function — no
+      // transaction is built, signed, or sent. Nothing reaches the chain.
+      expect((err as OspexValidationError).message).toMatch(/^Match would revert:/);
+    }
+  });
+
+  it('pins the exact refusal boundary — sub-lot overshoot is absorbed, beyond it refuses', () => {
+    // The refusal is NOT "any value above the full-take size". It fires when
+    // the LOT-ROUNDED maker leg exceeds remaining, so an overshoot smaller
+    // than one lot's rounding is absorbed and fills at exactly remaining.
+    //
+    // tick 250 → profitTicks 150, ODDS_SCALE 100, remaining 1_000_000.
+    //   fillMakerRisk = floor_to_lot(ceil(desired * 100 / 150))
+    // 1_500_148 → 1_000_000 (fits, absorbed)
+    // 1_500_149 → 1_000_100 (exceeds remaining → refuse)
+    const ok = buildMatchPreview(baseArgs({ takerDesiredRiskWei6: 1_500_148n }));
+    expect(BigInt(ok.economics.fillMakerRiskWei6)).toBe(1_000_000n);
+    // The taker is billed the real cost of that leg, never their overshoot.
+    expect(BigInt(ok.economics.takerRiskWei6)).toBe(1_500_000n);
+
+    expect(() => buildMatchPreview(baseArgs({ takerDesiredRiskWei6: 1_500_149n })))
+      .toThrow(/not in \(0, remaining=1000000\]/);
+  });
+
+  it('OMITTING the field takes full remaining capacity and cannot trip the refusal', () => {
+    // The documented escape hatch: no explicit size → derived from remaining,
+    // so it is structurally incapable of exceeding it. Same maker, a remaining
+    // amount that an explicit guess would likely overshoot.
+    const p = buildMatchPreview(
+      baseArgs({ commitment: makeCommitment({ remainingRiskAmount: '333300' }) }),
+    );
+    expect(BigInt(p.economics.fillMakerRiskWei6)).toBe(333_300n);
+    expect(p.warnings).not.toContain('partial-fill');
+  });
+
+  it('zero is rejected too', () => {
+    expect(() => buildMatchPreview(baseArgs({ takerDesiredRiskWei6: 0n }))).toThrow(
+      OspexValidationError,
+    );
   });
 });

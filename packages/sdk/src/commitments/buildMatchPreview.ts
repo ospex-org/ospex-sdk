@@ -11,7 +11,7 @@
  * allowances, and the speculation-mode discriminator, then calling
  * this with everything pre-fetched.
  *
- * Lot-size math mirrors `MatchingModule.sol:260-272`. Mirrored locally
+ * Lot-size math mirrors `MatchingModule.matchCommitment`. Mirrored locally
  * (rather than imported from `match.ts`) so the pure builder stays
  * self-contained — `match.ts` calls this file too.
  */
@@ -109,7 +109,12 @@ export function buildMatchPreview(args: BuildMatchPreviewArgs): MatchPreview {
     }
   }
 
-  // ── Lot-size rounding (mirrors MatchingModule.sol:260-272) ────────
+  // ── Lot-size rounding (mirrors MatchingModule.matchCommitment) ────
+  //
+  // NOTE: this refuses rather than clamps. An explicit takerDesiredRiskWei6
+  // implying more maker risk than remains throws here, before any signing or
+  // RPC — omitting it (full remaining fill) is the form that cannot trip it.
+  // Locked by the "explicit oversize is refused, not clamped" tests.
   const rawFillMakerRisk =
     (takerDesiredRiskWei6 * ODDS_SCALE + profitTicks - 1n) / profitTicks;
   const fillMakerRiskWei6 = rawFillMakerRisk - (rawFillMakerRisk % ODDS_SCALE);

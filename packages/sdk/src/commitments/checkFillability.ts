@@ -67,10 +67,16 @@ export interface CheckCommitmentFillabilityArgs {
   hash?: Hex;
   commitment?: Commitment;
   /**
-   * Taker's desired fill risk in USDC wei6. Defaults to the commitment's full
-   * remaining capacity; clamped to it. An explicit value that can't form a
-   * valid lot throws `OspexValidationError` (it's a caller-supplied size, not
-   * a property of the order).
+   * Taker's desired fill risk in USDC wei6. **Omit it to check against the
+   * commitment's full remaining capacity.**
+   *
+   * An explicit value is **NOT** clamped to that capacity. One whose
+   * lot-rounded maker leg exceeds it — or that can't form a valid lot —
+   * throws `OspexValidationError`
+   * rather than reporting `not-fillable`, because it is a caller-supplied
+   * size, not a property of the order. (The *default* full-fill size rounding
+   * to an unfillable lot IS a property of the order, and reports
+   * `NO_REMAINING_CAPACITY`.)
    */
   takerDesiredRiskWei6?: bigint;
   /**
