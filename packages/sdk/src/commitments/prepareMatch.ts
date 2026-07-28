@@ -59,7 +59,10 @@ export interface PrepareMatchArgs {
    * An explicit value is **NOT** clamped to `commitment.remainingRiskAmount`.
    * One whose lot-rounded maker leg exceeds what remains throws
    * `OspexValidationError` (`field: 'takerDesiredRiskWei6'`) from
-   * `buildMatchPreview` — a pure pre-signing check, so no transaction is sent.
+   * `buildMatchPreview`, which this function calls LAST — after the commitment
+   * + contest reads and the read-only RPC allowance preflight above. So the
+   * refusal costs those reads, but no transaction is constructed, signed, or
+   * broadcast and no gas is spent.
    *
    * (After lot rounding the derived taker risk IS capped down to this value,
    * so you never pay more than you asked for — a separate, downward-only

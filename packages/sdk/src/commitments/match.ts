@@ -30,9 +30,11 @@ export interface MatchArgs {
    *
    * An explicit value is **NOT** clamped to `commitment.remainingRiskAmount`.
    * If its lot-rounded maker leg exceeds what remains, the match is **refused**
-   * with `OspexValidationError` — thrown by the pure preview builder before any
-   * signing or RPC, so nothing reaches the chain and no gas is spent. Zero is
-   * likewise rejected.
+   * with `OspexValidationError`, thrown by the pure preview builder before any
+   * transaction is constructed, signed, or broadcast — **no gas is spent**.
+   * Note the refusal is not free of I/O: `prepareMatch` runs first, so the
+   * commitment + contest API reads and the read-only RPC allowance preflight
+   * have already happened by then. Zero is likewise rejected.
    *
    * (A different, downward-only adjustment does exist: after lot rounding the
    * derived taker risk is capped to this value, so you never pay more than

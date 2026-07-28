@@ -650,7 +650,9 @@ describe('buildMatchPreview — an explicit oversize is REFUSED, never clamped',
       expect(err).toBeInstanceOf(OspexValidationError);
       expect((err as OspexValidationError).field).toBe('takerDesiredRiskWei6');
       // "Match would revert:" is a PREDICTION from this pure function — no
-      // transaction is built, signed, or sent. Nothing reaches the chain.
+      // transaction is built, signed, or broadcast, and no gas is spent. (Via
+      // `prepareMatch`, read-only API/RPC preflight has already run; only the
+      // WRITE path is guaranteed untouched.)
       expect((err as OspexValidationError).message).toMatch(/^Match would revert:/);
     }
   });

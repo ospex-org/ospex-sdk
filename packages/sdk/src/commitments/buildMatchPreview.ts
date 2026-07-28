@@ -112,8 +112,13 @@ export function buildMatchPreview(args: BuildMatchPreviewArgs): MatchPreview {
   // ── Lot-size rounding (mirrors MatchingModule.matchCommitment) ────
   //
   // NOTE: this refuses rather than clamps. An explicit takerDesiredRiskWei6
-  // implying more maker risk than remains throws here, before any signing or
-  // RPC — omitting it (full remaining fill) is the form that cannot trip it.
+  // whose lot-rounded maker leg exceeds what remains throws here — omitting it
+  // (full remaining fill) is the form that cannot trip it.
+  //
+  // THIS function is pure, but the refusal is not I/O-free in context: callers
+  // arrive via `prepareMatch`, which has already done its API reads and
+  // read-only RPC allowance preflight. What the throw guarantees is that no
+  // transaction is constructed, signed, or broadcast, and no gas is spent.
   // Locked by the "explicit oversize is refused, not clamped" tests.
   const rawFillMakerRisk =
     (takerDesiredRiskWei6 * ODDS_SCALE + profitTicks - 1n) / profitTicks;
