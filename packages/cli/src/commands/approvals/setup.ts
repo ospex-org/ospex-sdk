@@ -4,10 +4,12 @@
  * worst-case risk exposure in a single command.
  *
  * Flag mode (any of `--risk-usdc`, `--fee-usdc` provided):
- *   only act on the dimensions specified. When `--risk-usdc` is set
- *   alone, a small `--fee-usdc` default is auto-included so the next
- *   commitment match doesn't trigger a mid-bet approval prompt; pass
- *   `--fee-usdc 0` to opt out.
+ *   only act on the dimensions specified. The two are orthogonal —
+ *   omitting a flag leaves that allowance untouched, and approving bet
+ *   risk never implies a fee approval. A wallet that may be first to a
+ *   line — a `(contest, scorer, lineTicks)` tuple, which odds are NOT
+ *   part of — must approve `--fee-usdc` explicitly, or its first match
+ *   on that line reverts on the speculation creation fee.
  *
  * Interactive mode (no flags + TTY + not --json):
  *   prompts for each dimension with sensible defaults. Press enter to
@@ -85,8 +87,9 @@ export const approvalsSetupCommand = addSignerOptions(
     .option(
       '--fee-usdc <amount>',
       'USDC approval for TreasuryModule (protocol fees: contest creation + lazy spec creation). ' +
-        'If --risk-usdc is set and --fee-usdc is omitted, a small default is auto-included to ' +
-        'prevent a mid-bet approval prompt; pass --fee-usdc 0 to opt out.',
+        'Independent of --risk-usdc; omit it to leave the fee allowance unchanged. Approve a few ' +
+        'USDC here if you may be first to a line — the 0.25/side speculation creation fee is ' +
+        'pulled on that line\'s first match.',
     )
     .option('--yes', 'skip the confirmation prompt')
     .option('--json', 'machine-readable output'),
@@ -120,12 +123,18 @@ export const approvalsSetupCommand = addSignerOptions(
     }
 
     // Pre-parse flag amounts BEFORE any signer/chain interaction, so a
-    // typo'd `--risk-usdc not-a-number` errors out without first
-    // prompting for the keystore passphrase. The result is discarded —
-    // buildSetupPlan re-parses internally — and parseUsdcInput throws
-    // on bad shape.
-    if (opts.riskUsdc !== undefined) parseUsdcInput(opts.riskUsdc);
-    if (opts.feeUsdc !== undefined) parseUsdcInput(opts.feeUsdc);
+    // typo'd `--risk-usdc not-a-number` — or an explicit `0`, which this
+    // monotonic command refuses — errors out without first prompting for
+    // the keystore passphrase. The result is discarded (buildSetupPlan
+    // re-parses internally); parseUsdcInput throws on both cases.
+    //
+    // These throws sit outside the try/catch on purpose, matching the
+    // three pre-chain guards above: the failure envelope needs a chainId
+    // and owner that only exist after the client is built. Under --json a
+    // consumer still sees exit 1 with the reason on stderr — never a
+    // green envelope.
+    if (opts.riskUsdc !== undefined) parseUsdcInput(opts.riskUsdc, '--risk-usdc');
+    if (opts.feeUsdc !== undefined) parseUsdcInput(opts.feeUsdc, '--fee-usdc');
 
     const client = await getClient({ requiresSigner: true, requiresChain: true, signerIntent });
     const chainId = client.chainId();

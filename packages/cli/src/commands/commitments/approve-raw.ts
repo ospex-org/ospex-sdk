@@ -7,8 +7,9 @@
  * power users / scripts that already work in wei6.
  *
  * Most users should not run this — `ospex commitments approve <n>`
- * (decimal USDC) or `ospex approvals setup --risk-usdc <n>` (the
- * blessed multi-spender path) are clearer for the common case.
+ * (decimal USDC) or `ospex approvals setup --risk-usdc <n> --fee-usdc
+ * <n>` (the blessed multi-spender path; each flag targets only its own
+ * spender) are clearer for the common case.
  */
 
 import { Command } from '@commander-js/extra-typings';
