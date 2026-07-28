@@ -31,7 +31,7 @@ import {
   inverseOddsTick,
 } from './perspectiveView.js';
 import { buildPreviewOutcomes } from './outcomeView.js';
-import { usdcDecimalToWei6 } from './decimals.js';
+import { usdcDecimalToAmountWei6 } from './decimals.js';
 
 export interface MatchYouView {
   you: PreviewYou;
@@ -134,8 +134,8 @@ export interface SubmitYouView {
  * the always-populated `preview.outcomes`); otherwise backfills from
  * the legacy `side` / `economics` fields.
  *
- * Wired in PR C — exported now from the same module so the symmetric
- * API surface is one import for downstream agents.
+ * Exported from the same module as its match-side sibling so the
+ * symmetric API surface is one import for downstream agents.
  */
 export function computeSubmitYouView(preview: SubmitPreview): SubmitYouView {
   if (preview.you !== undefined && preview.counterparty !== undefined) {
@@ -158,17 +158,18 @@ export function computeSubmitYouView(preview: SubmitPreview): SubmitYouView {
   // Cross-check: the existing envelope publishes counterpartyRiskUSDC
   // as a decimal string. We re-derive the wei6 form via integer math
   // above; verify the two paths agree to catch any silent drift.
-  try {
-    const fromString = usdcDecimalToWei6(preview.economics.counterpartyRiskUSDC);
-    if (fromString !== counterpartyRiskWei6) {
-      throw new OspexValidationError(
-        `computeSubmitYouView: counterpartyRiskUSDC=${preview.economics.counterpartyRiskUSDC} disagrees with the BigInt-derived value (${counterpartyRiskWei6}).`,
-      );
-    }
-  } catch (e) {
-    // `usdcDecimalToWei6` rejects sub-lot-size values; if the existing
-    // string can't be parsed we trust our BigInt math and continue.
-    if (!(e instanceof OspexValidationError)) throw e;
+  //
+  // The counterparty's risk is a TAKER-side value — it carries no lot
+  // rule, and sub-lot values are routine (at riskWei6=100n, oddsTick=101
+  // it is "0.000001"). Parsing it with the maker-risk parser threw on
+  // every one of those, and the try/catch added to compensate swallowed
+  // the drift error too — both are OspexValidationError — so this check
+  // could never actually fire. The right parser removes the need for it.
+  const fromString = usdcDecimalToAmountWei6(preview.economics.counterpartyRiskUSDC);
+  if (fromString !== counterpartyRiskWei6) {
+    throw new OspexValidationError(
+      `computeSubmitYouView: counterpartyRiskUSDC=${preview.economics.counterpartyRiskUSDC} disagrees with the BigInt-derived value (${counterpartyRiskWei6}).`,
+    );
   }
 
   const you = buildPreviewYou({

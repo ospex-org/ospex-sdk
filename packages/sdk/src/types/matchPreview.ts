@@ -17,7 +17,35 @@
  * Wire safety: every numeric field that may exceed Number.MAX_SAFE_INTEGER
  * is a decimal string (e.g. `riskWei6: '1000000'`). USDC formatted
  * strings (`takerRiskUSDC: '1.000000'`) are produced via
- * `wei6ToDecimalUSDC` and round-trip with `usdcDecimalToWei6`.
+ * `wei6ToDecimalUSDC`.
+ *
+ * Most of them carry a paired integer: `<name>USDC` ↔ `<name>Wei6`, and
+ * inside `you` / `counterparty` the pair is `{ wei6, usdc }` on the same
+ * object. **Decode those with `BigInt(...)`** — exact, never throws.
+ *
+ * Three fields have NO paired integer IN THIS ENVELOPE (pinned by
+ * `usdc-field-pairing.test.ts`; `SubmitPreview` has a different, larger
+ * set — do not treat this list as global):
+ *   - `economics.takerProfitOnWinUSDC` — read `you.profit.wei6`, which
+ *     equals `economics.fillMakerRiskWei6`.
+ *   - `economics.takerReturnOnWinUSDC` — read `you.totalReturn.wei6`,
+ *     which equals `takerRiskWei6 + fillMakerRiskWei6`.
+ *     (Use the integer source rather than parsing. `SubmitPreview`'s
+ *     equivalents can legitimately be `'0.000000'`, which no parser
+ *     accepts; sourcing the integer is sign-agnostic and cannot rot.)
+ *   - `outcomes[].payoutUSDC` — SIGNED per row: `'win'` / `'push'` rows
+ *     are positive and parse, while a `'lose'` row is the negated risk
+ *     (e.g. `'-7.700000'`) and NEITHER parser accepts it. Strip the sign
+ *     yourself, or derive it from the perspective's unsigned `risk.wei6` /
+ *     `profit.wei6`.
+ *
+ * Do not assume any decimal string parses: `wei6ToDecimalUSDC` is total,
+ * but the SDK's parsers validate user-supplied input and accept POSITIVE
+ * amounts only — `speculation.creationFee.*USDC` is `'0.000000'` whenever
+ * the speculation already exists. Reserve `usdcDecimalToAmountWei6` for
+ * amounts a human or agent typed. (`usdcDecimalToWei6` is narrower still:
+ * it also enforces the maker's 100-wei6 lot rule, which a taker-side
+ * amount need not satisfy.)
  */
 
 import type { PublicVisibleCommitment } from './commitment.js';

@@ -1175,3 +1175,38 @@ describe('prepareSubmit — maker override (preview-only without signer unlock)'
     expect(preview.raw.maker.toLowerCase()).toBe(MAKER.toLowerCase());
   });
 });
+
+describe('prepareSubmit — the maker lot rule (negative control for the taker relaxation)', () => {
+  /**
+   * `riskUsdc` here becomes `preview.raw.riskAmount` — the value the maker
+   * SIGNS. `MatchingModule._validateCommitment` reverts `InvalidLotSize`
+   * if it is not a multiple of 100 wei6, and on this high-level path
+   * `usdcDecimalToWei6` is the ONLY thing that enforces it (`submitRaw`
+   * has its own `validateRiskAmount`; nothing re-checks here).
+   *
+   * The taker-side parser relaxation must never reach this call site.
+   * If someone repoints it at `usdcDecimalToAmountWei6`, these go red.
+   */
+  it('refuses an off-lot-grid maker risk before building a preview', async () => {
+    const ctx = buildContext({ allowance: 1_000_000n });
+    await expect(
+      prepareSubmit(ctx, speculationArgs({ riskUsdc: '0.000123' })),
+    ).rejects.toThrow(/lot size/);
+  });
+
+  it('refuses the very values the taker side now accepts', async () => {
+    const ctx = buildContext({ allowance: 1_000_000n });
+    for (const riskUsdc of ['0.000001', '0.000150', '0.999936', '4.999918']) {
+      await expect(prepareSubmit(ctx, speculationArgs({ riskUsdc }))).rejects.toThrow(/lot size/);
+    }
+  });
+
+  it('POSITIVE CONTROL: accepts the smallest lot-aligned maker risk', async () => {
+    // Pairs with the refusals above — proves they are not a function that
+    // simply always throws.
+    const ctx = buildContext({ allowance: 1_000_000n });
+    const preview = await prepareSubmit(ctx, speculationArgs({ riskUsdc: '0.0001' }));
+    expect(preview.raw.riskAmount).toBe('100');
+    expect(preview.economics.riskUSDC).toBe('0.000100');
+  });
+});

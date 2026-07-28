@@ -22,6 +22,7 @@ import type {
   BuildMatchPreviewArgs,
 } from '../src/types/matchPreview.js';
 import type { Commitment } from '../src/types/commitment.js';
+import { usdcDecimalToAmountWei6 } from '../src/commitments/decimals.js';
 
 const MAKER = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as `0x${string}`;
 const TAKER = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as `0x${string}`;
@@ -690,5 +691,299 @@ describe('buildMatchPreview — an explicit oversize is REFUSED, never clamped',
     expect(() => buildMatchPreview(baseArgs({ takerDesiredRiskWei6: 0n }))).toThrow(
       OspexValidationError,
     );
+  });
+});
+
+describe('buildMatchPreview — taker-risk round-trip (no lot rule on the taker leg)', () => {
+  /**
+   * The operator round-trip: run a preview, read back the taker risk it
+   * reported, and hand that exact number to a second run. This is how an
+   * orchestrator binds an execution to an already-validated preview.
+   *
+   * It goes through `usdcDecimalToAmountWei6` deliberately — that parse is
+   * the step the CLI performs on `--risk-usdc`, and it is the step that
+   * used to reject the preview's own output.
+   */
+  function roundTrip(oddsTick: number, remaining: string, desiredWei6: bigint) {
+    const args = (d: bigint) =>
+      baseArgs({
+        commitment: makeCommitment({
+          oddsTick,
+          riskAmount: remaining,
+          remainingRiskAmount: remaining,
+        }),
+        takerDesiredRiskWei6: d,
+      });
+    const first = buildMatchPreview(args(desiredWei6));
+    // Feed the REPORTED taker risk back through the CLI's own parser.
+    const reparsed = usdcDecimalToAmountWei6(first.economics.takerRiskUSDC);
+    const second = buildMatchPreview(args(reparsed));
+    return { first, second, reparsed };
+  }
+
+  it('is idempotent across a full sweep of odds and sizes (property, not sample)', () => {
+    let checked = 0;
+    let offGrid = 0;
+    let clampBound = 0;
+    for (let oddsTick = 101; oddsTick <= 10100; oddsTick += 37) {
+      for (const desired of [1n, 37n, 50n, 99n, 100n, 199n, 12_345n, 999_936n, 500_000n]) {
+        let r: ReturnType<typeof roundTrip>;
+        try {
+          r = roundTrip(oddsTick, '1000000', desired);
+        } catch (e) {
+          // buildMatchPreview refuses fills outside (0, remaining] — an
+          // interval bound, unrelated to the lot grid. Skip those. Assert
+          // the REASON too: OspexValidationError is also what a lot-size
+          // regression would throw, so a bare instanceof check would let
+          // one hide here as a skipped case.
+          expect(e).toBeInstanceOf(OspexValidationError);
+          expect((e as Error).message).not.toMatch(/lot size/);
+          continue;
+        }
+        expect(r.second.economics.fillMakerRiskWei6).toBe(r.first.economics.fillMakerRiskWei6);
+        expect(r.second.economics.takerRiskWei6).toBe(r.first.economics.takerRiskWei6);
+
+        // ABSOLUTE anchor, not just self-consistency: pin the reported taker
+        // risk to the contract's own formula, clamp included. Idempotence
+        // alone would still hold if the SDK's mirror of `matchCommitment`
+        // drifted, and `approvals[].required` on a match IS this number — an
+        // over-report would prompt for a larger allowance than the contract
+        // charges.
+        const profitTicks = BigInt(oddsTick) - 100n;
+        const fill = BigInt(r.first.economics.fillMakerRiskWei6);
+        const unclamped = (fill * profitTicks) / 100n;
+        const expected = unclamped > desired ? desired : unclamped;
+        expect(BigInt(r.first.economics.takerRiskWei6)).toBe(expected);
+        expect(BigInt(r.first.economics.takerRiskWei6)).toBeLessThanOrEqual(desired);
+        if (unclamped > desired) clampBound += 1;
+
+        if (r.reparsed % 100n !== 0n) offGrid += 1;
+        checked += 1;
+      }
+    }
+    // Meaningful coverage, and a real share of it is off the lot grid —
+    // i.e. these round-trips were impossible before the parser split.
+    expect(checked).toBeGreaterThan(500);
+    expect(offGrid).toBeGreaterThan(100);
+    // The clamp branch must actually be exercised, or `expected` above
+    // degenerates into the unclamped formula and pins only half the rule.
+    expect(clampBound).toBeGreaterThan(0);
+  });
+
+  it('emits and re-accepts the off-grid taker risk quoted in the issue (999936)', () => {
+    // oddsTick 244 → profitTicks 144. A fill of 694400 (lot-aligned) prices
+    // the taker at 694400 * 144 / 100 = 999936 — the value observed in the
+    // wild, 36 wei6 off the lot grid. The preview PRINTS it; before the
+    // parser split, handing it straight back was refused.
+    const r = roundTrip(244, '1000000', 999_936n);
+    expect(r.first.economics.takerRiskUSDC).toBe('0.999936');
+    expect(r.first.economics.fillMakerRiskWei6).toBe('694400');
+    expect(r.reparsed).toBe(999_936n);
+    expect(r.reparsed % 100n).toBe(36n); // genuinely off-grid
+    expect(r.second.economics.fillMakerRiskWei6).toBe(r.first.economics.fillMakerRiskWei6);
+  });
+
+  it('is idempotent even when the reported taker risk lands back ON the grid', () => {
+    // Same desired value at oddsTick 250 prices to 999900 — lot-aligned by
+    // coincidence. Idempotence must not depend on which side of the grid
+    // the number happens to fall.
+    const r = roundTrip(250, '1000000', 999_936n);
+    expect(r.reparsed).toBe(999_900n);
+    expect(r.reparsed % 100n).toBe(0n);
+    expect(r.second.economics.fillMakerRiskWei6).toBe(r.first.economics.fillMakerRiskWei6);
+  });
+
+  it('round-trips below decimal odds 2.00, where NO lot-aligned equivalent exists', () => {
+    // oddsTick 150 == decimal 1.50 → profitTicks 50. The taker amounts
+    // that produce a given fill span a window only `profitTicks` wide, so
+    // below 2.00 that window can contain no multiple of 100 at all.
+    const r = roundTrip(150, '1000000', 50n);
+    expect(r.first.economics.fillMakerRiskWei6).toBe('100');
+    expect(r.reparsed).toBe(50n);
+    expect(r.reparsed % 100n).toBe(50n); // off-grid
+    expect(r.second.economics.fillMakerRiskWei6).toBe('100');
+
+    // Prove the unreachability rather than asserting it: sweep every taker
+    // amount that yields this fill and confirm none is lot-aligned.
+    const producingThisFill: bigint[] = [];
+    for (let t = 1n; t <= 400n; t += 1n) {
+      try {
+        const p = buildMatchPreview(
+          baseArgs({
+            commitment: makeCommitment({ oddsTick: 150 }),
+            takerDesiredRiskWei6: t,
+          }),
+        );
+        if (p.economics.fillMakerRiskWei6 === '100') producingThisFill.push(t);
+      } catch {
+        /* outside (0, remaining] */
+      }
+    }
+    expect(producingThisFill.length).toBeGreaterThan(0);
+    expect(producingThisFill.filter((t) => t % 100n === 0n)).toEqual([]);
+  });
+
+  it('the minimum fill at oddsTick 101 is reachable ONLY at 1 wei6', () => {
+    // profitTicks = 1 → the window for fill=100 is exactly [1, 1]. Under a
+    // 100-wei6 lot rule on the taker leg this fill is inexpressible.
+    const p = buildMatchPreview(
+      baseArgs({ commitment: makeCommitment({ oddsTick: 101 }), takerDesiredRiskWei6: 1n }),
+    );
+    expect(p.economics.fillMakerRiskWei6).toBe('100');
+    expect(p.economics.takerRiskUSDC).toBe('0.000001');
+    expect(usdcDecimalToAmountWei6(p.economics.takerRiskUSDC)).toBe(1n);
+  });
+});
+
+describe('buildMatchPreview — zero USDC strings are emitted but do NOT parse', () => {
+  it('an ordinary existing-speculation preview emits "0.000000" the parser refuses', () => {
+    // This is the agent-contract claim, checked against the artifact rather
+    // than asserted in prose: `wei6ToDecimalUSDC` is total, the parsers are
+    // not, and a routine preview emits zero-valued USDC strings. Consumers
+    // are directed at the paired `*Wei6` field with BigInt() for this reason.
+    const p = buildMatchPreview(baseArgs()); // speculation.mode === 'existing'
+    const fee = p.speculation.creationFee;
+
+    expect(fee.applies).toBe(false);
+    for (const usdc of [
+      fee.viewerShareUSDC,
+      fee.totalFeeUSDC,
+      fee.takerShareUSDC,
+      fee.makerShareUSDC,
+    ]) {
+      expect(usdc).toBe('0.000000');
+      expect(() => usdcDecimalToAmountWei6(usdc)).toThrow(/must be positive/);
+    }
+
+    // The path the contract tells agents to use works for exactly these.
+    expect(BigInt(fee.viewerShareWei6)).toBe(0n);
+    expect(BigInt(fee.totalFeeWei6)).toBe(0n);
+  });
+
+  it('the paired *Wei6 field is exact for the non-zero economics too', () => {
+    // Negative control: the BigInt path is not a special case for zero — it
+    // is the general rule, and it agrees with the parser wherever the parser
+    // is defined.
+    const p = buildMatchPreview(baseArgs({ takerDesiredRiskWei6: 150n }));
+    expect(BigInt(p.economics.takerRiskWei6)).toBe(
+      usdcDecimalToAmountWei6(p.economics.takerRiskUSDC),
+    );
+    expect(BigInt(p.economics.fillMakerRiskWei6)).toBe(
+      usdcDecimalToAmountWei6(p.economics.fillMakerRiskUSDC),
+    );
+  });
+});
+
+describe('buildMatchPreview — the emitted USDC-string domain vs. what parses', () => {
+  /**
+   * Walks a real preview and classifies EVERY key ending in `USDC`. This
+   * guards the class rather than the handful of fields anyone thought to
+   * enumerate: a future zero- or negative-valued USDC field is caught here
+   * without the test being updated.
+   *
+   * The public JSDoc on `MatchPreview` / `PerspectiveAmount` /
+   * `PreviewOutcome.payoutUSDC` promises exactly this shape — decode via
+   * the paired `*Wei6` field, because the parsers take positive input only.
+   */
+  type Found = { path: string; value: string };
+
+  function collectUsdcStrings(node: unknown, path = '$', out: Found[] = []): Found[] {
+    if (node === null || node === undefined) return out;
+    if (Array.isArray(node)) {
+      node.forEach((v, i) => collectUsdcStrings(v, `${path}[${i}]`, out));
+      return out;
+    }
+    if (typeof node === 'object') {
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+        // BOTH naming conventions: `xUSDC` at the top level, and the
+        // `{ wei6, usdc }` pair inside you/counterparty PerspectiveAmounts.
+        // An earlier version of this walker was case-sensitive on `USDC` and
+        // silently skipped every PerspectiveAmount.
+        if ((k.endsWith('USDC') || k === 'usdc') && typeof v === 'string') {
+          out.push({ path: `${path}.${k}`, value: v });
+        }
+        else collectUsdcStrings(v, `${path}.${k}`, out);
+      }
+    }
+    return out;
+  }
+
+  function toWei6(usdc: string): bigint {
+    const neg = usdc.startsWith('-');
+    const [int, frac] = (neg ? usdc.slice(1) : usdc).split('.');
+    const mag = BigInt(int!) * 1_000_000n + BigInt(frac!);
+    return neg ? -mag : mag;
+  }
+
+  it('every emitted *USDC string parses if and only if it is positive', () => {
+    const previews = [
+      buildMatchPreview(baseArgs()), // existing speculation -> zero fee strings
+      buildMatchPreview(baseArgs({ speculation: { mode: 'lazy' } })), // lazy -> non-zero fee
+      buildMatchPreview(baseArgs({ takerDesiredRiskWei6: 150n })), // off-grid taker risk
+      buildMatchPreview(
+        baseArgs({ commitment: makeCommitment({ marketType: 'spread', lineTicks: -35 }) }),
+      ), // spread -> a push row too
+    ];
+
+    let positive = 0;
+    let zero = 0;
+    let negative = 0;
+
+    for (const p of previews) {
+      for (const { path, value } of collectUsdcStrings(p)) {
+        // Every one is canonical 6dp, optionally signed.
+        expect(value, path).toMatch(/^-?\d+\.\d{6}$/);
+        const n = toWei6(value);
+        if (n > 0n) {
+          expect(usdcDecimalToAmountWei6(value), path).toBe(n);
+          positive += 1;
+        } else {
+          expect(() => usdcDecimalToAmountWei6(value), path).toThrow(/must be positive/);
+          if (n === 0n) zero += 1;
+          else negative += 1;
+        }
+      }
+    }
+
+    // Non-vacuous: all three classes genuinely occur in real output, so the
+    // "positive only" scoping in the public JSDoc is load-bearing, not
+    // defensive boilerplate.
+    expect(positive).toBeGreaterThan(0);
+    expect(zero).toBeGreaterThan(0);
+    expect(negative).toBeGreaterThan(0);
+  });
+
+  it('a lose row really is the negated risk, and it is refused', () => {
+    const p = buildMatchPreview(baseArgs());
+    const lose = p.outcomes?.find((o) => o.result === 'lose');
+    expect(lose).toBeDefined();
+    expect(lose!.payoutUSDC.startsWith('-')).toBe(true);
+    expect(lose!.payoutUSDC).toBe(`-${p.economics.takerRiskUSDC}`);
+    expect(() => usdcDecimalToAmountWei6(lose!.payoutUSDC)).toThrow(/must be positive/);
+  });
+});
+
+describe('buildMatchPreview — the two unpaired economics USDC fields', () => {
+  /**
+   * The full paired/unpaired classification for BOTH preview envelopes lives
+   * in `usdc-field-pairing.test.ts`. This covers the MatchPreview-specific
+   * consequence: the docs tell agents to DERIVE these two rather than parse
+   * them, which is only safe advice if the derivation is exact.
+   */
+  it('the two unpaired ECONOMICS fields are positive and derivable from paired ones', () => {
+    // The docs tell agents to derive these rather than parse them; that
+    // advice is only safe if the derivation is exact. Sweep, do not sample.
+    for (let oddsTick = 101; oddsTick <= 3000; oddsTick += 23) {
+      const p = buildMatchPreview(baseArgs({ commitment: makeCommitment({ oddsTick }) }));
+      const fill = BigInt(p.economics.fillMakerRiskWei6);
+      const risk = BigInt(p.economics.takerRiskWei6);
+
+      // profit-on-win === fillMakerRisk (zero-vig), return === risk + profit.
+      expect(usdcDecimalToAmountWei6(p.economics.takerProfitOnWinUSDC)).toBe(fill);
+      expect(usdcDecimalToAmountWei6(p.economics.takerReturnOnWinUSDC)).toBe(risk + fill);
+      // Positive, hence parseable — unlike payoutUSDC.
+      expect(p.economics.takerProfitOnWinUSDC.startsWith('-')).toBe(false);
+      expect(p.economics.takerReturnOnWinUSDC.startsWith('-')).toBe(false);
+    }
   });
 });

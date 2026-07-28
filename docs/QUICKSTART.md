@@ -248,6 +248,13 @@ To take a partial fill, pass `--risk-usdc <n>`:
 ospex commitments match 0xe900c6dd --risk-usdc 0.5
 ```
 
+Here `--risk-usdc` is the **taker's** desired risk, and unlike the maker-side `--risk-usdc` on `commitments submit` it is **not** restricted to `$0.0001` lots — the lot rule applies only to a maker's signed `riskAmount`. That matters because the preview's own `takerRiskUSDC` frequently is not lot-aligned — it is `min(your requested risk, fillMakerRisk × (oddsTick − 100) / 100)` — so you can feed a preview's exact reported size straight back in:
+
+```bash
+ospex commitments match 0xe900c6dd --json | jq -r .payload.economics.takerRiskUSDC   # e.g. 0.999936
+ospex commitments match 0xe900c6dd --risk-usdc 0.999936 --yes                        # fills exactly that
+```
+
 Pass `--yes` to skip the confirmation prompt for scripted use; pass `--json` (without `--yes`) to emit the preview envelope without signing.
 
 That's the bettor loop. After the game finishes, jump to [After the game](#after-the-game-score-settle-claim).
@@ -361,7 +368,7 @@ speculation:  not yet created — lazily created on first match
   - integer with neither sign nor decimal point (`"101"`) → ambiguous, rejected — use `"+101"` for American or `"101.0"` for decimal
 
   Protocol bound is `1.01 ≤ decimal ≤ 101.00`, equivalent to American `[-10000, -100]` ∪ `[+100, +10000]`. The preview echoes both formats so you can verify before signing; negative-American values round to the protocol's 2-decimal precision (e.g. `-113` → decimal `1.88` → re-displayed as `-114`).
-- **`--risk-usdc`** — decimal USDC string. `1`, `0.001`, `25`. Must be a multiple of `$0.0001` per the contract's lot-size rule.
+- **`--risk-usdc`** — decimal USDC string. `1`, `0.001`, `25`. Must be a multiple of `$0.0001` per the contract's lot-size rule. That rule constrains the **maker's signed `riskAmount`** specifically; the same-named flag on `commitments match` / `commitments fillability` is the taker's desired risk and carries no such restriction.
 - **`--line`** — selected-side displayed line for spread / total. `--side padres --line -3.5` means "Padres -3.5" regardless of whether Padres are home or away; the resolver inverts to the protocol's away-side ticks under the hood. **Omit for `--market moneyline`** — moneyline is line-less, and the SDK errors if `--line` is passed there.
 - **`--yes`** skips the confirmation prompt and signs/posts. **`--json`** is output-format only and pairs with `--yes`:
   - `--json` alone → emits a v2 `AgentEnvelope` (`stage: 'preview'`, `payload: SubmitPreview`, **no signing**). Use case: an agent inspects the resolved tuple before deciding whether to commit.

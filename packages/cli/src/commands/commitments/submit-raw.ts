@@ -26,7 +26,7 @@ import { z } from 'zod';
 import {
   OspexAllowanceError,
   OspexValidationError,
-  usdcDecimalToWei6,
+  usdcDecimalToAmountWei6,
   wei6ToDecimalUSDC,
 } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
@@ -194,7 +194,7 @@ async function handleAllowance(
     } else {
       let parsed: bigint;
       try {
-        parsed = usdcDecimalToWei6(choice);
+        parsed = usdcDecimalToAmountWei6(choice);
       } catch {
         process.stderr.write(`Could not parse "${choice}" as a USDC amount.\n`);
         process.exit(1);

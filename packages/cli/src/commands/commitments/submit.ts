@@ -58,7 +58,7 @@ import {
   OspexAPIError,
   OspexValidationError,
   computeSubmitYouView,
-  usdcDecimalToWei6,
+  usdcDecimalToAmountWei6,
   wei6ToDecimalUSDC,
   type AgentEffect,
   type AgentEnvelope,
@@ -210,7 +210,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
     // scope runs on a --json-only preview.
     const bookScope = opts.fundabilityScope ?? 'visible-book-only';
 
-    // Lazy signer split (spec §17.2): preview-only mode (`--json`
+    // Lazy signer split: preview-only mode (`--json`
     // without `--yes`) MUST NOT trigger an interactive passphrase
     // prompt or a keystore decrypt unless a non-interactive source
     // is configured. `resolvePreviewAddress` returns an address
@@ -412,7 +412,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
         } else {
           let parsed: bigint;
           try {
-            parsed = usdcDecimalToWei6(choice);
+            parsed = usdcDecimalToAmountWei6(choice);
           } catch {
             process.stderr.write(`Could not parse "${choice}" as a USDC amount.\n`);
             process.exit(1);
