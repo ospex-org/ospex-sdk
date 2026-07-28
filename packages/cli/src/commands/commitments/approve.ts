@@ -50,7 +50,8 @@ export const commitmentsApproveCommand = addSignerOptions(
     .description(
       'Approve PositionModule for USDC. Argument is decimal USDC (e.g. "5", "0.25") or "max" for unlimited. ' +
         'For raw 6-decimal units, use `ospex commitments approve-raw`. The blessed multi-spender setup path is ' +
-        '`ospex approvals setup --risk-usdc <n>`.',
+        '`ospex approvals setup --risk-usdc <n> --fee-usdc <n>` — each flag targets only its own spender. ' +
+        'Passing 0 here revokes the PositionModule allowance.',
     )
     .argument('<amount>', 'decimal USDC ("5", "0.25") or "max"')
     .option('--yes', 'skip the confirmation prompt')

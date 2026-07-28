@@ -7,8 +7,9 @@
  *   only act on the dimensions specified. The two are orthogonal —
  *   omitting a flag leaves that allowance untouched, and approving bet
  *   risk never implies a fee approval. A wallet that may be first to a
- *   market must approve `--fee-usdc` explicitly, or its first match on
- *   that market reverts on the speculation creation fee.
+ *   line — a `(contest, scorer, lineTicks)` tuple, which odds are NOT
+ *   part of — must approve `--fee-usdc` explicitly, or its first match
+ *   on that line reverts on the speculation creation fee.
  *
  * Interactive mode (no flags + TTY + not --json):
  *   prompts for each dimension with sensible defaults. Press enter to
@@ -87,8 +88,8 @@ export const approvalsSetupCommand = addSignerOptions(
       '--fee-usdc <amount>',
       'USDC approval for TreasuryModule (protocol fees: contest creation + lazy spec creation). ' +
         'Independent of --risk-usdc; omit it to leave the fee allowance unchanged. Approve a few ' +
-        'USDC here if you may be the first to a market — the 0.25/side speculation creation fee is ' +
-        'pulled on that market\'s first match.',
+        'USDC here if you may be first to a line — the 0.25/side speculation creation fee is ' +
+        'pulled on that line\'s first match.',
     )
     .option('--yes', 'skip the confirmation prompt')
     .option('--json', 'machine-readable output'),

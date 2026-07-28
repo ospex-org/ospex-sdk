@@ -16,11 +16,13 @@
  * The two dimensions are ORTHOGONAL: each flag acts on its own spender
  * and nothing else. Omitting a flag leaves that allowance untouched.
  * There is no cross-dimension defaulting — approving bet risk never
- * implies a fee approval. An operator who may be first to a market has
- * to approve a fee budget explicitly, because that is how the protocol
- * is designed: the speculation creation fee (0.25 USDC per side) is
- * pulled from TreasuryModule on the first commitment match of a new
- * market, and an unapproved wallet reverts there.
+ * implies a fee approval. An operator who may be first to a line has to
+ * approve a fee budget explicitly, because that is how the protocol is
+ * designed: the speculation creation fee (0.25 USDC per side) is pulled
+ * from TreasuryModule on the first commitment match of a `(contest,
+ * scorer, lineTicks)` tuple, and an unapproved wallet reverts there.
+ * Odds are NOT part of that key — requoting an existing line at a new
+ * price creates no speculation and owes no fee.
  *
  * Skip rule: if the wallet already has at least the requested allowance
  * for a given spender, the planner emits a `skip-already-approved`

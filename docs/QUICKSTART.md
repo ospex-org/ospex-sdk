@@ -185,7 +185,7 @@ Two independent spenders, one flag each:
 | `--risk-usdc` | **PositionModule** | Your bet risk pool. Pulled when you match someone else's commitment, and when one of your own commitments is filled. |
 | `--fee-usdc` | **TreasuryModule** | Protocol fees: 1 USDC to create a contest, and 0.25 USDC per side of the speculation creation fee. |
 
-**Approve a fee budget if you might be first to a market.** The speculation creation fee is charged lazily — the *first* commitment match on a given market pays it, 0.25 USDC from each side. If your TreasuryModule allowance doesn't cover your share, that match reverts. Later matches on an already-created market are free, so a wallet that only ever takes existing lines can skip `--fee-usdc`; a wallet that opens markets cannot.
+**Approve a fee budget if you might be first to a line.** The speculation creation fee is charged lazily — the *first* commitment match on a given `(contest, scorer/market, lineTicks)` tuple pays it, 0.25 USDC from each side. If your TreasuryModule allowance doesn't cover your share, that match reverts. Every later match on that same line is free, so a wallet that only ever takes lines that already exist can skip `--fee-usdc`; a wallet that opens new ones cannot.
 
 The two flags are independent. Passing one leaves the other allowance untouched — approving bet risk never implies a fee approval. Run `ospex approvals show` to verify what landed.
 
@@ -266,7 +266,7 @@ Same one-liner as the bettor path; size the risk budget for the total liability 
 ospex approvals setup --risk-usdc 200 --fee-usdc 5 --yes
 ```
 
-Makers should always carry a fee budget. Submitting a commitment at a price nobody has quoted yet makes you the market's opener, so your side of the 0.25 USDC speculation creation fee comes due on its first match.
+Makers should always carry a fee budget. A speculation is keyed by `(contest, scorer/market, lineTicks)` — **not** by odds — so you are the market's opener when you are first on a *line* nobody has taken yet, and your side of the 0.25 USDC speculation creation fee comes due on its first match. Quoting a different price on a line that already exists does **not** create a new speculation, and carries no creation fee.
 
 ### 2. Pick a price
 
