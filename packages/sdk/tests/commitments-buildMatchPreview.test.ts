@@ -834,3 +834,42 @@ describe('buildMatchPreview — taker-risk round-trip (no lot rule on the taker 
     expect(usdcDecimalToAmountWei6(p.economics.takerRiskUSDC)).toBe(1n);
   });
 });
+
+describe('buildMatchPreview — zero USDC strings are emitted but do NOT parse', () => {
+  it('an ordinary existing-speculation preview emits "0.000000" the parser refuses', () => {
+    // This is the agent-contract claim, checked against the artifact rather
+    // than asserted in prose: `wei6ToDecimalUSDC` is total, the parsers are
+    // not, and a routine preview emits zero-valued USDC strings. Consumers
+    // are directed at the paired `*Wei6` field with BigInt() for this reason.
+    const p = buildMatchPreview(baseArgs()); // speculation.mode === 'existing'
+    const fee = p.speculation.creationFee;
+
+    expect(fee.applies).toBe(false);
+    for (const usdc of [
+      fee.viewerShareUSDC,
+      fee.totalFeeUSDC,
+      fee.takerShareUSDC,
+      fee.makerShareUSDC,
+    ]) {
+      expect(usdc).toBe('0.000000');
+      expect(() => usdcDecimalToAmountWei6(usdc)).toThrow(/must be positive/);
+    }
+
+    // The path the contract tells agents to use works for exactly these.
+    expect(BigInt(fee.viewerShareWei6)).toBe(0n);
+    expect(BigInt(fee.totalFeeWei6)).toBe(0n);
+  });
+
+  it('the paired *Wei6 field is exact for the non-zero economics too', () => {
+    // Negative control: the BigInt path is not a special case for zero — it
+    // is the general rule, and it agrees with the parser wherever the parser
+    // is defined.
+    const p = buildMatchPreview(baseArgs({ takerDesiredRiskWei6: 150n }));
+    expect(BigInt(p.economics.takerRiskWei6)).toBe(
+      usdcDecimalToAmountWei6(p.economics.takerRiskUSDC),
+    );
+    expect(BigInt(p.economics.fillMakerRiskWei6)).toBe(
+      usdcDecimalToAmountWei6(p.economics.fillMakerRiskUSDC),
+    );
+  });
+});

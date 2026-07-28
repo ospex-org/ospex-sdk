@@ -411,6 +411,25 @@ describe('usdcDecimalToAmountWei6', () => {
     expect(strictAccepted).toBe(10);
   });
 
+  it('inverts wei6ToDecimalUSDC for POSITIVE values only — zero is refused', () => {
+    // The agent contract points consumers at the paired `*Wei6` field with
+    // BigInt() precisely because of this asymmetry: wei6ToDecimalUSDC maps
+    // ANY bigint to a string, but the parsers validate user-supplied input
+    // and so refuse zero. Sweep rather than sample.
+    for (let n = 0n; n <= 300n; n += 1n) {
+      const emitted = wei6ToDecimalUSDC(n);
+      if (n === 0n) {
+        expect(emitted).toBe('0.000000');
+        expect(() => usdcDecimalToAmountWei6(emitted)).toThrow(/must be positive/);
+        expect(() => usdcDecimalToWei6(emitted)).toThrow(/must be positive/);
+      } else {
+        expect(usdcDecimalToAmountWei6(emitted)).toBe(n);
+      }
+      // The documented always-works path.
+      expect(BigInt(n.toString())).toBe(n);
+    }
+  });
+
   it('reports a neutral subject — it is not always a "risk amount"', () => {
     // Emitted verbatim at ERC-20 allowance prompts, where "Risk amount"
     // would be wrong.

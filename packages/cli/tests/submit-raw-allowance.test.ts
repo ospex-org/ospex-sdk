@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   OspexAllowanceError,
-  usdcDecimalToWei6,
+  usdcDecimalToAmountWei6,
   wei6ToDecimalUSDC,
   type OspexClient,
 } from '@ospex/sdk';
@@ -215,7 +215,26 @@ describe('submit-raw — M9 interactive approval', () => {
     vi.mocked(promptYesNo).mockResolvedValue(true);
     vi.mocked(promptValue).mockResolvedValue('5'); // user types "5" meaning 5 USDC
     await run(commitmentsSubmitRawCommand, [...BASE_ARGS]);
-    expect(approve).toHaveBeenCalledWith(usdcDecimalToWei6('5')); // 5_000_000n, NOT 5n
+    expect(approve).toHaveBeenCalledWith(usdcDecimalToAmountWei6('5')); // 5_000_000n, NOT 5n
+  });
+
+  it('accepts an OFF-LOT-GRID custom amount (an approve amount has no lot rule)', async () => {
+    // An ERC-20 approve value carries no 100-wei6 lot rule — that rule is
+    // MatchingModule's constraint on a maker's SIGNED riskAmount. This prompt
+    // used the maker-risk parser, which refused any off-grid amount and
+    // reported the refusal as a parse failure before exiting 1.
+    setTTY(true);
+    const submitRaw = vi.fn().mockRejectedValueOnce(allowanceError()).mockResolvedValue(SUCCESS);
+    const approve = vi.fn().mockResolvedValue({ txHash: '0xapprove', receipt: { status: 'success' } });
+    vi.mocked(getClient).mockResolvedValue(fakeClient({ submitRaw, approve }) as never);
+    vi.mocked(promptYesNo).mockResolvedValue(true);
+    vi.mocked(promptValue).mockResolvedValue('1.000150'); // 1_000_150n, 50 off the grid
+    const res = await run(commitmentsSubmitRawCommand, [...BASE_ARGS]);
+
+    expect(1_000_150n % 100n).toBe(50n); // the value really is off-grid
+    expect(approve).toHaveBeenCalledWith(1_000_150n);
+    expect(res.stderr).not.toMatch(/Could not parse/);
+    expect(res.exitCode).toBe(0);
   });
 
   it('"max" grants unlimited explicitly', async () => {

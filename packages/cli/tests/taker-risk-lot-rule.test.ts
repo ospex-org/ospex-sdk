@@ -28,11 +28,12 @@ vi.mock('../src/lib/prompt.js', async (importOriginal) => {
   return { ...actual, promptYesNo: vi.fn(), promptValue: vi.fn() };
 });
 
-import { buildMatchPreview } from '@ospex/sdk';
+import { buildMatchPreview, buildSubmitPreview } from '@ospex/sdk';
 import { getClient } from '../src/lib/client.js';
 import { promptYesNo, promptValue } from '../src/lib/prompt.js';
 import { commitmentsFillabilityCommand } from '../src/commands/commitments/fillability.js';
 import { commitmentsMatchCommand } from '../src/commands/commitments/match.js';
+import { commitmentsSubmitCommand } from '../src/commands/commitments/submit.js';
 
 const HASH = `0x${'b'.repeat(64)}`;
 const TAKER = `0x${'c'.repeat(40)}`;
@@ -337,5 +338,97 @@ describe('match allowance prompt accepts its own suggested default', () => {
     // ...and accepting it now approves rather than exiting 1.
     expect(approve).toHaveBeenCalledWith(150n);
     expect(result.stderr).not.toMatch(/Could not parse/);
+  });
+});
+
+describe('submit allowance prompt accepts an off-lot-grid amount', () => {
+  // `commitments submit`'s allowance prompt was on the maker-risk parser too.
+  // Unlike `match`, its SUGGESTED DEFAULT is a maker riskAmount and so is
+  // lot-aligned by construction — there is no reachable "refuses its own
+  // default" dead-end here. What was broken is a HAND-TYPED off-grid amount,
+  // which an ERC-20 approve has every right to be.
+  function submitPreview(riskWei6: bigint) {
+    return buildSubmitPreview({
+      contestId: 42n,
+      awayTeam: 'Los Angeles Lakers',
+      homeTeam: 'Denver Nuggets',
+      awayTeamId: 'lakers-uuid',
+      homeTeamId: 'nuggets-uuid',
+      sport: 'nba',
+      matchTime: FAR_FUTURE_ISO,
+      market: 'moneyline',
+      scorer: `0x${'4'.repeat(40)}`,
+      lineTicks: 0,
+      speculation: { mode: 'existing', speculationId: '100', speculationKey: `0x${'a'.repeat(64)}` },
+      resolvedSide: {
+        positionType: 0,
+        resolvedLabel: 'Los Angeles Lakers',
+        role: 'away',
+        resolutionSource: 'exact',
+      },
+      sideInput: 'lakers',
+      oddsTick: 250,
+      riskWei6,
+      maker: TAKER,
+      chainId: 137,
+      matchingModuleAddress: MM,
+      expirySec: 4_081_888_800n,
+      expirySource: 'default-match-time',
+      matchTimeSec: 4_081_888_800n,
+      makerCreationFeeWei6: 0n,
+      treasuryModuleAddress: TM,
+      treasuryUsdcCurrentAllowanceWei6: 0n,
+      nonce: 17_000_000_001n,
+      positionModuleAddress: PM,
+      usdcCurrentAllowanceWei6: 0n, // forces needsApproval on the risk row
+    } as never);
+  }
+
+  it('a hand-typed off-grid approve amount is accepted, not reported as a parse error', async () => {
+    const preview = submitPreview(1_000_000n);
+    expect(preview.approvals[0]?.needsApproval).toBe(true);
+
+    vi.mocked(promptValue).mockResolvedValue('1.000150'); // 1_000_150n — off-grid
+    const approve = vi
+      .fn()
+      .mockResolvedValue({ txHash: '0xapprove', receipt: { status: 'success', blockNumber: 1n } });
+    vi.mocked(getClient).mockResolvedValue({
+      chainId: () => 137,
+      signer: () => ({ getAddress: async () => TAKER }),
+      commitments: {
+        prepareSubmit: vi.fn().mockResolvedValue(preview),
+        checkSubmitFundability: vi
+          .fn()
+          .mockResolvedValue({ outcome: 'fundable', reasons: [] }),
+        approve,
+        submitPrepared: vi.fn().mockResolvedValue({
+          hash: '0xhash',
+          commitment: { status: 'open', riskAmount: '1000000', nonce: '1', expiry: '123' },
+        }),
+      },
+    } as never);
+
+    const origIsTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    let result: Awaited<ReturnType<typeof run>>;
+    try {
+      result = await run(commitmentsSubmitCommand, [
+        '--speculation',
+        '100',
+        '--side',
+        'lakers',
+        '--odds',
+        '2.50',
+        '--risk-usdc',
+        '1',
+      ]);
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: origIsTTY, configurable: true });
+    }
+
+    expect(1_000_150n % 100n).toBe(50n); // the typed value really is off-grid
+    expect(approve).toHaveBeenCalledWith(1_000_150n);
+    expect(result.stderr).not.toMatch(/Could not parse/);
+    expect(result.error).toBeUndefined();
   });
 });
