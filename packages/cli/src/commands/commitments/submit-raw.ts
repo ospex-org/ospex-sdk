@@ -16,11 +16,17 @@
  * `--expiry` is REQUIRED. The raw-tuple surface reads no contest, so it has
  * no match time to derive a safe expiry from; the removed `now + 24h`
  * default was a wall-clock guess that left a commitment matchable well into
- * live play. Both the missing-flag refusal and the flag's own parse run in
- * the command's pre-parse, BEFORE `getClient` — so a forgotten or malformed
- * `--expiry` never costs a keystore passphrase prompt or a signer unlock.
- * Use `ospex commitments submit`, which reads the contest and defaults
- * expiry to its match time, if you want a default.
+ * live play. Use `ospex commitments submit`, which reads the contest and
+ * defaults expiry to its match time, if you want a default.
+ *
+ * Two of the three `--expiry` failure modes are caught in the command's
+ * pre-parse, BEFORE `getClient`: a MISSING flag and an UNPARSEABLE value.
+ * Neither costs a keystore passphrase prompt or a signer unlock. The third —
+ * a value that parses but is out of bounds (already past, or beyond the
+ * 366-day cap) — is refused by the SDK's `validateExpiry` inside `submitRaw`,
+ * i.e. AFTER `getClient`, because that bound is not exported from
+ * `@ospex/sdk` and duplicating the constant here would just create a second
+ * number to drift. Nothing is signed or POSTed in any of the three cases.
  *
  * On `OspexAllowanceError` we offer to approve PositionModule and retry
  * once: interactive runs prompt (defaulting to the EXACT required amount,
@@ -62,9 +68,12 @@ function parsePosition(raw: string): 0 | 1 {
 
 /**
  * Relative-duration grammar accepted by `--expiry`: a positive integer
- * followed by one of `s` / `m` / `h` / `d` / `w`. Mirrors the grammar the
- * high-level `ospex commitments submit` accepts (implemented SDK-side in
- * `prepareSubmit`), so the two `--expiry` flags take the same inputs.
+ * followed by one of `s` / `m` / `h` / `d` / `w` — all five units, which is
+ * why the user-facing strings below lead with `"45s"` rather than the
+ * four-example list this grammar is usually advertised with. Mirrors the
+ * grammar the high-level `ospex commitments submit` accepts (implemented
+ * SDK-side in `prepareSubmit`), so the two `--expiry` flags take the same
+ * inputs.
  *
  * Deliberately duplicated rather than imported: the SDK's parser is
  * module-private and the CLI must not import SDK internals. If either side
@@ -81,8 +90,8 @@ const DURATION_UNIT_SEC: Record<string, bigint> = {
 };
 
 /**
- * Parse `--expiry` to unix-seconds. Accepts a duration ("30m", "4h", "1d",
- * "1w"), unix-seconds ("1715299200"), or ISO-8601 / RFC3339.
+ * Parse `--expiry` to unix-seconds. Accepts a duration ("45s", "30m", "4h",
+ * "1d", "1w"), unix-seconds ("1715299200"), or ISO-8601 / RFC3339.
  *
  * A duration is resolved against the CALLER's clock at parse time, so a
  * re-issued `submit-raw` with the same duration signs a DIFFERENT expiry —
@@ -96,7 +105,7 @@ function parseExpiry(raw: string): bigint {
     const magnitude = BigInt(duration[1]!);
     if (magnitude === 0n) {
       throw new OspexValidationError(
-        `Invalid --expiry duration "${raw}": magnitude must be > 0 (e.g. "30m", "4h", "1d", "1w").`,
+        `Invalid --expiry duration "${raw}": magnitude must be > 0 (e.g. "45s", "30m", "4h", "1d", "1w").`,
         { field: 'expiry' },
       );
     }
@@ -107,7 +116,7 @@ function parseExpiry(raw: string): bigint {
   const ms = Date.parse(raw);
   if (Number.isNaN(ms)) {
     throw new OspexValidationError(
-      `Invalid --expiry "${raw}". Accepted forms: a duration ("30m", "4h", "1d", "1w"), ` +
+      `Invalid --expiry "${raw}". Accepted forms: a duration ("45s", "30m", "4h", "1d", "1w"), ` +
         `unix-seconds ("1715299200"), or ISO-8601 / RFC3339 ("2026-05-09T20:00:00Z").`,
       { field: 'expiry' },
     );
@@ -130,7 +139,7 @@ export const commitmentsSubmitRawCommand = addSignerOptions(
     .argument('<riskAmount>', 'risk amount (USDC, 6 decimals; multiple of 100)')
     .option(
       '--expiry <duration-iso-or-unix>',
-      'REQUIRED. duration ("30m", "4h", "1d", "1w"), ISO-8601 ("2026-05-09T20:00:00Z"), or ' +
+      'REQUIRED. duration ("45s", "30m", "4h", "1d", "1w"), ISO-8601 ("2026-05-09T20:00:00Z"), or ' +
         'unix-seconds. There is NO default: submit-raw reads no contest, so it has no match ' +
         'time to derive a safe expiry from. Use `ospex commitments submit` for a match-time default.',
     )
@@ -185,8 +194,8 @@ export const commitmentsSubmitRawCommand = addSignerOptions(
         '--expiry is required for `commitments submit-raw`; there is no default. ' +
           'The raw-tuple surface reads no contest, so it has no match time to derive a safe ' +
           'expiry from, and a wall-clock default would leave the commitment matchable after ' +
-          'the game starts. Pass a duration ("30m", "4h", "1d", "1w"), an ISO-8601 timestamp, ' +
-          'or unix-seconds — or use `ospex commitments submit`, which reads the contest and ' +
+          'the game starts. Pass a duration ("45s", "30m", "4h", "1d", "1w"), an ISO-8601 ' +
+          'timestamp, or unix-seconds — or use `ospex commitments submit`, which reads the contest and ' +
           'defaults expiry to its match time.',
         { field: 'expiry' },
       );

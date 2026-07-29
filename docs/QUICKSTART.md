@@ -417,7 +417,7 @@ ospex commitments submit-raw 42 0xd846… 0 upper 250 1000 --expiry 4h
 
 Same arguments mirror the on-chain `OspexCommitment` struct. No preview block, no resolver. Use the high-level form unless you have a specific reason not to.
 
-**`--expiry` is required here and has no default.** The raw surface reads no contest, so it has no match time to derive a safe expiry from — and an expiry that outlives the start of the game leaves your order matchable during live play, at prices you set pre-game. The high-level `ospex commitments submit` reads the contest and defaults `--expiry` to its match time; reach for it if you want that. Accepted forms are the same on both commands: a duration (`30m`, `4h`, `1d`, `1w`), ISO-8601 (`2026-05-09T20:00:00Z`), or unix-seconds.
+**`--expiry` is required here and has no default.** The raw surface reads no contest, so it has no match time to derive a safe expiry from — and an expiry that outlives the start of the game leaves your order matchable during live play, at prices you set pre-game. The high-level `ospex commitments submit` reads the contest and defaults `--expiry` to its match time; reach for it if you want that. Accepted forms are the same on both commands: a duration (a positive integer plus one of `s` / `m` / `h` / `d` / `w` — `45s`, `30m`, `4h`, `1d`, `1w`), ISO-8601 (`2026-05-09T20:00:00Z`), or unix-seconds.
 
 ---
 

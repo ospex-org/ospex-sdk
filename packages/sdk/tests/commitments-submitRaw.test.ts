@@ -37,9 +37,9 @@ const CHAIN_ID = 137 as const;
 const SIG_ORIGINAL = ('0x' + '11'.repeat(65)) as `0x${string}`;
 const SIG_RETRY = ('0x' + '22'.repeat(65)) as `0x${string}`;
 
-// 30 days from test-run time — well under the protocol's 1-year-from-now
-// expiry cap regardless of when the suite runs (mirrors the moving-target
-// fixture pattern in commitments-prepareSubmit.test.ts).
+// 30 days from test-run time — well under `validateExpiry`'s 366-day cap
+// regardless of when the suite runs (mirrors the moving-target fixture
+// pattern in commitments-prepareSubmit.test.ts).
 const EXPIRY_SEC = BigInt(Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60);
 
 const ARGS = {

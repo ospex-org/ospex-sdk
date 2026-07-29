@@ -14,7 +14,7 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ### Fixed
 
-- **`@ospex/sdk`: the two `--expiry` upper-bound errors now state the bound each actually enforces.** `validateExpiry` (the `submitRaw` path) caps at **366 days** and `parseExpiry` (the `submit` / `prepareSubmit` path) caps at **365 days**, but both messages read "1 year" — so an expiry between the two was accepted by one surface and refused by the other while both explained the refusal with the same wrong number. The messages now read "more than 366 days in the future" and "within 365 days of now" respectively, and both constants carry a comment naming the discrepancy. **Behaviour is unchanged**: this corrects the wording only. Reconciling the two values is a follow-up.
+- **`@ospex/sdk`: the two `--expiry` upper-bound errors now state the bound each actually enforces.** `validateExpiry` (the `submitRaw` path) caps at **366 days** and `parseExpiry` (the `submit` / `prepareSubmit` path) caps at **365 days**, but both messages read "1 year" — so an expiry between the two was accepted by one surface and refused by the other while both explained the refusal with the same wrong number. The messages now read "more than 366 days in the future" and "within 365 days of now" respectively, and both constants carry a comment naming the discrepancy. **Behaviour is unchanged**: this corrects the wording only. Reconciling the two values is a follow-up. Each message is now pinned by a test that reads the day count **out of the message** and probes the validator at that exact boundary (cap accepted, cap + 1 refused), then asserts the number is 366 / 365 — so a reverted message, a moved constant, or the two drifting apart all turn red.
 
 ## [0.11.0] — 2026-07-28
 

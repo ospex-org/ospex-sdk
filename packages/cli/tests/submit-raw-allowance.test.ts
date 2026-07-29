@@ -16,7 +16,9 @@
  * Also covers the required `--expiry` refusal (the removed blind `now + 24h`
  * default): that a missing or malformed flag is refused in the pre-parse,
  * BEFORE `getClient` — i.e. before any keystore passphrase prompt or signer
- * unlock — plus the accepted-format matrix as the negative control.
+ * unlock — plus the accepted-format matrix as the negative control, and the
+ * boundary of that guarantee (a value that PARSES but is out of bounds is
+ * refused SDK-side, after `getClient`).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -212,6 +214,36 @@ describe('submit-raw — --expiry is REQUIRED, refused before getClient', () => 
     expect(error).toBeInstanceOf(OspexValidationError);
     expect((error as OspexValidationError).field).toBe('expiry');
     expect(getClient).not.toHaveBeenCalled();
+  });
+
+  it('LIMIT of the pre-parse: a PARSEABLE but out-of-bounds --expiry reaches getClient and is refused SDK-side', async () => {
+    // The pre-parse covers exactly two failure modes — a MISSING flag and an
+    // UNPARSEABLE value. A value that parses fine but violates the SDK's
+    // bounds (already past, or beyond the 366-day cap) is caught by
+    // `validateExpiry` INSIDE `submitRaw`, i.e. after `getClient` has already
+    // resolved the signer. That bound is not exported from `@ospex/sdk` and
+    // duplicating the constant here would create a second number to drift, so
+    // the limit is deliberate. This test pins it, so the command header (which
+    // states the limit) cannot quietly grow into a broader claim.
+    setTTY(false);
+    const past = String(Math.floor(Date.now() / 1000) - 3600);
+    const submitRaw = vi
+      .fn()
+      .mockRejectedValue(new OspexValidationError('expiry must be in the future.', { field: 'expiry' }));
+    vi.mocked(getClient).mockResolvedValue(fakeClient({ submitRaw }) as never);
+
+    const { error } = await run(commitmentsSubmitRawCommand, [
+      ...POSITIONALS,
+      '--expiry',
+      past,
+      '--yes',
+    ]);
+
+    expect(getClient).toHaveBeenCalledTimes(1); // NOT short-circuited pre-parse
+    expect(submitRaw).toHaveBeenCalledTimes(1);
+    expect(submitRaw.mock.calls[0]?.[0]).toMatchObject({ expiry: BigInt(past) });
+    expect(error).toBeInstanceOf(OspexValidationError);
+    expect((error as OspexValidationError).field).toBe('expiry');
   });
 
   it('NEGATIVE CONTROL: with --expiry the command reaches getClient and submits', async () => {
