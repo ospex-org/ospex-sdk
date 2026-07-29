@@ -412,10 +412,12 @@ ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks> --
 If you already hold canonical protocol values (raw scorer address, lineTicks at 10× scale, oddsTick at 100× scale, `riskAmount` in wei6) — say from a market-maker bot or a debugging session — there's a positional escape hatch:
 
 ```bash
-ospex commitments submit-raw 42 0xd846… 0 upper 250 1000
+ospex commitments submit-raw 42 0xd846… 0 upper 250 1000 --expiry 4h
 ```
 
 Same arguments mirror the on-chain `OspexCommitment` struct. No preview block, no resolver. Use the high-level form unless you have a specific reason not to.
+
+**`--expiry` is required here and has no default.** The raw surface reads no contest, so it has no match time to derive a safe expiry from — and an expiry that outlives the start of the game leaves your order matchable during live play, at prices you set pre-game. The high-level `ospex commitments submit` reads the contest and defaults `--expiry` to its match time; reach for it if you want that. Accepted forms are the same on both commands: a duration (`30m`, `4h`, `1d`, `1w`), ISO-8601 (`2026-05-09T20:00:00Z`), or unix-seconds.
 
 ---
 

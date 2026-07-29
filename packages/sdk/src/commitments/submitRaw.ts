@@ -10,8 +10,18 @@
  * signing. `submitRaw` is preserved for tests, debugging, and advanced
  * operators who already hold canonical protocol values.
  *
+ * `expiry` is REQUIRED here and has no default. `submitRaw` takes a raw
+ * protocol tuple and performs no contest read of any kind, so it has no
+ * match time to derive a safe expiry from — the only default it could
+ * offer is a wall-clock offset, which says nothing about when the game
+ * starts. `MatchingModule`'s NatSpec makes expiry the sole temporal guard
+ * on a commitment and puts the burden of a sensible one on off-chain
+ * infrastructure; a blind offset discharges that burden by guessing. The
+ * high-level `commitments.submit` / `prepareSubmit` DO read the contest and
+ * default expiry to its match time — use those if you want a default.
+ *
  * Pipeline:
- *   1. Validate inputs
+ *   1. Validate inputs (incl. refusing an omitted `expiry`)
  *   2. eth_call USDC.allowance — throw OspexAllowanceError if short
  *   3. eth_call MatchingModule.s_minNonces (canonical floor)
  *   4. Pick nonce per the SDK's strategy (or use override)
@@ -59,8 +69,15 @@ export interface RawSubmitArgs {
   oddsTick: number;
   riskAmount: bigint;
   /**
-   * Unix-seconds expiry. Defaults to now + 24 h. Must be in the future
-   * and ≤ 1 year out (server will reject otherwise).
+   * Unix-seconds expiry. **Required — there is no default.** Must be in the
+   * future and within {@link validateExpiry}'s upper bound (366 days; the
+   * server rejects beyond ~1 year).
+   *
+   * Typed optional only so that adding the requirement does not break
+   * consumers at compile time — the runtime refusal
+   * (`OspexValidationError({ field: 'expiry' })`) is the real boundary and it
+   * fires before any signer access, chain read, or POST. Omitting it is a
+   * caller bug, not a request for a default.
    */
   expiry?: bigint;
   /**
@@ -127,8 +144,6 @@ export interface SubmitResult {
   signedPayload: SignedCommitmentPayload;
 }
 
-const DEFAULT_EXPIRY_OFFSET_SEC = 24n * 60n * 60n;
-
 /**
  * Re-wrap an `OspexAPIError` from a `/v1/commitments` POST so it carries the
  * locally-computed EIP-712 `commitmentHash`. A POST that fails AFTER the server
@@ -162,7 +177,25 @@ export async function submitRaw(
   validateOdds(args.oddsTick);
   validateRiskAmount(args.riskAmount);
 
-  const expiry = args.expiry ?? nowUnixSec() + DEFAULT_EXPIRY_OFFSET_SEC;
+  // Expiry is required and has no default. The removed default was a blind
+  // `now + 24h`, which is a wall-clock guess with no relationship to when the
+  // game starts: a commitment signed shortly before first pitch stayed
+  // matchable deep into live play, which is the stale-fill exposure
+  // MatchingModule's NatSpec assigns to off-chain infrastructure to prevent.
+  // submitRaw reads no contest, so it cannot derive a safe value — refuse
+  // instead of guessing. Fires here, above the signer, the chain reads, and
+  // the POST.
+  if (args.expiry === undefined) {
+    throw new OspexValidationError(
+      'expiry is required — submitRaw has no default. It signs a raw protocol tuple and ' +
+        'reads no contest, so it has no match time to derive a safe expiry from, and a ' +
+        'wall-clock offset would leave the commitment matchable after the game starts. ' +
+        'Pass an explicit unix-seconds expiry, or use commitments.submit / prepareSubmit, ' +
+        'which read the contest and default expiry to its match time.',
+      { field: 'expiry' },
+    );
+  }
+  const expiry = args.expiry;
   validateExpiry(expiry);
 
   const signer = ctx.requireSigner();

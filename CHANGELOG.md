@@ -4,7 +4,17 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### Removed
+
+- **BREAKING — `@ospex/cli` + `@ospex/sdk`: `commitments submit-raw` / `commitments.submitRaw` no longer default `expiry` to `now + 24h`. An explicit expiry is now required.** The default was a wall-clock offset with no relationship to when the game starts. `submitRaw` takes a raw protocol tuple and performs **no contest read of any kind**, so it never had a match time to derive a safe value from — the 24h offset was a guess, and for a commitment signed shortly before first pitch it left a live, matchable order deep into in-play. `MatchingModule`'s NatSpec makes `expiry` the sole temporal guard on a commitment and states that off-chain infrastructure is responsible for setting sensible defaults; a blind offset discharges that responsibility by guessing, so the default is removed rather than documented as a footgun. `RawSubmitArgs.expiry` stays **typed optional** (`expiry?: bigint`) so no consumer breaks at compile time, and the enforcement is a runtime `OspexValidationError({ field: 'expiry' })` raised **before any signer access, chain read, or POST** — nothing is signed and nothing is submitted. The `ospex commitments submit-raw` CLI raises the same typed error in its **pre-parse, before `getClient`**, so a forgotten flag never costs a keystore passphrase prompt or a signer unlock. **`commitments submit` / `prepareSubmit` are unaffected** — they read the contest and already default expiry to its match time, which is the surface to reach for if you want a default. Callers that already pass an explicit expiry (including `ospex-market-maker`, which always does) are unaffected.
+
+### Changed
+
+- **`@ospex/cli`: `submit-raw --expiry` accepts duration strings and throws a typed error.** The flag previously accepted only unix-seconds or ISO-8601 and rejected malformed input with a bare `Error`, while the high-level `commitments submit --expiry` accepted `"30m"` / `"4h"` / `"1d"` / `"1w"` as well. With `--expiry` now mandatory on `submit-raw`, that asymmetry would have forced every caller of the raw surface to compute a timestamp by hand, so the two flags now take the same forms; bad input raises `OspexValidationError({ field: 'expiry' })` like every sibling validation surface. **A duration resolves against the caller's clock at parse time**, so a re-issued `submit-raw` with the same duration signs a different `expiry` → a different commitment hash → the server's hash-keyed idempotency cannot dedup it; pass the absolute unix-seconds value you originally signed to make a retry idempotent (`docs/AGENT_CONTRACT.md` §7).
+
+### Fixed
+
+- **`@ospex/sdk`: the two `--expiry` upper-bound errors now state the bound each actually enforces.** `validateExpiry` (the `submitRaw` path) caps at **366 days** and `parseExpiry` (the `submit` / `prepareSubmit` path) caps at **365 days**, but both messages read "1 year" — so an expiry between the two was accepted by one surface and refused by the other while both explained the refusal with the same wrong number. The messages now read "more than 366 days in the future" and "within 365 days of now" respectively, and both constants carry a comment naming the discrepancy. **Behaviour is unchanged**: this corrects the wording only. Reconciling the two values is a follow-up.
 
 ## [0.11.0] — 2026-07-28
 

@@ -64,6 +64,15 @@ import type { Contest, SpeculationDetail } from '../types/contest.js';
  * explicit --expiry.
  */
 const MISSING_MATCH_TIME_FALLBACK_SEC = 60n * 60n;
+/**
+ * Upper bound this path enforces on `--expiry`: 365 days.
+ *
+ * KNOWN DISCREPANCY (behaviour unchanged, follow-up tracked): the
+ * `submitRaw` path's `validateExpiry` caps at 366 days. An expiry between
+ * the two is refused here and accepted there. Both messages used to read
+ * "1 year", which hid the gap; each now states the bound it actually
+ * enforces. Reconciling the two VALUES is a separate change.
+ */
 const ONE_YEAR_SEC = 365n * 24n * 60n * 60n;
 
 /**
@@ -466,7 +475,7 @@ interface ParsedExpiry {
  *   - anything else                             → ISO-8601 / RFC3339
  *     (source = 'user-iso')
  *
- * All paths run through the same future + 1-year-cap validation.
+ * All paths run through the same future + 365-day-cap validation.
  */
 function parseExpiry(
   input: string | number | undefined,
@@ -531,7 +540,7 @@ function parseExpiry(
   }
   if (expirySec > nowSec + ONE_YEAR_SEC) {
     throw new OspexValidationError(
-      `--expiry must be within 1 year of now (got ${expirySec}, max ${nowSec + ONE_YEAR_SEC}).`,
+      `--expiry must be within 365 days of now (got ${expirySec}, max ${nowSec + ONE_YEAR_SEC}).`,
     );
   }
   return { expirySec, source };

@@ -6,11 +6,19 @@
  * Bounds are taken from:
  *   - oddsTick:  MatchingModule  (MIN_ODDS=101, MAX_ODDS=10100)
  *   - lot size:  MatchingModule  (riskAmount % 100 == 0)
- *   - expiry upper bound: 1 year (enforced by the API on POST)
+ *   - expiry upper bound: 366 days (a client-side approximation of the
+ *     API's ~1-year cap on POST)
  *
- * The 1-year expiry cap is an API-side constraint, not an on-chain one;
+ * The expiry cap is an API-side constraint, not an on-chain one;
  * enforcing it here surfaces a clean error instead of letting the
  * server reject the POST.
+ *
+ * KNOWN DISCREPANCY (behaviour unchanged, follow-up tracked): this path's
+ * bound is 366 days, while `prepareSubmit`'s `parseExpiry` caps at 365
+ * days. An expiry between the two is accepted by `submitRaw` and refused
+ * by `submit`. Both messages used to read "1 year", which hid the gap;
+ * each now states the bound it actually enforces. Reconciling the two
+ * VALUES is a separate change.
  */
 
 import { OspexValidationError } from '../errors.js';
@@ -74,7 +82,7 @@ export function validateExpiry(expiry: bigint, nowSec: bigint = nowUnixSec()): v
   }
   if (expiry > nowSec + MAX_EXPIRY_OFFSET_SEC) {
     throw new OspexValidationError(
-      'expiry is more than 1 year in the future; the API will reject it.',
+      'expiry is more than 366 days in the future; the API will reject it.',
       { field: 'expiry' },
     );
   }

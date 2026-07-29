@@ -9,6 +9,11 @@
  * message all rebuilt with the new nonce), never the original's. Field-by-
  * field assertions across `hash` / `commitmentHash` / nonce / signature
  * catch any regression that wires the retry path to return stale fields.
+ *
+ * Also covers the required-`expiry` refusal (the removed blind `now + 24h`
+ * default): the refusal itself, that it fires before the signer / chain /
+ * POST, and the negative control that an explicit expiry is still accepted
+ * and lands verbatim in the signed EIP-712 struct.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -85,11 +90,19 @@ function fullBody(hash: string): CommitmentBody {
  * `/v1/commitments` POST sequence (e.g. throw NONCE_TOO_LOW once then
  * succeed). `signatureSeq` does the same for `signer.signTypedData` so
  * the retry's signature can differ from the original's.
+ *
+ * `onSign` observes every `signTypedData` call — both the count ("was
+ * anything signed at all?") and the exact typed-data payload handed to the
+ * signer, so a test can assert on the struct that was ACTUALLY signed rather
+ * than on the value the SDK happened to echo back. `onChainRead` does the
+ * same for `readContract`.
  */
 function fakeContext(opts: {
   apiResponder: (callIndex: number) => Promise<CommitmentBody>;
   nonceFloorSeq: bigint[];
   signatureSeq: `0x${string}`[];
+  onSign?: (payload: unknown) => void;
+  onChainRead?: (functionName: string) => void;
 }): CommitmentsContext {
   let nonceReadIdx = 0;
   let sigIdx = 0;
@@ -97,6 +110,7 @@ function fakeContext(opts: {
 
   const publicClient = {
     readContract: async ({ functionName }: { functionName: string }) => {
+      opts.onChainRead?.(functionName);
       if (functionName === 'allowance') return 1_000_000n;
       if (functionName === 's_minNonces') {
         const floor = opts.nonceFloorSeq[nonceReadIdx] ?? opts.nonceFloorSeq[opts.nonceFloorSeq.length - 1];
@@ -109,7 +123,8 @@ function fakeContext(opts: {
 
   const signer: Signer = {
     getAddress: async () => MAKER,
-    signTypedData: async () => {
+    signTypedData: async (payload) => {
+      opts.onSign?.(payload);
       const sig = opts.signatureSeq[sigIdx] ?? opts.signatureSeq[opts.signatureSeq.length - 1];
       sigIdx += 1;
       return sig ?? SIG_ORIGINAL;
@@ -141,6 +156,146 @@ function fakeContext(opts: {
     nonceCounter: new NonceCounter(),
   };
 }
+
+/**
+ * A context whose signer, chain client, addresses, chain id and API
+ * transport ALL throw if touched.
+ *
+ * A guard that claims to fire "before any signer access, chain read, or
+ * POST" has to prove it against a hostile context, not a cooperating fake:
+ * with a cooperating fake, a regression that moved the guard below the
+ * signer would still surface the same typed error and the test would still
+ * pass. Here, touching anything replaces the expected
+ * `OspexValidationError` with a TRIPWIRE `Error`, and the
+ * `toMatchObject({ field: 'expiry' })` assertion goes red.
+ */
+function tripwireContext(): CommitmentsContext {
+  const trip =
+    (what: string) =>
+    (): never => {
+      throw new Error(`TRIPWIRE: submitRaw touched ${what} before refusing`);
+    };
+  return {
+    api: { request: trip('the /v1/commitments POST') } as unknown as CommitmentsContext['api'],
+    requireSigner: trip('the signer'),
+    getChainId: trip('the chain id'),
+    getAddresses: trip('the addresses'),
+    requireChainClient: trip('the chain client'),
+    nonceCounter: new NonceCounter(),
+  } as unknown as CommitmentsContext;
+}
+
+describe('submitRaw — expiry is REQUIRED (no wall-clock default)', () => {
+  // submitRaw reads no contest, so it has no match time to derive a safe
+  // expiry from. The blind `now + 24h` default it used to apply left a
+  // commitment matchable deep into live play — the stale-fill exposure
+  // MatchingModule's NatSpec assigns to off-chain infrastructure to prevent.
+  // These tests pin the refusal; deleting the guard turns them red.
+
+  it('refuses an omitted expiry BEFORE touching the signer, the chain, or the POST', async () => {
+    // Destructure-and-drop: the `expiry` KEY is absent from the args object,
+    // which is what a TS consumer that simply forgets the field produces.
+    const { expiry: _drop, ...NO_EXPIRY } = ARGS;
+    await expect(submitRaw(tripwireContext(), NO_EXPIRY)).rejects.toMatchObject({
+      field: 'expiry',
+    });
+  });
+
+  it('nothing is signed, read, or POSTed when expiry is omitted', async () => {
+    // Same claim, counted explicitly against a cooperating fake — so a
+    // failure here names WHICH side effect leaked, rather than just tripping.
+    let posted = false;
+    let signCount = 0;
+    const chainReads: string[] = [];
+    const ctx = fakeContext({
+      apiResponder: async () => {
+        posted = true;
+        return fullBody('0xPLACEHOLDER');
+      },
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+      onSign: () => {
+        signCount += 1;
+      },
+      onChainRead: (fn) => chainReads.push(fn),
+    });
+
+    const { expiry: _drop, ...NO_EXPIRY } = ARGS;
+    await expect(submitRaw(ctx, NO_EXPIRY)).rejects.toBeInstanceOf(OspexValidationError);
+    expect(signCount).toBe(0);
+    expect(chainReads).toEqual([]);
+    expect(posted).toBe(false);
+  });
+
+  it('refuses an EXPLICIT `expiry: undefined` too (the JS / non-exactOptional caller)', async () => {
+    // `exactOptionalPropertyTypes` forbids writing `expiry: undefined` in
+    // this repo, but a plain-JS consumer, or one compiled without that flag,
+    // can hand it over — and `args.expiry === undefined` is the same thing at
+    // runtime. The cast reproduces that caller; the guard must treat both
+    // shapes identically.
+    const EXPLICIT_UNDEFINED = { ...ARGS, expiry: undefined } as unknown as typeof ARGS;
+    await expect(submitRaw(tripwireContext(), EXPLICIT_UNDEFINED)).rejects.toMatchObject({
+      field: 'expiry',
+    });
+  });
+
+  it('NEGATIVE CONTROL: an explicit expiry is accepted and signed VERBATIM into the EIP-712 struct', async () => {
+    // Pair for the refusals above: the guard must reject ONLY the omitted
+    // case. Without this, a `submitRaw` broken to always throw would pass
+    // every test in this block.
+    const signedExpiries: bigint[] = [];
+    const ctx = fakeContext({
+      apiResponder: async () => fullBody('0xPLACEHOLDER'),
+      nonceFloorSeq: [0n],
+      signatureSeq: [SIG_ORIGINAL],
+      onSign: (payload) => {
+        signedExpiries.push((payload as { message: { expiry: bigint } }).message.expiry);
+      },
+    });
+
+    const result = await submitRaw(ctx, ARGS);
+
+    // Probe the artifact the signer actually saw, not just the SDK's echo:
+    // the expiry handed to signTypedData is the caller's value, unmodified.
+    expect(signedExpiries).toEqual([EXPIRY_SEC]);
+    expect(result.signedPayload.commitment.expiry).toBe(EXPIRY_SEC);
+    // ...and the signed struct still hashes to the returned hash.
+    const domain = buildDomain(CHAIN_ID, MATCHING_MODULE);
+    expect(hashCommitment(domain, result.signedPayload.commitment)).toBe(result.hash);
+  });
+
+  it('a PRESENT but invalid expiry is still refused by validateExpiry, before signing or posting', async () => {
+    // Removing the default must not remove the bound checks that ran after
+    // it. Sweep both ends: already-past, and beyond the 366-day cap.
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    const cases: Array<{ label: string; expiry: bigint }> = [
+      { label: 'in the past', expiry: nowSec - 60n },
+      { label: 'exactly now', expiry: nowSec },
+      { label: 'beyond the 366-day cap', expiry: nowSec + 400n * 24n * 60n * 60n },
+    ];
+    for (const { label, expiry } of cases) {
+      let posted = false;
+      let signCount = 0;
+      const ctx = fakeContext({
+        apiResponder: async () => {
+          posted = true;
+          return fullBody('0xPLACEHOLDER');
+        },
+        nonceFloorSeq: [0n],
+        signatureSeq: [SIG_ORIGINAL],
+        onSign: () => {
+          signCount += 1;
+        },
+      });
+      await expect(
+        submitRaw(ctx, { ...ARGS, expiry }),
+        `expiry ${label}`,
+      ).rejects.toMatchObject({ field: 'expiry' });
+      expect(signCount, `expiry ${label}`).toBe(0);
+      expect(posted, `expiry ${label}`).toBe(false);
+    }
+  });
+});
 
 describe('submitRaw — happy path returns signedPayload', () => {
   it('result.signedPayload matches the SDK-signed struct (hash + signature + nonce)', async () => {

@@ -12,11 +12,17 @@
  *   (b) all diagnostics go to STDERR so the --json payload on stdout stays
  *       parseable;
  *   (c) the entered amount is parsed as human USDC units (6dp), not raw wei6.
+ *
+ * Also covers the required `--expiry` refusal (the removed blind `now + 24h`
+ * default): that a missing or malformed flag is refused in the pre-parse,
+ * BEFORE `getClient` — i.e. before any keystore passphrase prompt or signer
+ * unlock — plus the accepted-format matrix as the negative control.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   OspexAllowanceError,
+  OspexValidationError,
   usdcDecimalToAmountWei6,
   wei6ToDecimalUSDC,
   type OspexClient,
@@ -40,7 +46,12 @@ const REQUIRED_HUMAN = wei6ToDecimalUSDC(REQUIRED_WEI6);
 const AMOUNT_PROMPT = 'Amount in USDC (number, or "max" for unlimited)';
 
 // 6 positional args: contestId scorer lineTicks position oddsTick riskAmount
-const BASE_ARGS = ['1', '0x000000000000000000000000000000000000dEaD', '0', 'upper', '191', '1000000'];
+const POSITIONALS = ['1', '0x000000000000000000000000000000000000dEaD', '0', 'upper', '191', '1000000'];
+// `--expiry` is REQUIRED as of the blind-default removal, so every scenario
+// that expects to reach the client has to carry one. 30 days out keeps the
+// value inside the validator's bound regardless of when the suite runs.
+const EXPIRY_UNIX = String(Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60);
+const BASE_ARGS = [...POSITIONALS, '--expiry', EXPIRY_UNIX];
 
 const SUCCESS = {
   hash: '0xhash',
@@ -151,6 +162,105 @@ describe('submit-raw — M8 non-TTY guard', () => {
     expect(error).toBeUndefined();
     expect(exitCode).toBe(0);
     expect(submitRaw).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('submit-raw — --expiry is REQUIRED, refused before getClient', () => {
+  // The removed default was a blind `now + 24h`. Refusing in the pre-parse
+  // (not just SDK-side) is the point: a user who forgot the flag must not be
+  // made to enter a keystore passphrase and unlock a signer first.
+  // `getClient` is the observable proxy for that whole interaction — it is
+  // what prompts, reads the keystore, and builds the chain client.
+
+  it('refuses a missing --expiry BEFORE getClient (no keystore/signer interaction)', async () => {
+    setTTY(false);
+    const { error } = await run(commitmentsSubmitRawCommand, [...POSITIONALS, '--yes']);
+    expect(error).toBeInstanceOf(OspexValidationError);
+    expect((error as OspexValidationError).field).toBe('expiry');
+    expect(String((error as Error)?.message)).toMatch(/--expiry is required/);
+    expect(getClient).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing --expiry in an INTERACTIVE run too (--yes is not what gates it)', async () => {
+    setTTY(true);
+    const { error } = await run(commitmentsSubmitRawCommand, [...POSITIONALS]);
+    expect(String((error as Error)?.message)).toMatch(/--expiry is required/);
+    expect(getClient).not.toHaveBeenCalled();
+  });
+
+  it('refuses a MALFORMED --expiry before getClient, with a typed error', async () => {
+    setTTY(false);
+    const { error } = await run(commitmentsSubmitRawCommand, [
+      ...POSITIONALS,
+      '--expiry',
+      'next tuesday',
+      '--yes',
+    ]);
+    expect(error).toBeInstanceOf(OspexValidationError);
+    expect((error as OspexValidationError).field).toBe('expiry');
+    expect(getClient).not.toHaveBeenCalled();
+  });
+
+  it('refuses a zero-magnitude duration before getClient', async () => {
+    setTTY(false);
+    const { error } = await run(commitmentsSubmitRawCommand, [
+      ...POSITIONALS,
+      '--expiry',
+      '0m',
+      '--yes',
+    ]);
+    expect(error).toBeInstanceOf(OspexValidationError);
+    expect((error as OspexValidationError).field).toBe('expiry');
+    expect(getClient).not.toHaveBeenCalled();
+  });
+
+  it('NEGATIVE CONTROL: with --expiry the command reaches getClient and submits', async () => {
+    setTTY(false);
+    const submitRaw = vi.fn().mockResolvedValue(SUCCESS);
+    vi.mocked(getClient).mockResolvedValue(fakeClient({ submitRaw }) as never);
+    const { error, exitCode } = await run(commitmentsSubmitRawCommand, [...BASE_ARGS, '--yes', '--json']);
+    expect(error).toBeUndefined();
+    expect(exitCode).toBe(0);
+    expect(getClient).toHaveBeenCalledTimes(1);
+    expect(submitRaw).toHaveBeenCalledTimes(1);
+    // The parsed unix-seconds value reaches the SDK verbatim.
+    expect(submitRaw.mock.calls[0]?.[0]).toMatchObject({ expiry: BigInt(EXPIRY_UNIX) });
+  });
+
+  it('accepts every documented --expiry form and forwards the resolved unix-seconds', async () => {
+    // Sweep the accepted grammar rather than sampling one form: the five
+    // duration units, unix-seconds, and ISO-8601 all have to survive the
+    // required-flag change.
+    const isoMs = Date.UTC(2030, 4, 9, 20, 0, 0);
+    const cases: Array<{ flag: string; expect: (nowSec: bigint) => bigint }> = [
+      { flag: '45s', expect: (n) => n + 45n },
+      { flag: '30m', expect: (n) => n + 1800n },
+      { flag: '4h', expect: (n) => n + 14400n },
+      { flag: '1d', expect: (n) => n + 86400n },
+      { flag: '1w', expect: (n) => n + 604800n },
+      { flag: EXPIRY_UNIX, expect: () => BigInt(EXPIRY_UNIX) },
+      { flag: '2030-05-09T20:00:00Z', expect: () => BigInt(Math.floor(isoMs / 1000)) },
+    ];
+    for (const c of cases) {
+      setTTY(false);
+      const submitRaw = vi.fn().mockResolvedValue(SUCCESS);
+      vi.mocked(getClient).mockReset().mockResolvedValue(fakeClient({ submitRaw }) as never);
+      const before = BigInt(Math.floor(Date.now() / 1000));
+      const { error } = await run(commitmentsSubmitRawCommand, [
+        ...POSITIONALS,
+        '--expiry',
+        c.flag,
+        '--yes',
+        '--json',
+      ]);
+      const after = BigInt(Math.floor(Date.now() / 1000));
+      expect(error, `--expiry ${c.flag}`).toBeUndefined();
+      const passed = (submitRaw.mock.calls[0]?.[0] as { expiry: bigint }).expiry;
+      // Relative forms resolve against the wall clock at parse time, so bound
+      // rather than equate: the value must sit in [now-at-entry, now-at-exit].
+      expect(passed >= c.expect(before), `--expiry ${c.flag} lower bound`).toBe(true);
+      expect(passed <= c.expect(after), `--expiry ${c.flag} upper bound`).toBe(true);
+    }
   });
 });
 
