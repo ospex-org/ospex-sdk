@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.11.0] — 2026-07-28
+
 ### Fixed
 
 - **`@ospex/cli`: `--risk-usdc` on `commitments match` / `commitments fillability` no longer applies the maker's 100-wei6 lot rule to the taker's desired risk.** Both commands parsed the flag through `usdcDecimalToWei6`, which enforces `wei6 % 100 === 0` — a rule `MatchingModule._validateCommitment` imposes on a maker's **signed `commitment.riskAmount`** and on nothing else. `matchCommitment`'s only direct guard on `takerDesiredRisk` is a zero check; the maker leg it derives is floored to the lot by the contract itself. Two consequences, both reproduced: **(a) the CLI rejected values it had just printed** — a preview's `economics.takerRiskUSDC` is `min(takerDesiredRisk, fillMakerRisk × (oddsTick − 100) / 100)`, which lands on the 100-wei6 grid only by coincidence, so `ospex commitments match <hash> --json` could report `takerRiskWei6: 999936` and `--risk-usdc 0.999936` would then be refused, making it impossible to bind an execution to an already-validated preview; and **(b) at low odds the constraint was outright unsatisfiable** — the taker amounts producing a given fill span a window only `profitTicks` wide, so below decimal odds 2.00 that window need not contain any multiple of 100; for `oddsTick` 101–150 (decimal 1.01–1.50) even the minimum 100-wei6 fill has *no* lot-aligned taker amount at all, and at `oddsTick` 101 the entire valid window is `[1, 1]` wei6. A new `usdcDecimalToAmountWei6` performs the same strict parse — plain decimal, ≤ 6 fractional digits, must be positive — without the lot assertion, and the two taker call sites plus `fillability` use it. The maker path (`prepareSubmit` → the signed `riskAmount`) still uses `usdcDecimalToWei6` and still refuses off-grid input; that is now pinned by a test.
