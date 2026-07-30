@@ -31,7 +31,7 @@ import type { TeamAlias } from '../src/commitments/resolveSide.js';
 import type { SubmitPreview, HighLevelSubmitArgs } from '../src/types/preview.js';
 
 // Match time used in test fixtures — 30 days from now, so it's always
-// within the protocol's 1-year-from-now cap regardless of when the test
+// within this path's 365-day-from-now expiry cap regardless of when the test
 // suite runs. Avoids fixtures rotting (the previous "2026-05-08" string
 // was written when 2026 was the future). 30 days is comfortably past
 // "now + 1d" so explicit-duration --expiry tests can verify they DON'T
@@ -920,7 +920,7 @@ describe('prepareSubmit — explicit --expiry: durations', () => {
 
 describe('prepareSubmit — explicit --expiry: ISO + unix still work', () => {
   it('ISO-8601 with Z → source=user-iso, matches the parsed timestamp', async () => {
-    // Pick something safely in the future and within 1y of now.
+    // Pick something safely in the future and within this path's 365-day cap.
     const futureMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
     const futureIso = new Date(futureMs).toISOString();
     const expectedSec = BigInt(Math.floor(futureMs / 1000));
@@ -951,6 +951,53 @@ describe('prepareSubmit — explicit --expiry: ISO + unix still work', () => {
     const preview = await prepareSubmit(ctx, speculationArgs({ expiry: expectedSec.toString() }));
     expect(preview.expiry.unixSec).toBe(expectedSec.toString());
     expect(preview.expiry.source).toBe('user-unix');
+  });
+});
+
+describe('prepareSubmit — explicit --expiry: the upper bound this path enforces', () => {
+  const DAY = 24n * 60n * 60n;
+  const nowSec = (): bigint => BigInt(Math.floor(Date.now() / 1000));
+
+  it('the cap message states the bound `parseExpiry` ACTUALLY enforces', async () => {
+    // This path caps at 365 days while the `submitRaw` path's `validateExpiry`
+    // caps at 366; both messages used to read "1 year", so an expiry between
+    // the two was refused here and accepted there while both explained the
+    // outcome with the same wrong number. The test derives the advertised
+    // bound FROM the message and then probes `prepareSubmit` at that exact
+    // boundary, so it goes red if the message stops naming a day count, if it
+    // names a number the code doesn't enforce, or if the constant moves
+    // without the message.
+    const ctx = buildContext({ allowance: 1_000_000n });
+
+    let message = '';
+    try {
+      await prepareSubmit(ctx, speculationArgs({ expiry: (nowSec() + 3650n * DAY).toString() }));
+      throw new Error('expected prepareSubmit to reject an expiry 10 years out');
+    } catch (err) {
+      expect(err).toBeInstanceOf(OspexValidationError);
+      message = (err as OspexValidationError).message;
+    }
+
+    const advertised = /within (\d+) days of now/.exec(message);
+    expect(advertised, `message must name its bound in days; got: ${message}`).not.toBeNull();
+    const capDays = BigInt(advertised![1]!);
+
+    // Accepted exactly AT the advertised cap. `prepareSubmit` reads its own
+    // `now`, which can only be ≥ the test's, and a later `now` only widens the
+    // window — so this side is drift-proof.
+    const atCap = nowSec() + capDays * DAY;
+    const preview = await prepareSubmit(ctx, speculationArgs({ expiry: atCap.toString() }));
+    expect(preview.expiry.unixSec).toBe(atCap.toString());
+
+    // Refused just PAST it. +5s rather than +1s absorbs any clock drift
+    // between the two `now` reads; a bound that moved by a day still bites.
+    await expect(
+      prepareSubmit(ctx, speculationArgs({ expiry: (nowSec() + capDays * DAY + 5n).toString() })),
+    ).rejects.toThrow(/within \d+ days of now/);
+
+    // ...and that bound is the 365 days the constant's comment and the
+    // CHANGELOG both claim — deliberately NOT the 366 of `validateExpiry`.
+    expect(capDays).toBe(365n);
   });
 });
 

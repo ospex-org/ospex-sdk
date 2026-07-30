@@ -299,10 +299,11 @@ A non-TTY run that wants `--json` output and would otherwise prompt for a passph
 
 ## 3. CLI: the `--yes` contract
 
-`--yes` skips the human confirmation prompt. It is **required for non-interactive runs of preview-bearing signing commands** — the commands that render a confirmation prompt before signing. Specifically:
+`--yes` skips the human confirmation prompt. It is **required for non-interactive runs of any command that will sign without an available preview-only path** — the commands that render a confirmation prompt before signing, plus `submit-raw`, which renders none and signs immediately. Specifically:
 
 - `ospex commitments submit`
 - `ospex commitments match`
+- `ospex commitments submit-raw` *(not preview-bearing — see the note below)*
 - `ospex commitments approve`
 - `ospex commitments approve-raw`
 - `ospex approvals setup`
@@ -313,6 +314,8 @@ These commands check `process.stdin.isTTY` and refuse to proceed when it's false
 ```
 OspexValidationError: --yes is required for non-interactive runs of `<command>`. Re-run with --yes.
 ```
+
+**`commitments submit-raw` is the one member of that list with no preview-only mode, and the difference is load-bearing for agents.** `commitments submit`, `commitments match` and `approvals setup` are the three dual-mode `--json` commands above: `--json` without `--yes` is a preview-only run, so it is **exempt** from the gate. `submit-raw` always signs + posts — there is nothing to preview — so its gate carries no `--json` term and **`--json` does not exempt it**. It still requires `--yes` because a USDC allowance shortfall would otherwise raise an approval prompt on a stdin nobody can answer.
 
 **Other write commands sign and send WITHOUT requiring `--yes`** — including `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`, top-level `claim`, `claim-all`, `settle` (registered at the program root for ergonomics, not under `positions`), `contests score`, and `contests create --game-id <uuid>`. For these, `--json` is an *output format only*, not a preview gate; the command may still send a transaction. Use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
 
@@ -830,7 +833,7 @@ The SDK does not retry for you. Build the retry loop in your agent.
 
 ### Retry carve-out: `commitments submit` / `submit-raw` are NOT idempotent across a re-issued call
 
-The `API_ERROR` rows above mark 429 / 5xx / transport failures "retry safe with backoff." That holds for reads and for writes whose inputs are stable — but a **re-issued `commitments submit` / `submit-raw` is a special case**, because each call **re-derives wall-clock-dependent fields of the signed commitment**: by default a fresh nonce (`max(floor, lastUsed + 1, unixSec)`) and, for `submit-raw` (and the high-level path when `--expiry` is relative or the contest match time is unavailable), a fresh `expiry` (`now + …`). `expiry` is one of the nine hashed EIP-712 fields, so **any** re-derived field → a **different commitment hash** → the server's hash-keyed `Idempotency-Key` dedup (§9) cannot recognize it as the same commitment. So a blind retry after an *ambiguous* submit failure can create a **second live, matchable commitment** at the same tuple — doubled maker exposure.
+The `API_ERROR` rows above mark 429 / 5xx / transport failures "retry safe with backoff." That holds for reads and for writes whose inputs are stable — but a **re-issued `commitments submit` / `submit-raw` is a special case**, because each call **re-derives wall-clock-dependent fields of the signed commitment**: by default a fresh nonce (`max(floor, lastUsed + 1, unixSec)`) and, whenever `--expiry` is supplied as a **relative duration** (`"30m"` / `"4h"` / `"1d"` / `"1w"` — accepted by both `submit` and `submit-raw`) or the high-level path falls back because the contest match time is unavailable, a fresh `expiry` (`now + …`). (`submit-raw` no longer defaults `expiry` at all — `--expiry` is required — so on that surface a re-derived expiry happens **only** when you pass a relative duration; an absolute unix-seconds or ISO value is stable across re-issues.) `expiry` is one of the nine hashed EIP-712 fields, so **any** re-derived field → a **different commitment hash** → the server's hash-keyed `Idempotency-Key` dedup (§9) cannot recognize it as the same commitment. So a blind retry after an *ambiguous* submit failure can create a **second live, matchable commitment** at the same tuple — doubled maker exposure.
 
 The danger window is a **lost response after a successful insert**: the server accepted + persisted the commitment, but the response was lost in transit (fetch reject, gateway timeout / Heroku H12, a 5xx emitted after the insert). The first commitment is LIVE; a naive retry posts a second.
 
@@ -839,7 +842,7 @@ The danger window is a **lost response after a successful insert**: the server a
 Before re-issuing a failed submit, do ONE of:
 
 1. **Verify, then decide (preferred).** Look up the commitment — `ospex commitments show <details.commitmentHash> --json`, or `commitments list --maker <addr>` / owner-auth own-state when you don't have the hash. If a commitment for that tuple **exists**, the submit landed despite the error — do **NOT** retry (you would double the exposure); treat the original as successful. If none exists, the insert didn't happen and a retry is safe.
-2. **Or reproduce the exact signed commitment.** The dedup collapses the retry onto the first row ONLY when the FULL EIP-712 struct is byte-identical — so pin **every** wall-clock-derived field, not just the nonce: re-issue with the original `--nonce` **and** the original `--expiry` (both are on the preview's `raw.nonce` / `raw.expiry`; for `submitRaw`, pass the same `nonce` **and** `expiry` you originally signed). Pinning only the nonce while `expiry` re-defaults produces a different hash → a duplicate. (The high-level `commitments submit` default expiry is the contest match time, which is stable across re-issues — but pin it explicitly rather than relying on that.)
+2. **Or reproduce the exact signed commitment.** The dedup collapses the retry onto the first row ONLY when the FULL EIP-712 struct is byte-identical — so pin **every** wall-clock-derived field, not just the nonce: re-issue with the original `--nonce` **and** the original `--expiry` (both are on the preview's `raw.nonce` / `raw.expiry`; for `submitRaw`, pass the same `nonce` **and** `expiry` you originally signed). Pinning only the nonce while `expiry` re-derives — a relative `--expiry` duration on either command, or the high-level path falling back because the match time is unavailable — produces a different hash → a duplicate. (The high-level `commitments submit` default expiry is the contest match time, which is stable across re-issues — but pin it explicitly rather than relying on that.)
 
 Never blindly re-issue a failed submit on the strength of the `API_ERROR → retry with backoff` row alone.
 
@@ -899,7 +902,7 @@ The SDK has no module-level state. Multiple `OspexClient` instances are fully is
 
 | Operation | Idempotent? | Notes |
 |---|---|---|
-| `commitments.submit` with **identical inputs** | Yes | Server-side dedup on `commitmentHash`. Same hash returned, no duplicate row. **"Identical" is load-bearing:** a default re-issued submit re-derives wall-clock fields of the signed struct (a fresh nonce, and for `submit-raw` a fresh `expiry`) → a different hash → no dedup. To retry idempotently, reproduce the FULL signed struct — pin the original nonce **and** expiry — or verify via `commitments show <hash>` first. See the §7 retry carve-out. |
+| `commitments.submit` with **identical inputs** | Yes | Server-side dedup on `commitmentHash`. Same hash returned, no duplicate row. **"Identical" is load-bearing:** a default re-issued submit re-derives wall-clock fields of the signed struct (a fresh nonce, and a fresh `expiry` whenever `--expiry` was given as a relative duration — `submit-raw` requires an explicit `--expiry` and no longer defaults it) → a different hash → no dedup. To retry idempotently, reproduce the FULL signed struct — pin the original nonce **and** expiry — or verify via `commitments show <hash>` first. See the §7 retry carve-out. |
 | `commitments.cancel(hash)` (off-chain DELETE) | Yes | Re-cancel on a cancelled row returns `200`. |
 | `commitments.cancelOnchain({ hash } \| { signedCommitment } \| { commitment }, recoverHidden?)` / `commitments.cancelOnchainSigned(payload)` | Yes | The contract has **no `AlreadyCancelled` revert path** — the second `cancelCommitment` succeeds. Don't infer "first cancel" from tx success; check off-chain status if you need that signal. **Recovering a book-hidden row** (e.g. after a dual `cancel --also-onchain` whose on-chain leg didn't confirm): pass `recoverHidden: true` to `cancelOnchain` (the `ospex commitments cancel-onchain` CLI does this), or hold the payload and call `cancelOnchainSigned`. A hidden row resolves by **full hash only** (the public list omits hidden rows) and only its maker can recover it. |
 | `commitments.raiseMinNonce` / `cancelAllOnSpeculation` with `newMinNonce` ≤ current floor | No | Reverts `NonceMustIncrease`. Read the current floor with `commitments.getNonceFloor(...)` and pass `max(thatFloor, anyHigherNonceYouSigned) + 1` as the explicit `newMinNonce` — the SDK no longer auto-computes (anonymous reads cannot enumerate the maker's hidden book, so any default would be a fail-open guarantee). |
@@ -1050,7 +1053,7 @@ field-by-field envelope rules          See docs/AGENT_ENVELOPE_SPEC.md
 --json alone (preview-bearing cmds)    Preview only, no signing/tx (submit, match, approvals setup)
 --json (other write cmds)              Output format only — may still send a tx (cancel, claim, settle, …)
 --yes --json                           Execute and emit (preview-bearing cmds)
---yes for non-TTY                      Required only for preview-bearing commands (see §3)
+--yes for non-TTY                      Required by every command listed in §3 (incl. submit-raw)
 --json on stdout                       Always parseable; logs/prompts go to stderr
 NDJSON for `odds watch`                One JSON object per line, numbers (not strings) for line/odds, SIGINT clean exit
 single envelope for `odds show`        AgentEnvelope<OddsShowEnvelope>; NOT NDJSON
