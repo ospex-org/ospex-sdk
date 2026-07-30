@@ -299,10 +299,11 @@ A non-TTY run that wants `--json` output and would otherwise prompt for a passph
 
 ## 3. CLI: the `--yes` contract
 
-`--yes` skips the human confirmation prompt. It is **required for non-interactive runs of preview-bearing signing commands** — the commands that render a confirmation prompt before signing. Specifically:
+`--yes` skips the human confirmation prompt. It is **required for non-interactive runs of any command that will sign without an available preview-only path** — the commands that render a confirmation prompt before signing, plus `submit-raw`, which renders none and signs immediately. Specifically:
 
 - `ospex commitments submit`
 - `ospex commitments match`
+- `ospex commitments submit-raw` *(not preview-bearing — see the note below)*
 - `ospex commitments approve`
 - `ospex commitments approve-raw`
 - `ospex approvals setup`
@@ -313,6 +314,8 @@ These commands check `process.stdin.isTTY` and refuse to proceed when it's false
 ```
 OspexValidationError: --yes is required for non-interactive runs of `<command>`. Re-run with --yes.
 ```
+
+**`commitments submit-raw` is the one member of that list with no preview-only mode, and the difference is load-bearing for agents.** `commitments submit`, `commitments match` and `approvals setup` are the three dual-mode `--json` commands above: `--json` without `--yes` is a preview-only run, so it is **exempt** from the gate. `submit-raw` always signs + posts — there is nothing to preview — so its gate carries no `--json` term and **`--json` does not exempt it**. It still requires `--yes` because a USDC allowance shortfall would otherwise raise an approval prompt on a stdin nobody can answer.
 
 **Other write commands sign and send WITHOUT requiring `--yes`** — including `commitments cancel`, `commitments cancel-onchain`, `commitments cancel-all`, top-level `claim`, `claim-all`, `settle` (registered at the program root for ergonomics, not under `positions`), `contests score`, and `contests create --game-id <uuid>`. For these, `--json` is an *output format only*, not a preview gate; the command may still send a transaction. Use `--dry-run` where available (`claim-all`, `commitments cancel-all`) for plan-only behavior.
 
@@ -1050,7 +1053,7 @@ field-by-field envelope rules          See docs/AGENT_ENVELOPE_SPEC.md
 --json alone (preview-bearing cmds)    Preview only, no signing/tx (submit, match, approvals setup)
 --json (other write cmds)              Output format only — may still send a tx (cancel, claim, settle, …)
 --yes --json                           Execute and emit (preview-bearing cmds)
---yes for non-TTY                      Required only for preview-bearing commands (see §3)
+--yes for non-TTY                      Required by every command listed in §3 (incl. submit-raw)
 --json on stdout                       Always parseable; logs/prompts go to stderr
 NDJSON for `odds watch`                One JSON object per line, numbers (not strings) for line/odds, SIGINT clean exit
 single envelope for `odds show`        AgentEnvelope<OddsShowEnvelope>; NOT NDJSON
