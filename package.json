@@ -13,6 +13,7 @@
     "build": "yarn workspace @ospex/sdk build && yarn workspace @ospex/cli build",
     "test": "yarn workspace @ospex/sdk test && yarn workspace @ospex/cli test",
     "typecheck": "yarn workspace @ospex/sdk typecheck && yarn workspace @ospex/cli typecheck",
+    "typecheck:tests": "yarn workspace @ospex/sdk typecheck:tests && yarn workspace @ospex/cli typecheck:tests",
     "clean": "yarn workspace @ospex/sdk clean && yarn workspace @ospex/cli clean"
   },
   "packageManager": "yarn@1.22.22"

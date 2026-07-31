@@ -11,8 +11,8 @@
 import { describe, expect, it } from 'vitest';
 import { buildMatchPreview } from '../src/commitments/buildMatchPreview.js';
 import { computeMatchYouView } from '../src/commitments/youView.js';
-import type { BuildMatchPreviewArgs } from '../src/types/matchPreview.js';
-import type { Commitment } from '../src/types/commitment.js';
+import type { BuildMatchPreviewArgs, MatchPreview } from '../src/types/matchPreview.js';
+import type { PublicVisibleCommitment } from '../src/types/commitment.js';
 
 const MAKER = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as `0x${string}`;
 const TAKER = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as `0x${string}`;
@@ -31,7 +31,9 @@ const FAR_FUTURE_ISO = '2099-05-08T02:00:00Z';
 const AWAY = 'San Francisco Giants';
 const HOME = 'Los Angeles Dodgers';
 
-function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
+function makeCommitment(
+  overrides: Partial<PublicVisibleCommitment> = {},
+): PublicVisibleCommitment {
   return {
     visibility: 'visible',
     redacted: false,
@@ -328,6 +330,20 @@ describe('MatchPreview.outcomes — taker perspective', () => {
   });
 });
 
+/**
+ * A preview as emitted before the perspective-view fields were added: the
+ * three newer keys are ABSENT, not present-and-undefined. That is what an
+ * older SDK build actually produced, and `computeMatchYouView` discriminates
+ * on `!== undefined`, so both spellings take the same branch.
+ */
+function withoutPerspectiveFields(p: MatchPreview): MatchPreview {
+  const legacy = { ...p };
+  delete legacy.you;
+  delete legacy.counterparty;
+  delete legacy.outcomes;
+  return legacy;
+}
+
 describe('computeMatchYouView', () => {
   it('returns preview.you/counterparty/outcomes directly when present', () => {
     const p = buildMatchPreview(baseArgs());
@@ -341,7 +357,7 @@ describe('computeMatchYouView', () => {
     const p = buildMatchPreview(baseArgs());
     // Simulate a legacy preview that pre-dates the perspective-view
     // addition by dropping the new fields.
-    const legacy = { ...p, you: undefined, counterparty: undefined, outcomes: undefined };
+    const legacy = withoutPerspectiveFields(p);
     const view = computeMatchYouView(legacy);
     // Backfill should reproduce the same shape as the freshly-built one.
     expect(view.you).toEqual(p.you);
@@ -369,7 +385,7 @@ describe('computeMatchYouView', () => {
     ];
     for (const args of fixtures) {
       const built = buildMatchPreview(args);
-      const legacy = { ...built, you: undefined, counterparty: undefined, outcomes: undefined };
+      const legacy = withoutPerspectiveFields(built);
       const view = computeMatchYouView(legacy);
       expect(view.you).toEqual(built.you);
       expect(view.counterparty).toEqual(built.counterparty);

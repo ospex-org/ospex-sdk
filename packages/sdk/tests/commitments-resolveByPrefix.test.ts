@@ -32,6 +32,14 @@ import type { Commitment } from '../src/types/commitment.js';
 
 const FAR_FUTURE_ISO = '2099-05-08T02:00:00Z';
 
+/** A list body with the pagination envelope the wire always carries. */
+function makeListBody(rows: CommitmentBody[]): CommitmentsListBody {
+  return {
+    commitments: rows,
+    pagination: { limit: PAGE_LIMIT, offset: 0, total: rows.length, hasMore: false },
+  };
+}
+
 function makeBody(
   hash: string,
   overrides: Partial<CommitmentBody> = {},
@@ -83,7 +91,7 @@ function buildCtx(api: ApiResponses): CommitmentsContext {
           return api.getResponse ?? makeBody(path.split('/').pop()!);
         }
         // List path
-        return api.listResponse ?? { commitments: [] };
+        return api.listResponse ?? makeListBody([]);
       }),
     } as unknown as CommitmentsContext['api'],
     requireSigner: () => {
@@ -151,9 +159,7 @@ describe('resolveByPrefix — prefix path', () => {
     const HASH_A = '0x' + 'a1'.repeat(32);
     const HASH_B = '0x' + 'b2'.repeat(32);
     const ctx = buildCtx({
-      listResponse: {
-        commitments: [makeBody(HASH_A), makeBody(HASH_B)],
-      },
+      listResponse: makeListBody([makeBody(HASH_A), makeBody(HASH_B)]),
     });
     const result = await resolveByPrefix(ctx, '0x' + 'a1'.repeat(4));
     expect(result.commitmentHash).toBe(HASH_A);
@@ -188,7 +194,7 @@ describe('resolveByPrefix — prefix path', () => {
     // would return only the open one. We mock that behavior here.
     const HASH_A = '0x' + 'a1'.repeat(32);
     const ctx = buildCtx({
-      listResponse: { commitments: [makeBody(HASH_A)] },
+      listResponse: makeListBody([makeBody(HASH_A)]),
     });
     const result = await resolveByPrefix(ctx, '0x' + 'a1'.repeat(4));
     expect(result.commitmentHash).toBe(HASH_A);
@@ -200,9 +206,9 @@ describe('resolveByPrefix — prefix path', () => {
     const ctx = buildCtx({
       // Effective `expired` row (raw stored `open`) — returned by the server via
       // includeExpired=true, NOT by a status=expired filter.
-      listResponse: {
-        commitments: [makeBody('0x' + 'a1'.repeat(32), { status: 'expired', storedStatus: 'open' })],
-      },
+      listResponse: makeListBody([
+        makeBody('0x' + 'a1'.repeat(32), { status: 'expired', storedStatus: 'open' }),
+      ]),
       calls,
     });
     const result = await resolveByPrefix(ctx, '0x' + 'a1'.repeat(4), { status: 'any' });
@@ -223,7 +229,7 @@ describe('resolveByPrefix — prefix path', () => {
     const HASH_A = '0xa1a1a1a1' + 'aa'.repeat(28);
     const HASH_B = '0xa1a1a1a1' + 'bb'.repeat(28);
     const ctx = buildCtx({
-      listResponse: { commitments: [makeBody(HASH_A), makeBody(HASH_B)] },
+      listResponse: makeListBody([makeBody(HASH_A), makeBody(HASH_B)]),
     });
     await expect(resolveByPrefix(ctx, '0xa1a1a1a1')).rejects.toThrow(
       /ambiguous prefix.*matches.*0xa1a1a1a1/i,
@@ -236,14 +242,14 @@ describe('resolveByPrefix — prefix path', () => {
     // search space was too large.
     const dummy = '0x' + 'cc'.repeat(32); // doesn't share the prefix below
     const rows = Array.from({ length: PAGE_LIMIT }, () => makeBody(dummy));
-    const ctx = buildCtx({ listResponse: { commitments: rows } });
+    const ctx = buildCtx({ listResponse: makeListBody(rows) });
     await expect(resolveByPrefix(ctx, '0xa1a1a1a1')).rejects.toThrow(
       /too many commitments.*pass the full hash or add filters/,
     );
   });
 
   it('zero matches → "no commitment matches prefix" error', async () => {
-    const ctx = buildCtx({ listResponse: { commitments: [] } });
+    const ctx = buildCtx({ listResponse: makeListBody([]) });
     await expect(resolveByPrefix(ctx, '0xa1a1a1a1')).rejects.toThrow(
       /no commitment matches prefix.*within the requested status scope/,
     );
@@ -254,7 +260,7 @@ describe('resolveByPrefix — passes through filters', () => {
   it('forwards contestId / maker / scorer / speculationId to api.list query', async () => {
     const calls: Array<{ path: string; opts?: Record<string, unknown> }> = [];
     const ctx = buildCtx({
-      listResponse: { commitments: [makeBody('0x' + 'a1'.repeat(32))] },
+      listResponse: makeListBody([makeBody('0x' + 'a1'.repeat(32))]),
       calls,
     });
     await resolveByPrefix(ctx, '0x' + 'a1'.repeat(4), {

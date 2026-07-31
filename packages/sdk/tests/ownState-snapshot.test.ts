@@ -51,7 +51,7 @@ function makeApi(
       init?.body !== undefined && init.body !== null
         ? JSON.parse(String(init.body))
         : undefined;
-    const headers = new Headers(init?.headers as HeadersInit | undefined);
+    const headers = new Headers(init?.headers);
     const call: RecordedCall = {
       url: String(url),
       method: (init?.method ?? 'GET').toUpperCase(),
@@ -278,11 +278,10 @@ describe('decodeSnapshot — wire → public', () => {
   });
 
   it('falls back storedStatus to status on pre-effective-status core-api builds', () => {
-    const body = snapshotResponse({
-      commitments: [
-        visibleCommitmentBody({ storedStatus: undefined, status: 'open' }),
-      ],
-    });
+    // Older core-api builds omitted the field entirely rather than sending null.
+    const legacyRow = visibleCommitmentBody({ status: 'open' });
+    delete (legacyRow as { storedStatus?: unknown }).storedStatus;
+    const body = snapshotResponse({ commitments: [legacyRow] });
     const out = decodeSnapshot(body);
     expect(out.commitments[0]!.storedStatus).toBe('open');
   });

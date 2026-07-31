@@ -27,7 +27,10 @@ function installFetchMock(handler: MockHandler): () => void {
     const requests = Array.isArray(body) ? body : [body];
     const responses = requests.map((req: { id: number; method: string; params?: unknown[] }) => {
       try {
-        const result = handler({ method: req.method, params: req.params });
+        const result = handler({
+          method: req.method,
+          ...(req.params !== undefined ? { params: req.params } : {}),
+        });
         return { jsonrpc: '2.0', id: req.id, result };
       } catch (e) {
         return {

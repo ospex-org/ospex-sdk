@@ -26,7 +26,7 @@ function makeApi(
     calls.push({
       url: String(url),
       method: (init?.method ?? 'GET').toUpperCase(),
-      headers: new Headers(init?.headers as HeadersInit | undefined),
+      headers: new Headers(init?.headers),
     });
     const r = responder();
     return new Response(JSON.stringify(r.body), {

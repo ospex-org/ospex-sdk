@@ -21,7 +21,8 @@
     "dev": "tsx src/index.ts",
     "test": "yarn workspace @ospex/sdk build && vitest run",
     "test:watch": "vitest",
-    "typecheck": "yarn workspace @ospex/sdk build && tsc --noEmit"
+    "typecheck": "yarn workspace @ospex/sdk build && tsc --noEmit",
+    "typecheck:tests": "yarn workspace @ospex/sdk build && tsc -p tsconfig.tests.json"
   },
   "dependencies": {},
   "devDependencies": {

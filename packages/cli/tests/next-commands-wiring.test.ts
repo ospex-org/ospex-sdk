@@ -21,6 +21,7 @@ import {
   getAddresses,
   type BuildSubmitPreviewArgs,
   type Commitment,
+  type PublicVisibleCommitment,
   type Hex,
 } from '@ospex/sdk';
 import {
@@ -46,8 +47,12 @@ const MAKER: Hex = SIGNER;
 const HASH = ('0x' + 'cd'.repeat(32)) as Hex;
 const SPEC_KEY = ('0x' + 'ab'.repeat(32)) as Hex;
 
-function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
+function makeCommitment(
+  overrides: Partial<PublicVisibleCommitment> = {},
+): PublicVisibleCommitment {
   return {
+    visibility: 'visible',
+    redacted: false,
     commitmentHash: HASH,
     maker: SIGNER,
     contestId: '42',
@@ -64,6 +69,7 @@ function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
     speculationKey: SPEC_KEY,
     signature: '0xsig',
     status: 'open',
+    storedStatus: 'open',
     source: 'submit',
     network: 'polygon',
     nonceInvalidated: false,
@@ -117,7 +123,7 @@ describe('PR-7 wiring: success envelopes carry the right verify suggestions', ()
     const env = toSubmitExecuteEnvelope(
       preview,
       { hash: '0xnewhash', commitment: makeCommitment() },
-      { chainId: POLYGON },
+      { chainId: POLYGON, fundability: null },
     );
     expect(env.nextCommands).toHaveLength(1);
     expect(env.nextCommands[0]?.id).toBe('verify-commitment');
@@ -128,6 +134,9 @@ describe('PR-7 wiring: success envelopes carry the right verify suggestions', ()
   it('claim → verify-position-status with the signer address', () => {
     const env = toClaimAgentEnvelope(
       {
+        speculationId: 101n,
+        positionType: 0,
+        outcome: 'claimed',
         txHash: '0xtx',
         blockNumber: 1000n,
         payoutWei6: 5_000_000n,
@@ -148,6 +157,8 @@ describe('PR-7 wiring: success envelopes carry the right verify suggestions', ()
   it('settle → verify-position-status', () => {
     const env = toSettleAgentEnvelope(
       {
+        speculationId: 101n,
+        outcome: 'settled',
         txHash: '0xtx',
         blockNumber: 1000n,
         winSide: 'away',

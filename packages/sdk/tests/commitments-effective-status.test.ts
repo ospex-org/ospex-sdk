@@ -8,8 +8,25 @@
 import { describe, expect, it } from 'vitest';
 import { OspexClient } from '../src/index.js';
 import type { CommitmentBody, CommitmentsListBody } from '../src/api/types.js';
+import type {
+  Commitment,
+  PublicVisibleCommitment,
+} from '../src/types/commitment.js';
 
 const apiUrl = 'https://api.example.test';
+
+/**
+ * Narrow a listed row to the visible variant. Every fixture in this file is
+ * book-visible, so a hidden row means the decoder mis-classified it — fail
+ * loudly instead of letting the field assertions read `undefined`.
+ */
+function visible(row: Commitment | undefined): PublicVisibleCommitment {
+  if (row === undefined) throw new Error('expected a commitment row, got none');
+  if (row.visibility !== 'visible') {
+    throw new Error(`expected a visible commitment, got ${row.visibility}`);
+  }
+  return row;
+}
 
 function makeBody(overrides: Partial<CommitmentBody> = {}): CommitmentBody {
   return {
@@ -63,7 +80,7 @@ describe('effective status passthrough + storedStatus', () => {
     const [c] = await client.commitments.list();
     expect(c?.status).toBe('expired');
     expect(c?.storedStatus).toBe('open');
-    expect(c?.isLive).toBe(false);
+    expect(visible(c).isLive).toBe(false);
   });
 
   it('book-hidden: effective status "cancelled" + raw storedStatus "partially_filled" → still isLive (book-hiding is not an on-chain cancel; the signed payload stays matchable)', async () => {
@@ -74,7 +91,7 @@ describe('effective status passthrough + storedStatus', () => {
     const [c] = await client.commitments.list();
     expect(c?.status).toBe('cancelled'); // effective — pulled from the public book
     expect(c?.storedStatus).toBe('partially_filled'); // raw on-chain lifecycle
-    expect(c?.isLive).toBe(true); // matchCommitment ignores book-visibility → still live
+    expect(visible(c).isLive).toBe(true); // matchCommitment ignores book-visibility → still live
   });
 
   it('back-compat: defaults storedStatus to status when the API omits it', async () => {

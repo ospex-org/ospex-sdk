@@ -18,7 +18,7 @@
  *      so a book-hidden row is recoverable.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 // Mock the client factory so the action gets a stub we control + spy on.
 vi.mock('../src/lib/client.js', () => ({ getClient: vi.fn() }));
@@ -95,8 +95,8 @@ function stubClient(commitments: Partial<StubCommitments> = {}): {
 
 let stdout = '';
 let origWrite: typeof process.stdout.write;
-let origExitCode: number | string | null | undefined;
-let exitSpy: ReturnType<typeof vi.spyOn>;
+let origExitCode: typeof process.exitCode;
+let exitSpy: MockInstance<typeof process.exit>;
 
 beforeEach(() => {
   stdout = '';

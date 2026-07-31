@@ -49,11 +49,25 @@ yarn workspace @ospex/sdk build              # SDK must build before CLI typeche
 yarn workspace @ospex/cli build
 yarn workspace @ospex/sdk test               # vitest, unit-only — no live infra
 yarn workspace @ospex/cli test
-yarn typecheck                               # both packages
+yarn typecheck                               # both packages, src only
+yarn typecheck:tests                         # both packages, src + the whole tests/ tree
 node packages/cli/dist/index.js <command>    # run CLI without linking
 ```
 
-> **`yarn typecheck` does NOT cover `packages/sdk/tests/integration/`.** Both `packages/{sdk,cli}/tsconfig.json` set `exclude: ["node_modules", "dist", "tests"]`, so `tsc --noEmit` skips the whole `tests/` tree — a green typecheck is **not** proof that the integration suite still compiles. For any signature change that touches `tests/integration/`, run a standalone `tsc` against that path, and sweep for stale call sites with a **negation grep** (match any `name(` call that does NOT fit the new shape) — positive greps for the known-good pattern miss sites that use a different identifier.
+### Typechecking the test tree
+
+`yarn typecheck` covers `src` only — both `packages/{sdk,cli}/tsconfig.json` still set `exclude: [..., "tests"]`, so a green `typecheck` says nothing about whether the tests compile.
+
+**`yarn typecheck:tests` closes that.** It runs `tsc -p tsconfig.tests.json` in each workspace against `include: ["src", "tests"]`, extending `tsconfig.base.json` directly with **nothing relaxed** — same `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`. The CLI variant chains `yarn workspace @ospex/sdk build` first, exactly like its `typecheck`, because CLI tests resolve `@ospex/sdk` through `dist/index.d.ts`.
+
+What it covers: every `.ts` file under `packages/sdk/tests/` and `packages/cli/tests/`, **including `packages/sdk/tests/integration/`** — the gap this replaced. After a signature change, a green `typecheck:tests` is real evidence that no call site in the test tree went stale.
+
+What it does **not** cover, and deliberately so:
+
+- **It is advisory, not a gate.** It is not wired into `typecheck`, `build`, `test`, `prepare`, CI, or any hook. A type checker reports; it never blocks a build, a release, or a live run. Run it yourself when you've touched shared shapes.
+- **It does not run the tests.** `tsc` only; `yarn test` is still what proves behaviour.
+- **Package-level config files are outside `include`** — `vitest.config.ts` and `packages/cli/scripts/*.mjs` are not typechecked by it.
+- **A green run is not proof the integration suite passes** — `tests/integration/onchain-cancel.test.ts` is gated behind `OSPEX_INTEGRATION=1` and still needs live infra to actually execute.
 
 ## What lives where (when in doubt)
 

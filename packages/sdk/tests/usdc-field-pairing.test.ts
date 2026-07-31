@@ -211,7 +211,12 @@ describe('USDC field pairing — what holds across BOTH envelopes', () => {
     // MatchPreview: perspective blocks carry the taker's numbers.
     for (const args of [matchArgs(), matchArgs({ speculation: { mode: 'lazy' } })]) {
       const mp = buildMatchPreview(args) as unknown as {
-        economics: Record<string, string>;
+        economics: {
+          fillMakerRiskWei6: string;
+          takerProfitOnWinUSDC: string;
+          takerRiskWei6: string;
+          takerReturnOnWinUSDC: string;
+        };
         you: { profit: { wei6: string }; totalReturn: { wei6: string } };
       };
       expect(BigInt(mp.you.profit.wei6)).toBe(BigInt(mp.economics.fillMakerRiskWei6));
@@ -236,7 +241,11 @@ describe('USDC field pairing — what holds across BOTH envelopes', () => {
     let sawZero = 0;
     for (const args of submitCases) {
       const sp = buildSubmitPreview(args) as unknown as {
-        economics: Record<string, string>;
+        economics: {
+          counterpartyRiskUSDC: string;
+          profitUSDC: string;
+          returnUSDC: string;
+        };
         you: { profit: { wei6: string }; totalReturn: { wei6: string } };
         counterparty: { risk: { wei6: string } };
         market: {
@@ -280,7 +289,9 @@ describe('USDC field pairing — what holds across BOTH envelopes', () => {
     // And profit floors to zero at the protocol's minimum odds.
     const tiny = buildSubmitPreview(
       submitArgs({ speculation: LAZY, extra: { riskWei6: 1n, oddsTick: 101 } }),
-    ) as unknown as { economics: Record<string, string> };
+    ) as unknown as {
+      economics: { profitUSDC: string; counterpartyRiskUSDC: string };
+    };
     expect(tiny.economics.profitUSDC).toBe('0.000000');
     expect(tiny.economics.counterpartyRiskUSDC).toBe('0.000000');
     expect(() => usdcDecimalToAmountWei6(tiny.economics.profitUSDC)).toThrow(/must be positive/);

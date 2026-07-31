@@ -29,6 +29,19 @@ import type { CommitmentsContext } from '../src/commitments/context.js';
 import type { CommitmentBody, CommitmentsListBody } from '../src/api/types.js';
 import type { Signer } from '../src/types/signer.js';
 
+/**
+ * These code paths read no contest / speculation / team data, so the
+ * corresponding context accessors must never be touched. Wiring them to
+ * throw keeps that a tested property rather than an assumption: a
+ * regression that starts calling one turns the expected typed error into a
+ * loud tripwire instead of passing silently.
+ */
+const unusedAccessor =
+  (what: string) =>
+  (): never => {
+    throw new Error(`unexpected ${what} access`);
+  };
+
 const SIGNER_ADDR = '0xabcdefabcdef0123456789abcdef0123456789ab';
 const SCORER = ('0x' + 'dd'.repeat(20)) as `0x${string}`;
 const CONTEST_ID = 42n;
@@ -157,6 +170,9 @@ function fakeContext(opts: FakeOpts): {
         matchingModule: ('0x' + '11'.repeat(20)) as `0x${string}`,
       }) as unknown as ReturnType<CommitmentsContext['getAddresses']>,
     requireChainClient: () => publicClient,
+    getContestsApi: unusedAccessor('getContestsApi'),
+    getSpeculationsApi: unusedAccessor('getSpeculationsApi'),
+    getTeams: unusedAccessor('getTeams'),
     nonceCounter,
   };
   return { ctx, sentTxs, apiCallCount: () => apiCalls };

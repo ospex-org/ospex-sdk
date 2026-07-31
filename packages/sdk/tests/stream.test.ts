@@ -13,14 +13,19 @@ import { subscribeToStream } from '../src/realtime/stream.js';
 import { parseSseStream, type SseFrame } from '../src/realtime/sse.js';
 import type { Position } from '../src/types/position.js';
 import type { StreamStatus, StreamSubscribeHandlers } from '../src/types/stream.js';
+import type { Subscription } from '../src/types/odds.js';
 
 const enc = new TextEncoder();
 
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /** Advance fake time and flush the microtasks that resolve stream reads / promises. */
-const settle = (ms = 1): Promise<void> => vi.advanceTimersByTimeAsync(ms);
+const settle = async (ms = 1): Promise<void> => {
+  await vi.advanceTimersByTimeAsync(ms);
+};
 
 // ── parser ────────────────────────────────────────────────────────────────
 

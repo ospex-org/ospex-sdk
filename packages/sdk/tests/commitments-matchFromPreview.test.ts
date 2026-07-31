@@ -25,9 +25,15 @@ import { NonceCounter } from '../src/commitments/context.js';
 import { OspexAllowanceError, OspexValidationError } from '../src/errors.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
 import type { Hex, Signer } from '../src/types/signer.js';
-import type { Commitment } from '../src/types/commitment.js';
+import type {
+  Commitment,
+  PublicVisibleCommitment,
+} from '../src/types/commitment.js';
 import type { Contest } from '../src/types/contest.js';
-import type { MatchPreview } from '../src/types/matchPreview.js';
+import type {
+  BuildMatchPreviewArgs,
+  MatchPreview,
+} from '../src/types/matchPreview.js';
 
 const MAKER = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as Hex;
 const TAKER = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as Hex;
@@ -48,6 +54,7 @@ const ADDRESSES = {
   treasuryModule: '0x'.padEnd(42, 'b') as Hex,
   secondaryMarketModule: '0x'.padEnd(42, 'c') as Hex,
   oracleModule: '0x'.padEnd(42, 'd') as Hex,
+  creOracleReceiver: '0x'.padEnd(42, 'a') as Hex,
   scorers: {
     moneyline: '0x'.padEnd(42, 'e') as Hex,
     spread: '0x'.padEnd(42, 'f') as Hex,
@@ -55,7 +62,9 @@ const ADDRESSES = {
   },
 };
 
-function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
+function makeCommitment(
+  overrides: Partial<PublicVisibleCommitment> = {},
+): PublicVisibleCommitment {
   return {
     visibility: 'visible',
     redacted: false,
@@ -104,6 +113,9 @@ function buildContest(overrides: Partial<Contest> = {}): Contest {
         lineTicks: 0,
         line: 0,
         speculationStatus: 0,
+        winSide: null,
+        settledAt: null,
+        voided: false,
       },
     ],
     ...overrides,
@@ -111,8 +123,8 @@ function buildContest(overrides: Partial<Contest> = {}): Contest {
 }
 
 function buildPreview(opts: {
-  commitment?: Commitment;
-  speculation?: MatchPreview['speculation'];
+  commitment?: PublicVisibleCommitment;
+  speculation?: BuildMatchPreviewArgs['speculation'];
   taker?: Hex;
 } = {}): MatchPreview {
   return buildMatchPreview({
@@ -277,6 +289,9 @@ describe('matchFromPreview — line magnitude backstop', () => {
           lineTicks: poisonedLine,
           line: poisonedLine / 10,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });
@@ -424,7 +439,7 @@ describe('matchFromPreview — book-visibility (raw storedStatus, not effective 
 describe('matchFromPreview — speculation transitions', () => {
   it('lazy preview → existing now: throws (preview was overly cautious; let user re-confirm)', async () => {
     const preview = buildPreview({
-      speculation: { mode: 'lazy', speculationId: null, speculationKey: '0x'.padEnd(66, 'a') },
+      speculation: { mode: 'lazy' },
     });
     // Contest now has the matching open speculation → mode flips to existing.
     const { ctx } = buildCtx({
@@ -445,6 +460,9 @@ describe('matchFromPreview — speculation transitions', () => {
             lineTicks: 0,
             line: 0,
             speculationStatus: 1, // closed
+            winSide: 'away',
+            settledAt: '2026-01-01T00:00:00Z',
+            voided: false,
           },
         ],
       }),
@@ -465,7 +483,7 @@ describe('matchFromPreview — allowance recheck', () => {
     // recheck must hit both so the lazy-creation-fee row's
     // TreasuryModule allowance shortfall is caught before send.
     const preview = buildPreview({
-      speculation: { mode: 'lazy', speculationId: null, speculationKey: '0x'.padEnd(66, 'a') },
+      speculation: { mode: 'lazy' },
     });
     const { ctx, reads } = buildCtx({
       // Allowances comfortably cover both required values; we're
@@ -494,7 +512,7 @@ describe('matchFromPreview — allowance recheck', () => {
     // hadn't approved TreasuryModule yet) would slip past preflight
     // and revert in TreasuryModule.processSplitFee.
     const preview = buildPreview({
-      speculation: { mode: 'lazy', speculationId: null, speculationKey: '0x'.padEnd(66, 'a') },
+      speculation: { mode: 'lazy' },
     });
     const { ctx } = buildCtx({
       positionAllowanceWei6: 100_000_000n, // PM is fine

@@ -22,7 +22,7 @@ import { MAX_LINE_TICKS } from '../src/commitments/validation.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
 import type { Hex, Signer } from '../src/types/signer.js';
-import type { Commitment } from '../src/types/commitment.js';
+import type { PublicVisibleCommitment } from '../src/types/commitment.js';
 import type { Contest } from '../src/types/contest.js';
 
 const MAKER = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as Hex;
@@ -45,6 +45,7 @@ const ADDRESSES = {
   treasuryModule: '0x'.padEnd(42, 'b') as Hex,
   secondaryMarketModule: '0x'.padEnd(42, 'c') as Hex,
   oracleModule: '0x'.padEnd(42, 'd') as Hex,
+  creOracleReceiver: '0x'.padEnd(42, 'a') as Hex,
   scorers: {
     moneyline: '0x'.padEnd(42, 'e') as Hex,
     spread: '0x'.padEnd(42, 'f') as Hex,
@@ -72,7 +73,9 @@ function buildSigner(addr: Hex = TAKER): Signer {
   } as unknown as Signer;
 }
 
-function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
+function makeCommitment(
+  overrides: Partial<PublicVisibleCommitment> = {},
+): PublicVisibleCommitment {
   return {
     visibility: 'visible',
     redacted: false,
@@ -129,6 +132,9 @@ function openSpec(): Contest {
         lineTicks: 0,
         line: 0,
         speculationStatus: 0,
+        winSide: null,
+        settledAt: null,
+        voided: false,
       },
     ],
   });
@@ -433,6 +439,9 @@ describe('checkCommitmentFillability — closed speculation', () => {
           lineTicks: 0,
           line: 0,
           speculationStatus: 1, // closed
+          winSide: 'away',
+          settledAt: '2026-01-01T00:00:00Z',
+          voided: false,
         },
       ],
     });

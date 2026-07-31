@@ -663,7 +663,7 @@ describe('emitJsonFailure — requiresSignature / requiresTransaction / approval
         tokenSymbol: 'USDC',
         spender: '0x1111111111111111111111111111111111111111' as const,
         spenderLabel: 'PositionModule',
-        purpose: 'PositionModule pulls USDC at fill time',
+        purpose: 'commitment-risk',
         requiredWei: '100000000',
         requiredHuman: '100.000000',
         currentWei: '0',
