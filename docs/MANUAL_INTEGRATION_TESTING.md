@@ -173,7 +173,7 @@ The flow that proves funds actually move. (If you only need to prove the match/s
 
 ## Section 6 — partial fill + remaining-capacity match
 
-Verifies the SDK's takerRisk math against the contract's revert-or-exact-fill rule (MatchingModule.sol:268-270).
+Verifies the SDK's takerRisk math against the contract's revert-or-exact-fill rule in `MatchingModule.matchCommitment` — a fill against an exhausted commitment reverts `MatchingModule__CommitmentFullyFilled`, and a lot-size-rounded `fillMakerRisk` that lands on zero or above the maker's remaining risk reverts `MatchingModule__InvalidFillMakerRisk`. There is no partial-fill-to-what-is-left fallback: the call either fills the computed amount exactly or reverts.
 
 | # | Step | Expected | Validates |
 |---|---|---|---|
@@ -298,7 +298,7 @@ Prereq: a funded test wallet (gas + a few USDC for the submits) on mainnet. Main
 | 10.8 | Run 10.7 without `--dry-run` (same `--new-min-nonce`). | tx succeeds; `MinNonceUpdated` event in receipt; both rows show `nonceInvalidated=true` within 30s; `status` stays `'open'`. | `cancelAllOnSpeculation` end-to-end + indexer `nonce_invalidated` projection. |
 | 10.9 | Run `cancel-all` again, passing `--new-min-nonce <n>` where `n` ≤ the floor printed by 10.10 (or the `newMinNonce` returned by 10.8). | `OspexChainError` with `reason: 'NonceMustIncrease'`. | `NonceMustIncrease` mapping. Each successful raise bumps the floor, so a floor at-or-below the current value deterministically hits this revert. |
 | 10.10 | `ospex commitments nonce-floor --maker <addr> --contest-id <id> --scorer <addr> --line <ticks>` | Prints the post-10.8 newMinNonce as `minNonce`. | `getNonceFloor` read utility. |
-| 10.11 | Submit a fresh commitment, then `ospex commitments cancel <hash> --also-onchain`. | DELETE returns `200`; on-chain cancel emits `CommitmentCancelled`; `status='cancelled'`. | Composed off-chain + on-chain cancel — recommended pattern from `CANCEL_FLOW.md`. |
+| 10.11 | Submit a fresh commitment, then `ospex commitments cancel <hash> --also-onchain`. | DELETE returns `200`; on-chain cancel emits `CommitmentCancelled`; `status='cancelled'`. | Composed off-chain + on-chain cancel — the recommended pattern, documented in the root `README.md` under **Sovereign cancel — off-chain DELETE vs. on-chain cancel**. |
 
 **Pass criterion**: 10.1–10.4, 10.7–10.10, and 10.11 succeed end-to-end. 10.5 (partial-fill cancel) and 10.6 (third-party reject) require additional wallets / takers — defer to "manual verification at next two-wallet test cycle" in the release ticket if not feasible at PR time.
 
@@ -332,8 +332,10 @@ Copy this into the release ticket:
 [ ] Section 2.5 — Non-interactive Foundry signer
 [ ] Section 3 — odds streaming
 [ ] Section 4 — Single-wallet chain ops (mainnet)
+[ ] Section 4.5 — `approvals setup` monotonic contract (mainnet)
 [ ] Section 5 — Two-wallet match (mainnet)
 [ ] Section 6 — Partial fill
+[ ] Section 6.5 — Match preview + lazy creation fee (mainnet)
 [ ] Section 7 — Failure modes
 [ ] Section 9 — settle + claim (or manual-verification-deferred note)
 [ ] Section 10 — on-chain cancel (10.5 / 10.6 may defer to two-wallet cycle)
@@ -344,3 +346,5 @@ Date:     ____________
 ```
 
 Skipping any section other than 8 (which only applies post-publish) requires a written exception in the release ticket.
+
+**Maintenance:** this list must name every `## Section` heading defined above, and a `.5` section is its own line — `4` does not subsume `4.5`, exactly as `2` does not subsume `2.5`. A section defined in the body but missing here is silently skippable with no exception and no trace, which is how 4.5 and 6.5 — both mainnet, both money-moving — went unlisted. Adding a section means adding its line here in the same change.
