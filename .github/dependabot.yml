@@ -1,0 +1,38 @@
+# Dependabot version updates.
+#
+# REPORTING-ONLY. Per .claude/rules/advisory-tooling.md, nothing here may become
+# a required check or gate a release. Dependabot opens PRs; a human decides.
+#
+# Why this file exists: alerts were being generated and surfaced on this repo,
+# but with no dependabot.yml and automated security fixes disabled, nothing ever
+# opened a bump PR. The backlog rebuilt itself silently.
+#
+# `cooldown` mirrors the project's 3-day supply-chain rule -- a version published
+# hours ago is exactly the window a registry-compromise worm lives in, and a
+# security advisory is precisely when the temptation to grab the freshest release
+# is strongest.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    groups:
+      # One PR per ecosystem-ish cluster rather than per package: these move
+      # together and reviewing them together is how their interactions show up.
+      dev-tooling:
+        patterns:
+          - vitest
+          - vite
+          - esbuild
+          - tsx
+          - rimraf
+          - typescript
+          - '@types/*'
+      lint:
+        patterns:
+          - eslint
+          - '@typescript-eslint/*'
