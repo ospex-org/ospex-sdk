@@ -18,14 +18,16 @@
 import { describe, expect, it } from 'vitest';
 import { computeTakerView } from '../src/commitments/takerView.js';
 import { OspexValidationError } from '../src/errors.js';
-import type { Commitment } from '../src/types/commitment.js';
+import type { PublicVisibleCommitment } from '../src/types/commitment.js';
 
 const GIANTS_DODGERS = {
   awayTeam: 'San Francisco Giants',
   homeTeam: 'Los Angeles Dodgers',
 };
 
-function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
+function makeCommitment(
+  overrides: Partial<PublicVisibleCommitment> = {},
+): PublicVisibleCommitment {
   return {
     visibility: 'visible',
     redacted: false,

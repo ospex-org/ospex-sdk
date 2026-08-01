@@ -381,8 +381,8 @@ describe('setup envelope shape', () => {
     expect(env.schemaVersion).toBe(1);
     expect(env.plan).toBeDefined();
     expect(env.plan.willSendCount).toBe(2);
-    expect((env.plan as Record<string, unknown>).schemaVersion).toBeUndefined();
-    expect((env as Record<string, unknown>).results).toBeUndefined();
+    expect((env.plan as unknown as Record<string, unknown>).schemaVersion).toBeUndefined();
+    expect((env as unknown as Record<string, unknown>).results).toBeUndefined();
   });
 
   it('result envelope shape: { schemaVersion: 1, plan: {...}, results: [...] }', () => {
@@ -399,7 +399,7 @@ describe('setup envelope shape', () => {
     expect(env.plan.willSendCount).toBe(2);
     expect(env.results).toHaveLength(1);
     expect(env.results[0]!.spenderModule).toBe('positionModule');
-    expect((env.plan as Record<string, unknown>).schemaVersion).toBeUndefined();
+    expect((env.plan as unknown as Record<string, unknown>).schemaVersion).toBeUndefined();
   });
 
   it('result envelope tolerates an empty results array (idempotent re-run)', () => {

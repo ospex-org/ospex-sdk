@@ -110,6 +110,9 @@ function buildSpec(overrides: Partial<SpeculationDetail> = {}): SpeculationDetai
     lineTicks: 0,
     line: 0,
     speculationStatus: 0,
+    winSide: null,
+    settledAt: null,
+    voided: false,
     orderbook: [],
     contest: {
       contestId: '42',
@@ -181,9 +184,9 @@ function buildContext({
     getAddresses: () => ADDRESSES,
     requireChainClient: () =>
       buildPublicClient({
-        allowance,
+        ...(allowance !== undefined ? { allowance } : {}),
         ...(treasuryAllowance !== undefined ? { treasuryAllowance } : {}),
-        nonceFloor,
+        ...(nonceFloor !== undefined ? { nonceFloor } : {}),
       }) as ReturnType<CommitmentsContext['requireChainClient']>,
     nonceCounter: new NonceCounter(),
     getContestsApi: () => contestsApi,
@@ -261,6 +264,9 @@ describe('prepareSubmit — --contest mode', () => {
           lineTicks: 0,
           line: 0,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });
@@ -351,6 +357,9 @@ describe('prepareSubmit — --contest mode', () => {
           lineTicks: -35,
           line: -3.5,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
         {
           speculationId: '101',
@@ -359,6 +368,9 @@ describe('prepareSubmit — --contest mode', () => {
           lineTicks: -75,
           line: -7.5,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });
@@ -383,6 +395,9 @@ describe('prepareSubmit — --contest mode', () => {
           lineTicks: -35,
           line: -3.5,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });
@@ -401,7 +416,11 @@ describe('prepareSubmit — --contest mode', () => {
 describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', () => {
   it('rejects --speculation when speculationStatus !== 0 (closed/scored)', async () => {
     const ctx = buildContext({
-      spec: buildSpec({ speculationStatus: 1 }),
+      spec: buildSpec({
+        speculationStatus: 1,
+        winSide: 'away',
+        settledAt: '2026-01-01T00:00:00Z',
+      }),
     });
     await expect(prepareSubmit(ctx, speculationArgs())).rejects.toThrow(
       /closed \(settled or scored\)/,
@@ -420,6 +439,9 @@ describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', ()
           lineTicks: -35,
           line: -3.5,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
         {
           speculationId: '101',
@@ -428,6 +450,9 @@ describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', ()
           lineTicks: -75,
           line: -7.5,
           speculationStatus: 1, // closed
+          winSide: 'away',
+          settledAt: '2026-01-01T00:00:00Z',
+          voided: false,
         },
       ],
     });
@@ -458,6 +483,9 @@ describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', ()
           lineTicks: -35,
           line: -3.5,
           speculationStatus: 1, // closed at the line we want
+          winSide: 'away',
+          settledAt: '2026-01-01T00:00:00Z',
+          voided: false,
         },
       ],
     });
@@ -482,6 +510,9 @@ describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', ()
           lineTicks: 0,
           line: 0,
           speculationStatus: 1, // closed
+          winSide: 'away',
+          settledAt: '2026-01-01T00:00:00Z',
+          voided: false,
         },
       ],
     });
@@ -506,6 +537,9 @@ describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', ()
           lineTicks: 85,
           line: 8.5,
           speculationStatus: 1, // closed
+          winSide: 'over',
+          settledAt: '2026-01-01T00:00:00Z',
+          voided: false,
         },
       ],
     });
@@ -532,6 +566,9 @@ describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', ()
           lineTicks: -75,
           line: -7.5,
           speculationStatus: 1, // closed at -7.5
+          winSide: 'away',
+          settledAt: '2026-01-01T00:00:00Z',
+          voided: false,
         },
       ],
     });
@@ -559,6 +596,9 @@ describe('prepareSubmit — closed-speculation guards (review #4 blocker 1)', ()
           lineTicks: 35, // away +3.5 = home -3.5
           line: 3.5,
           speculationStatus: 1, // closed
+          winSide: 'away',
+          settledAt: '2026-01-01T00:00:00Z',
+          voided: false,
         },
       ],
     });
@@ -636,6 +676,9 @@ describe('prepareSubmit — total negative-line guard (review #4 blocker 2)', ()
           lineTicks: -85,
           line: -8.5,
           speculationStatus: 0, // open, but negative — bad data
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });
@@ -660,6 +703,9 @@ describe('prepareSubmit — total negative-line guard (review #4 blocker 2)', ()
           lineTicks: 85,
           line: 8.5,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });
@@ -1115,6 +1161,9 @@ describe('prepareSubmit — TreasuryModule allowance preflight', () => {
           lineTicks: 0,
           line: 0,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });

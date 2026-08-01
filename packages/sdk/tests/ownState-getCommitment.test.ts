@@ -51,7 +51,7 @@ function makeApi(
 ): { api: ApiClient; calls: RecordedCall[] } {
   const calls: RecordedCall[] = [];
   const fakeFetch: typeof globalThis.fetch = async (url, init) => {
-    const headers = new Headers(init?.headers as HeadersInit | undefined);
+    const headers = new Headers(init?.headers);
     const call: RecordedCall = {
       url: String(url),
       method: (init?.method ?? 'GET').toUpperCase(),

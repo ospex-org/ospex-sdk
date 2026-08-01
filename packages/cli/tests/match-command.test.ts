@@ -20,7 +20,7 @@ import { Writable } from 'node:stream';
 import { commitmentsMatchCommand } from '../src/commands/commitments/match.js';
 import { renderMatchPreview } from '../src/lib/matchPreviewRender.js';
 import { buildMatchPreview, type Hex } from '@ospex/sdk';
-import type { Commitment } from '@ospex/sdk';
+import type { Commitment, PublicVisibleCommitment } from '@ospex/sdk';
 
 const FAR_FUTURE_ISO = '2099-05-08T02:00:00Z';
 const MAKER = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as Hex;
@@ -32,8 +32,12 @@ const MM = '0x1111111111111111111111111111111111111111' as Hex;
 const PM = '0x2222222222222222222222222222222222222222' as Hex;
 const TM = '0x3333333333333333333333333333333333333333' as Hex;
 
-function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
+function makeCommitment(
+  overrides: Partial<PublicVisibleCommitment> = {},
+): PublicVisibleCommitment {
   return {
+    visibility: 'visible',
+    redacted: false,
     commitmentHash: HASH,
     maker: MAKER,
     contestId: '42',
@@ -50,6 +54,7 @@ function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
     speculationKey: SPEC_KEY,
     signature: '0xsig',
     status: 'open',
+    storedStatus: 'open',
     source: 'submit',
     network: 'polygon',
     nonceInvalidated: false,

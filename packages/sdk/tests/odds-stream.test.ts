@@ -19,10 +19,14 @@ import type { StreamStatus } from '../src/types/stream.js';
 const enc = new TextEncoder();
 
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /** Advance fake time and flush the microtasks that resolve stream reads / promises. */
-const settle = (ms = 1): Promise<void> => vi.advanceTimersByTimeAsync(ms);
+const settle = async (ms = 1): Promise<void> => {
+  await vi.advanceTimersByTimeAsync(ms);
+};
 
 // ── transport harness ───────────────────────────────────────────────────────
 

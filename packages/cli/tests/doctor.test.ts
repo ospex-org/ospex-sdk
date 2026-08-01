@@ -333,8 +333,8 @@ describe('buildDoctorReport (JSON envelope)', () => {
       apiOk: true,
     });
     expect(report.schemaVersion).toBe(1);
-    expect(report.network.chainId).toBe(137);
-    expect(report.network.label).toBe('Polygon mainnet');
+    expect(report.network!.chainId).toBe(137);
+    expect(report.network!.label).toBe('Polygon mainnet');
     expect(report.api.ok).toBe(true);
     expect(report.wallet.address).toBe(OWNER);
   });
@@ -345,12 +345,12 @@ describe('buildDoctorReport (JSON envelope)', () => {
       balances: makeBalances({ native: 2n * 10n ** 18n, usdc: 42_120_000n }),
       apiOk: true,
     });
-    expect(report.balances.native.raw).toBe((2n * 10n ** 18n).toString());
-    expect(report.balances.native.formatted).toBe('2');
-    expect(report.balances.usdc.raw).toBe('42120000');
-    expect(report.balances.usdc.formatted).toBe('42.12');
-    expect(report.allowances.usdcPositionModule.raw).toBe('50000000');
-    expect(report.allowances.usdcPositionModule.formatted).toBe('50');
+    expect(report.balances!.native.raw).toBe((2n * 10n ** 18n).toString());
+    expect(report.balances!.native.formatted).toBe('2');
+    expect(report.balances!.usdc.raw).toBe('42120000');
+    expect(report.balances!.usdc.formatted).toBe('42.12');
+    expect(report.allowances!.usdcPositionModule.raw).toBe('50000000');
+    expect(report.allowances!.usdcPositionModule.formatted).toBe('50');
   });
 
   it('round-trips through JSON.stringify with no BigInt errors', () => {

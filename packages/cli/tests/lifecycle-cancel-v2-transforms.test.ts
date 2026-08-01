@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { OspexChainError } from '@ospex/sdk';
-import type { Commitment, Hex } from '@ospex/sdk';
+import type { Commitment, Hex, PublicVisibleCommitment } from '@ospex/sdk';
 import {
   toCancelOffchainAgentEnvelope,
   toCancelDualAgentEnvelope,
@@ -28,8 +28,12 @@ const SIGNER: Hex = '0xaabbccddeeff00112233445566778899aabbccdd';
 const HASH = ('0x' + 'ab'.repeat(32)) as Hex;
 const SCORER = ('0x' + '11'.repeat(20)) as Hex;
 
-function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
+function makeCommitment(
+  overrides: Partial<PublicVisibleCommitment> = {},
+): PublicVisibleCommitment {
   return {
+    visibility: 'visible',
+    redacted: false,
     commitmentHash: HASH,
     maker: SIGNER,
     contestId: '42',
@@ -46,6 +50,7 @@ function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
     speculationKey: ('0x' + 'cd'.repeat(32)),
     signature: '0xsig',
     status: 'open',
+    storedStatus: 'open',
     source: 'submit',
     network: 'polygon',
     nonceInvalidated: false,

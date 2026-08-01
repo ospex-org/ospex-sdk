@@ -23,6 +23,7 @@ import {
   type CheckCommitmentFillabilityResult,
   type CheckSubmitFundabilityResult,
   type Commitment,
+  type PublicVisibleCommitment,
   type Hex,
   type MatchPreviewWarning,
 } from '@ospex/sdk';
@@ -83,8 +84,12 @@ function makeSubmitPreviewArgs(
   };
 }
 
-function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
+function makeCommitment(
+  overrides: Partial<PublicVisibleCommitment> = {},
+): PublicVisibleCommitment {
   return {
+    visibility: 'visible',
+    redacted: false,
     commitmentHash: HASH,
     maker: MAKER,
     contestId: '42',
@@ -101,6 +106,7 @@ function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
     speculationKey: SPEC_KEY,
     signature: '0xsig',
     status: 'open',
+    storedStatus: 'open',
     source: 'submit',
     network: 'polygon',
     nonceInvalidated: false,
@@ -195,7 +201,7 @@ describe('toSubmitPreviewEnvelope', () => {
 
   it('payload === preview (no inner schemaVersion to strip)', () => {
     const env = toSubmitPreviewEnvelope(preview, { chainId: POLYGON });
-    expect('schemaVersion' in (env.payload as Record<string, unknown>)).toBe(false);
+    expect('schemaVersion' in (env.payload as unknown as Record<string, unknown>)).toBe(false);
   });
 });
 
@@ -220,7 +226,7 @@ describe('toSubmitExecuteEnvelope', () => {
     const env = toSubmitExecuteEnvelope(
       preview,
       { hash: '0xdead', commitment: stubCommitment },
-      { chainId: POLYGON },
+      { chainId: POLYGON, fundability: null },
     );
     expect(env.stage).toBe('execute');
     expect(env.requiresSignature).toBe(false);
@@ -231,7 +237,7 @@ describe('toSubmitExecuteEnvelope', () => {
     const env = toSubmitExecuteEnvelope(
       preview,
       { hash: '0xdead', commitment: stubCommitment },
-      { chainId: POLYGON },
+      { chainId: POLYGON, fundability: null },
     );
     expect(env.commitment).toBe(stubCommitment);
   });
@@ -240,7 +246,7 @@ describe('toSubmitExecuteEnvelope', () => {
     const env = toSubmitExecuteEnvelope(
       preview,
       { hash: '0xdead', commitment: stubCommitment },
-      { chainId: POLYGON },
+      { chainId: POLYGON, fundability: null },
     );
     expect(env.effects).toHaveLength(2);
     expect(env.effects[0]?.type).toBe('eip712-signature');
@@ -276,7 +282,7 @@ describe('toSubmitExecuteEnvelope', () => {
     const env = toSubmitExecuteEnvelope(
       preview,
       widerLike as unknown as { hash: Hex; commitment: Commitment },
-      { chainId: POLYGON },
+      { chainId: POLYGON, fundability: null },
     );
     expect(env.payload.result).toEqual({ hash: '0xdead', commitment: stubCommitment });
     expect((env.payload.result as Record<string, unknown>).signedPayload).toBeUndefined();
@@ -293,7 +299,7 @@ describe('toSubmitExecuteEnvelope', () => {
     const env = toSubmitExecuteEnvelope(
       preview,
       { hash: '0xdead', commitment: stubCommitment },
-      { chainId: POLYGON, approveEffects: [approve] },
+      { chainId: POLYGON, fundability: null, approveEffects: [approve] },
     );
     expect(env.effects).toHaveLength(3);
     expect(env.effects[0]).toBe(approve);
@@ -307,7 +313,7 @@ describe('toSubmitExecuteEnvelope', () => {
     const env = toSubmitExecuteEnvelope(
       preview,
       { hash: '0xdead', commitment: stubCommitment },
-      { chainId: POLYGON, approveEffects: [a1, a2] },
+      { chainId: POLYGON, fundability: null, approveEffects: [a1, a2] },
     );
     expect(env.effects).toHaveLength(4);
     expect(env.effects[0]?.txHash).toBe('0xa1');
@@ -325,7 +331,7 @@ describe('toSubmitExecuteEnvelope', () => {
     const env = toSubmitExecuteEnvelope(
       preview,
       { hash: '0xdead', commitment: stubCommitment },
-      { chainId: POLYGON, approveEffects: [revertedApprove] },
+      { chainId: POLYGON, fundability: null, approveEffects: [revertedApprove] },
     );
     expect(env.ok).toBe(false);
   });
@@ -337,7 +343,7 @@ describe('toSubmitExecuteEnvelope', () => {
       { chainId: POLYGON, fundability: null },
     );
     expect(env.payload.result.commitment).toBe(stubCommitment);
-    expect('schemaVersion' in (env.payload as Record<string, unknown>)).toBe(false);
+    expect('schemaVersion' in (env.payload as unknown as Record<string, unknown>)).toBe(false);
   });
 
   // ── Post-approval fundability re-check + remediation contract ───
@@ -456,7 +462,7 @@ describe('toMatchPreviewEnvelope', () => {
   it('strips MatchPreview.schemaVersion from payload (review contract)', () => {
     const env = toMatchPreviewEnvelope(preview, { chainId: POLYGON });
     expect(preview.schemaVersion).toBe(1); // legacy marker on the source
-    expect('schemaVersion' in (env.payload as Record<string, unknown>)).toBe(false);
+    expect('schemaVersion' in (env.payload as unknown as Record<string, unknown>)).toBe(false);
   });
 
   it('wallet = preview.taker (lowercased), walletRole = signer', () => {

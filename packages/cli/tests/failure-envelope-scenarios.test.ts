@@ -441,7 +441,7 @@ describe('failure-envelope scenario 3: mid-flight failure after one successful e
           // No approval was attempted (the preview path doesn't enter
           // the approval branch) — tx flag stays false.
           requiresTransaction: false,
-          error: new OspexAPIError('API unreachable', { status: undefined }),
+          error: new OspexAPIError('API unreachable'),
         });
       });
       const env = JSON.parse(stdout.trim()) as {

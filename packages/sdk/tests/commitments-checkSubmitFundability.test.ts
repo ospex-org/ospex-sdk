@@ -55,6 +55,7 @@ const ADDRESSES = {
   treasuryModule: '0x'.padEnd(42, 'b') as Hex,
   secondaryMarketModule: '0x'.padEnd(42, 'c') as Hex,
   oracleModule: '0x'.padEnd(42, 'd') as Hex,
+  creOracleReceiver: '0x'.padEnd(42, 'a') as Hex,
   scorers: {
     moneyline: '0x'.padEnd(42, 'e') as Hex,
     spread: '0x'.padEnd(42, 'f') as Hex,

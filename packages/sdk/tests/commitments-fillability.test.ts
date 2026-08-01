@@ -7,6 +7,23 @@ import { describe, expect, it } from 'vitest';
 import { OspexClient } from '../src/index.js';
 import type { CommitmentFillability } from '../src/index.js';
 import type { CommitmentBody, CommitmentsListBody } from '../src/api/types.js';
+import type {
+  Commitment,
+  PublicVisibleCommitment,
+} from '../src/types/commitment.js';
+
+/**
+ * Narrow a listed row to the visible variant. Every fixture in this file is
+ * book-visible, so a hidden row means the decoder mis-classified it — fail
+ * loudly instead of letting the field assertions read `undefined`.
+ */
+function visible(row: Commitment | undefined): PublicVisibleCommitment {
+  if (row === undefined) throw new Error('expected a commitment row, got none');
+  if (row.visibility !== 'visible') {
+    throw new Error(`expected a visible commitment, got ${row.visibility}`);
+  }
+  return row;
+}
 
 const apiUrl = 'https://api.example.test';
 
@@ -86,16 +103,16 @@ describe('commitments list — includeFillability wire + mapping', () => {
       fetch: makeCapturingFetch([makeBody({ fillability: FILLABILITY })], { url: '' }),
     });
     const [c] = await client.commitments.list({ includeFillability: true });
-    expect(c?.fillability).toEqual(FILLABILITY);
+    expect(visible(c).fillability).toEqual(FILLABILITY);
     // The load-bearing individually-backed-but-overcommitted split survives the boundary.
-    expect(c?.fillability?.makerFundingStatus).toBe('overcommitted');
-    expect(c?.fillability?.orderIndividuallyBackedNow).toBe(true);
-    expect(c?.fillability?.makerBookBackedNow).toBe(false);
+    expect(visible(c).fillability?.makerFundingStatus).toBe('overcommitted');
+    expect(visible(c).fillability?.orderIndividuallyBackedNow).toBe(true);
+    expect(visible(c).fillability?.makerBookBackedNow).toBe(false);
   });
 
   it('leaves fillability undefined when the API row has none', async () => {
     const client = new OspexClient({ apiUrl, fetch: makeCapturingFetch([makeBody()], { url: '' }) });
     const [c] = await client.commitments.list();
-    expect(c?.fillability).toBeUndefined();
+    expect(visible(c).fillability).toBeUndefined();
   });
 });

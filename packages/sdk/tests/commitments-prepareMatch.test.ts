@@ -21,7 +21,10 @@ import { MAX_LINE_TICKS } from '../src/commitments/validation.js';
 import { NonceCounter } from '../src/commitments/context.js';
 import type { CommitmentsContext } from '../src/commitments/context.js';
 import type { Hex, Signer } from '../src/types/signer.js';
-import type { Commitment } from '../src/types/commitment.js';
+import type {
+  Commitment,
+  PublicVisibleCommitment,
+} from '../src/types/commitment.js';
 import type { Contest } from '../src/types/contest.js';
 
 const MAKER = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as Hex;
@@ -43,6 +46,7 @@ const ADDRESSES = {
   treasuryModule: '0x'.padEnd(42, 'b') as Hex,
   secondaryMarketModule: '0x'.padEnd(42, 'c') as Hex,
   oracleModule: '0x'.padEnd(42, 'd') as Hex,
+  creOracleReceiver: '0x'.padEnd(42, 'a') as Hex,
   scorers: {
     moneyline: '0x'.padEnd(42, 'e') as Hex,
     spread: '0x'.padEnd(42, 'f') as Hex,
@@ -58,7 +62,9 @@ function buildSigner(addr: Hex = TAKER): Signer {
   } as unknown as Signer;
 }
 
-function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
+function makeCommitment(
+  overrides: Partial<PublicVisibleCommitment> = {},
+): PublicVisibleCommitment {
   return {
     visibility: 'visible',
     redacted: false,
@@ -201,7 +207,7 @@ function buildContext(opts: CtxOpts = {}): {
 describe('prepareMatch — input modes', () => {
   it('{ hash }: fetches commitment via api.request(/v1/commitments/<hash>)', async () => {
     const fakeBody = makeCommitment();
-    const apiRequest = vi.fn(async () => fakeBody);
+    const apiRequest = vi.fn(async (_path: string) => fakeBody);
     const { ctx } = buildContext({ apiRequest });
     await prepareMatch(ctx, { hash: HASH });
     expect(apiRequest).toHaveBeenCalledTimes(1);
@@ -257,6 +263,9 @@ describe('prepareMatch — speculation classification', () => {
           lineTicks: 0,
           line: 0,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });
@@ -286,6 +295,9 @@ describe('prepareMatch — speculation classification', () => {
           lineTicks: 0,
           line: 0,
           speculationStatus: 1, // closed
+          winSide: 'away',
+          settledAt: '2026-01-01T00:00:00Z',
+          voided: false,
         },
       ],
     });
@@ -307,6 +319,9 @@ describe('prepareMatch — allowance reads', () => {
           lineTicks: 0,
           line: 0,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });
@@ -389,6 +404,9 @@ describe('prepareMatch — taker position allowance', () => {
           lineTicks: 0,
           line: 0,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });
@@ -413,6 +431,9 @@ describe('prepareMatch — taker position allowance', () => {
           lineTicks: 0,
           line: 0,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });
@@ -438,6 +459,9 @@ describe('prepareMatch — chain id pass-through', () => {
           lineTicks: 0,
           line: 0,
           speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
         },
       ],
     });

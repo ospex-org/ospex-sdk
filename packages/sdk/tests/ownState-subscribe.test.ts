@@ -182,7 +182,7 @@ function makeServer(options: FakeServerOptions): FakeServer {
   const fakeFetch: typeof globalThis.fetch = async (url, init) => {
     const u = String(url);
     const method = (init?.method ?? 'GET').toUpperCase();
-    const headers = new Headers(init?.headers as HeadersInit | undefined);
+    const headers = new Headers(init?.headers);
     calls.push({ url: u, method, headers });
 
     if (u.endsWith('/v1/auth/stream-challenge')) {

@@ -11,8 +11,25 @@ import type {
   CommitmentBody,
   CommitmentsListBody,
 } from '../src/api/types.js';
+import type {
+  Commitment,
+  PublicVisibleCommitment,
+} from '../src/types/commitment.js';
 
 const apiUrl = 'https://api.example.test';
+
+/**
+ * Narrow a listed row to the visible variant. Every fixture in this file is
+ * book-visible, so a hidden row means the decoder mis-classified it — fail
+ * loudly instead of letting the field assertions read `undefined`.
+ */
+function visible(row: Commitment | undefined): PublicVisibleCommitment {
+  if (row === undefined) throw new Error('expected a commitment row, got none');
+  if (row.visibility !== 'visible') {
+    throw new Error(`expected a visible commitment, got ${row.visibility}`);
+  }
+  return row;
+}
 
 function makeBody(overrides: Partial<CommitmentBody> = {}): CommitmentBody {
   return {
@@ -93,7 +110,7 @@ describe('Commitment.isLive predicate', () => {
     it(`${c.name} → isLive=${c.expectIsLive}`, async () => {
       const client = new OspexClient({ apiUrl, fetch: makeFetch([makeBody(c.overrides)]) });
       const [first] = await client.commitments.list();
-      expect(first?.isLive).toBe(c.expectIsLive);
+      expect(visible(first).isLive).toBe(c.expectIsLive);
     });
   }
 });

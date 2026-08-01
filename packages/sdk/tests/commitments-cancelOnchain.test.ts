@@ -123,6 +123,9 @@ function fakeContext(opts: FakeOpts = {}): { ctx: CommitmentsContext } {
         matchingModule: MATCHING_MODULE,
       }) as unknown as ReturnType<CommitmentsContext['getAddresses']>,
     requireChainClient: () => publicClient,
+    getContestsApi: unusedAccessor('getContestsApi'),
+    getSpeculationsApi: unusedAccessor('getSpeculationsApi'),
+    getTeams: unusedAccessor('getTeams'),
     nonceCounter: new NonceCounter(),
   };
   return { ctx };
@@ -270,6 +273,9 @@ describe('commitments.cancelOnchain', () => {
       getAddresses: () => {
         throw new Error('addresses must not be accessed for a redacted commitment');
       },
+      getContestsApi: unusedAccessor('getContestsApi'),
+      getSpeculationsApi: unusedAccessor('getSpeculationsApi'),
+      getTeams: unusedAccessor('getTeams'),
       nonceCounter: new NonceCounter(),
     };
     await expect(cancelOnchain(ctx, { hash: HASH as `0x${string}` })).rejects.toMatchObject({
@@ -436,6 +442,19 @@ import type {
   OwnerStateSnapshotBody,
   StreamChallenge,
 } from '../src/api/types.js';
+
+/**
+ * These code paths read no contest / speculation / team data, so the
+ * corresponding context accessors must never be touched. Wiring them to
+ * throw keeps that a tested property rather than an assumption: a
+ * regression that starts calling one turns the expected typed error into a
+ * loud tripwire instead of passing silently.
+ */
+const unusedAccessor =
+  (what: string) =>
+  (): never => {
+    throw new Error(`unexpected ${what} access`);
+  };
 
 const SCORER = ('0xdd' + 'aa'.repeat(19)) as `0x${string}`;
 const VALID_SIG_65 = ('0x' + 'cc'.repeat(65)) as `0x${string}`;
@@ -641,6 +660,9 @@ function fakeRecoveryContext(opts: RecoveryOpts = {}): {
         CommitmentsContext['getAddresses']
       >,
     requireChainClient: () => publicClient,
+    getContestsApi: unusedAccessor('getContestsApi'),
+    getSpeculationsApi: unusedAccessor('getSpeculationsApi'),
+    getTeams: unusedAccessor('getTeams'),
     nonceCounter: new NonceCounter(),
   };
   return { ctx, snapshotCallCount: () => snapshotCalls };
@@ -680,6 +702,9 @@ describe('commitments.cancelOnchain — { commitment } overload + recoverHidden 
       getAddresses: () => {
         throw new Error('addresses must not be accessed for a redacted refusal');
       },
+      getContestsApi: unusedAccessor('getContestsApi'),
+      getSpeculationsApi: unusedAccessor('getSpeculationsApi'),
+      getTeams: unusedAccessor('getTeams'),
       nonceCounter: new NonceCounter(),
     };
     await expect(

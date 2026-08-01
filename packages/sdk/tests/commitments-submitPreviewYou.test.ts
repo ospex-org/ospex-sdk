@@ -14,6 +14,20 @@ import {
   type BuildSubmitPreviewArgs,
 } from '../src/commitments/buildSubmitPreview.js';
 import { computeSubmitYouView } from '../src/commitments/youView.js';
+import type { SubmitPreview } from '../src/types/preview.js';
+
+/**
+ * A preview as emitted before the perspective-view fields were added: the
+ * newer keys are ABSENT, not present-and-undefined. That is what an older SDK
+ * build actually produced, and `computeSubmitYouView` discriminates on
+ * `!== undefined`, so both spellings take the same branch.
+ */
+function withoutPerspectiveFields(p: SubmitPreview): SubmitPreview {
+  const legacy = { ...p };
+  delete legacy.you;
+  delete legacy.counterparty;
+  return legacy;
+}
 
 const MAKER = '0x'.padEnd(42, '0') as `0x${string}`;
 const MM = '0x'.padEnd(42, '1') as `0x${string}`;
@@ -191,7 +205,7 @@ describe('computeSubmitYouView', () => {
 
   it('backfills you / counterparty from legacy fields when absent', () => {
     const p = buildSubmitPreview(baseArgs());
-    const legacy = { ...p, you: undefined, counterparty: undefined };
+    const legacy = withoutPerspectiveFields(p);
     const view = computeSubmitYouView(legacy);
     expect(view.you).toEqual(p.you);
     expect(view.counterparty).toEqual(p.counterparty);
@@ -224,7 +238,7 @@ describe('computeSubmitYouView', () => {
     ];
     for (const args of fixtures) {
       const built = buildSubmitPreview(args);
-      const legacy = { ...built, you: undefined, counterparty: undefined };
+      const legacy = withoutPerspectiveFields(built);
       const view = computeSubmitYouView(legacy);
       expect(view.you).toEqual(built.you);
       expect(view.counterparty).toEqual(built.counterparty);
@@ -244,11 +258,8 @@ describe('computeSubmitYouView — counterpartyRiskUSDC cross-check', () => {
    * check that could not fail. Both halves are pinned below: the honest
    * sub-lot case must pass, and real drift must throw.
    */
-  const legacyOf = (p: ReturnType<typeof buildSubmitPreview>) => ({
-    ...p,
-    you: undefined,
-    counterparty: undefined,
-  });
+  const legacyOf = (p: ReturnType<typeof buildSubmitPreview>): SubmitPreview =>
+    withoutPerspectiveFields(p);
 
   it('NEGATIVE CONTROL: an honest sub-lot counterparty risk is accepted', () => {
     // riskWei6 100n at oddsTick 101 → profit 1 wei6 → "0.000001".

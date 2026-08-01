@@ -21,7 +21,7 @@ import {
 import type {
   BuildMatchPreviewArgs,
 } from '../src/types/matchPreview.js';
-import type { Commitment } from '../src/types/commitment.js';
+import type { PublicVisibleCommitment } from '../src/types/commitment.js';
 import { usdcDecimalToAmountWei6 } from '../src/commitments/decimals.js';
 
 const MAKER = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as `0x${string}`;
@@ -35,7 +35,9 @@ const HASH = '0x'.padEnd(66, 'b') as `0x${string}`;
 
 const FAR_FUTURE_ISO = '2099-05-08T02:00:00Z';
 
-function makeCommitment(overrides: Partial<Commitment> = {}): Commitment {
+function makeCommitment(
+  overrides: Partial<PublicVisibleCommitment> = {},
+): PublicVisibleCommitment {
   return {
     visibility: 'visible',
     redacted: false,
