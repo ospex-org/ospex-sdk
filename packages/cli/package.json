@@ -26,15 +26,15 @@
   "dependencies": {},
   "devDependencies": {
     "@commander-js/extra-typings": "^14.0.0",
-    "@types/node": "^20.17.32",
+    "@types/node": "^26.1.2",
     "cli-table3": "^0.6.5",
     "commander": "^14.0.0",
     "esbuild": "^0.28.0",
     "rimraf": "^6.0.1",
     "tsx": "^4.19.4",
-    "typescript": "^5.8.3",
+    "typescript": "^7.0.2",
     "viem": "^2.55.0",
-    "vitest": "^3.2.6",
+    "vitest": "^4.1.10",
     "zod": "^3.23.8"
   }
 }
