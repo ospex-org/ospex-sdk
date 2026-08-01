@@ -45,7 +45,7 @@ describe('loadOwnStateHealth', () => {
       body: {
         indexerLagSeconds: 5,
         lastIndexedAt: '2026-06-01T16:00:00.000Z',
-        lagSource: 'sync_state',
+        lagSource: 'indexer_cursor',
       },
     }));
 
@@ -53,7 +53,7 @@ describe('loadOwnStateHealth', () => {
     expect(health).toEqual({
       indexerLagSeconds: 5,
       lastIndexedAt: '2026-06-01T16:00:00.000Z',
-      lagSource: 'sync_state',
+      lagSource: 'indexer_cursor',
     });
 
     const call = calls.find((c) => c.url.includes('/v1/health/own-state'))!;
@@ -64,7 +64,7 @@ describe('loadOwnStateHealth', () => {
   it('accepts indexerLagSeconds: 0 (perfectly fresh)', async () => {
     const { api } = makeApi(() => ({
       status: 200,
-      body: { indexerLagSeconds: 0, lastIndexedAt: '2026-06-01T16:00:00.000Z', lagSource: 'sync_state' },
+      body: { indexerLagSeconds: 0, lastIndexedAt: '2026-06-01T16:00:00.000Z', lagSource: 'indexer_cursor' },
     }));
     const health = await loadOwnStateHealth(api);
     expect(health.indexerLagSeconds).toBe(0);
@@ -73,7 +73,7 @@ describe('loadOwnStateHealth', () => {
   it('throws OspexValidationError on a malformed body (missing indexerLagSeconds)', async () => {
     const { api } = makeApi(() => ({
       status: 200,
-      body: { lastIndexedAt: '2026-06-01T16:00:00.000Z', lagSource: 'sync_state' },
+      body: { lastIndexedAt: '2026-06-01T16:00:00.000Z', lagSource: 'indexer_cursor' },
     }));
     await expect(loadOwnStateHealth(api)).rejects.toBeInstanceOf(OspexValidationError);
   });
