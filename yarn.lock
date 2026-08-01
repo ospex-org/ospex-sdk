@@ -12,10 +12,10 @@
   resolved "https://registry.yarnpkg.com/@colors/colors/-/colors-1.5.0.tgz#bb504579c1cae923e6576a4f5da43d25f97bdbd9"
   integrity sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==
 
-"@commander-js/extra-typings@^14.0.0":
-  version "14.0.0"
-  resolved "https://registry.yarnpkg.com/@commander-js/extra-typings/-/extra-typings-14.0.0.tgz#a48b73e8e9c80d5c7538d361f9c1fb9b231643d7"
-  integrity sha512-hIn0ncNaJRLkZrxBIp5AsW/eXEHNKYQBh0aPdoUqNgD+Io3NIykQqpKFyKcuasZhicGaEZJX/JBSIkZ4e5x8Dg==
+"@commander-js/extra-typings@^15.0.0":
+  version "15.0.0"
+  resolved "https://registry.yarnpkg.com/@commander-js/extra-typings/-/extra-typings-15.0.0.tgz#5ec61990250ddfe7d3a1c043878b68ba15b110d5"
+  integrity sha512-yeJlba62xqmkgELUsn7356MEnzLLu/fw2x4lofFqGnXh6YysRdEs2BaLeLtg1+KU0AXvMeqQvTTp+3hBEBK+EA==
 
 "@esbuild/aix-ppc64@0.25.12":
   version "0.25.12"
