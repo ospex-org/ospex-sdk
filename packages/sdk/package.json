@@ -35,7 +35,7 @@
   "dependencies": {
     "ethers": "^6.17.0",
     "viem": "^2.55.0",
-    "zod": "^3.23.8"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20.17.32",
