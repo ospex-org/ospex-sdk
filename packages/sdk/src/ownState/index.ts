@@ -157,8 +157,11 @@ export class OwnState {
    * Fetch the protocol's current indexer-lag health for the own-state surface
    * (own-state SSE plan §2.6 + §3.3). PUBLIC — no signer / token, takes no
    * arguments: lag is a global, wallet-independent signal. Consumers building
-   * a stream-health gate poll this (~10 s) and hold quoting when
-   * `indexerLagSeconds` crosses their threshold.
+   * a stream-health gate poll this once per tick (the reference market-maker
+   * uses 60s by default) and hold quoting when `indexerLagSeconds` crosses
+   * their threshold. Note the value sawtooths roughly 0 → 15s when the indexer
+   * is caught up, so a threshold inside that band can read as degraded on a
+   * healthy indexer — see {@link OwnStateHealth}.
    */
   async health(): Promise<OwnStateHealth> {
     return loadOwnStateHealth(this.ctx.api);

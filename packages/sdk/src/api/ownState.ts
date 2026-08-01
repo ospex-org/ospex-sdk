@@ -75,8 +75,9 @@ export class OwnStateApi {
   /**
    * Fetch the PUBLIC indexer-lag probe (`GET /v1/health/own-state`, PR0b §3.3).
    * No bearer — indexer lag is a global, wallet-independent signal, so this
-   * takes no token (and no `?address`). The market-maker polls it (~10 s) and
-   * folds `indexerLagSeconds` into its stream-health gate.
+   * takes no token (and no `?address`). A market-maker polls it once per runner
+   * tick (default 60s) and folds `indexerLagSeconds` into its stream-health
+   * gate.
    */
   async health(): Promise<OwnStateHealthBody> {
     return this.client.request<OwnStateHealthBody>('/v1/health/own-state', {

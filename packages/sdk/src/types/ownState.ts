@@ -227,21 +227,28 @@ export interface OwnerStateSnapshot {
 
 /**
  * Indexer-lag health for the own-state surface — `client.ownState.health()`
- * (own-state SSE plan §2.6 + §3.3). The market-maker polls this (~10 s) and
- * folds `indexerLagSeconds < INDEXER_LAG_MAX` into its composite stream-health
- * gate, holding quoting when the indexer falls behind.
+ * (own-state SSE plan §2.6 + §3.3). A market-maker polls this once per runner
+ * tick (default 60s) and folds it into a composite stream-health gate, holding
+ * quoting when the indexer falls behind.
  *
  * This is a GLOBAL, wallet-independent signal — no signer / token required.
- * `lagSource` names the signal backing the number (currently `'sync_state'`,
- * the indexer's per-block processed-watermark, which advances on every block
- * so a quiet no-activity window does NOT read as lag).
+ * `lagSource` names the signal backing the number — currently
+ * `'indexer_cursor'`, the indexer's checkpoint, written after every processed
+ * block-range chunk whether or not that chunk carried an Ospex event. That is
+ * why a quiet no-activity window does NOT read as lag. It also means the value
+ * sawtooths roughly 0 → 15s when caught up, so a threshold at or below that
+ * band can read as degraded on a healthy indexer.
  */
 export interface OwnStateHealth {
   /** Whole seconds since the indexer last advanced its processed-block watermark. */
   indexerLagSeconds: number;
   /** ISO-8601 timestamp of that watermark. */
   lastIndexedAt: string;
-  /** The signal backing the lag measurement (e.g. `'sync_state'`). */
+  /**
+   * The signal backing the lag measurement — currently `'indexer_cursor'`.
+   * Kept as a plain `string`, not a literal union: the server may name a
+   * different signal without that being a breaking change for consumers.
+   */
   lagSource: string;
 }
 
