@@ -69,6 +69,35 @@ describe('decodeContestUpdate', () => {
     });
     expect(out).not.toHaveProperty('speculations');
     expect(out).not.toHaveProperty('jsonoddsId');
+    // Negative control: this body predates the start-time companions —
+    // the keys must stay absent on the decoded update, not undefined-assigned.
+    expect(out).not.toHaveProperty('chainStartTime');
+    expect(out).not.toHaveProperty('gameMatchTime');
+    expect(out).not.toHaveProperty('gameEarliestMatchTime');
+  });
+
+  it('copies the start-time companion fields verbatim when the stream body carries them', () => {
+    const out = decodeContestUpdate({
+      contestId: '1',
+      awayTeam: 'A',
+      homeTeam: 'H',
+      sport: 'nba',
+      sportId: 1,
+      matchTime: '2026-05-02T23:30:00Z',
+      chainStartTime: '2026-05-03T00:00:00Z',
+      gameMatchTime: '2026-05-03T00:00:00Z',
+      gameEarliestMatchTime: '2026-05-02T23:30:00Z',
+      status: 'verified',
+      awayScore: null,
+      homeScore: null,
+      verifiedAt: 'v',
+      scoredAt: null,
+      voidedAt: null,
+      contestCreatedAt: 'c',
+    });
+    expect(out.chainStartTime).toBe('2026-05-03T00:00:00Z');
+    expect(out.gameMatchTime).toBe('2026-05-03T00:00:00Z');
+    expect(out.gameEarliestMatchTime).toBe('2026-05-02T23:30:00Z');
   });
 });
 
@@ -143,5 +172,31 @@ describe('contestToUpdate', () => {
     expect(out.awayScore).toBe(100);
     expect(out.scoredAt).toBe('s');
     expect(out.verifiedAt).toBeNull();
+    // Negative control: absent start-time companions on the Contest stay
+    // absent on the projection — never null-coerced like the lifecycle
+    // fields, so the snapshot row matches a same-build stream body.
+    expect(out).not.toHaveProperty('chainStartTime');
+    expect(out).not.toHaveProperty('gameMatchTime');
+    expect(out).not.toHaveProperty('gameEarliestMatchTime');
+  });
+
+  it('carries the start-time companion fields through the projection when present', () => {
+    const contest: Contest = {
+      contestId: '1',
+      awayTeam: 'A',
+      homeTeam: 'H',
+      sport: 'nba',
+      sportId: 1,
+      matchTime: '2026-05-02T23:30:00Z',
+      chainStartTime: '2026-05-03T00:00:00Z',
+      gameMatchTime: '2026-05-03T00:00:00Z',
+      gameEarliestMatchTime: '2026-05-02T23:30:00Z',
+      status: 'verified',
+      speculations: [],
+    };
+    const out = contestToUpdate(contest);
+    expect(out.chainStartTime).toBe('2026-05-03T00:00:00Z');
+    expect(out.gameMatchTime).toBe('2026-05-03T00:00:00Z');
+    expect(out.gameEarliestMatchTime).toBe('2026-05-02T23:30:00Z');
   });
 });

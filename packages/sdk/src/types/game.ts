@@ -35,7 +35,22 @@ export interface Game {
   gameId: string;
   slug: string;
   sport: GameSport;
+  /**
+   * ISO-8601 string. The earliest start currently held for this game — the
+   * minimum of the raw feed value and the retained floor on servers that
+   * carry the two diagnostic fields below (a conservative safety bound, not
+   * a prediction); the raw feed value on older core-api builds, which omit
+   * them. Matches the derivation contest surfaces apply to `matchTime`.
+   */
   matchTime: string;
+  /** The raw current feed value, unminimised. Diagnostic; absent against older core-api builds. */
+  gameMatchTime?: string;
+  /**
+   * The retained monotone start-time floor, or `null` when unset. Diagnostic:
+   * when this is below `gameMatchTime`, it is what is driving `matchTime`.
+   * Absent against older core-api builds.
+   */
+  earliestMatchTime?: string | null;
   status: GameStatus;
   homeTeam: GameTeam;
   awayTeam: GameTeam;

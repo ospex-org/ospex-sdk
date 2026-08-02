@@ -83,7 +83,7 @@ export class GamesApi {
 }
 
 function toGame(body: GameBody): Game {
-  return {
+  const out: Game = {
     gameId: body.gameId,
     slug: body.slug,
     sport: body.sport as GameSport,
@@ -101,4 +101,11 @@ function toGame(body: GameBody): Game {
       rundown: body.externalIds.rundown,
     },
   };
+  // Conditional copy per `exactOptionalPropertyTypes`: absent against
+  // core-api builds predating the start-time diagnostic fields. Note
+  // `earliestMatchTime` is nullable when present — `null` is a real served
+  // value ("floor unset"), distinct from the key being absent.
+  if (body.gameMatchTime !== undefined) out.gameMatchTime = body.gameMatchTime;
+  if (body.earliestMatchTime !== undefined) out.earliestMatchTime = body.earliestMatchTime;
+  return out;
 }

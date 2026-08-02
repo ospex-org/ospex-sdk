@@ -89,6 +89,14 @@ export interface SpeculationParentContext {
   sport: string;
   /** ISO-8601 string. */
   matchTime: string;
+  /**
+   * Same three optional start-time companions as {@link Contest}
+   * (`chainStartTime` / `gameMatchTime` / `gameEarliestMatchTime`) — see the
+   * field docs there. Absent against core-api builds that predate them.
+   */
+  chainStartTime?: string;
+  gameMatchTime?: string;
+  gameEarliestMatchTime?: string;
   status: string;
 }
 
@@ -124,8 +132,27 @@ export interface Contest {
   homeTeam: string;
   sport: string;
   sportId: number;
-  /** ISO-8601 string. */
+  /**
+   * ISO-8601 string. The current conservative start-time safety bound — the
+   * minimum over the chain start, the odds-feed schedule, and the game's
+   * retained safety floor (the three companion fields below). Gate on this.
+   */
   matchTime: string;
+  // ── Start-time companion fields (list + detail) ───────────────────
+  // All three are ISO-8601 strings with a `""` sentinel, mirroring the
+  // core-api contest contract. Optional: absent (not `""`) against
+  // core-api builds that predate them.
+  /** Raw on-chain start. `""` until the contest is verified. */
+  chainStartTime?: string;
+  /** Raw odds-feed schedule for the linked game. `""` when no games row is linked. */
+  gameMatchTime?: string;
+  /**
+   * The game's current retained start-time safety floor, verbatim — never
+   * clamped (it is NOT guaranteed `<= gameMatchTime`); `""` when no games
+   * row is linked. When it is the minimum of the three inputs, it is what
+   * is driving `matchTime`.
+   */
+  gameEarliestMatchTime?: string;
   status: string;
   speculations: Speculation[];
   // ── Detail-endpoint-only fields ───────────────────────────────────
@@ -181,6 +208,15 @@ export interface ContestUpdate {
   sportId: number;
   /** ISO-8601 string. */
   matchTime: string;
+  /**
+   * Same three optional start-time companions as {@link Contest} (`""`
+   * sentinels) — the stream body carries them too, so a floor raise or a
+   * feed reschedule arrives on deltas, not just snapshots. Absent against
+   * core-api builds that predate them.
+   */
+  chainStartTime?: string;
+  gameMatchTime?: string;
+  gameEarliestMatchTime?: string;
   status: string;
   awayScore: number | null;
   homeScore: number | null;
