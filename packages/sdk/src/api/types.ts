@@ -314,6 +314,20 @@ export interface ContestBody {
   sport: string;
   sportId: number;
   matchTime: string;
+  /**
+   * Raw on-chain start (`""` until the contest is verified). Optional on the
+   * wire — core-api builds predating the start-time floor surface omit it,
+   * along with `gameMatchTime` / `gameEarliestMatchTime` below.
+   */
+  chainStartTime?: string;
+  /** Raw odds-feed schedule for the linked game; `""` when no games row is linked. */
+  gameMatchTime?: string;
+  /**
+   * The game's current retained start-time safety floor, verbatim — never
+   * clamped; `""` when no games row is linked. When it is the minimum of the
+   * three inputs, it is what is driving `matchTime`.
+   */
+  gameEarliestMatchTime?: string;
   status: string;
   speculations: SpeculationBody[];
   // Detail-endpoint-only fields — undefined on /v1/contests list rows.
@@ -358,6 +372,13 @@ export interface SpeculationParentContextBody {
   homeTeamId: string | null;
   sport: string;
   matchTime: string;
+  /**
+   * Same three optional start-time companions as {@link ContestBody}
+   * (`""` sentinels); optional on the wire — older core-api builds omit them.
+   */
+  chainStartTime?: string;
+  gameMatchTime?: string;
+  gameEarliestMatchTime?: string;
   status: string;
 }
 
@@ -536,7 +557,22 @@ export interface GameBody {
   gameId: string;
   slug: string;
   sport: string;
+  /**
+   * The earliest start currently held for this game — the minimum of the raw
+   * feed value and the retained floor (a conservative safety bound on servers
+   * that carry the two diagnostic fields below; the raw feed value on older
+   * core-api builds, which omit them).
+   */
   matchTime: string;
+  /** The raw current feed value, unminimised. Diagnostic. */
+  gameMatchTime?: string;
+  /**
+   * The retained monotone floor, or `null` when the underlying column is
+   * unset. Diagnostic: when this is below `gameMatchTime`, it is what is
+   * driving `matchTime`. (Nullable here, unlike the `""` sentinel on contest
+   * surfaces — mirrors the wire.)
+   */
+  earliestMatchTime?: string | null;
   status: string;
   homeTeam: GameTeamBody;
   awayTeam: GameTeamBody;

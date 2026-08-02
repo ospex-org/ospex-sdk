@@ -123,6 +123,81 @@ describe('OspexClient API surface', () => {
     expect(first?.jsonoddsId).toBeUndefined();
   });
 
+  it('contests copy the start-time companion fields verbatim, including "" sentinels', async () => {
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        contests: [
+          {
+            contestId: '1',
+            awayTeam: 'A',
+            homeTeam: 'B',
+            sport: 'nba',
+            sportId: 1,
+            matchTime: '2026-05-02T23:30:00Z',
+            chainStartTime: '2026-05-03T00:00:00Z',
+            gameMatchTime: '2026-05-03T00:00:00Z',
+            gameEarliestMatchTime: '2026-05-02T23:30:00Z',
+            status: 'verified',
+            speculations: [],
+          },
+          {
+            contestId: '2',
+            awayTeam: 'C',
+            homeTeam: 'D',
+            sport: 'nba',
+            sportId: 1,
+            matchTime: '2026-05-04T00:00:00Z',
+            // Unverified + no games row → the server's "" sentinels must
+            // survive verbatim (not dropped, not nulled).
+            chainStartTime: '',
+            gameMatchTime: '',
+            gameEarliestMatchTime: '',
+            status: 'unverified',
+            speculations: [],
+          },
+        ],
+        pagination: { limit: 100, offset: 0, total: 2, hasMore: false },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const [first, second] = await client.contests.list();
+    expect(first?.chainStartTime).toBe('2026-05-03T00:00:00Z');
+    expect(first?.gameMatchTime).toBe('2026-05-03T00:00:00Z');
+    expect(first?.gameEarliestMatchTime).toBe('2026-05-02T23:30:00Z');
+    expect(second?.chainStartTime).toBe('');
+    expect(second?.gameMatchTime).toBe('');
+    expect(second?.gameEarliestMatchTime).toBe('');
+  });
+
+  it('contests leave the start-time companion keys ABSENT (not undefined-assigned) when the server omits them', async () => {
+    // Negative control for additivity: an older core-api body without the
+    // fields decodes exactly as before, with no new own-keys minted.
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        contests: [
+          {
+            contestId: '1',
+            awayTeam: 'A',
+            homeTeam: 'B',
+            sport: 'nba',
+            sportId: 1,
+            matchTime: '2026-05-03T00:00:00Z',
+            status: 'verified',
+            speculations: [],
+          },
+        ],
+        pagination: { limit: 100, offset: 0, total: 1, hasMore: false },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const [first] = await client.contests.list();
+    expect(first).not.toHaveProperty('chainStartTime');
+    expect(first).not.toHaveProperty('gameMatchTime');
+    expect(first).not.toHaveProperty('gameEarliestMatchTime');
+  });
+
   it('speculations.list builds /v1/speculations with filters', async () => {
     const { fetch, calls } = makeFetch(() => ({
       status: 200,
@@ -219,6 +294,97 @@ describe('OspexClient API surface', () => {
     expect(detail.winSide).toBe('away');
     expect(detail.settledAt).toBe('2026-07-01T04:00:14+00:00');
     expect(detail.voided).toBe(false);
+    // Negative control: this parent-context body predates the start-time
+    // companions — the keys must stay absent, not undefined-assigned.
+    expect(detail.contest).not.toHaveProperty('chainStartTime');
+    expect(detail.contest).not.toHaveProperty('gameMatchTime');
+    expect(detail.contest).not.toHaveProperty('gameEarliestMatchTime');
+  });
+
+  it('speculations.get parent context copies the start-time companion fields verbatim', async () => {
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        speculationId: '500',
+        contestId: '42',
+        type: 'moneyline',
+        lineTicks: 0,
+        line: null,
+        speculationStatus: 0,
+        winSide: null,
+        settledAt: null,
+        voided: false,
+        orderbook: [],
+        contest: {
+          contestId: '42',
+          awayTeam: 'Lakers',
+          homeTeam: 'Celtics',
+          sport: 'nba',
+          matchTime: '2026-05-02T23:30:00Z',
+          chainStartTime: '2026-05-03T00:00:00Z',
+          gameMatchTime: '2026-05-03T00:00:00Z',
+          gameEarliestMatchTime: '2026-05-02T23:30:00Z',
+          status: 'verified',
+        },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const detail = await client.speculations.get('500');
+    expect(detail.contest.chainStartTime).toBe('2026-05-03T00:00:00Z');
+    expect(detail.contest.gameMatchTime).toBe('2026-05-03T00:00:00Z');
+    expect(detail.contest.gameEarliestMatchTime).toBe('2026-05-02T23:30:00Z');
+  });
+
+  it('games.get copies the start-time diagnostics verbatim (null floor is a real value, absent keys stay absent)', async () => {
+    const gameBody = {
+      gameId: 'g1',
+      slug: 'stl-sd-2026-05-08',
+      sport: 'mlb',
+      matchTime: '2026-05-08T01:00:00Z',
+      status: 'upcoming',
+      homeTeam: { name: 'San Diego Padres', abbreviation: 'SD' },
+      awayTeam: { name: 'St. Louis Cardinals', abbreviation: 'STL' },
+      hasOdds: true,
+      contestCreated: false,
+      contestId: null,
+      canCreateContest: true,
+      externalIds: { jsonodds: 'g1', sportspage: '336545', rundown: 'rd1' },
+    };
+    // Served with a raw feed value + a null floor (column unset) — both
+    // must be copied verbatim; null is NOT collapsed into key-absence.
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        ...gameBody,
+        gameMatchTime: '2026-05-08T02:00:00Z',
+        earliestMatchTime: null,
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const game = await client.games.get('g1');
+    expect(game.gameMatchTime).toBe('2026-05-08T02:00:00Z');
+    expect(game).toHaveProperty('earliestMatchTime', null);
+
+    // A retained (string) floor is copied verbatim, not normalised.
+    const { fetch: flooredFetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        ...gameBody,
+        gameMatchTime: '2026-05-08T02:00:00Z',
+        earliestMatchTime: '2026-05-08T00:30:00Z',
+      },
+    }));
+    const flooredClient = new OspexClient({ apiUrl, fetch: flooredFetch });
+    const flooredGame = await flooredClient.games.get('g1');
+    expect(flooredGame.earliestMatchTime).toBe('2026-05-08T00:30:00Z');
+
+    // Negative control: an older core-api body without the diagnostics
+    // decodes with the keys absent, not undefined-assigned.
+    const { fetch: oldFetch } = makeFetch(() => ({ status: 200, body: gameBody }));
+    const oldClient = new OspexClient({ apiUrl, fetch: oldFetch });
+    const oldGame = await oldClient.games.get('g1');
+    expect(oldGame).not.toHaveProperty('gameMatchTime');
+    expect(oldGame).not.toHaveProperty('earliestMatchTime');
   });
 
   it('commitments.list passes the speculationId filter through', async () => {

@@ -45,7 +45,7 @@ export function decodePositionDelta(body: unknown): Position {
 
 export function decodeContestUpdate(body: unknown): ContestUpdate {
   const b = body as ContestUpdate;
-  return {
+  const out: ContestUpdate = {
     contestId: b.contestId,
     awayTeam: b.awayTeam,
     homeTeam: b.homeTeam,
@@ -60,6 +60,15 @@ export function decodeContestUpdate(body: unknown): ContestUpdate {
     voidedAt: b.voidedAt,
     contestCreatedAt: b.contestCreatedAt,
   };
+  // Start-time companions (conditional copy per `exactOptionalPropertyTypes`):
+  // carried on the stream/recovery body so a floor raise or feed reschedule
+  // reaches subscribers as a delta; absent against older core-api builds.
+  if (b.chainStartTime !== undefined) out.chainStartTime = b.chainStartTime;
+  if (b.gameMatchTime !== undefined) out.gameMatchTime = b.gameMatchTime;
+  if (b.gameEarliestMatchTime !== undefined) {
+    out.gameEarliestMatchTime = b.gameEarliestMatchTime;
+  }
+  return out;
 }
 
 /**
@@ -104,7 +113,7 @@ export function decodeFill(body: unknown): Fill {
  * are optional; coerce absent ones to null to match the stream body.
  */
 export function contestToUpdate(c: Contest): ContestUpdate {
-  return {
+  const out: ContestUpdate = {
     contestId: c.contestId,
     awayTeam: c.awayTeam,
     homeTeam: c.homeTeam,
@@ -119,4 +128,13 @@ export function contestToUpdate(c: Contest): ContestUpdate {
     voidedAt: c.voidedAt ?? null,
     contestCreatedAt: c.contestCreatedAt ?? null,
   };
+  // Start-time companions stay conditional (absent, not null-coerced) so the
+  // projected snapshot row matches what the stream body would carry from the
+  // same server build.
+  if (c.chainStartTime !== undefined) out.chainStartTime = c.chainStartTime;
+  if (c.gameMatchTime !== undefined) out.gameMatchTime = c.gameMatchTime;
+  if (c.gameEarliestMatchTime !== undefined) {
+    out.gameEarliestMatchTime = c.gameEarliestMatchTime;
+  }
+  return out;
 }

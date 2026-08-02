@@ -83,7 +83,7 @@ export class SpeculationsApi {
 }
 
 function toContext(body: SpeculationParentContextBody): SpeculationParentContext {
-  return {
+  const out: SpeculationParentContext = {
     contestId: body.contestId,
     awayTeam: body.awayTeam,
     homeTeam: body.homeTeam,
@@ -96,4 +96,12 @@ function toContext(body: SpeculationParentContextBody): SpeculationParentContext
     matchTime: body.matchTime,
     status: body.status,
   };
+  // Conditional copy per `exactOptionalPropertyTypes`: the start-time
+  // companions stay absent (not coerced) against older core-api builds.
+  if (body.chainStartTime !== undefined) out.chainStartTime = body.chainStartTime;
+  if (body.gameMatchTime !== undefined) out.gameMatchTime = body.gameMatchTime;
+  if (body.gameEarliestMatchTime !== undefined) {
+    out.gameEarliestMatchTime = body.gameEarliestMatchTime;
+  }
+  return out;
 }

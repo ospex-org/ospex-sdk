@@ -57,9 +57,15 @@ function toContest(body: ContestBody): Contest {
     status: body.status,
     speculations: body.speculations.map(toSpeculation),
   };
-  // Conditional spread per `exactOptionalPropertyTypes`: only set keys
-  // that the body actually carried. Detail endpoint populates these;
-  // list endpoint omits them entirely.
+  // Conditional copy per `exactOptionalPropertyTypes`: only set keys the
+  // body actually carried. The start-time companions are served on both
+  // list and detail, but absent against core-api builds predating them.
+  if (body.chainStartTime !== undefined) out.chainStartTime = body.chainStartTime;
+  if (body.gameMatchTime !== undefined) out.gameMatchTime = body.gameMatchTime;
+  if (body.gameEarliestMatchTime !== undefined) {
+    out.gameEarliestMatchTime = body.gameEarliestMatchTime;
+  }
+  // Detail-endpoint-only fields — the list endpoint omits them entirely.
   if (body.jsonoddsId !== undefined) out.jsonoddsId = body.jsonoddsId;
   if (body.rundownId !== undefined) out.rundownId = body.rundownId;
   if (body.sportspageId !== undefined) out.sportspageId = body.sportspageId;
