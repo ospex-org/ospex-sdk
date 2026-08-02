@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.12.0] — 2026-08-02
+
 ### Added
 
 - **`@ospex/sdk`: contest and game reads now surface the start-time companion fields core-api serves alongside `matchTime`.** `Contest`, `SpeculationParentContext`, and `ContestUpdate` gain optional `chainStartTime` / `gameMatchTime` / `gameEarliestMatchTime` (ISO-8601 strings with the contest surfaces' `""` sentinel convention); `Game` gains optional `gameMatchTime` / `earliestMatchTime` (the latter `string | null` — the games endpoint's nullable convention). `matchTime` itself is unchanged everywhere and remains the conservative bound to gate on; the new fields are its raw inputs — `gameEarliestMatchTime` / `earliestMatchTime` is the game's retained start-time safety floor, served verbatim (it is not guaranteed `<= gameMatchTime`). Carried on snapshots **and** stream deltas alike (`contests.subscribe` bodies and the `contestId`-scoped snapshot projection), so a floor raise or feed reschedule reaches subscribers without a re-fetch. All fields are optional and conditionally copied: against a core-api build that predates them the keys are absent (not `undefined`-assigned), pinned by tests in both directions. Additive — no existing field changes shape or meaning.
