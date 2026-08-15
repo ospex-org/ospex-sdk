@@ -198,6 +198,84 @@ describe('OspexClient API surface', () => {
     expect(first).not.toHaveProperty('gameEarliestMatchTime');
   });
 
+  it('contests.list({ date }) sends the date param and no window', async () => {
+    const { fetch, calls } = makeFetch(() => ({
+      status: 200,
+      body: { contests: [], pagination: { limit: 100, offset: 0, total: 0, hasMore: false } },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    await client.contests.list({ date: '2026-08-14', sport: 'mlb' });
+    const url = new URL(calls[0]!.url);
+    expect(url.pathname).toBe('/v1/contests');
+    expect(url.searchParams.get('date')).toBe('2026-08-14');
+    expect(url.searchParams.get('sport')).toBe('mlb');
+    // No hours option → no window param; the API 400s a request naming both.
+    expect(url.searchParams.get('window')).toBeNull();
+  });
+
+  it('dated contest rows copy gameFinalType verbatim, including the "" sentinel', async () => {
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        contests: [
+          {
+            contestId: '1',
+            awayTeam: 'Cubs',
+            homeTeam: 'Reds',
+            sport: 'mlb',
+            sportId: 5,
+            matchTime: '2026-08-14T18:10:00Z',
+            status: 'scored',
+            gameFinalType: 'Finished',
+            speculations: [],
+          },
+          {
+            contestId: '2',
+            awayTeam: 'Mets',
+            homeTeam: 'Braves',
+            sport: 'mlb',
+            sportId: 5,
+            matchTime: '2026-08-14T23:10:00Z',
+            status: 'verified',
+            // No result status reported yet → the "" sentinel must survive
+            // verbatim (not dropped, not nulled).
+            gameFinalType: '',
+            speculations: [],
+          },
+        ],
+        pagination: { limit: 100, offset: 0, total: 2, hasMore: false },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const [first, second] = await client.contests.list({ date: '2026-08-14' });
+    expect(first?.gameFinalType).toBe('Finished');
+    expect(second?.gameFinalType).toBe('');
+  });
+
+  it('contests leave the gameFinalType key ABSENT when the server omits it (default listings)', async () => {
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        contests: [
+          {
+            contestId: '1',
+            awayTeam: 'A',
+            homeTeam: 'B',
+            sport: 'nba',
+            sportId: 1,
+            matchTime: '2026-05-03T00:00:00Z',
+            status: 'verified',
+            speculations: [],
+          },
+        ],
+        pagination: { limit: 100, offset: 0, total: 1, hasMore: false },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const [first] = await client.contests.list();
+    expect(first).not.toHaveProperty('gameFinalType');
+  });
+
   it('speculations.list builds /v1/speculations with filters', async () => {
     const { fetch, calls } = makeFetch(() => ({
       status: 200,

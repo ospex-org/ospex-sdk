@@ -32,6 +32,10 @@ export class ContestsApi {
     if (options.sport !== undefined) query.sport = options.sport;
     if (options.status !== undefined) query.status = options.status;
     if (options.hours !== undefined) query.window = options.hours;
+    // Dated discovery — the API's UTC-day window param. Mutually exclusive
+    // with `window` server-side; the SDK passes both through untouched and
+    // lets the API's 400 surface, so the two layers can't disagree.
+    if (options.date !== undefined) query.date = options.date;
     if (options.limit !== undefined) query.limit = options.limit;
     if (options.offset !== undefined) query.offset = options.offset;
     const body = await this.client.request<ContestsListBody>('/v1/contests', { query });
@@ -65,6 +69,9 @@ function toContest(body: ContestBody): Contest {
   if (body.gameEarliestMatchTime !== undefined) {
     out.gameEarliestMatchTime = body.gameEarliestMatchTime;
   }
+  // Dated-list-only: `GET /v1/contests?date=` rows carry the linked game's
+  // finality; every other contest surface omits the key.
+  if (body.gameFinalType !== undefined) out.gameFinalType = body.gameFinalType;
   // Detail-endpoint-only fields — the list endpoint omits them entirely.
   if (body.jsonoddsId !== undefined) out.jsonoddsId = body.jsonoddsId;
   if (body.rundownId !== undefined) out.rundownId = body.rundownId;

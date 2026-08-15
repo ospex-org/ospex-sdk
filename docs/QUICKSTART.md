@@ -464,6 +464,14 @@ The three external IDs the contract requires (rundown / sportspage / jsonodds) a
 
 Once the underlying game ends, three permissionless on-chain steps move funds back to the winners. Anyone can run any of them — they're not gated to the maker / taker / contest creator.
 
+### 0. Find the day's contests and check finality (signer-free)
+
+```bash
+ospex contests list --date 2026-08-14 --sport mlb    # one UTC day, past or future
+```
+
+The default `contests list` only looks forward, so a finished game's contest has already dropped out of it. `--date` lists one UTC calendar day instead, and each dated row carries a `finality` column (`gameFinalType` in `--json`) — the upstream feed's result status, verbatim (`Finished` means the event completed) — beside the contest's own `status` (`scored` / `scored_manually` once step 1 has landed). That answers "which contests from date D exist, are their events final, and are they scored yet?" in one wallet-free read; anything `Finished` but not yet `scored` is your worklist for step 1. `--date` and `--hours` are mutually exclusive.
+
 ### 1. Score the contest
 
 ```bash

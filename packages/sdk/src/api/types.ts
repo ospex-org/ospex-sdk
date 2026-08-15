@@ -328,6 +328,13 @@ export interface ContestBody {
    * three inputs, it is what is driving `matchTime`.
    */
   gameEarliestMatchTime?: string;
+  /**
+   * The linked game's upstream result status (`games.final_type`), verbatim
+   * (`'Finished'` / `'Postponed'` / … free text; `""` sentinel). On the wire
+   * ONLY for `GET /v1/contests?date=` rows — absent on default listings and
+   * on the detail endpoint.
+   */
+  gameFinalType?: string;
   status: string;
   speculations: SpeculationBody[];
   // Detail-endpoint-only fields — undefined on /v1/contests list rows.

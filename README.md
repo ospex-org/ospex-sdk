@@ -151,7 +151,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex init` | Interactive setup — writes `~/.ospex/config.json` (rpcUrl, chainId, apiUrl, keystorePath). |
 | `ospex doctor [--address <addr>]` | Readiness probe — balances, allowances, network status, "Ready to" matrix, next-step suggestion. |
 | `ospex health` | API liveness probe. |
-| `ospex contests list [--sport --status --hours --limit --offset]` | Lists upcoming contests with their speculations. |
+| `ospex contests list [--sport --status --hours --date --limit --offset]` | Lists contests with their speculations — upcoming by default, or one UTC day (past or future) with `--date YYYY-MM-DD`. Dated rows add the linked game's finality (`gameFinalType`, human column `finality`) for postgame settle-and-claim discovery; `--date` and `--hours` are mutually exclusive. |
 | `ospex contests show <contestId>` | One contest with its full orderbook. |
 | `ospex contests create --game-id <id>` (or `--game <slug-or-id>`) | Submit `CreOracleReceiver.createContestAndRequestVerify`. Permissionless; the caller pays the USDC contest-creation fee (allowance to TreasuryModule). `gameId` is the stable id from `ospex games list`; the SDK resolves the three external IDs server-side. `--game` is a resolver alias accepting either a slug or a UUID. |
 | `ospex contests score <contestId> [--wait --wait-timeout-seconds <n> --poll-interval-seconds <n>]` | Submit `CreOracleReceiver.requestScore`. Permissionless and free; reverts until the contest's on-chain start time has passed. `--wait` (opt-in; default stays fire-and-return) then polls on-chain until Scored, auto-re-requesting once if the CRE report drops, and adds a `scoring` block to the `--json` payload. |

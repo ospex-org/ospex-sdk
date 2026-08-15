@@ -4,7 +4,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### Added
+
+- **`@ospex/sdk` + `@ospex/cli`: dated historical contest discovery — `contests.list({ date })` / `ospex contests list --date YYYY-MM-DD`.** The listing window becomes that UTC day `[00:00Z, next day 00:00Z)` instead of the forward-only hours window, so an agent can enumerate a past day's contests for the postgame settle-and-claim half of its lifecycle, signer-free. Dated rows carry a new optional `Contest.gameFinalType` — the linked game's upstream result status (`games.final_type`) verbatim (`'Finished'` / `'Postponed'` / … free text, `""` sentinel); the CLI human table adds a `finality` column in dated mode and the `--json` envelope payload carries the field through. `date` and `hours` are mutually exclusive — the CLI refuses the pair before any client work and the API refuses it with a 400. Additive: default (no-`date`) listings are unchanged, the key is absent (not `undefined`-assigned) on non-dated rows, pinned by tests in both directions. Requires a core-api build serving `GET /v1/contests?date=`. A pre-`date` core-api build ignores unknown query params, so a dated call against one returns the ordinary forward window with no `gameFinalType` keys — a consumer that must distinguish the two can check for the key's presence.
 
 ## [0.12.0] — 2026-08-02
 
