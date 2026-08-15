@@ -14,10 +14,12 @@ ospex commitments match 0xe900c6dd
 This package ships as a **single self-contained bundle** via [GitHub Releases](https://github.com/ospex-org/ospex-sdk/releases), not npm. Everything (including `@ospex/sdk`) is bundled in, so you install one tarball globally and run bare `ospex` — nothing else to resolve:
 
 ```sh
-npm install -g https://github.com/ospex-org/ospex-sdk/releases/download/v<ver>/ospex-cli-<ver>.tgz
+npm install -g --allow-remote=root https://github.com/ospex-org/ospex-sdk/releases/download/v<ver>/ospex-cli-<ver>.tgz
 # or: yarn global add https://github.com/ospex-org/ospex-sdk/releases/download/v<ver>/ospex-cli-<ver>.tgz
 ospex --version
 ```
+
+(`--allow-remote=root` is for npm 12+, which blocks remote-tarball installs by default; older npm ignores it with a warning. Yarn needs no flag.)
 
 The separate `ospex-sdk-<ver>.tgz` library tarball is only for programmatic consumers importing `@ospex/sdk`; CLI users don't need it.
 

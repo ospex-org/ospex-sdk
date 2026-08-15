@@ -46,9 +46,11 @@ The CLI ships as a **single self-contained bundle** — one file with every depe
 **npm:**
 
 ```bash
-npm install -g https://github.com/ospex-org/ospex-sdk/releases/download/v<ver>/ospex-cli-<ver>.tgz
+npm install -g --allow-remote=root https://github.com/ospex-org/ospex-sdk/releases/download/v<ver>/ospex-cli-<ver>.tgz
 ospex --version
 ```
+
+`--allow-remote=root` is for npm 12+, which blocks remote-tarball installs by default (`EALLOWREMOTE`); it allows just this tarball — safe, since the bundle declares zero dependencies — and older npm versions ignore the flag with a warning and install fine.
 
 **yarn:**
 
