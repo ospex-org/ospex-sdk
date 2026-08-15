@@ -153,6 +153,15 @@ export interface Contest {
    * is driving `matchTime`.
    */
   gameEarliestMatchTime?: string;
+  /**
+   * The linked game's upstream result status (`games.final_type`), verbatim
+   * — free upstream text, e.g. `'Finished'`, `'Postponed'`, `'Canceled'`
+   * (upstream spelling). `""` when no games row is linked or no result
+   * status has been reported. Event completion is signaled by
+   * `gameFinalType === 'Finished'`. Present ONLY on rows from a dated list
+   * (`contests.list({ date })`); absent on default listings and detail reads.
+   */
+  gameFinalType?: string;
   status: string;
   speculations: Speculation[];
   // ── Detail-endpoint-only fields ───────────────────────────────────
@@ -235,6 +244,14 @@ export interface ContestsListOptions {
   status?: string;
   /** Hours into the future. Defaults to API-side default (72h). */
   hours?: number;
+  /**
+   * UTC calendar day (`YYYY-MM-DD`) for dated / historical discovery: the
+   * listing window becomes that day `[00:00Z, next day 00:00Z)` instead of
+   * the forward-only hours window, and each row carries
+   * {@link Contest.gameFinalType}. Mutually exclusive with `hours` — the
+   * API rejects a request naming both with a 400.
+   */
+  date?: string;
   limit?: number;
   offset?: number;
 }
