@@ -11,8 +11,10 @@
  * Speculations also have their own first-class endpoint family — see
  * `api/speculations.ts` and `client.speculations`.
  */
+import { z } from 'zod';
 import type { ApiClient } from './client.js';
 import { toCommitment } from './commitments.js';
+import { parseWire } from '../wireSchema.js';
 import type {
   Contest,
   ContestsListOptions,
@@ -20,9 +22,66 @@ import type {
 } from '../types/contest.js';
 import type {
   ContestBody,
-  ContestsListBody,
   SpeculationBody,
 } from './types.js';
+
+// ── wire schema: the `GET /v1/contests` (list) decode boundary ──────────
+//
+// The list body is validated through `parseWire()` per the repo hard rule:
+// a mistyped field in an untrusted wire body must fail as a typed
+// `OspexValidationError`, never propagate into the public `Contest` (the
+// concrete hazard: a non-string `gameFinalType` flowing verbatim into the
+// CLI's agent JSON payload). The schema enumerates exactly the fields the
+// list mapper copies; zod's default unknown-key strip drops everything
+// else, so new server fields still can't break a deployed SDK.
+//
+// Tolerances mirror the mapper's documented ones: the settlement trio is
+// optional (a pre-#41 core-api omits it — `toSpeculation` degrades to
+// null/false), and the start-time companions + `gameFinalType` are
+// optional (older builds / non-dated listings omit the keys).
+//
+// The DETAIL read (`get`) keeps the pre-existing cast+copy decode: its
+// body embeds per-speculation orderbooks of signed commitments — a much
+// wider surface whose schema boundary is a deliberate separate change,
+// not a rider on the list fix.
+const SpeculationListRowSchema = z.object({
+  speculationId: z.string(),
+  contestId: z.string(),
+  type: z.enum(['moneyline', 'spread', 'total']),
+  lineTicks: z.number().nullable(),
+  line: z.number().nullable(),
+  awayLine: z.number().optional(),
+  homeLine: z.number().optional(),
+  speculationStatus: z.union([z.literal(0), z.literal(1)]),
+  winSide: z.enum(['away', 'home', 'over', 'under', 'push', 'void']).nullable().optional(),
+  settledAt: z.string().nullable().optional(),
+  voided: z.boolean().optional(),
+});
+
+const ContestListRowSchema = z.object({
+  contestId: z.string(),
+  awayTeam: z.string(),
+  homeTeam: z.string(),
+  sport: z.string(),
+  sportId: z.number(),
+  matchTime: z.string(),
+  chainStartTime: z.string().optional(),
+  gameMatchTime: z.string().optional(),
+  gameEarliestMatchTime: z.string().optional(),
+  gameFinalType: z.string().optional(),
+  status: z.string(),
+  speculations: z.array(SpeculationListRowSchema),
+});
+
+const ContestsListBodySchema = z.object({
+  contests: z.array(ContestListRowSchema),
+  pagination: z.object({
+    limit: z.number(),
+    offset: z.number(),
+    total: z.number(),
+    hasMore: z.boolean(),
+  }),
+});
 
 export class ContestsApi {
   constructor(private readonly client: ApiClient) {}
@@ -38,8 +97,13 @@ export class ContestsApi {
     if (options.date !== undefined) query.date = options.date;
     if (options.limit !== undefined) query.limit = options.limit;
     if (options.offset !== undefined) query.offset = options.offset;
-    const body = await this.client.request<ContestsListBody>('/v1/contests', { query });
-    return body.contests.map(toContest);
+    const raw = await this.client.request<unknown>('/v1/contests', { query });
+    const body = parseWire(ContestsListBodySchema, raw);
+    // Mapped from the PARSED value, so the schema is the single enumeration
+    // of what a list row can carry. The cast bridges zod's `?: T | undefined`
+    // optional inference to `ContestBody`'s exact-optional keys — safe here
+    // because the runtime check just ran, and JSON can't encode `undefined`.
+    return body.contests.map((c) => toContest(c as ContestBody));
   }
 
   async get(contestId: string | number): Promise<Contest> {

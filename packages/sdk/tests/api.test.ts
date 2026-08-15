@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { OspexAPIError, OspexClient } from '../src/index.js';
+import { OspexAPIError, OspexClient, OspexValidationError } from '../src/index.js';
 
 interface CapturedRequest {
   url: string;
@@ -274,6 +274,96 @@ describe('OspexClient API surface', () => {
     const client = new OspexClient({ apiUrl, fetch });
     const [first] = await client.contests.list();
     expect(first).not.toHaveProperty('gameFinalType');
+  });
+
+  // ── contests.list wire-schema boundary (zod via parseWire) ────────────
+  // A mistyped field must throw the TYPED error, never propagate into the
+  // public `Contest` — the concrete hazard was a non-string `gameFinalType`
+  // flowing verbatim into the CLI's agent JSON payload.
+
+  function listBodyWith(row: Record<string, unknown>): { status: number; body: unknown } {
+    return {
+      status: 200,
+      body: {
+        contests: [
+          {
+            contestId: '1',
+            awayTeam: 'A',
+            homeTeam: 'B',
+            sport: 'mlb',
+            sportId: 5,
+            matchTime: '2026-08-14T18:10:00Z',
+            status: 'scored',
+            speculations: [],
+            ...row,
+          },
+        ],
+        pagination: { limit: 100, offset: 0, total: 1, hasMore: false },
+      },
+    };
+  }
+
+  it('contests.list REFUSES a non-string gameFinalType as OspexValidationError, with the field path', async () => {
+    const { fetch } = makeFetch(() => listBodyWith({ gameFinalType: 123 }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const err = await client.contests.list({ date: '2026-08-14' }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(OspexValidationError);
+    expect((err as OspexValidationError).field).toBe('contests.0.gameFinalType');
+  });
+
+  it('the boundary covers the whole row, not one field — a mistyped speculationStatus is refused too', async () => {
+    const { fetch } = makeFetch(() =>
+      listBodyWith({
+        speculations: [
+          {
+            speculationId: '9',
+            contestId: '1',
+            type: 'total',
+            lineTicks: 85,
+            line: 8.5,
+            speculationStatus: 2,
+            winSide: null,
+            settledAt: null,
+            voided: false,
+          },
+        ],
+      }),
+    );
+    const client = new OspexClient({ apiUrl, fetch });
+    await expect(client.contests.list()).rejects.toBeInstanceOf(OspexValidationError);
+  });
+
+  it('a non-object list body is a typed error, not a TypeError', async () => {
+    const { fetch } = makeFetch(() => ({ status: 200, body: 'nope' }));
+    const client = new OspexClient({ apiUrl, fetch });
+    await expect(client.contests.list()).rejects.toBeInstanceOf(OspexValidationError);
+  });
+
+  it('negative control: the schema keeps the pre-#41 tolerance — a speculation without the settlement trio decodes', async () => {
+    // The settlement fields are optional at the boundary because an older
+    // core-api omits them; `toSpeculation` degrades to null/false. This pin
+    // stops the schema from quietly becoming stricter than the mapper.
+    const { fetch } = makeFetch(() =>
+      listBodyWith({
+        speculations: [
+          {
+            speculationId: '9',
+            contestId: '1',
+            type: 'moneyline',
+            lineTicks: 0,
+            line: null,
+            speculationStatus: 0,
+          },
+        ],
+      }),
+    );
+    const client = new OspexClient({ apiUrl, fetch });
+    const [first] = await client.contests.list();
+    expect(first?.speculations[0]?.winSide).toBeNull();
+    expect(first?.speculations[0]?.voided).toBe(false);
   });
 
   it('speculations.list builds /v1/speculations with filters', async () => {
