@@ -1041,7 +1041,7 @@ If you observe a runtime difference between this contract and the SDK:
    - Public types barrel: [`packages/sdk/src/types/index.ts`](../packages/sdk/src/types/index.ts)
    - `auth check` payload + resolution walker: [`packages/cli/src/commands/auth/check.ts`](../packages/cli/src/commands/auth/check.ts)
    - Non-interactive signer helpers + reason codes: [`packages/sdk/src/signers/foundry.ts`](../packages/sdk/src/signers/foundry.ts) and [`packages/sdk/src/signers/keystore.ts`](../packages/sdk/src/signers/keystore.ts)
-3. The integration playbook (which exercises every promise here against the live testnet) is [`MANUAL_INTEGRATION_TESTING.md`](./MANUAL_INTEGRATION_TESTING.md).
+3. The integration playbook (which exercises every promise here against Polygon mainnet, with real funds in small amounts) is [`MANUAL_INTEGRATION_TESTING.md`](./MANUAL_INTEGRATION_TESTING.md).
 
 ---
 

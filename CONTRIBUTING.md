@@ -21,7 +21,7 @@ yarn test
 
 Run the full sequence before pushing. CI runs the same on every PR.
 
-The integration playbook at [`docs/MANUAL_INTEGRATION_TESTING.md`](./docs/MANUAL_INTEGRATION_TESTING.md) is the manual smoke test against a live testnet. You don't need to walk it for routine changes, but we walk it before tagging a release.
+The integration playbook at [`docs/MANUAL_INTEGRATION_TESTING.md`](./docs/MANUAL_INTEGRATION_TESTING.md) is the manual smoke test against **Polygon mainnet, with real funds in small amounts** (Amoy is not actively supported — see the playbook's own header). You don't need to walk it for routine changes, but we walk it before tagging a release.
 
 ## Commit messages
 

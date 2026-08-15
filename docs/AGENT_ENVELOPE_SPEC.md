@@ -401,7 +401,7 @@ Commands listed below adopt the wrapper. Anything not listed either does not hav
 
 ### 4.1 Reads
 
-`health`, `doctor`, `auth check`, `approvals show`, `wallet address`, `commitments list`, `commitments show`, `commitments fillability`, `commitments nonce-floor`, `contests list`, `contests show`, `contests scripts`, `contests wait-verified`, `contests wait-scored`, `contests score-status`, `games list`, `leaderboard show`, `odds show`, `positions list`, `positions status`, `positions history`, `speculations list`, `speculations show`.
+`health`, `doctor`, `auth check`, `approvals show`, `wallet address`, `commitments list`, `commitments show`, `commitments fillability`, `commitments nonce-floor`, `contests list`, `contests show`, `contests wait-verified`, `contests wait-scored`, `contests score-status`, `games list`, `leaderboard show`, `odds show`, `positions list`, `positions status`, `positions history`, `speculations list`, `speculations show`.
 
 ### 4.2 Preview-bearing writes
 
