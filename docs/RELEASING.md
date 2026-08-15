@@ -15,7 +15,7 @@ Releases are cut on demand, not on a schedule. Trigger conditions:
 1. **All PRs for the release are merged into `main`.**
 2. **`main` is clean:** `git status` shows no uncommitted changes; `git diff --check` is clean.
 3. **CI is green** on the latest `main` commit.
-4. **Update [`CHANGELOG.md`](../CHANGELOG.md)**: move the `Unreleased` items into a new dated section with the upcoming version; reset `Unreleased` to `—`.
+4. **Update [`CHANGELOG.md`](../CHANGELOG.md)**: move the `Unreleased` items into a new dated section with the upcoming version; reset `Unreleased` to `—`. Then update the reference-link block at the bottom: add the new version's `releases/tag/v<ver>` definition and repoint `[Unreleased]` to `compare/v<ver>...HEAD`. (This step drifted silently from 0.6.0 through 0.13.0; `packages/sdk/tests/changelog-links.test.ts` now goes red if the block is left stale.)
 5. **Bump versions in lockstep:**
    - `package.json` (workspace root)
    - `packages/sdk/package.json`
