@@ -7,6 +7,7 @@
  */
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
+import { OspexValidationError } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
 import {
   buildAgentEnvelope,
@@ -44,7 +45,7 @@ export const contestListCommand = new Command('list')
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
     if (opts.date !== undefined && opts.hours !== undefined) {
-      throw new Error('--date and --hours are mutually exclusive. Pass exactly one.');
+      throw new OspexValidationError('--date and --hours are mutually exclusive. Pass exactly one.');
     }
     const client = await getClient({ requiresSigner: false });
     const listOpts: Parameters<typeof client.contests.list>[0] = {};

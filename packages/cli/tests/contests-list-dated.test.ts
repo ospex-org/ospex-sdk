@@ -15,6 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OspexValidationError } from '@ospex/sdk';
 import type { Contest } from '@ospex/sdk';
 
 vi.mock('../src/lib/client.js', async (importOriginal) => {
@@ -85,7 +86,12 @@ afterEach(() => {
 // ── flag validation ─────────────────────────────────────────────────────
 
 describe('ospex contests list --date — flag validation', () => {
-  it('--date with --hours fails loudly before any client work', async () => {
+  it('--date with --hours fails loudly before any client work, as the typed validation error', async () => {
+    // Typed, like every sibling mutual-exclusion site — agents classify on
+    // the (VALIDATION_ERROR) code the CLI's error surface prints for it.
+    await expect(runList(['--date', '2026-08-14', '--hours', '24'])).rejects.toThrow(
+      OspexValidationError,
+    );
     await expect(runList(['--date', '2026-08-14', '--hours', '24'])).rejects.toThrow(
       /--date and --hours are mutually exclusive/,
     );
@@ -110,11 +116,17 @@ describe('ospex contests list --date — output', () => {
     // Signer-free read.
     expect(vi.mocked(getClient)).toHaveBeenCalledWith({ requiresSigner: false });
     expect(list).toHaveBeenCalledWith({ date: '2026-08-14', sport: 'mlb', status: 'scored' });
-    // The human table carries the finality column, with the verbatim value
-    // beside the contest's own scored status.
+    // The finality value is bound to its ROW, not just present somewhere
+    // in the blob: contest 42's line carries 'Finished' beside its own
+    // 'scored' status, and contest 43's line does not.
     expect(out).toContain('finality');
-    expect(out).toContain('Finished');
-    expect(out).toContain('scored');
+    const line42 = out.split('\n').find((l) => l.includes(' 42 '));
+    const line43 = out.split('\n').find((l) => l.includes(' 43 '));
+    expect(line42).toBeDefined();
+    expect(line42).toContain('Finished');
+    expect(line42).toContain('scored');
+    expect(line43).toBeDefined();
+    expect(line43).not.toContain('Finished');
   });
 
   it('--json envelope payload carries gameFinalType through untouched', async () => {
