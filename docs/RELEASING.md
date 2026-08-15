@@ -56,7 +56,7 @@ ospex health
 npm uninstall -g @ospex/cli                          # clean up the smoke install (or `yarn global remove @ospex/cli`)
 ```
 
-Verify the URL-install form too (what the download page ships) once the release is published: `npm install -g <releases-url>/ospex-cli-<ver>.tgz` and `yarn global add <releases-url>/ospex-cli-<ver>.tgz`. The `@ospex/sdk` library tarball is exercised by the market-maker realign in **Post-release** below.
+Verify the URL-install form too (what the download page ships) once the release is published: `npm install -g --allow-remote=root <releases-url>/ospex-cli-<ver>.tgz` and `yarn global add <releases-url>/ospex-cli-<ver>.tgz`. (The npm flag is required on npm 12+, whose `allow-remote=none` default refuses remote tarballs; older npm ignores it with a warning — verify on a current npm so the published command is the one that gets exercised.) The `@ospex/sdk` library tarball is exercised by the market-maker realign in **Post-release** below.
 
 ## Tag and push
 
