@@ -15,13 +15,14 @@ Releases are cut on demand, not on a schedule. Trigger conditions:
 1. **All PRs for the release are merged into `main`.**
 2. **`main` is clean:** `git status` shows no uncommitted changes; `git diff --check` is clean.
 3. **CI is green** on the latest `main` commit.
-4. **Update [`CHANGELOG.md`](../CHANGELOG.md)**: move the `Unreleased` items into a new dated section with the upcoming version; reset `Unreleased` to `—`.
-5. **Bump versions in lockstep:**
+4. **No delegated/async review is still in flight** on anything being released. A verdict that lands after the tag can only be honored as a patch release — merged-but-still-under-review is not release-ready. (The v0.13.0 decoder blocker arrived between merge and tag and was caught in time only by luck.)
+5. **Update [`CHANGELOG.md`](../CHANGELOG.md)**: move the `Unreleased` items into a new dated section with the upcoming version; reset `Unreleased` to `—`. Then update the reference-link block at the bottom: add the new version's `releases/tag/v<ver>` definition and repoint `[Unreleased]` to `compare/v<ver>...HEAD`. (This step drifted silently from 0.6.0 through 0.13.0; `packages/sdk/tests/changelog-links.test.ts` now goes red if the block is left stale.)
+6. **Bump versions in lockstep:**
    - `package.json` (workspace root)
    - `packages/sdk/package.json`
    - `packages/cli/package.json`
    - The CLI tarball install snippet in `docs/QUICKSTART.md` if it pins by version.
-6. Open a release PR with the version bump + CHANGELOG, get it reviewed, merge.
+7. Open a release PR with the version bump + CHANGELOG, get it reviewed, merge.
 
 ## Build the release tarballs
 

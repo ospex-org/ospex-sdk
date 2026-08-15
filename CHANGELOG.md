@@ -511,7 +511,19 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.13.0
+[0.12.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.12.0
+[0.11.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.11.0
+[0.10.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.10.1
+[0.10.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.10.0
+[0.9.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.9.0
+[0.8.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.8.0
+[0.7.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.7.1
+[0.7.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.7.0
+[0.6.2]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.6.2
+[0.6.1]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.6.1
+[0.6.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.6.0
 [0.5.4]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.4
 [0.5.3]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.3
 [0.5.2]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.5.2
