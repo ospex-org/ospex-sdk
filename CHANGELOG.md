@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.14.0] — 2026-08-17
+
 ### Added
 
 - **`@ospex/sdk` + `@ospex/cli`: contest list rows surface the canonical game identity core-api now serves — `Contest.gameId` / `Contest.jsonoddsId`.** Both carry the contest's JSONOdds linkage — the same string the games surface serves as `Game.gameId`, since the games table's primary key is `(network, jsonodds_id)` and no surrogate game UUID exists — so `contest.gameId === game.gameId` is an exact-equality join between contest rows and the games surface (and any game-keyed consumer records), demoting teams + start-time matching to defense-in-depth. `null` when the contest was created without a linkage. The wire pair is deliberately redundant (it mirrors `/v1/games`'s documented `gameId` / `externalIds.jsonodds` pair); `jsonoddsId` was already on the public type as a detail-only field and is now list-bearing too. Optional on the read model, conditionally copied, and named in the list zod schema (whose unknown-key strip would otherwise silently drop the keys): against a core-api build predating the identity change the keys are absent (not `undefined`-assigned), pinned by tests in both directions, including null-survival through the CLI `--json` envelope. The boundary also enforces the pair contract — the keys arrive together or not at all, both null or the same non-empty string; one-sided, unequal, null/string-mixed, and empty-string shapes are refused as typed `OspexValidationError`s — and `gameId` is attached on the validated list path only, never by the shared mapper, so a detail body carrying an unexpected `gameId` cannot mint the list-only key. The CLI human table is deliberately unchanged; `contests list --help` now states the identity contract. No construct-site impact — the fields are optional, so this is additive at compile time as well as at runtime.
@@ -513,7 +517,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.14.0
 [0.13.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.13.0
 [0.12.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.12.0
 [0.11.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.11.0
