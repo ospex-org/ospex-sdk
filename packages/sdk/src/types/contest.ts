@@ -224,9 +224,10 @@ export interface Contest {
  * lifecycle slice, not the full `Contest`. The stream exists to push
  * status / score / verified / scored / voided transitions; it deliberately
  * omits `speculations[]` (those have their own `speculations.subscribe`
- * stream), the game identity keys (`gameId` / `jsonoddsId` — read those
- * from list rows or `contests.get`), and the detail-only enrichment
- * (source hashes, team UUIDs, …) that only `contests.get` returns.
+ * stream), the game identity keys (`gameId` / `jsonoddsId` — read them
+ * from list rows; detail reads carry `jsonoddsId`), and the detail-only
+ * enrichment (source hashes, team UUIDs, …) that only `contests.get`
+ * returns.
  * Distinct from `Contest` so a streamed lifecycle update can't be
  * mistaken for a full detail row.
  */

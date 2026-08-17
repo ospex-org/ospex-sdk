@@ -97,6 +97,11 @@ describe('OspexClient API surface', () => {
     const contest = await client.contests.get('42');
     expect(calls[0]!.url).toBe(`${apiUrl}/v1/contests/42`);
     expect(contest.jsonoddsId).toBe('a783e37e-4ce1-4f42-9dd6-615568f73044');
+    // Scope pin: gameId is a LIST-row key — the detail body never carries
+    // it (pinned server-side too), and the mapper must not mint it from
+    // jsonoddsId. Without this, a toContest mutant deriving gameId on
+    // detail reads passes every suite.
+    expect(contest).not.toHaveProperty('gameId');
   });
 
   it('contests.list leaves the game identity keys ABSENT when the server omits them (older core-api)', async () => {

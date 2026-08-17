@@ -212,6 +212,10 @@ describe('ospex contests list — game identity passthrough', () => {
     const out = await runList([]);
     expect(out).not.toContain('gameId');
     expect(out).not.toContain('jsonoddsId');
+    // Also pin by VALUE, not just key name — a column added under a
+    // renamed header ('game') would dodge the key-name checks while still
+    // rendering the identity into the table.
+    expect(out).not.toContain('a783e37e');
     // The rows themselves still render.
     expect(out).toContain('Cubs');
     expect(out).toContain('Sox');
