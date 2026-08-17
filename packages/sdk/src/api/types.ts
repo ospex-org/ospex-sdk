@@ -343,7 +343,11 @@ export interface ContestBody {
    * `jsonoddsId` is the same value under the detail endpoint's historical
    * name — on detail bodies always, and on list rows from the same
    * core-api builds. The redundancy is deliberate (it mirrors
-   * `/v1/games`'s `gameId` / `externalIds.jsonodds` pair).
+   * `/v1/games`'s `gameId` / `externalIds.jsonodds` pair), and the list
+   * boundary cross-validates it (both keys together — both null or the
+   * same non-empty string — or neither). `gameId` is copied to the public
+   * `Contest` by the LIST path only, never by the shared `toContest`
+   * mapper, so a detail body carrying it cannot mint the key.
    */
   gameId?: string | null;
   jsonoddsId?: string | null;

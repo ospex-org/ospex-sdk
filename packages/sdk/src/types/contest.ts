@@ -175,6 +175,10 @@ export interface Contest {
    * when the contest was created without a linkage. Served on list rows
    * only (core-api builds ≥ the game-identity change; absent on older
    * builds and on detail reads — detail carries `jsonoddsId` instead).
+   * The SDK enforces both halves of that contract: the list decode
+   * cross-validates the pair (present together and equal, or both null,
+   * or both absent), and the detail decode never mints `gameId` even from
+   * a body that carries it.
    */
   gameId?: string | null;
   /**

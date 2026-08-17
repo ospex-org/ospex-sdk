@@ -397,6 +397,80 @@ describe('OspexClient API surface', () => {
     expect((err as OspexValidationError).field).toBe('contests.0.jsonoddsId');
   });
 
+  // ── identity-pair contract (cross-field) ────────────────────────────
+  // The two keys are documented as deliberately redundant and EQUAL. The
+  // accept set is exactly what real servers emit — both absent (older
+  // core-api), both null (no linkage), or the same non-empty string; the
+  // three accepting states are already pinned above (the older-server
+  // absent-key control, and the verbatim test's equal + both-null rows).
+  // Everything else would let two consumers choose different "canonical"
+  // identifiers from the same row, so the boundary refuses it.
+  const GID = 'a783e37e-4ce1-4f42-9dd6-615568f73044';
+  const PAIR_REJECTS: Array<{ name: string; row: Record<string, unknown>; field: string }> = [
+    { name: 'only gameId present', row: { gameId: GID }, field: 'contests.0.jsonoddsId' },
+    { name: 'only jsonoddsId present', row: { jsonoddsId: GID }, field: 'contests.0.gameId' },
+    {
+      name: 'unequal non-empty strings',
+      row: { gameId: 'id-A', jsonoddsId: 'id-B' },
+      field: 'contests.0.gameId',
+    },
+    {
+      name: 'null gameId beside a string jsonoddsId',
+      row: { gameId: null, jsonoddsId: GID },
+      field: 'contests.0.gameId',
+    },
+    {
+      name: 'string gameId beside a null jsonoddsId',
+      row: { gameId: GID, jsonoddsId: null },
+      field: 'contests.0.gameId',
+    },
+    {
+      name: 'both empty strings (the server normalizes "" to null; "" here is no known server)',
+      row: { gameId: '', jsonoddsId: '' },
+      field: 'contests.0.gameId',
+    },
+  ];
+  for (const { name, row, field } of PAIR_REJECTS) {
+    it(`identity-pair contract: REFUSES ${name}`, async () => {
+      const { fetch } = makeFetch(() => listBodyWith(row));
+      const client = new OspexClient({ apiUrl, fetch });
+      const err = await client.contests.list().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe(field);
+    });
+  }
+
+  it('contests.get REFUSES to mint the list-only gameId from an adversarial detail body', async () => {
+    // The detail path reuses the shared mapper on an unvalidated cast+copy
+    // body — the list-only `gameId` is attached on the list path AFTER the
+    // mapper, so even a detail body that carries the key cannot mint it.
+    // The fixture value is distinct from jsonoddsId, so this also catches
+    // a mapper deriving gameId FROM jsonoddsId. (The absent-input control
+    // is the `contests.get ... surfaces jsonoddsId` test above.)
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        contestId: '42',
+        gameId: 'UNEXPECTED-DETAIL-VALUE',
+        jsonoddsId: 'a783e37e-4ce1-4f42-9dd6-615568f73044',
+        awayTeam: 'A',
+        homeTeam: 'B',
+        sport: 'nba',
+        sportId: 1,
+        matchTime: '2026-05-03T00:00:00Z',
+        status: 'verified',
+        speculations: [],
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const contest = await client.contests.get('42');
+    expect(contest).not.toHaveProperty('gameId');
+    expect(contest.jsonoddsId).toBe('a783e37e-4ce1-4f42-9dd6-615568f73044');
+  });
+
   it('the boundary covers the whole row, not one field — a mistyped speculationStatus is refused too', async () => {
     const { fetch } = makeFetch(() =>
       listBodyWith({
