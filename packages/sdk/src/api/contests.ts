@@ -37,8 +37,11 @@ import type {
 //
 // Tolerances mirror the mapper's documented ones: the settlement trio is
 // optional (a pre-#41 core-api omits it — `toSpeculation` degrades to
-// null/false), and the start-time companions + `gameFinalType` are
-// optional (older builds / non-dated listings omit the keys).
+// null/false), the start-time companions + `gameFinalType` are optional
+// (older builds / non-dated listings omit the keys), and the game identity
+// pair `gameId` / `jsonoddsId` is optional-nullable (core-api builds ≥ the
+// game-identity change serve both on every list row, `null` when the
+// contest has no JSONOdds linkage; older builds omit the keys).
 //
 // The DETAIL read (`get`) keeps the pre-existing cast+copy decode: its
 // body embeds per-speculation orderbooks of signed commitments — a much
@@ -69,6 +72,8 @@ const ContestListRowSchema = z.object({
   gameMatchTime: z.string().optional(),
   gameEarliestMatchTime: z.string().optional(),
   gameFinalType: z.string().optional(),
+  gameId: z.string().nullable().optional(),
+  jsonoddsId: z.string().nullable().optional(),
   status: z.string(),
   speculations: z.array(SpeculationListRowSchema),
 });
@@ -136,8 +141,13 @@ function toContest(body: ContestBody): Contest {
   // Dated-list-only: `GET /v1/contests?date=` rows carry the linked game's
   // finality; every other contest surface omits the key.
   if (body.gameFinalType !== undefined) out.gameFinalType = body.gameFinalType;
-  // Detail-endpoint-only fields — the list endpoint omits them entirely.
+  // Game identity. `gameId` arrives on list rows (core-api ≥ the
+  // game-identity change); `jsonoddsId` on detail reads too. `null` is a
+  // VALUE here (no linkage) and is copied — only an absent key stays
+  // absent, per `exactOptionalPropertyTypes`.
+  if (body.gameId !== undefined) out.gameId = body.gameId;
   if (body.jsonoddsId !== undefined) out.jsonoddsId = body.jsonoddsId;
+  // Detail-endpoint-only fields — the list endpoint omits them entirely.
   if (body.rundownId !== undefined) out.rundownId = body.rundownId;
   if (body.sportspageId !== undefined) out.sportspageId = body.sportspageId;
   if (body.contestCreator !== undefined) out.contestCreator = body.contestCreator;

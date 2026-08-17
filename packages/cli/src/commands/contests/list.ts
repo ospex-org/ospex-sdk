@@ -4,6 +4,15 @@
  * Default is the upcoming forward window; `--date` switches to dated /
  * historical discovery of one UTC day, whose rows carry the linked game's
  * finality (`gameFinalType`) for postgame settle-and-claim flows.
+ *
+ * Rows in both modes carry the linked game's canonical identity —
+ * `gameId` / `jsonoddsId`, the same string `games list` shows as `gameId`,
+ * `null` when the contest has no upstream linkage — preserved verbatim in
+ * the `--json` envelope payload, so agents can join contests to games (and
+ * to their own game-keyed records) by exact id equality instead of
+ * teams + start-time matching. (Against a core-api predating the
+ * game-identity change the keys are simply absent.) The human table is
+ * deliberately unchanged.
  */
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
@@ -33,7 +42,7 @@ const optionsSchema = z.object({
 
 export const contestListCommand = new Command('list')
   .description(
-    'List contests (upcoming by default; --date lists one UTC day, past or future, with game finality).',
+    'List contests (upcoming by default; --date lists one UTC day, past or future, with game finality). Rows carry canonical game identity (gameId / jsonoddsId) in the --json payload.',
   )
   .option('--json', 'output as JSON')
   .option('--sport <sport>', 'sport filter (mlb, nba, ncaab, ncaaf, nfl, nhl)')

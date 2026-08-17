@@ -122,9 +122,12 @@ export interface SpeculationsListOptions {
 /**
  * Off-chain projected Contest — the contest-level entity bundled with
  * the array of Speculations registered against it. Detail-only fields
- * (jsonoddsId, rundownId, contestCreator, scores, lifecycle timestamps)
- * are populated only when fetched via `client.contests.get(contestId)`;
- * the list endpoint stays lean and leaves them undefined.
+ * (rundownId, contestCreator, scores, lifecycle timestamps) are populated
+ * only when fetched via `client.contests.get(contestId)`; the list
+ * endpoint stays lean and leaves them undefined. Game identity is the
+ * exception in the other direction: list rows carry `gameId` +
+ * `jsonoddsId` (core-api ≥ the game-identity change), detail reads carry
+ * `jsonoddsId` only.
  */
 export interface Contest {
   contestId: string;
@@ -162,14 +165,30 @@ export interface Contest {
    * (`contests.list({ date })`); absent on default listings and detail reads.
    */
   gameFinalType?: string;
+  // ── Game identity (list rows; jsonoddsId also on detail) ──────────
+  /**
+   * Canonical identity of the linked game: the contest's JSONOdds linkage,
+   * the SAME string the games surface serves as `Game.gameId` — the games
+   * table has no separate surrogate UUID — so `contest.gameId ===
+   * game.gameId` is an exact-equality join between the two surfaces, and
+   * team-name + start-time matching demotes to defense-in-depth. `null`
+   * when the contest was created without a linkage. Served on list rows
+   * only (core-api builds ≥ the game-identity change; absent on older
+   * builds and on detail reads — detail carries `jsonoddsId` instead).
+   */
+  gameId?: string | null;
+  /**
+   * The same string as `gameId`, under the detail endpoint's historical
+   * name — the wire pair is deliberately redundant, mirroring core-api's
+   * documented `gameId` / `externalIds.jsonodds` pair on `/v1/games`.
+   * On detail reads (any core-api build) and list rows (core-api builds ≥
+   * the game-identity change); `null` when the contest has no upstream
+   * linkage.
+   */
+  jsonoddsId?: string | null;
   status: string;
   speculations: Speculation[];
   // ── Detail-endpoint-only fields ───────────────────────────────────
-  /**
-   * Upstream game id this contest is linked to (the writer's odds-provider
-   * id). Null when the contest has no upstream linkage. Detail-endpoint-only.
-   */
-  jsonoddsId?: string | null;
   /** External Rundown id the contest was created against. */
   rundownId?: string | null;
   /** External Sportspage id the contest was created against. */
@@ -205,9 +224,11 @@ export interface Contest {
  * lifecycle slice, not the full `Contest`. The stream exists to push
  * status / score / verified / scored / voided transitions; it deliberately
  * omits `speculations[]` (those have their own `speculations.subscribe`
- * stream) and the detail-only enrichment (`jsonoddsId`, source hashes,
- * team UUIDs, …) that only `contests.get` returns. Distinct from `Contest`
- * so a streamed lifecycle update can't be mistaken for a full detail row.
+ * stream), the game identity keys (`gameId` / `jsonoddsId` — read those
+ * from list rows or `contests.get`), and the detail-only enrichment
+ * (source hashes, team UUIDs, …) that only `contests.get` returns.
+ * Distinct from `Contest` so a streamed lifecycle update can't be
+ * mistaken for a full detail row.
  */
 export interface ContestUpdate {
   contestId: string;

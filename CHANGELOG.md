@@ -4,7 +4,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### Added
+
+- **`@ospex/sdk` + `@ospex/cli`: contest list rows surface the canonical game identity core-api now serves — `Contest.gameId` / `Contest.jsonoddsId`.** Both carry the contest's JSONOdds linkage — the same string the games surface serves as `Game.gameId`, since the games table's primary key is `(network, jsonodds_id)` and no surrogate game UUID exists — so `contest.gameId === game.gameId` is an exact-equality join between contest rows and the games surface (and any game-keyed consumer records), demoting teams + start-time matching to defense-in-depth. `null` when the contest was created without a linkage. The wire pair is deliberately redundant (it mirrors `/v1/games`'s documented `gameId` / `externalIds.jsonodds` pair); `jsonoddsId` was already on the public type as a detail-only field and is now list-bearing too. Optional on the read model, conditionally copied, and named in the list zod schema (whose unknown-key strip would otherwise silently drop the keys): against a core-api build predating the identity change the keys are absent (not `undefined`-assigned), pinned by tests in both directions, including null-survival through the CLI `--json` envelope. The CLI human table is deliberately unchanged; `contests list --help` now states the identity contract. No construct-site impact — the fields are optional, so this is additive at compile time as well as at runtime.
 
 ## [0.13.0] — 2026-08-15
 

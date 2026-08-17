@@ -99,7 +99,12 @@ describe('OspexClient API surface', () => {
     expect(contest.jsonoddsId).toBe('a783e37e-4ce1-4f42-9dd6-615568f73044');
   });
 
-  it('contests.list rows do not surface jsonoddsId (detail-only field)', async () => {
+  it('contests.list leaves the game identity keys ABSENT when the server omits them (older core-api)', async () => {
+    // Until the game-identity change this test pinned the OPPOSITE
+    // contract ("list rows do not surface jsonoddsId — detail-only");
+    // list rows now carry gameId + jsonoddsId. What survives is the
+    // additivity control: an older server's rows decode with no
+    // identity own-keys minted, absent stays absent.
     const { fetch } = makeFetch(() => ({
       status: 200,
       body: {
@@ -120,7 +125,8 @@ describe('OspexClient API surface', () => {
     }));
     const client = new OspexClient({ apiUrl, fetch });
     const [first] = await client.contests.list();
-    expect(first?.jsonoddsId).toBeUndefined();
+    expect(first).not.toHaveProperty('gameId');
+    expect(first).not.toHaveProperty('jsonoddsId');
   });
 
   it('contests copy the start-time companion fields verbatim, including "" sentinels', async () => {
@@ -252,6 +258,56 @@ describe('OspexClient API surface', () => {
     expect(second?.gameFinalType).toBe('');
   });
 
+  it('contests.list rows surface the game identity keys verbatim, including null (no linkage)', async () => {
+    // Through the REAL decode path: the zod schema's unknown-key strip
+    // means these keys survive only because the schema names them — a
+    // schema that forgot them would pass every shape test and silently
+    // drop the identity here.
+    const { fetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        contests: [
+          {
+            contestId: '1',
+            awayTeam: 'Cubs',
+            homeTeam: 'Reds',
+            sport: 'mlb',
+            sportId: 5,
+            matchTime: '2026-08-14T18:10:00Z',
+            status: 'verified',
+            gameId: 'a783e37e-4ce1-4f42-9dd6-615568f73044',
+            jsonoddsId: 'a783e37e-4ce1-4f42-9dd6-615568f73044',
+            speculations: [],
+          },
+          {
+            contestId: '2',
+            awayTeam: 'Sox',
+            homeTeam: 'Yanks',
+            sport: 'mlb',
+            sportId: 5,
+            matchTime: '2026-08-14T23:10:00Z',
+            status: 'verified',
+            // Created without a JSONOdds linkage → the server serves both
+            // keys as null. null is a VALUE and must survive the copy —
+            // an `if (body.gameId)` truthiness bug would drop it.
+            gameId: null,
+            jsonoddsId: null,
+            speculations: [],
+          },
+        ],
+        pagination: { limit: 100, offset: 0, total: 2, hasMore: false },
+      },
+    }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const [first, second] = await client.contests.list();
+    expect(first?.gameId).toBe('a783e37e-4ce1-4f42-9dd6-615568f73044');
+    expect(first?.jsonoddsId).toBe('a783e37e-4ce1-4f42-9dd6-615568f73044');
+    expect(second).toHaveProperty('gameId');
+    expect(second).toHaveProperty('jsonoddsId');
+    expect(second?.gameId).toBeNull();
+    expect(second?.jsonoddsId).toBeNull();
+  });
+
   it('contests leave the gameFinalType key ABSENT when the server omits it (default listings)', async () => {
     const { fetch } = makeFetch(() => ({
       status: 200,
@@ -312,6 +368,28 @@ describe('OspexClient API surface', () => {
     );
     expect(err).toBeInstanceOf(OspexValidationError);
     expect((err as OspexValidationError).field).toBe('contests.0.gameFinalType');
+  });
+
+  it('contests.list REFUSES a non-string, non-null gameId', async () => {
+    const { fetch } = makeFetch(() => listBodyWith({ gameId: 123 }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const err = await client.contests.list().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(OspexValidationError);
+    expect((err as OspexValidationError).field).toBe('contests.0.gameId');
+  });
+
+  it('contests.list REFUSES a non-string, non-null jsonoddsId', async () => {
+    const { fetch } = makeFetch(() => listBodyWith({ jsonoddsId: 123 }));
+    const client = new OspexClient({ apiUrl, fetch });
+    const err = await client.contests.list().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(OspexValidationError);
+    expect((err as OspexValidationError).field).toBe('contests.0.jsonoddsId');
   });
 
   it('the boundary covers the whole row, not one field — a mistyped speculationStatus is refused too', async () => {
