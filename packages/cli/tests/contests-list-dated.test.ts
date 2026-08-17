@@ -11,7 +11,10 @@
  *   - the human table gains a `finality` column in dated mode ONLY —
  *     the default (no `--date`) table is unchanged;
  *   - `--json` runs signer-free and its envelope payload carries
- *     `gameFinalType` through untouched.
+ *     `gameFinalType` through untouched;
+ *   - the envelope payload carries the game identity keys
+ *     (`gameId` / `jsonoddsId`, incl. null) through untouched, and the
+ *     human table deliberately does NOT gain identity columns.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -156,5 +159,65 @@ describe('ospex contests list --date — output', () => {
     // The ordinary columns are still there.
     expect(out).toContain('contestId');
     expect(out).toContain('Cubs');
+  });
+});
+
+// ── game identity in the envelope ───────────────────────────────────────
+
+describe('ospex contests list — game identity passthrough', () => {
+  const IDENTITY_CONTESTS: Contest[] = [
+    contest({
+      gameId: 'a783e37e-4ce1-4f42-9dd6-615568f73044',
+      jsonoddsId: 'a783e37e-4ce1-4f42-9dd6-615568f73044',
+    }),
+    contest({
+      contestId: '44',
+      awayTeam: 'Sox',
+      homeTeam: 'Yanks',
+      status: 'verified',
+      // No upstream linkage → the SDK surfaces both keys as null.
+      gameId: null,
+      jsonoddsId: null,
+    }),
+  ];
+
+  it('--json envelope payload carries gameId / jsonoddsId through untouched, including null', async () => {
+    // The CLI passes the decoded Contest[] verbatim as the payload — no
+    // re-projection — so this pins that nothing CLI-side starts filtering
+    // or renaming the identity keys.
+    const { client } = fakeClient(IDENTITY_CONTESTS);
+    vi.mocked(getClient).mockResolvedValue(client as never);
+
+    const out = await runList(['--json']);
+    const env = JSON.parse(out.trim()) as {
+      ok: boolean;
+      payload: Array<{ contestId: string; gameId?: string | null; jsonoddsId?: string | null }>;
+    };
+    expect(env.ok).toBe(true);
+    expect(env.payload[0]!.gameId).toBe('a783e37e-4ce1-4f42-9dd6-615568f73044');
+    expect(env.payload[0]!.jsonoddsId).toBe('a783e37e-4ce1-4f42-9dd6-615568f73044');
+    // null must SURVIVE serialization as an explicit key, not vanish —
+    // JSON.stringify drops undefined but keeps null, so this discriminates
+    // a copy-through from a truthiness filter.
+    expect('gameId' in env.payload[1]!).toBe(true);
+    expect('jsonoddsId' in env.payload[1]!).toBe(true);
+    expect(env.payload[1]!.gameId).toBeNull();
+    expect(env.payload[1]!.jsonoddsId).toBeNull();
+  });
+
+  it('the human table deliberately gains no identity columns', async () => {
+    const { client } = fakeClient(IDENTITY_CONTESTS);
+    vi.mocked(getClient).mockResolvedValue(client as never);
+
+    const out = await runList([]);
+    expect(out).not.toContain('gameId');
+    expect(out).not.toContain('jsonoddsId');
+    // Also pin by VALUE, not just key name — a column added under a
+    // renamed header ('game') would dodge the key-name checks while still
+    // rendering the identity into the table.
+    expect(out).not.toContain('a783e37e');
+    // The rows themselves still render.
+    expect(out).toContain('Cubs');
+    expect(out).toContain('Sox');
   });
 });

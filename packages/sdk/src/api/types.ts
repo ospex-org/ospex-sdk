@@ -335,11 +335,26 @@ export interface ContestBody {
    * on the detail endpoint.
    */
   gameFinalType?: string;
+  /**
+   * Game identity: the contest's JSONOdds linkage, the same string
+   * `/v1/games` serves as its `gameId` (`null` when the contest has no
+   * linkage). `gameId` is on every LIST row from core-api builds ≥ the
+   * game-identity change (absent on older builds and on detail bodies);
+   * `jsonoddsId` is the same value under the detail endpoint's historical
+   * name — on detail bodies always, and on list rows from the same
+   * core-api builds. The redundancy is deliberate (it mirrors
+   * `/v1/games`'s `gameId` / `externalIds.jsonodds` pair), and the list
+   * boundary cross-validates it (both keys together — both null or the
+   * same non-empty string — or neither). `gameId` is copied to the public
+   * `Contest` by the LIST path only, never by the shared `toContest`
+   * mapper, so a detail body carrying it cannot mint the key.
+   */
+  gameId?: string | null;
+  jsonoddsId?: string | null;
   status: string;
   speculations: SpeculationBody[];
   // Detail-endpoint-only fields — undefined on /v1/contests list rows.
   // Populated by /v1/contests/:contestId.
-  jsonoddsId?: string | null;
   rundownId?: string | null;
   sportspageId?: string | null;
   contestCreator?: string;
