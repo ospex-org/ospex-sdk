@@ -316,8 +316,10 @@ export interface ContestBody {
   matchTime: string;
   /**
    * Raw on-chain start (`""` until the contest is verified). Optional on the
-   * wire — core-api builds predating the start-time floor surface omit it,
-   * along with `gameMatchTime` / `gameEarliestMatchTime` below.
+   * wire — a core-api build predating the start-time floor surface omits it
+   * along with the other start-time companions below. Each companion is
+   * separately optional; check the key you need rather than inferring one
+   * from another.
    */
   chainStartTime?: string;
   /** Raw odds-feed schedule for the linked game; `""` when no games row is linked. */
@@ -325,7 +327,7 @@ export interface ContestBody {
   /**
    * The game's current retained start-time safety floor, verbatim — never
    * clamped; `""` when no games row is linked. When it is the minimum of the
-   * three inputs, it is what is driving `matchTime`.
+   * inputs, it is what is driving `matchTime`.
    */
   gameEarliestMatchTime?: string;
   /**
@@ -590,10 +592,11 @@ export interface GameBody {
   slug: string;
   sport: string;
   /**
-   * The earliest start currently held for this game — the minimum of the raw
-   * feed value and the retained floor (a conservative safety bound on servers
-   * that carry the two diagnostic fields below; the raw feed value on older
-   * core-api builds, which omit them).
+   * The earliest start currently held for this game — on servers that carry
+   * the diagnostic fields below, the minimum of the raw feed value, the
+   * retained floor, and whichever provider snapshots the server considered
+   * fresh (a conservative safety bound); the raw feed value on older core-api
+   * builds, which omit them.
    */
   matchTime: string;
   /** The raw current feed value, unminimised. Diagnostic. */

@@ -8,11 +8,12 @@ import {
 import type { Contest } from '../src/types/contest.js';
 
 /**
- * Every start-time value in a fixture has to be DISTINCT, or a swap between
- * two same-typed fields in a decoder is invisible. Measured before this
- * existed: `chainStartTime` and `gameMatchTime` shared one literal here, and
- * swapping those two assignments in `decodeContestUpdate` — and, separately,
- * in `contestToUpdate` — left this file green.
+ * A start-time fixture for a contest WITH a linked games row: every value
+ * independent, so every value distinct. Otherwise a swap between two
+ * same-typed fields in a decoder is invisible. Measured before this existed:
+ * `chainStartTime` and `gameMatchTime` shared one literal here, and swapping
+ * those two assignments in `decodeContestUpdate` — and, separately, in
+ * `contestToUpdate` — left this file green.
  */
 const STREAM_START_TIMES = {
   matchTime: '2026-05-02T23:15:00Z',
@@ -23,8 +24,45 @@ const STREAM_START_TIMES = {
   gameSportspageMatchTime: '2026-05-03T00:20:00Z',
 } as const;
 
+/** The same family for a contest with NO linked games row. */
+const UNLINKED_STREAM_START_TIMES = {
+  matchTime: '2026-05-03T00:00:00Z',
+  chainStartTime: '2026-05-03T00:00:00Z',
+  gameMatchTime: '',
+  gameEarliestMatchTime: '',
+  gameRundownMatchTime: '',
+  gameSportspageMatchTime: '',
+} as const;
+
+/**
+ * The no-games-row fixtures cannot satisfy that rule, and should not be
+ * edited until they do: with no linkage, core-api's served bound is a
+ * `LEAST(...)` over a NULL join side, so `matchTime` and `chainStartTime` come
+ * out equal there, and forcing them apart would buy distinctness with a body
+ * that view does not produce. `expectUnlinkedGameStartTimes` pins the shape
+ * that makes the exemption legitimate instead — every game-derived companion
+ * is the `""` sentinel, leaving no independent pair to discriminate.
+ *
+ * Bound worth stating: both are call sites, not a structural property of the
+ * file. Re-sharing a literal inside a guarded fixture reddens (measured);
+ * deleting the CALL along with the literal does not.
+ */
 function expectDistinctStartTimes(values: readonly string[]): void {
   expect(new Set(values).size).toBe(values.length);
+}
+
+function expectUnlinkedGameStartTimes(fixture: {
+  gameMatchTime: string;
+  gameEarliestMatchTime: string;
+  gameRundownMatchTime: string;
+  gameSportspageMatchTime: string;
+}): void {
+  expect([
+    fixture.gameMatchTime,
+    fixture.gameEarliestMatchTime,
+    fixture.gameRundownMatchTime,
+    fixture.gameSportspageMatchTime,
+  ]).toEqual(['', '', '', '']);
 }
 
 describe('decodePositionDelta', () => {
@@ -126,18 +164,14 @@ describe('decodeContestUpdate', () => {
   it('copies "" provider-snapshot sentinels on a stream body with no games row', () => {
     // Paired with the test above: a decoder broken to always emit "" fails
     // there, one broken to drop "" fails here.
+    expectUnlinkedGameStartTimes(UNLINKED_STREAM_START_TIMES);
     const out = decodeContestUpdate({
       contestId: '1',
       awayTeam: 'A',
       homeTeam: 'H',
       sport: 'nba',
       sportId: 1,
-      matchTime: '2026-05-03T00:00:00Z',
-      chainStartTime: '2026-05-03T00:00:00Z',
-      gameMatchTime: '',
-      gameEarliestMatchTime: '',
-      gameRundownMatchTime: '',
-      gameSportspageMatchTime: '',
+      ...UNLINKED_STREAM_START_TIMES,
       status: 'verified',
       awayScore: null,
       homeScore: null,
@@ -256,18 +290,14 @@ describe('contestToUpdate', () => {
   it('carries "" provider-snapshot sentinels through the projection', () => {
     // Paired with the test above, so neither direction passes on a
     // projection broken to always emit one shape.
+    expectUnlinkedGameStartTimes(UNLINKED_STREAM_START_TIMES);
     const contest: Contest = {
       contestId: '1',
       awayTeam: 'A',
       homeTeam: 'H',
       sport: 'nba',
       sportId: 1,
-      matchTime: '2026-05-03T00:00:00Z',
-      chainStartTime: '2026-05-03T00:00:00Z',
-      gameMatchTime: '',
-      gameEarliestMatchTime: '',
-      gameRundownMatchTime: '',
-      gameSportspageMatchTime: '',
+      ...UNLINKED_STREAM_START_TIMES,
       status: 'verified',
       speculations: [],
     };

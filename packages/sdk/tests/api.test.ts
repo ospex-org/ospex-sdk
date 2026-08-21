@@ -32,19 +32,51 @@ function makeFetch(
 const apiUrl = 'https://api.example.test';
 
 /**
- * Every start-time value in a fixture has to be DISTINCT, or a swap between
- * two same-typed fields in a mapper is invisible to the assertions that
- * follow. Measured before this helper existed: `chainStartTime` and
- * `gameMatchTime` shared one literal in the contest fixtures, and swapping
- * those two assignments in `toContest`, `toContext`, `decodeContestUpdate`
- * and `contestToUpdate` left the whole suite green in all four places.
+ * Fixture guards for the start-time family. There are two, because the wire
+ * has two shapes: a contest with a linked games row carries independent
+ * values, and one with no linkage carries the `""` sentinel in every
+ * game-derived field.
  *
- * Sentinels (`''` / `null`) are excluded — they are legitimately repeated
- * across fields and carry no positional information.
+ * `expectDistinctStartTimes` — where the values are independent they must all
+ * differ, or a swap between two same-typed fields in a mapper is invisible to
+ * the assertions that follow. Measured before this helper existed:
+ * `chainStartTime` and `gameMatchTime` shared one literal in the contest
+ * fixtures, and swapping those two assignments in `toContest`, `toContext`,
+ * `decodeContestUpdate` and `contestToUpdate` left the whole suite green in
+ * all four places. Sentinels (`''` / `null`) are excluded — they are
+ * legitimately repeated across fields and carry no positional information.
+ *
+ * `expectUnlinkedGameStartTimes` — the no-games-row fixtures cannot satisfy
+ * that rule, and should not be edited until they do. With no linkage,
+ * core-api's served bound is a `LEAST(...)` over a NULL join side, so
+ * `matchTime` and `chainStartTime` come out equal there; forcing them apart
+ * would buy distinctness with a body that view does not produce. This guard
+ * pins the shape that makes the exemption legitimate instead — every
+ * game-derived companion is the `""` sentinel, leaving no independent pair
+ * for distinctness to discriminate.
+ *
+ * Bound worth stating, because it is narrower than it looks: these are call
+ * sites, not a structural property of the file. Re-sharing a literal inside a
+ * guarded fixture reddens (measured); deleting the CALL along with the
+ * literal does not.
  */
 function expectDistinctStartTimes(values: Array<string | null | undefined>): void {
   const real = values.filter((v): v is string => typeof v === 'string' && v !== '');
   expect(new Set(real).size).toBe(real.length);
+}
+
+function expectUnlinkedGameStartTimes(fixture: {
+  gameMatchTime: string;
+  gameEarliestMatchTime: string;
+  gameRundownMatchTime: string;
+  gameSportspageMatchTime: string;
+}): void {
+  expect([
+    fixture.gameMatchTime,
+    fixture.gameEarliestMatchTime,
+    fixture.gameRundownMatchTime,
+    fixture.gameSportspageMatchTime,
+  ]).toEqual(['', '', '', '']);
 }
 
 describe('OspexClient API surface', () => {
@@ -168,6 +200,20 @@ describe('OspexClient API surface', () => {
       gameSportspageMatchTime: '2026-05-03T00:20:00Z',
     };
     expectDistinctStartTimes(Object.values(served));
+    // Unverified + no games row → the server's "" sentinels must survive
+    // verbatim (not dropped, not nulled). The two provider snapshots use the
+    // same "" sentinel on contest surfaces, even though `/v1/games` serves
+    // them nullable. Guarded by shape rather than by distinctness — see
+    // `expectUnlinkedGameStartTimes`.
+    const unlinked = {
+      matchTime: '2026-05-04T00:00:00Z',
+      chainStartTime: '',
+      gameMatchTime: '',
+      gameEarliestMatchTime: '',
+      gameRundownMatchTime: '',
+      gameSportspageMatchTime: '',
+    };
+    expectUnlinkedGameStartTimes(unlinked);
     const { fetch } = makeFetch(() => ({
       status: 200,
       body: {
@@ -188,16 +234,7 @@ describe('OspexClient API surface', () => {
             homeTeam: 'D',
             sport: 'nba',
             sportId: 1,
-            matchTime: '2026-05-04T00:00:00Z',
-            // Unverified + no games row → the server's "" sentinels must
-            // survive verbatim (not dropped, not nulled). The two provider
-            // snapshots use the same "" sentinel on contest surfaces, even
-            // though `/v1/games` serves them nullable.
-            chainStartTime: '',
-            gameMatchTime: '',
-            gameEarliestMatchTime: '',
-            gameRundownMatchTime: '',
-            gameSportspageMatchTime: '',
+            ...unlinked,
             status: 'unverified',
             speculations: [],
           },
@@ -415,6 +452,47 @@ describe('OspexClient API surface', () => {
     expect(err).toBeInstanceOf(OspexValidationError);
     expect((err as OspexValidationError).field).toBe('contests.0.gameFinalType');
   });
+
+  // The five start-time companions are `z.string().optional()` on the list
+  // row: absent is tolerated (older core-api builds), `""` is the sentinel,
+  // and `null` is refused. `null` is the discriminating input rather than a
+  // number — `z.string()`, `z.string().nullable()` and `z.any()` all refuse a
+  // number, and only the first refuses `null`. Measured before these existed:
+  // widening any of the five to `.nullable()` or `z.any()` left the whole
+  // suite green, so the KEYS were pinned but their TYPE was not.
+  //
+  // Worth stating because it is a live coupling: the underlying columns are
+  // nullable in the database, and what makes them strings here is a `?? ''`
+  // in core-api's contest projections. If that coalesce is ever dropped, this
+  // boundary rejects the whole page rather than leaking `null` into a
+  // `string`-typed public field — loud, and deliberately so.
+  for (const field of [
+    'chainStartTime',
+    'gameMatchTime',
+    'gameEarliestMatchTime',
+    'gameRundownMatchTime',
+    'gameSportspageMatchTime',
+  ] as const) {
+    it(`contests.list REFUSES a null ${field}, with the field path`, async () => {
+      const { fetch } = makeFetch(() => listBodyWith({ [field]: null }));
+      const client = new OspexClient({ apiUrl, fetch });
+      const err = await client.contests.list().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe(`contests.0.${field}`);
+    });
+
+    it(`contests.list ACCEPTS the "" sentinel on ${field}`, async () => {
+      // Negative control for the refusal above: a schema broken to refuse
+      // everything would pass the five tests above and fail these five.
+      const { fetch } = makeFetch(() => listBodyWith({ [field]: '' }));
+      const client = new OspexClient({ apiUrl, fetch });
+      const [row] = await client.contests.list();
+      expect(row?.[field]).toBe('');
+    });
+  }
 
   it('contests.list REFUSES a non-string, non-null gameId', async () => {
     const { fetch } = makeFetch(() => listBodyWith({ gameId: 123 }));
@@ -716,9 +794,20 @@ describe('OspexClient API surface', () => {
 
   it('speculations.get parent context copies "" provider-snapshot sentinels verbatim', async () => {
     // A verified contest with no games row: core-api coalesces every
-    // games-sourced companion to "" on contest surfaces. Paired with the
-    // test above (real values accepted) so neither direction passes on a
-    // mapper broken to always emit one or the other.
+    // games-sourced companion to "" on contest surfaces, and the served bound
+    // reduces to the chain start. Paired with the test above (real values
+    // accepted) so neither direction passes on a mapper broken to always emit
+    // one or the other. Shape-guarded, not distinctness-guarded — see
+    // `expectUnlinkedGameStartTimes`.
+    const unlinkedContext = {
+      matchTime: '2026-05-03T00:00:00Z',
+      chainStartTime: '2026-05-03T00:00:00Z',
+      gameMatchTime: '',
+      gameEarliestMatchTime: '',
+      gameRundownMatchTime: '',
+      gameSportspageMatchTime: '',
+    };
+    expectUnlinkedGameStartTimes(unlinkedContext);
     const { fetch } = makeFetch(() => ({
       status: 200,
       body: {
@@ -737,12 +826,7 @@ describe('OspexClient API surface', () => {
           awayTeam: 'Lakers',
           homeTeam: 'Celtics',
           sport: 'nba',
-          matchTime: '2026-05-03T00:00:00Z',
-          chainStartTime: '2026-05-03T00:00:00Z',
-          gameMatchTime: '',
-          gameEarliestMatchTime: '',
-          gameRundownMatchTime: '',
-          gameSportspageMatchTime: '',
+          ...unlinkedContext,
           status: 'verified',
         },
       },
