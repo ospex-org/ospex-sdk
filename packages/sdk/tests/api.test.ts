@@ -792,6 +792,26 @@ describe('OspexClient API surface', () => {
     // that coalesced null to the contest surfaces' `""`, fails it.
     expect(game).toHaveProperty('sportspageMatchTime', null);
 
+    // The MIRRORED mix, because a null assertion on one snapshot proves
+    // nothing about the other: measured, a `?? ''` on the rundown copy alone
+    // survived a version of this test that only ever served rundown as a
+    // string. Each null here sits beside a non-null sibling in the same
+    // response, so a mapper that nulls everything fails too.
+    const { fetch: mirroredFetch } = makeFetch(() => ({
+      status: 200,
+      body: {
+        ...gameBody,
+        gameMatchTime: '2026-05-08T02:00:00Z',
+        earliestMatchTime: null,
+        rundownMatchTime: null,
+        sportspageMatchTime: '2026-05-08T02:40:00Z',
+      },
+    }));
+    const mirroredClient = new OspexClient({ apiUrl, fetch: mirroredFetch });
+    const mirroredGame = await mirroredClient.games.get('g1');
+    expect(mirroredGame).toHaveProperty('rundownMatchTime', null);
+    expect(mirroredGame.sportspageMatchTime).toBe('2026-05-08T02:40:00Z');
+
     // A retained (string) floor and both snapshots captured — copied
     // verbatim, not normalised. Distinct values throughout, so a swap
     // between two of the four same-typed diagnostics cannot pass.
