@@ -4,7 +4,13 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### Added
+
+- **`@ospex/sdk`: contest and game reads surface the two provider start-time snapshots core-api serves beside the existing start-time set.** `Contest`, `SpeculationParentContext`, and `ContestUpdate` gain optional `gameRundownMatchTime` / `gameSportspageMatchTime` (ISO-8601 strings with the contest surfaces' `""` sentinel); `Game` gains optional `rundownMatchTime` / `sportspageMatchTime` (`string | null` — the games endpoint's nullable convention, and the asymmetry is the wire's, not a normalisation the SDK applies). Each is a first-successful-match snapshot of TheRundown's / Sportspage's scheduled start for the linked game, re-observed when the primary feed moves the game. **Diagnostics and display only.** `matchTime` is unchanged and remains the bound to gate on: core-api already folds a snapshot into the served minimum behind a one-hour freshness guard, so a snapshot well below `gameMatchTime` may simply be stale, and reading the raw values as a start-time bound would be less conservative than the field already there. Carried on stream deltas as well as snapshots (`contests.subscribe` bodies and the `contestId`-scoped snapshot projection), so a provider re-snapshot reaches subscribers without a re-fetch. All four are optional and conditionally copied — against a core-api build predating them the keys are absent rather than `undefined`-assigned, and on the games side `null` (snapshot not held) is pinned as distinct from key-absent — with tests in both directions on every surface. The two contest keys are also named in the `contests.list` zod schema, whose unknown-key strip would otherwise drop them silently; a mutant deleting either from the schema alone reddens the list test. Additive: no existing field changes shape or meaning, and every new key is optional, so construct sites of these read-model types keep compiling.
+
+### Fixed
+
+- **Tests: the contest start-time fixtures reused one timestamp literal across two fields, so a swap between them was invisible.** `chainStartTime` and `gameMatchTime` shared `'2026-05-03T00:00:00Z'` in the API and stream-decoder fixtures. Measured on the branch point: swapping those two assignments in `toContest`, the speculation parent-context mapper, `decodeContestUpdate`, and `contestToUpdate` left the suite green in all four places. Every start-time field in those fixtures now carries a distinct value, and a shared `expectDistinctStartTimes` helper asserts the distinctness in the test itself so a later fixture edit cannot quietly re-open the hole. No production behaviour changed.
 
 ## [0.14.0] — 2026-08-17
 

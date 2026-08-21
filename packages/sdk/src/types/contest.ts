@@ -90,13 +90,16 @@ export interface SpeculationParentContext {
   /** ISO-8601 string. */
   matchTime: string;
   /**
-   * Same three optional start-time companions as {@link Contest}
-   * (`chainStartTime` / `gameMatchTime` / `gameEarliestMatchTime`) — see the
-   * field docs there. Absent against core-api builds that predate them.
+   * Same five optional start-time companions as {@link Contest}
+   * (`chainStartTime` / `gameMatchTime` / `gameEarliestMatchTime` /
+   * `gameRundownMatchTime` / `gameSportspageMatchTime`) — see the field docs
+   * there. Absent against core-api builds that predate them.
    */
   chainStartTime?: string;
   gameMatchTime?: string;
   gameEarliestMatchTime?: string;
+  gameRundownMatchTime?: string;
+  gameSportspageMatchTime?: string;
   status: string;
 }
 
@@ -136,13 +139,14 @@ export interface Contest {
   sport: string;
   sportId: number;
   /**
-   * ISO-8601 string. The current conservative start-time safety bound — the
-   * minimum over the chain start, the odds-feed schedule, and the game's
-   * retained safety floor (the three companion fields below). Gate on this.
+   * ISO-8601 string. The current conservative start-time safety bound —
+   * server-side, the minimum over the chain start, the odds-feed schedule,
+   * the game's retained safety floor, and whichever provider snapshots the
+   * server considered fresh (the companion fields below). Gate on this.
    */
   matchTime: string;
   // ── Start-time companion fields (list + detail) ───────────────────
-  // All three are ISO-8601 strings with a `""` sentinel, mirroring the
+  // All five are ISO-8601 strings with a `""` sentinel, mirroring the
   // core-api contest contract. Optional: absent (not `""`) against
   // core-api builds that predate them.
   /** Raw on-chain start. `""` until the contest is verified. */
@@ -152,10 +156,23 @@ export interface Contest {
   /**
    * The game's current retained start-time safety floor, verbatim — never
    * clamped (it is NOT guaranteed `<= gameMatchTime`); `""` when no games
-   * row is linked. When it is the minimum of the three inputs, it is what
-   * is driving `matchTime`.
+   * row is linked. When it is the minimum of the inputs, it is what is
+   * driving `matchTime`.
    */
   gameEarliestMatchTime?: string;
+  /**
+   * First-successful-match snapshots of TheRundown's / Sportspage's scheduled
+   * start for the linked game, re-observed when the primary feed moves the
+   * game. `""` when no games row is linked or no snapshot has been captured.
+   *
+   * Dated observations rather than live values: core-api admits a snapshot
+   * into the served `matchTime` minimum behind a one-hour freshness guard, so
+   * a snapshot well below `gameMatchTime` may be stale and not driving the
+   * bound. Diagnostics/display — gate on `matchTime`, which already folds in
+   * whichever snapshots the server considered fresh.
+   */
+  gameRundownMatchTime?: string;
+  gameSportspageMatchTime?: string;
   /**
    * The linked game's upstream result status (`games.final_type`), verbatim
    * — free upstream text, e.g. `'Finished'`, `'Postponed'`, `'Canceled'`
@@ -244,14 +261,16 @@ export interface ContestUpdate {
   /** ISO-8601 string. */
   matchTime: string;
   /**
-   * Same three optional start-time companions as {@link Contest} (`""`
-   * sentinels) — the stream body carries them too, so a floor raise or a
-   * feed reschedule arrives on deltas, not just snapshots. Absent against
-   * core-api builds that predate them.
+   * Same five optional start-time companions as {@link Contest} (`""`
+   * sentinels) — the stream body carries them too, so a floor raise, a feed
+   * reschedule, or a provider re-snapshot arrives on deltas, not just
+   * snapshots. Absent against core-api builds that predate them.
    */
   chainStartTime?: string;
   gameMatchTime?: string;
   gameEarliestMatchTime?: string;
+  gameRundownMatchTime?: string;
+  gameSportspageMatchTime?: string;
   status: string;
   awayScore: number | null;
   homeScore: number | null;

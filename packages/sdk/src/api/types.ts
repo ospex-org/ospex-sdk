@@ -329,6 +329,14 @@ export interface ContestBody {
    */
   gameEarliestMatchTime?: string;
   /**
+   * Provider start-time snapshots for the linked game (`games.rundown_match_time`
+   * / `games.sportspage_match_time`), verbatim. `""` when no games row is linked
+   * or no snapshot has been captured. Optional on the wire — core-api builds
+   * predating the provider-snapshot surface omit them.
+   */
+  gameRundownMatchTime?: string;
+  gameSportspageMatchTime?: string;
+  /**
    * The linked game's upstream result status (`games.final_type`), verbatim
    * (`'Finished'` / `'Postponed'` / … free text; `""` sentinel). On the wire
    * ONLY for `GET /v1/contests?date=` rows — absent on default listings and
@@ -395,12 +403,14 @@ export interface SpeculationParentContextBody {
   sport: string;
   matchTime: string;
   /**
-   * Same three optional start-time companions as {@link ContestBody}
+   * Same five optional start-time companions as {@link ContestBody}
    * (`""` sentinels); optional on the wire — older core-api builds omit them.
    */
   chainStartTime?: string;
   gameMatchTime?: string;
   gameEarliestMatchTime?: string;
+  gameRundownMatchTime?: string;
+  gameSportspageMatchTime?: string;
   status: string;
 }
 
@@ -595,6 +605,15 @@ export interface GameBody {
    * surfaces — mirrors the wire.)
    */
   earliestMatchTime?: string | null;
+  /**
+   * Provider start-time snapshots (`games.rundown_match_time` /
+   * `games.sportspage_match_time`), or `null` when the underlying column is
+   * unset. (Nullable here, unlike the `""` sentinel on contest surfaces —
+   * mirrors the wire, where this endpoint passes the nullable column through
+   * and the contest projections coalesce it.)
+   */
+  rundownMatchTime?: string | null;
+  sportspageMatchTime?: string | null;
   status: string;
   homeTeam: GameTeamBody;
   awayTeam: GameTeamBody;

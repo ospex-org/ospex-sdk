@@ -7,6 +7,26 @@ import {
 } from '../src/realtime/decoders.js';
 import type { Contest } from '../src/types/contest.js';
 
+/**
+ * Every start-time value in a fixture has to be DISTINCT, or a swap between
+ * two same-typed fields in a decoder is invisible. Measured before this
+ * existed: `chainStartTime` and `gameMatchTime` shared one literal here, and
+ * swapping those two assignments in `decodeContestUpdate` — and, separately,
+ * in `contestToUpdate` — left this file green.
+ */
+const STREAM_START_TIMES = {
+  matchTime: '2026-05-02T23:15:00Z',
+  chainStartTime: '2026-05-03T00:00:00Z',
+  gameMatchTime: '2026-05-03T00:05:00Z',
+  gameEarliestMatchTime: '2026-05-02T23:30:00Z',
+  gameRundownMatchTime: '2026-05-03T00:10:00Z',
+  gameSportspageMatchTime: '2026-05-03T00:20:00Z',
+} as const;
+
+function expectDistinctStartTimes(values: readonly string[]): void {
+  expect(new Set(values).size).toBe(values.length);
+}
+
 describe('decodePositionDelta', () => {
   it('maps the recovery body to a Position carrying userAddress + claimedAt', () => {
     const body = {
@@ -74,19 +94,19 @@ describe('decodeContestUpdate', () => {
     expect(out).not.toHaveProperty('chainStartTime');
     expect(out).not.toHaveProperty('gameMatchTime');
     expect(out).not.toHaveProperty('gameEarliestMatchTime');
+    expect(out).not.toHaveProperty('gameRundownMatchTime');
+    expect(out).not.toHaveProperty('gameSportspageMatchTime');
   });
 
   it('copies the start-time companion fields verbatim when the stream body carries them', () => {
+    expectDistinctStartTimes(Object.values(STREAM_START_TIMES));
     const out = decodeContestUpdate({
       contestId: '1',
       awayTeam: 'A',
       homeTeam: 'H',
       sport: 'nba',
       sportId: 1,
-      matchTime: '2026-05-02T23:30:00Z',
-      chainStartTime: '2026-05-03T00:00:00Z',
-      gameMatchTime: '2026-05-03T00:00:00Z',
-      gameEarliestMatchTime: '2026-05-02T23:30:00Z',
+      ...STREAM_START_TIMES,
       status: 'verified',
       awayScore: null,
       homeScore: null,
@@ -95,9 +115,39 @@ describe('decodeContestUpdate', () => {
       voidedAt: null,
       contestCreatedAt: 'c',
     });
-    expect(out.chainStartTime).toBe('2026-05-03T00:00:00Z');
-    expect(out.gameMatchTime).toBe('2026-05-03T00:00:00Z');
-    expect(out.gameEarliestMatchTime).toBe('2026-05-02T23:30:00Z');
+    expect(out.matchTime).toBe(STREAM_START_TIMES.matchTime);
+    expect(out.chainStartTime).toBe(STREAM_START_TIMES.chainStartTime);
+    expect(out.gameMatchTime).toBe(STREAM_START_TIMES.gameMatchTime);
+    expect(out.gameEarliestMatchTime).toBe(STREAM_START_TIMES.gameEarliestMatchTime);
+    expect(out.gameRundownMatchTime).toBe(STREAM_START_TIMES.gameRundownMatchTime);
+    expect(out.gameSportspageMatchTime).toBe(STREAM_START_TIMES.gameSportspageMatchTime);
+  });
+
+  it('copies "" provider-snapshot sentinels on a stream body with no games row', () => {
+    // Paired with the test above: a decoder broken to always emit "" fails
+    // there, one broken to drop "" fails here.
+    const out = decodeContestUpdate({
+      contestId: '1',
+      awayTeam: 'A',
+      homeTeam: 'H',
+      sport: 'nba',
+      sportId: 1,
+      matchTime: '2026-05-03T00:00:00Z',
+      chainStartTime: '2026-05-03T00:00:00Z',
+      gameMatchTime: '',
+      gameEarliestMatchTime: '',
+      gameRundownMatchTime: '',
+      gameSportspageMatchTime: '',
+      status: 'verified',
+      awayScore: null,
+      homeScore: null,
+      verifiedAt: 'v',
+      scoredAt: null,
+      voidedAt: null,
+      contestCreatedAt: 'c',
+    });
+    expect(out.gameRundownMatchTime).toBe('');
+    expect(out.gameSportspageMatchTime).toBe('');
   });
 });
 
@@ -178,25 +228,51 @@ describe('contestToUpdate', () => {
     expect(out).not.toHaveProperty('chainStartTime');
     expect(out).not.toHaveProperty('gameMatchTime');
     expect(out).not.toHaveProperty('gameEarliestMatchTime');
+    expect(out).not.toHaveProperty('gameRundownMatchTime');
+    expect(out).not.toHaveProperty('gameSportspageMatchTime');
   });
 
   it('carries the start-time companion fields through the projection when present', () => {
+    expectDistinctStartTimes(Object.values(STREAM_START_TIMES));
     const contest: Contest = {
       contestId: '1',
       awayTeam: 'A',
       homeTeam: 'H',
       sport: 'nba',
       sportId: 1,
-      matchTime: '2026-05-02T23:30:00Z',
-      chainStartTime: '2026-05-03T00:00:00Z',
-      gameMatchTime: '2026-05-03T00:00:00Z',
-      gameEarliestMatchTime: '2026-05-02T23:30:00Z',
+      ...STREAM_START_TIMES,
       status: 'verified',
       speculations: [],
     };
     const out = contestToUpdate(contest);
-    expect(out.chainStartTime).toBe('2026-05-03T00:00:00Z');
-    expect(out.gameMatchTime).toBe('2026-05-03T00:00:00Z');
-    expect(out.gameEarliestMatchTime).toBe('2026-05-02T23:30:00Z');
+    expect(out.matchTime).toBe(STREAM_START_TIMES.matchTime);
+    expect(out.chainStartTime).toBe(STREAM_START_TIMES.chainStartTime);
+    expect(out.gameMatchTime).toBe(STREAM_START_TIMES.gameMatchTime);
+    expect(out.gameEarliestMatchTime).toBe(STREAM_START_TIMES.gameEarliestMatchTime);
+    expect(out.gameRundownMatchTime).toBe(STREAM_START_TIMES.gameRundownMatchTime);
+    expect(out.gameSportspageMatchTime).toBe(STREAM_START_TIMES.gameSportspageMatchTime);
+  });
+
+  it('carries "" provider-snapshot sentinels through the projection', () => {
+    // Paired with the test above, so neither direction passes on a
+    // projection broken to always emit one shape.
+    const contest: Contest = {
+      contestId: '1',
+      awayTeam: 'A',
+      homeTeam: 'H',
+      sport: 'nba',
+      sportId: 1,
+      matchTime: '2026-05-03T00:00:00Z',
+      chainStartTime: '2026-05-03T00:00:00Z',
+      gameMatchTime: '',
+      gameEarliestMatchTime: '',
+      gameRundownMatchTime: '',
+      gameSportspageMatchTime: '',
+      status: 'verified',
+      speculations: [],
+    };
+    const out = contestToUpdate(contest);
+    expect(out.gameRundownMatchTime).toBe('');
+    expect(out.gameSportspageMatchTime).toBe('');
   });
 });
