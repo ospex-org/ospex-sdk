@@ -55,13 +55,13 @@ export interface Game {
   /**
    * First-successful-match snapshots of TheRundown's / Sportspage's scheduled
    * start for this game, re-observed when the primary feed moves it, or `null`
-   * when no snapshot is held. Dated observations rather than live values:
-   * core-api admits a snapshot into `matchTime` behind a one-hour freshness
-   * guard, so a snapshot well below `gameMatchTime` may be stale and not
-   * driving the bound. Diagnostics/display — gate on `matchTime`. Absent
-   * against older core-api builds; `null` here is a served value, distinct
-   * from the key being absent. (Nullable, unlike the `""` sentinel the
-   * contest surfaces use for the same two snapshots.)
+   * when no snapshot is held. Dated observations rather than live values: per
+   * core-api's contract a snapshot enters `matchTime` only while it is fresh
+   * (a one-hour guard, applied server-side), so a snapshot well below
+   * `gameMatchTime` may simply be stale. Diagnostics/display — gate on
+   * `matchTime`. Absent against older core-api builds; `null` here is a served
+   * value, distinct from the key being absent. (Nullable, unlike the `""`
+   * sentinel the contest surfaces use for the same two snapshots.)
    */
   rundownMatchTime?: string | null;
   sportspageMatchTime?: string | null;

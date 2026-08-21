@@ -165,10 +165,11 @@ export interface Contest {
    * start for the linked game, re-observed when the primary feed moves the
    * game. `""` when no games row is linked or no snapshot has been captured.
    *
-   * Dated observations rather than live values: core-api admits a snapshot
-   * into the served `matchTime` minimum behind a one-hour freshness guard, so
-   * a snapshot well below `gameMatchTime` may be stale and not driving the
-   * bound. Diagnostics/display — gate on `matchTime`, which already folds in
+   * Dated observations rather than live values. Per core-api's contract, a
+   * snapshot enters the served `matchTime` minimum only while it is fresh
+   * (a one-hour guard, applied server-side and not re-derivable from these
+   * fields), so a snapshot well below `gameMatchTime` may simply be stale.
+   * Diagnostics/display — gate on `matchTime`, which already folds in
    * whichever snapshots the server considered fresh.
    */
   gameRundownMatchTime?: string;

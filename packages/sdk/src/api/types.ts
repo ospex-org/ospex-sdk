@@ -608,9 +608,9 @@ export interface GameBody {
   /**
    * Provider start-time snapshots (`games.rundown_match_time` /
    * `games.sportspage_match_time`), or `null` when the underlying column is
-   * unset. (Nullable here, unlike the `""` sentinel on contest surfaces —
-   * mirrors the wire, where this endpoint passes the nullable column through
-   * and the contest projections coalesce it.)
+   * unset. Nullable for the same reason as `earliestMatchTime` above: this
+   * endpoint passes the column through, while the contest projections
+   * coalesce it to `""`.
    */
   rundownMatchTime?: string | null;
   sportspageMatchTime?: string | null;
