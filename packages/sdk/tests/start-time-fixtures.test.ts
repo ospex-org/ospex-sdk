@@ -175,6 +175,23 @@ describe('expectWireValidContestStartTimes refuses a body the view cannot serve'
     );
   });
 
+  it('refuses the contest fixture this change replaced, values unmodified', () => {
+    // Reproduce before fixing: the row exactly as it stood, where giving all
+    // six fields their own value put matchTime below every input. The floor
+    // is the minimum at 23:30 and the fixture served 23:15.
+    const asItStood: ContestStartTimes = {
+      matchTime: '2026-05-02T23:15:00Z',
+      chainStartTime: '2026-05-03T00:00:00Z',
+      gameMatchTime: '2026-05-03T00:05:00Z',
+      gameEarliestMatchTime: '2026-05-02T23:30:00Z',
+      gameRundownMatchTime: '2026-05-03T00:10:00Z',
+      gameSportspageMatchTime: '2026-05-03T00:20:00Z',
+    };
+    expect(() => expectWireValidContestStartTimes(asItStood, 'the replaced fixture')).toThrow(
+      /not the bounded minimum/,
+    );
+  });
+
   it('refuses a populated matchTime beside an empty chainStartTime on an unlinked row', () => {
     // The exact shape the reviewer found: no games row, so the LEAST has no
     // members and `effective_start_time ?? ''` is "".
