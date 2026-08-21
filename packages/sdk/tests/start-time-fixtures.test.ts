@@ -42,6 +42,7 @@ import {
   instantMs,
   listableContestCases,
   type ContestStartTimes,
+  type GameStartTimes,
 } from './fixtures/start-times.js';
 
 /** One minute in ms — the nudge the negative controls use. */
@@ -293,6 +294,21 @@ describe('the fixture-hygiene guards refuse a collapsed matrix', () => {
     ).not.toThrow();
   });
 
+  it('expectGameStartTimeInputsDistinct refuses two games-side inputs sharing a literal', () => {
+    // The games surface's twin had no negative control at all — every call on
+    // it asserted acceptance, so a guard broken to never refuse stayed green.
+    // Its `null` skip needs no control of its own: the matrix carries rows
+    // with two absent snapshots, so a guard that stopped skipping `null` would
+    // redden on the per-row loop above.
+    const { served } = gameCase('retained-floor-drives');
+    expect(() =>
+      expectGameStartTimeInputsDistinct(
+        { ...served, rundownMatchTime: served.earliestMatchTime },
+        'games-shared',
+      ),
+    ).toThrow(/share the literal/);
+  });
+
   it('expectMatrixSeparatesEveryPair names a pair no row separates', () => {
     // Collapse gameSportspageMatchTime onto gameRundownMatchTime in every
     // row. Done to a copy, so the real matrix is untouched — the point is
@@ -353,6 +369,20 @@ describe('the freshness guards refuse the wrong case', () => {
     ).toThrow(/does not equal the fresh/);
   });
 
+  it('expectStaleSnapshotExcluded refuses a row whose matchTime sits AT the stale snapshot', () => {
+    // The guard's second clause, which had no control of its own: a stale
+    // snapshot proves nothing about exclusion unless matchTime is strictly
+    // above it. Only matchTime moves here, so the snapshot is still stale and
+    // the first clause still passes — the refusal can only come from the
+    // second. The boundary value is the discriminating one: matchTime EQUAL to
+    // the snapshot is refused by `<=` and accepted by `<`, while a matchTime
+    // strictly below it is refused by both and cannot separate them.
+    const bad: ContestStartTimes = { ...stale, matchTime: stale.gameRundownMatchTime };
+    expect(() => expectStaleSnapshotExcluded(bad, 'gameRundownMatchTime', 'stale-tied')).toThrow(
+      /at or below the stale/,
+    );
+  });
+
   it('expectStaleGameSnapshotExcluded refuses a games-side snapshot inside the window', () => {
     expect(() =>
       expectStaleGameSnapshotExcluded(
@@ -361,6 +391,37 @@ describe('the freshness guards refuse the wrong case', () => {
         'games-fresh-not-stale',
       ),
     ).toThrow(/it is FRESH/);
+  });
+
+  it('expectStaleGameSnapshotExcluded refuses a row whose matchTime sits AT the stale snapshot', () => {
+    // The games-side twin of the control above, for the same reason and with
+    // the same boundary choice.
+    const base = gameCase('stale-rundown-excluded').served;
+    const staleSnapshot = base.rundownMatchTime;
+    // Narrowing that is also an assertion, deliberately not a `??` fallback:
+    // if this row's snapshot ever became absent, falling back to `matchTime`
+    // would tie the row to itself and the case would pass while exercising
+    // nothing.
+    if (staleSnapshot === null) {
+      throw new Error('fixture regressed: the stale games row must hold a rundown snapshot');
+    }
+    const bad: GameStartTimes = { ...base, matchTime: staleSnapshot };
+    expect(() =>
+      expectStaleGameSnapshotExcluded(bad, 'rundownMatchTime', 'games-stale-tied'),
+    ).toThrow(/at or below the stale/);
+  });
+
+  it('expectStaleGameSnapshotExcluded refuses an absent snapshot rather than ageing a null', () => {
+    // Its third clause, also uncontrolled. Deleting it does not make the guard
+    // silent — `instantMs` refuses the coerced null — so the assertion is on
+    // the message, which is the only thing that tells the two refusals apart.
+    expect(() =>
+      expectStaleGameSnapshotExcluded(
+        gameCase('fresh-sportspage-drives-rundown-absent').served,
+        'rundownMatchTime',
+        'games-null-snapshot',
+      ),
+    ).toThrow(/no snapshot to age/);
   });
 });
 
@@ -423,10 +484,60 @@ describe('expectWireValidGameStartTimes refuses a body /v1/games cannot serve', 
     ).not.toThrow();
   });
 
+  it('admits a games-side snapshot exactly at the freshness edge and excludes one below it', () => {
+    // The pair the games surface was missing. `admittedGameInputs` compares
+    // `snapshot >= gameMatchTime - SNAPSHOT_FRESHNESS_MS`, and the ONLY input
+    // that separates that from a `>` is one sitting exactly on the boundary:
+    // the edge is inside an inclusive window and outside an exclusive one.
+    //
+    // Why the obvious input does not discriminate: a snapshot far below the
+    // feed value — the shape the case below this one uses, and the shape the
+    // `stale-rundown-excluded` fixture carries — is refused by an inclusive
+    // window AND by an exclusive one alike, so it cannot tell the two apart.
+    // An extreme value fails every candidate rule; a boundary value fails
+    // exactly one of them.
+    //
+    // Units. core-api applies this rule at microsecond resolution on the games
+    // surface (`v >= m - 3_600_000_000n` in `src/v1/games.ts`) and as
+    // `interval '1 hour'` in the contest view. These fixture literals are
+    // canonical UTC to the second — `instantMs` refuses anything finer — so
+    // one second is the smallest step below the edge this guard can express.
+    // A microsecond nudge is unrepresentable here and would buy nothing: every
+    // value strictly below the edge is on the same side of both windows. The
+    // edge is derived from `SNAPSHOT_FRESHNESS_MS` rather than written out, so
+    // moving the window moves the pair with it instead of un-discriminating it.
+    const feed = '2026-05-09T18:00:00Z';
+    const edge = iso(instantMs(feed, 'feed') - SNAPSHOT_FRESHNESS_MS);
+    const belowEdge = iso(instantMs(edge, 'edge') - 1000);
+
+    const admitted: GameStartTimes = {
+      matchTime: edge,
+      gameMatchTime: feed,
+      earliestMatchTime: null,
+      rundownMatchTime: edge,
+      sportspageMatchTime: null,
+    };
+    const excluded: GameStartTimes = { ...admitted, rundownMatchTime: belowEdge };
+
+    // Everything else is held, asserted rather than trusted: the freshness
+    // comparison is the only thing that can give these two different verdicts.
+    expect(GAME_START_TIME_FIELDS.filter((f) => admitted[f] !== excluded[f])).toEqual([
+      'rundownMatchTime',
+    ]);
+
+    // Inclusive: the edge is admitted, so it drives the minimum and matchTime
+    // equals it. This is the half that reddens if the comparison becomes `>`.
+    expect(() => expectWireValidGameStartTimes(admitted, 'games-edge-admitted')).not.toThrow();
+    // One second lower the snapshot drops out, the minimum becomes the feed
+    // value, and the same served matchTime is no longer producible.
+    expect(() => expectWireValidGameStartTimes(excluded, 'games-edge-excluded')).toThrow(
+      /not the minimum/,
+    );
+  });
+
   it('excludes a stale games-side snapshot from the minimum', () => {
-    // Discriminating pair: the same snapshot value, once inside the window
-    // and once outside it, with everything else held. Only a build that
-    // applies the freshness rule tells them apart.
+    // The far-below case. It proves the window is applied at all; it does NOT
+    // separate `>=` from `>` — the test above it is what does that.
     const feed = '2026-05-09T20:00:00Z';
     const fresh = iso(instantMs(feed, 'feed') - 30 * MINUTE);
     const staleValue = iso(instantMs(feed, 'feed') - SNAPSHOT_FRESHNESS_MS - MINUTE);
