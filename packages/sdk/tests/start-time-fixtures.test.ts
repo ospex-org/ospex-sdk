@@ -22,9 +22,15 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import * as startTimeFixtures from './fixtures/start-times.js';
 import {
+  CONTEST_INPUT_FIELDS,
+  CONTEST_SNAPSHOT_FIELDS,
   CONTEST_START_TIME_FIELDS,
   CONTEST_START_TIME_MATRIX,
+  CONTEST_UNGUARDED_INPUT_FIELDS,
+  GAME_INPUT_FIELDS,
+  GAME_SNAPSHOT_FIELDS,
   GAME_START_TIME_FIELDS,
   GAME_START_TIME_MATRIX,
   SNAPSHOT_FRESHNESS_MS,
@@ -51,6 +57,190 @@ const MINUTE = 60_000;
 function iso(ms: number): string {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
+
+// ── the enumerated surfaces, pinned against literals ───────────────────────
+
+/**
+ * Every field list the fixture module exports, written out here as a LITERAL.
+ *
+ * WHY THIS CASE EXISTS. Guards inside the fixture module and sweeps in three
+ * test files iterate these lists. Dropping an entry therefore shrinks every
+ * one of those sweeps at once — the field it names silently stops being
+ * checked, and nothing goes red. Two review rounds closed that one list at a
+ * time and it stayed open on the next list over; this closes it in one place,
+ * for any list, whichever sweep happens to consume it.
+ *
+ * MEASURED at `4ee3eaa` rather than assumed. Dropping `sportspageMatchTime`
+ * from `GAME_START_TIME_FIELDS` left the whole sdk suite green. With that drop
+ * applied, a `toGame` assigning `body.rundownMatchTime` into
+ * `out.sportspageMatchTime` also went green — the same suite kills that mapper
+ * with the list intact. (The full rundown/sportspage swap still died, because
+ * the surviving `rundownMatchTime` entry catches its other half; the one-sided
+ * copy is the one that got through.)
+ *
+ * MAINTENANCE RULE. Adding a start-time field to a surface means adding it to
+ * that surface's list in `fixtures/start-times.ts` AND to the matching literal
+ * below. Adding a NEW list means adding a row to this table — the completeness
+ * case below refuses an exported list that no row names, so a future list is
+ * caught here rather than needing a case of its own.
+ *
+ * THE EXPECTATIONS ARE LITERALS ON PURPOSE. An expectation read back from the
+ * module, from `Object.keys` of a fixture row, or from a type would shrink in
+ * lockstep with the mutant that shrinks the list, and this case could then
+ * only fail on a broken copy.
+ */
+const PINNED_FIELD_LISTS: ReadonlyArray<{
+  readonly listName: string;
+  readonly list: readonly string[];
+  readonly expected: readonly string[];
+}> = [
+  {
+    listName: 'CONTEST_START_TIME_FIELDS',
+    list: CONTEST_START_TIME_FIELDS,
+    expected: [
+      'matchTime',
+      'chainStartTime',
+      'gameMatchTime',
+      'gameEarliestMatchTime',
+      'gameRundownMatchTime',
+      'gameSportspageMatchTime',
+    ],
+  },
+  {
+    listName: 'CONTEST_INPUT_FIELDS',
+    list: CONTEST_INPUT_FIELDS,
+    expected: [
+      'chainStartTime',
+      'gameMatchTime',
+      'gameEarliestMatchTime',
+      'gameRundownMatchTime',
+      'gameSportspageMatchTime',
+    ],
+  },
+  {
+    listName: 'CONTEST_UNGUARDED_INPUT_FIELDS',
+    list: CONTEST_UNGUARDED_INPUT_FIELDS,
+    expected: ['chainStartTime', 'gameMatchTime', 'gameEarliestMatchTime'],
+  },
+  {
+    listName: 'CONTEST_SNAPSHOT_FIELDS',
+    list: CONTEST_SNAPSHOT_FIELDS,
+    expected: ['gameRundownMatchTime', 'gameSportspageMatchTime'],
+  },
+  {
+    listName: 'GAME_START_TIME_FIELDS',
+    list: GAME_START_TIME_FIELDS,
+    expected: [
+      'matchTime',
+      'gameMatchTime',
+      'earliestMatchTime',
+      'rundownMatchTime',
+      'sportspageMatchTime',
+    ],
+  },
+  {
+    listName: 'GAME_INPUT_FIELDS',
+    list: GAME_INPUT_FIELDS,
+    expected: ['gameMatchTime', 'earliestMatchTime', 'rundownMatchTime', 'sportspageMatchTime'],
+  },
+  {
+    listName: 'GAME_SNAPSHOT_FIELDS',
+    list: GAME_SNAPSHOT_FIELDS,
+    expected: ['rundownMatchTime', 'sportspageMatchTime'],
+  },
+];
+
+/**
+ * The same rule one level up: the matrices are exported arrays that the same
+ * sweeps iterate, so deleting a ROW shrinks them the way deleting a field
+ * shrinks a list. Their `id` sequences are pinned as literals here for the
+ * same reason and under the same maintenance rule.
+ */
+const PINNED_MATRIX_IDS: ReadonlyArray<{
+  readonly matrixName: string;
+  readonly ids: readonly string[];
+  readonly expected: readonly string[];
+}> = [
+  {
+    matrixName: 'CONTEST_START_TIME_MATRIX',
+    ids: CONTEST_START_TIME_MATRIX.map((c) => c.id),
+    expected: [
+      'chain-start-drives',
+      'feed-value-drives',
+      'retained-floor-drives',
+      'fresh-rundown-drives',
+      'stale-rundown-excluded',
+      'unverified-linked',
+      'unlinked',
+    ],
+  },
+  {
+    matrixName: 'GAME_START_TIME_MATRIX',
+    ids: GAME_START_TIME_MATRIX.map((c) => c.id),
+    expected: [
+      'feed-value-drives-sportspage-absent',
+      'fresh-sportspage-drives-rundown-absent',
+      'retained-floor-drives',
+      'stale-rundown-excluded',
+      'fresh-rundown-drives',
+    ],
+  },
+];
+
+describe('the fixture module enumerations are pinned against literals', () => {
+  for (const { listName, list, expected } of PINNED_FIELD_LISTS) {
+    it(`${listName} is exactly the pinned enumeration`, () => {
+      // `toEqual` on arrays is order-sensitive, so this fails on a drop, an
+      // addition, a rename and a reorder alike.
+      expect(list).toEqual(expected);
+    });
+  }
+
+  for (const { matrixName, ids, expected } of PINNED_MATRIX_IDS) {
+    it(`${matrixName} carries exactly the pinned rows, in order`, () => {
+      expect(ids).toEqual(expected);
+    });
+  }
+
+  it('the table names every field list the module exports', () => {
+    // What the per-list literals above cannot catch: a NEW list added to the
+    // fixture module and never pinned. Derived from the module deliberately —
+    // it is the addition side, and a mutant that DROPS an entry cannot move
+    // this set. The names below are still a literal, so renaming a list or
+    // un-exporting one reddens here too.
+    const exported = Object.entries(startTimeFixtures)
+      .filter(
+        ([, value]) =>
+          Array.isArray(value) && value.length > 0 && value.every((e) => typeof e === 'string'),
+      )
+      .map(([name]) => name)
+      .sort();
+    expect(exported).toEqual([
+      'CONTEST_INPUT_FIELDS',
+      'CONTEST_SNAPSHOT_FIELDS',
+      'CONTEST_START_TIME_FIELDS',
+      'CONTEST_UNGUARDED_INPUT_FIELDS',
+      'GAME_INPUT_FIELDS',
+      'GAME_SNAPSHOT_FIELDS',
+      'GAME_START_TIME_FIELDS',
+    ]);
+    expect([...PINNED_FIELD_LISTS].map((e) => e.listName).sort()).toEqual(exported);
+  });
+
+  it('the table names every case matrix the module exports', () => {
+    const exported = Object.entries(startTimeFixtures)
+      .filter(
+        ([, value]) =>
+          Array.isArray(value) &&
+          value.length > 0 &&
+          value.every((e) => typeof e === 'object' && e !== null && 'id' in e),
+      )
+      .map(([name]) => name)
+      .sort();
+    expect(exported).toEqual(['CONTEST_START_TIME_MATRIX', 'GAME_START_TIME_MATRIX']);
+    expect([...PINNED_MATRIX_IDS].map((e) => e.matrixName).sort()).toEqual(exported);
+  });
+});
 
 describe('the contest start-time matrix is wire-valid', () => {
   for (const { id, why, served } of CONTEST_START_TIME_MATRIX) {

@@ -41,6 +41,21 @@
  * reddens instead of quietly un-discriminating the suite. Adding a start-time
  * field to a surface means adding it to that surface's field list here.
  *
+ * ── EVERY FIELD LIST BELOW IS EXPORTED, AND PINNED ELSEWHERE ────────────────
+ *
+ * The lists in this module are iterated by guards here and by sweeps in three
+ * test files, so DROPPING AN ENTRY SHRINKS EVERY ONE OF THOSE SWEEPS AT ONCE
+ * and the field it names stops being checked with nothing going red. Measured
+ * on this branch: removing `sportspageMatchTime` from `GAME_START_TIME_FIELDS`
+ * left the whole sdk suite green, and with that removal in place a `toGame`
+ * that copied `rundownMatchTime` into `out.sportspageMatchTime` went green too
+ * — the same suite kills that mapper with the list intact.
+ *
+ * So every list here is exported (including the ones only this module reads)
+ * and `start-time-fixtures.test.ts` pins each against a literal enumeration
+ * written out in that file. Adding a field to a list, or adding a new list,
+ * means updating that case; it fails naming the list otherwise.
+ *
  * Two narrower rules run beside it:
  *
  *   - `expectStartTimeInputsDistinct` — within one row, no two non-sentinel
@@ -153,7 +168,7 @@ export const CONTEST_START_TIME_FIELDS = [
 ] as const;
 
 /** The inputs the view minimises over. `matchTime` is the output, not an input. */
-const CONTEST_INPUT_FIELDS = [
+export const CONTEST_INPUT_FIELDS = [
   'chainStartTime',
   'gameMatchTime',
   'gameEarliestMatchTime',
@@ -161,7 +176,22 @@ const CONTEST_INPUT_FIELDS = [
   'gameSportspageMatchTime',
 ] as const;
 
-const CONTEST_SNAPSHOT_FIELDS = ['gameRundownMatchTime', 'gameSportspageMatchTime'] as const;
+/**
+ * The three inputs that enter the LEAST unconditionally — everything in
+ * `CONTEST_INPUT_FIELDS` that is not a provider snapshot. Named rather than
+ * written inline at its one call site so it is a list the pinning case can
+ * reach; see the note on the lists above.
+ */
+export const CONTEST_UNGUARDED_INPUT_FIELDS = [
+  'chainStartTime',
+  'gameMatchTime',
+  'gameEarliestMatchTime',
+] as const;
+
+export const CONTEST_SNAPSHOT_FIELDS = [
+  'gameRundownMatchTime',
+  'gameSportspageMatchTime',
+] as const;
 
 export const CONTEST_START_TIME_MATRIX: readonly ContestStartTimeCase[] = [
   {
@@ -295,7 +325,7 @@ function admittedContestInputs(
   where: string,
 ): Array<{ field: string; iso: string }> {
   const admitted: Array<{ field: string; iso: string }> = [];
-  for (const field of ['chainStartTime', 'gameMatchTime', 'gameEarliestMatchTime'] as const) {
+  for (const field of CONTEST_UNGUARDED_INPUT_FIELDS) {
     if (row[field] !== '') admitted.push({ field, iso: row[field] });
   }
   for (const field of CONTEST_SNAPSHOT_FIELDS) {
@@ -472,14 +502,14 @@ export const GAME_START_TIME_FIELDS = [
   'sportspageMatchTime',
 ] as const;
 
-const GAME_INPUT_FIELDS = [
+export const GAME_INPUT_FIELDS = [
   'gameMatchTime',
   'earliestMatchTime',
   'rundownMatchTime',
   'sportspageMatchTime',
 ] as const;
 
-const GAME_SNAPSHOT_FIELDS = ['rundownMatchTime', 'sportspageMatchTime'] as const;
+export const GAME_SNAPSHOT_FIELDS = ['rundownMatchTime', 'sportspageMatchTime'] as const;
 
 export const GAME_START_TIME_MATRIX: readonly GameStartTimeCase[] = [
   {
