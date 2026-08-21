@@ -275,14 +275,37 @@ describe('expectWireValidContestStartTimes refuses a body the view cannot serve'
 });
 
 describe('the fixture-hygiene guards refuse a collapsed matrix', () => {
-  it('expectContestStartTimeInputsDistinct refuses two inputs sharing a literal', () => {
+  it('expectContestStartTimeInputsDistinct refuses a shared literal on EVERY input it covers', () => {
+    // N fields in the guard's list are N properties. A control that collides
+    // one pair leaves the other inputs unchecked, and dropping any of them
+    // from `CONTEST_INPUT_FIELDS` then stays green — measured: dropping
+    // `gameSportspageMatchTime`, and separately `chainStartTime`, both
+    // survived the single-pair version of this case.
+    //
+    // The enumeration below is a LITERAL rather than the module's own list on
+    // purpose. Importing that list would shrink this loop in lockstep with the
+    // mutant that shrinks the list, which is the shape where a test supplies
+    // its own expected value and can then only fail on a broken copy.
+    const INPUTS = [
+      'chainStartTime',
+      'gameMatchTime',
+      'gameEarliestMatchTime',
+      'gameRundownMatchTime',
+      'gameSportspageMatchTime',
+    ] as const;
     const { served } = contestCase('chain-start-drives');
-    expect(() =>
-      expectContestStartTimeInputsDistinct(
-        { ...served, gameMatchTime: served.gameRundownMatchTime },
-        'shared',
-      ),
-    ).toThrow(/share the literal/);
+    // A value no field in that row carries, so the collision this builds is
+    // the only one and the guard cannot refuse for an unrelated pair.
+    const shared = '2026-05-02T23:00:00Z';
+    for (const field of INPUTS) {
+      const partner = field === 'chainStartTime' ? 'gameMatchTime' : 'chainStartTime';
+      const row: ContestStartTimes = { ...served };
+      row[field] = shared;
+      row[partner] = shared;
+      expect(() => expectContestStartTimeInputsDistinct(row, 'contest-shared')).toThrow(
+        /share the literal/,
+      );
+    }
   });
 
   it('expectContestStartTimeInputsDistinct tolerates repeated "" sentinels', () => {
@@ -294,19 +317,31 @@ describe('the fixture-hygiene guards refuse a collapsed matrix', () => {
     ).not.toThrow();
   });
 
-  it('expectGameStartTimeInputsDistinct refuses two games-side inputs sharing a literal', () => {
+  it('expectGameStartTimeInputsDistinct refuses a shared literal on EVERY input it covers', () => {
     // The games surface's twin had no negative control at all — every call on
     // it asserted acceptance, so a guard broken to never refuse stayed green.
+    // Same per-field sweep and same literal-not-imported reasoning as above.
+    //
     // Its `null` skip needs no control of its own: the matrix carries rows
     // with two absent snapshots, so a guard that stopped skipping `null` would
-    // redden on the per-row loop above.
+    // redden on the per-row loop at the top of this file. Measured.
+    const INPUTS = [
+      'gameMatchTime',
+      'earliestMatchTime',
+      'rundownMatchTime',
+      'sportspageMatchTime',
+    ] as const;
     const { served } = gameCase('retained-floor-drives');
-    expect(() =>
-      expectGameStartTimeInputsDistinct(
-        { ...served, rundownMatchTime: served.earliestMatchTime },
-        'games-shared',
-      ),
-    ).toThrow(/share the literal/);
+    const shared = '2026-05-08T05:55:00Z';
+    for (const field of INPUTS) {
+      const partner = field === 'gameMatchTime' ? 'rundownMatchTime' : 'gameMatchTime';
+      const row: GameStartTimes = { ...served };
+      row[field] = shared;
+      row[partner] = shared;
+      expect(() => expectGameStartTimeInputsDistinct(row, 'games-shared')).toThrow(
+        /share the literal/,
+      );
+    }
   });
 
   it('expectMatrixSeparatesEveryPair names a pair no row separates', () => {
@@ -333,14 +368,32 @@ describe('the fixture-hygiene guards refuse a collapsed matrix', () => {
     }
   });
 
-  it('expectUnlinkedGameStartTimes refuses a populated game-derived companion', () => {
+  it('expectUnlinkedGameStartTimes refuses a populated companion, whichever one it is', () => {
+    // Same N-fields-N-properties gap: the guard enumerates four companions and
+    // the earlier control populated one, so dropping either snapshot from that
+    // enumeration stayed green. Measured on both.
+    //
+    // Derived from the exported field list here, unlike the two loops above:
+    // the mutant this kills shrinks the guard's OWN inline enumeration, which
+    // is a different list, so deriving cannot shrink the loop with it — and a
+    // contest start-time field added later is swept automatically.
+    const gameDerived = CONTEST_START_TIME_FIELDS.filter(
+      (f) => f !== 'matchTime' && f !== 'chainStartTime',
+    );
+    expect(gameDerived).toEqual([
+      'gameMatchTime',
+      'gameEarliestMatchTime',
+      'gameRundownMatchTime',
+      'gameSportspageMatchTime',
+    ]);
     const { served } = contestCase('unlinked');
-    expect(() =>
-      expectUnlinkedGameStartTimes(
-        { ...served, gameEarliestMatchTime: '2026-05-08T01:05:00Z' },
-        'populated',
-      ),
-    ).toThrow(/gameEarliestMatchTime/);
+    for (const field of gameDerived) {
+      const row: ContestStartTimes = { ...served };
+      row[field] = '2026-05-08T01:05:00Z';
+      // `where` is deliberately not the field name: the only place the name
+      // can come from is the guard's own report of what it found populated.
+      expect(() => expectUnlinkedGameStartTimes(row, 'populated')).toThrow(new RegExp(field));
+    }
   });
 });
 
