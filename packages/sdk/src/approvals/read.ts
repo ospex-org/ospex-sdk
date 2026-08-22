@@ -11,6 +11,10 @@
  * for Foundry-keystore-backed signers and is the path the CLI
  * `approvals show --address` and `doctor` commands take when the user
  * has not already unlocked.
+ *
+ * Passing `blockNumber` pins both reads to that block — see
+ * `ReadApprovalsArgs.blockNumber` and the `commitments.getFilledRisk`
+ * docblock for why a funding comparison wants one instant.
  */
 
 import { readAllowance } from '../commitments/allowance.js';
@@ -42,8 +46,8 @@ export async function read(
   const treasuryModule = addresses.treasuryModule as Hex;
 
   const [usdcPositionModule, usdcTreasuryModule] = await Promise.all([
-    readAllowance(publicClient, usdc, owner, positionModule),
-    readAllowance(publicClient, usdc, owner, treasuryModule),
+    readAllowance(publicClient, usdc, owner, positionModule, args.blockNumber),
+    readAllowance(publicClient, usdc, owner, treasuryModule, args.blockNumber),
   ]);
 
   const positionEntry: AllowanceEntry = {

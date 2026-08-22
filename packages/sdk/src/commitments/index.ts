@@ -43,6 +43,11 @@ import {
   type CancelOnchainArgs,
   type CancelOnchainResult,
 } from './cancelOnchain.js';
+import {
+  getFilledRisk,
+  type FilledRiskSnapshot,
+  type GetFilledRiskArgs,
+} from './getFilledRisk.js';
 import { getNonceFloor, type GetNonceFloorArgs } from './getNonceFloor.js';
 import { match, type MatchArgs, type MatchResult } from './match.js';
 import { matchFromPreview } from './matchFromPreview.js';
@@ -357,6 +362,10 @@ export class Commitments {
   getNonceFloor(args: GetNonceFloorArgs): Promise<bigint> {
     return getNonceFloor(this.ctx, args);
   }
+
+  getFilledRisk(args: GetFilledRiskArgs): Promise<FilledRiskSnapshot> {
+    return getFilledRisk(this.ctx, args);
+  }
 }
 
 export type { ApproveArgs, ApproveResult } from './approve.js';
@@ -366,6 +375,7 @@ export type {
   CancelAllOnSpeculationResult,
 } from './cancelAllOnSpeculation.js';
 export type { CancelOnchainArgs, CancelOnchainResult } from './cancelOnchain.js';
+export type { FilledRiskSnapshot, GetFilledRiskArgs } from './getFilledRisk.js';
 export type { GetNonceFloorArgs } from './getNonceFloor.js';
 export type { MatchArgs, MatchResult } from './match.js';
 export type { PrepareMatchArgs } from './prepareMatch.js';

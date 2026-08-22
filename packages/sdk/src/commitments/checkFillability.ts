@@ -88,7 +88,7 @@ export interface CheckCommitmentFillabilityArgs {
 }
 
 export type FillabilityOutcome =
-  /** Every checked requirement is satisfied at `checkedAtBlock`. */
+  /** Every checked requirement is satisfied by the funding reads this verdict was computed from. */
   | 'fillable'
   /** A definite liveness or funding shortfall was found. */
   | 'not-fillable'
@@ -175,9 +175,16 @@ export interface CheckCommitmentFillabilityResult {
   /** Always true — this is a point-in-time advisory, never a guarantee. */
   advisory: true;
   /**
-   * Block at which balances/allowances were read. Present only when funding was
-   * evaluated on-chain — absent on a liveness-only short-circuit (that verdict
-   * comes from the fetched commitment row, not a chain read).
+   * A block number read ALONGSIDE the balances/allowances, as a marker of
+   * roughly when this verdict was taken. It is fetched concurrently with those
+   * reads rather than passed to them, so it labels the verdict; it does not pin
+   * it, and the funding reads can land a block either side of it. For a
+   * comparison taken AT one block, use `commitments.getFilledRisk` and pass its
+   * `atBlock` to `balances.read` / `approvals.read`.
+   *
+   * Present only when funding was evaluated on-chain — absent on a
+   * liveness-only short-circuit (that verdict comes from the fetched commitment
+   * row, not a chain read).
    */
   checkedAtBlock?: bigint;
   /**

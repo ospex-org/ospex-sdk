@@ -283,7 +283,7 @@ If the indexer already moved the row to `claimable`, you'll see the equivalent s
 
 ## Section 10 — on-chain cancel (mainnet)
 
-Validates `commitments.cancelOnchain`, `commitments.raiseMinNonce`, `commitments.cancelAllOnSpeculation`, and `commitments.getNonceFloor`. The contract has no `AlreadyCancelled` revert path, so re-cancelling is a *success* — that's a deliberate observation point in 10.4.
+Validates `commitments.cancelOnchain`, `commitments.raiseMinNonce`, `commitments.cancelAllOnSpeculation`, `commitments.getNonceFloor`, and `commitments.getFilledRisk`. The contract has no `AlreadyCancelled` revert path, so re-cancelling is a *success* — that's a deliberate observation point in 10.4.
 
 Prereq: a funded test wallet (gas + a few USDC for the submits) on mainnet. Mainnet contract addresses are in `packages/sdk/src/contracts/addresses.ts`.
 
@@ -299,11 +299,14 @@ Prereq: a funded test wallet (gas + a few USDC for the submits) on mainnet. Main
 | 10.8 | Run 10.7 without `--dry-run` (same `--new-min-nonce`). | tx succeeds; `MinNonceUpdated` event in receipt; both rows show `nonceInvalidated=true` within 30s; `status` stays `'open'`. | `cancelAllOnSpeculation` end-to-end + indexer `nonce_invalidated` projection. |
 | 10.9 | Run `cancel-all` again, passing `--new-min-nonce <n>` where `n` ≤ the floor printed by 10.10 (or the `newMinNonce` returned by 10.8). | `OspexChainError` with `reason: 'NonceMustIncrease'`. | `NonceMustIncrease` mapping. Each successful raise bumps the floor, so a floor at-or-below the current value deterministically hits this revert. |
 | 10.10 | `ospex commitments nonce-floor --maker <addr> --contest-id <id> --scorer <addr> --line <ticks>` | Prints the post-10.8 newMinNonce as `minNonce`. | `getNonceFloor` read utility. |
+| 10.10a | `ospex commitments filled-risk <hash-from-10.1> <hash-from-10.5>` | Two rows; the 10.1 hash reads `0`, the partially-matched 10.5 hash reads its filled amount; one `atBlock` line above the table. | `getFilledRisk` batching + a real Multicall3 aggregate. A hash with no fill is `0`, not an error. |
+| 10.10b | Re-run 10.10a with `--block <atBlock - 5>` from the previous step. | Same rows if no fill landed in between; `atBlock` echoes the pinned value. | The node serves a pinned aggregate. Note the printed `atBlock` is echoed from `--block`, so it does not by itself show the block reached the node — 10.10c is what shows that. |
+| 10.10c | Re-run 10.10a with `--block <atBlock + 5000000>` (a block far past the head). | Command fails with an `OspexChainError` (typically a `header not found` from the node). | The pin reaches the wire: a dropped `--block` would simply succeed at `latest`. Same refusal a lagging node behind a load balancer produces — the read refuses rather than answering from a different block, which is the documented residual, not a bug. |
 | 10.11 | Submit a fresh commitment, then `ospex commitments cancel <hash> --also-onchain`. | DELETE returns `200`; on-chain cancel emits `CommitmentCancelled`; `status='cancelled'`. | Composed off-chain + on-chain cancel — the recommended pattern, documented in the root `README.md` under **Sovereign cancel — off-chain DELETE vs. on-chain cancel**. |
 
-**Pass criterion**: 10.1–10.4, 10.7–10.10, and 10.11 succeed end-to-end. 10.5 (partial-fill cancel) and 10.6 (third-party reject) require additional wallets / takers — defer to "manual verification at next two-wallet test cycle" in the release ticket if not feasible at PR time.
+**Pass criterion**: 10.1–10.4, 10.7–10.10c, and 10.11 succeed end-to-end. 10.5 (partial-fill cancel) and 10.6 (third-party reject) require additional wallets / takers — defer to "manual verification at next two-wallet test cycle" in the release ticket if not feasible at PR time.
 
-A read-only automated smoke for `getNonceFloor` lives at `packages/sdk/tests/integration/onchain-cancel.test.ts` and runs under `OSPEX_INTEGRATION=1` with `OSPEX_TEST_RPC_URL`. Set `OSPEX_TEST_PRIVATE_KEY` + `OSPEX_TEST_LIVE_HASH` to additionally run 10.2 and 10.4 automatically.
+A read-only automated smoke for `getNonceFloor` and `getFilledRisk` lives at `packages/sdk/tests/integration/onchain-cancel.test.ts` and runs under `OSPEX_INTEGRATION=1` with `OSPEX_TEST_RPC_URL`. Set `OSPEX_TEST_PRIVATE_KEY` + `OSPEX_TEST_LIVE_HASH` to additionally run 10.2 and 10.4 automatically.
 
 ---
 

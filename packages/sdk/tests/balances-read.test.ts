@@ -36,8 +36,8 @@ const ADDRESSES: OspexAddresses = {
 };
 
 interface ReadCalls {
-  getBalance: Array<{ address: string }>;
-  readContract: Array<{ token: string; owner: string }>;
+  getBalance: Array<{ address: string; blockNumber: bigint | undefined }>;
+  readContract: Array<{ token: string; owner: string; blockNumber: bigint | undefined }>;
 }
 
 interface FakeOpts {
@@ -50,16 +50,21 @@ function makeContext(opts: FakeOpts = {}): { ctx: BalancesContext; calls: ReadCa
   const calls: ReadCalls = { getBalance: [], readContract: [] };
 
   const publicClient = {
-    getBalance: async (params: { address: string }) => {
-      calls.getBalance.push({ address: params.address });
+    getBalance: async (params: { address: string; blockNumber?: bigint }) => {
+      calls.getBalance.push({ address: params.address, blockNumber: params.blockNumber });
       return opts.native ?? 0n;
     },
     readContract: async (params: {
       address: string;
       args: readonly [string];
+      blockNumber?: bigint;
     }) => {
       const [owner] = params.args;
-      calls.readContract.push({ token: params.address, owner });
+      calls.readContract.push({
+        token: params.address,
+        owner,
+        blockNumber: params.blockNumber,
+      });
       if (params.address.toLowerCase() === ADDRESSES.usdc.toLowerCase()) {
         return opts.usdc ?? 0n;
       }
@@ -131,5 +136,32 @@ describe('client.balances.read', () => {
     const snap = await read(ctx, { owner: OWNER_OVERRIDE });
     expect(snap.native).toBe(0n);
     expect(snap.usdc).toBe(0n);
+  });
+
+  // `blockNumber` exists so a funding comparison can be taken at the same
+  // instant as `commitments.getFilledRisk`'s `atBlock`. There are TWO reads
+  // here and threading the block into one of them is not the property — a
+  // native balance at block N beside a USDC balance at head is exactly the
+  // incoherence the option removes.
+  it('pins BOTH reads to an explicit blockNumber', async () => {
+    const { ctx, calls } = makeContext({ native: 1n, usdc: 2n });
+
+    await read(ctx, { owner: OWNER_OVERRIDE, blockNumber: 71_234_501n });
+
+    expect(calls.getBalance).toHaveLength(1);
+    expect(calls.readContract).toHaveLength(1);
+    expect(calls.getBalance[0]!.blockNumber).toBe(71_234_501n);
+    expect(calls.readContract[0]!.blockNumber).toBe(71_234_501n);
+  });
+
+  it('sends no block when blockNumber is omitted (the pre-existing behaviour)', async () => {
+    // Control for the case above: without this, a build that pinned every
+    // read to some constant would still pass it.
+    const { ctx, calls } = makeContext({ native: 1n, usdc: 2n });
+
+    await read(ctx, { owner: OWNER_OVERRIDE });
+
+    expect(calls.getBalance[0]!.blockNumber).toBeUndefined();
+    expect(calls.readContract[0]!.blockNumber).toBeUndefined();
   });
 });

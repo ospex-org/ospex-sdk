@@ -137,7 +137,7 @@ export interface CheckSubmitFundabilityArgs {
 }
 
 export type SubmitFundabilityOutcome =
-  /** Maker can back their whole open book plus this new commitment — including the worst-case existing lazy fees — at `checkedAtBlock`. */
+  /** Maker can back their whole open book plus this new commitment — including the worst-case existing lazy fees — per the funding reads this verdict was computed from. */
   | 'fundable'
   /** A definite funding shortfall was found from a successful read. */
   | 'not-fundable'
@@ -268,7 +268,15 @@ export interface CheckSubmitFundabilityResult {
   coverage: SubmitFundabilityCoverage;
   /** Always true — a point-in-time advisory, never a guarantee. */
   advisory: true;
-  /** Block at which balances/allowances were read. Absent only when the block read failed. */
+  /**
+   * A block number read ALONGSIDE the balances/allowances, as a marker of
+   * roughly when this verdict was taken. It is fetched concurrently with those
+   * reads rather than passed to them, so it labels the verdict; it does not pin
+   * it, and the funding reads can land a block either side of it. For a
+   * comparison taken AT one block, use `commitments.getFilledRisk` and pass its
+   * `atBlock` to `balances.read` / `approvals.read`. Absent only when the block
+   * read failed.
+   */
   checkedAtBlock?: bigint;
   /**
    * The aggregate requirement the verdict was computed against, over the achieved
