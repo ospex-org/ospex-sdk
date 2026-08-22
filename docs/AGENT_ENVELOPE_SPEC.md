@@ -547,7 +547,7 @@ Rules:
 - `errors[]` is populated using the `OspexError.code` taxonomy from [`AGENT_CONTRACT.md` §7](./AGENT_CONTRACT.md).
 - `nextCommands[]` may include a `remediate` suggestion when the error has a known local fix.
 - `payload: null` when the command could not produce a payload.
-- Errors that prevent envelope construction at all (e.g. failure before SDK init) fall back to `error: <code>: <message>` on stderr with exit `1`. This is a narrow window: anything after `getClient()` succeeds emits a structured failure envelope.
+- Errors that prevent envelope construction at all (e.g. failure before SDK init) fall back to `error: <code>: <message>` on stderr with exit `1`. That fallback is *meant* to be a narrow window — the rule above is that anything after `getClient()` succeeds emits a structured failure envelope. It is not yet narrow in practice; see the conformance note below for which commands honour it today.
 - **Conformance, measured rather than asserted.** Every Class A write command plus `doctor` and `commitments filled-risk` honours the rule above; the remaining read commands do not yet — they let a post-client failure escape to stderr, so `--json | jq .` gets nothing from them on a failed read. The rule stays as written because it is the requirement, not a description; what each command actually does is measured against a dead endpoint by `packages/cli/tests/class-a-failure-envelope-sweep.test.ts`, whose probe table is the one place the outstanding set is enumerated. That table is exact in both directions: a command that starts honouring the rule and a command that stops both redden it.
 - Validation errors thrown before `getClient()` (`OspexValidationError` on argument parse) also fall back to stderr.
 - **Failure-envelope intent flags are path-specific.** `requiresSignature: true` is set when the failed code path would have produced an EIP-712 signature or signed a tx had it succeeded — for every write command (sign-based or tx-based) this is always true. `requiresTransaction: true` is set ONLY when the failed code path would have sent or attempted an on-chain tx. The two are independent:
@@ -568,7 +568,7 @@ Every Class A `--json` invocation must satisfy:
 - **All diagnostics go to stderr.** Allowance prompts, "Resolved `0xabc → …`" address echoes, log lines, stack traces — stderr only.
 - **No interactive prompts in `--json` mode.** Preview-bearing commands without `--yes` emit the preview and exit `0`; with `--yes` they execute non-interactively. Anything that would prompt under interactive mode either uses a configured non-interactive credential or errors out structurally with `errors: [{ code: 'non_interactive_password_required', ... }]`.
 - **No secrets in any output.** Keystore content, passphrases, decrypted private keys never appear on stdout *or* stderr.
-- **`--json | jq .` always works** for both success and failure envelopes.
+- **`--json | jq .` always works** for both success and failure envelopes. (Requirement, not a description of today: the failure half is not yet met by every command — §6's conformance note names which ones, and `packages/cli/tests/class-a-failure-envelope-sweep.test.ts` measures it.)
 
 ---
 
