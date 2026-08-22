@@ -29,9 +29,12 @@
  *
  * `atBlock` is the block the values were read at, not a label recorded
  * beside them. Pass `blockNumber` to pin the batch; omit it and the SDK
- * resolves the current block first (one extra `eth_blockNumber` round
- * trip) and pins to that. Either way every value in `filledRisk`
- * describes the same block, and `atBlock` names it.
+ * resolves the current block first — one uncached `eth_blockNumber` per
+ * call, deliberately, because viem caches that read per client for
+ * `cacheTime` (4s by default) and a polling caller would otherwise be
+ * pinned to a head several seconds old — and pins to that. Either way
+ * every value in `filledRisk` describes the same block, and `atBlock`
+ * names it.
  *
  * To compare filled risk against funding at that same block, thread
  * `atBlock` into the funding reads — both accept the same optional

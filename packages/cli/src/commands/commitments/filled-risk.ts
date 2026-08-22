@@ -73,7 +73,7 @@ export const commitmentsFilledRiskCommand = new Command('filled-risk')
       return {
         hash,
         filledRiskWei6: value.toString(),
-        filledRiskUsdc: wei6ToDecimalUSDC(value),
+        filledRiskUSDC: wei6ToDecimalUSDC(value),
       };
     });
 

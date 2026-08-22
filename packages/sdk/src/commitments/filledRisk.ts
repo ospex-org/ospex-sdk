@@ -48,6 +48,18 @@ export interface FilledRiskRead {
  * (`eth_blockNumber`) before the aggregate. That is the price of
  * `atBlock` being the block the values were actually read at rather
  * than a label raced alongside them — see the `getFilledRisk` docblock.
+ *
+ * `cacheTime: 0` is load-bearing, not a default spelled out. `OspexClient`
+ * memoises its viem client, and viem's `getBlockNumber` caches per client
+ * for `cacheTime` — which defaults to `pollingInterval`, 4_000 ms. Left at
+ * the default, a caller polling this read on one client (which is what a
+ * funding guard does) would be handed a head up to 4s old on every call
+ * after the first: the aggregate would still be coherent, but a fill that
+ * landed in those seconds would be invisible, leaving filled risk
+ * stale-low and the maker's remaining obligation OVERSTATED — the same
+ * direction as the bug this read exists to remove. Measured on viem 2.55:
+ * two `getFilledRisk` calls on one `OspexClient` shared a single
+ * `eth_blockNumber` before this argument, and issue one each after it.
  */
 export async function readFilledRiskAtBlock(
   publicClient: PublicClient,
@@ -60,7 +72,7 @@ export async function readFilledRiskAtBlock(
     atBlock = blockNumber;
   } else {
     try {
-      atBlock = await publicClient.getBlockNumber();
+      atBlock = await publicClient.getBlockNumber({ cacheTime: 0 });
     } catch (err) {
       throw new OspexChainError('Failed to resolve the current block number for a filled-risk read.', {
         cause: err,

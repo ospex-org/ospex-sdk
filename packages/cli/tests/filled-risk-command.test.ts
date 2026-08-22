@@ -122,14 +122,19 @@ describe('commitments filled-risk — what it prints', () => {
     expect(envelope.action).toBe('commitments.filled-risk');
     expect(envelope.stage).toBe('read');
     expect(envelope.payload.atBlock).toBe('71234567');
-    // Whole mapping, not a sampled row.
+    // Whole mapping, not a sampled row. The USDC key is `filledRiskUSDC`, not
+    // `filledRiskUsdc`: `docs/AGENT_CONTRACT.md` ("Numeric-field rule") tells
+    // agents the exact integer for a USDC string is its `<name>USDC` ↔
+    // `<name>Wei6` partner, and every emitted payload field in the CLI spells
+    // it that way. `...Usdc` in this repo is a commander option name
+    // (`--risk-usdc`), never wire.
     expect(envelope.payload.filledRisk).toStrictEqual([
-      { hash: H_PARTIAL, filledRiskWei6: '3141593', filledRiskUsdc: '3.141593' },
-      { hash: H_UNFILLED, filledRiskWei6: '0', filledRiskUsdc: '0.000000' },
+      { hash: H_PARTIAL, filledRiskWei6: '3141593', filledRiskUSDC: '3.141593' },
+      { hash: H_UNFILLED, filledRiskWei6: '0', filledRiskUSDC: '0.000000' },
       {
         hash: H_LARGE,
         filledRiskWei6: '9007199254740993',
-        filledRiskUsdc: '9007199254.740993',
+        filledRiskUSDC: '9007199254.740993',
       },
     ]);
   });

@@ -26,7 +26,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { OspexClient, type ChainId } from '../../src/index.js';
+import { OspexChainError, OspexClient, type ChainId } from '../../src/index.js';
 import { KeystoreSigner } from '../../src/signers/keystore.js';
 import { polygon } from 'viem/chains';
 
@@ -83,13 +83,33 @@ describe.skipIf(!RUN)('integration: M2.5 on-chain cancel', () => {
       [b, 0n],
     ]);
 
-    // Pin a few blocks back: proves the block argument reaches the node
-    // rather than being dropped on the way.
+    // Pin a few blocks back: proves the node SERVES a pinned aggregate.
+    // Note what this case does NOT prove — `atBlock` is echoed from the
+    // argument, so asserting it says only that the SDK copied what it was
+    // handed. The block reaching the node is the next case's job.
     const pinned = await client.commitments.getFilledRisk({
       hashes: [a, b],
       blockNumber: head.atBlock - 5n,
     });
     expect(pinned.atBlock).toBe(head.atBlock - 5n);
+  });
+
+  it('refuses a block the node does not have — the pin reaches the wire', async () => {
+    if (!RPC_URL) throw new Error('OSPEX_TEST_RPC_URL required');
+    const client = makeClient();
+    const a = ('0x' + '11'.repeat(32)) as `0x${string}`;
+
+    const head = await client.commitments.getFilledRisk({ hashes: [a] });
+
+    // A block far past the head. This is the discriminating case: if the pin
+    // were dropped on the way to the node the read would simply succeed at
+    // `latest`, so only a request that actually carried the block can fail.
+    // The refusal is also the documented residual — a lagging node behind a
+    // load balancer answers the same way, and the read refuses rather than
+    // answering from a different block.
+    await expect(
+      client.commitments.getFilledRisk({ hashes: [a], blockNumber: head.atBlock + 5_000_000n }),
+    ).rejects.toBeInstanceOf(OspexChainError);
   });
 
   describe.skipIf(!PRIVATE_KEY || !LIVE_HASH)('write paths (require OSPEX_TEST_PRIVATE_KEY + OSPEX_TEST_LIVE_HASH)', () => {

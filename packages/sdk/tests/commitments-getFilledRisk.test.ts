@@ -13,7 +13,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { PublicClient } from 'viem';
+import { createPublicClient, custom, encodeAbiParameters, type PublicClient } from 'viem';
+import { polygon } from 'viem/chains';
 import { getFilledRisk } from '../src/commitments/getFilledRisk.js';
 import { matchingModuleAbi } from '../src/contracts/abi/index.js';
 import { NonceCounter } from '../src/commitments/context.js';
@@ -386,5 +387,156 @@ describe('commitments.getFilledRisk — public surface', () => {
     const snapshot: FilledRiskSnapshot = { atBlock: PINNED_BLOCK, filledRisk: new Map() };
     expect(args.hashes).toHaveLength(BOOK.length);
     expect(snapshot.filledRisk.size).toBe(0);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Against a REAL viem client, over a counting transport               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Everything above drives a hand-rolled fake `publicClient`, which can only
+ * ever show what the SDK HANDED viem. Two properties live below viem and a
+ * fake cannot see either of them:
+ *
+ *  1. `atBlock` is a FRESH head. `OspexClient` memoises its viem client and
+ *     viem's `getBlockNumber` caches per client for `cacheTime` (default
+ *     `pollingInterval`, 4_000 ms), so at the library default a polling
+ *     caller — which is what a funding guard is — would be handed a head up
+ *     to 4s old on every call after the first. The aggregate stays coherent,
+ *     but a fill landing in those seconds is invisible, leaving filled risk
+ *     stale-low and the maker's remaining obligation overstated. That is the
+ *     direction of the bug this read exists to remove.
+ *  2. The pin reaches the WIRE. Asserting the `blockNumber` the SDK passed
+ *     to `multicall` cannot distinguish "viem forwarded it" from "viem
+ *     dropped it"; the block parameter on the outgoing `eth_call` can.
+ *
+ * The transport answers a real ABI-encoded `aggregate3` result, so this case
+ * also exercises the encode/decode path the fakes stub out.
+ */
+
+const AGGREGATE3_RESULT = [
+  {
+    type: 'tuple[]',
+    components: [
+      { name: 'success', type: 'bool' },
+      { name: 'returnData', type: 'bytes' },
+    ],
+  },
+] as const;
+
+interface WireProbe {
+  ctx: CommitmentsContext;
+  publicClient: PublicClient;
+  methodCounts: Map<string, number>;
+  callBlockParams: unknown[];
+}
+
+/**
+ * A viem client whose transport answers a fresh, STRICTLY INCREASING head on
+ * every `eth_blockNumber`. Increasing rather than constant so a cached answer
+ * is visible in the value as well as in the request count — two independent
+ * tells for the same defect.
+ */
+function wireProbe(values: readonly bigint[], firstHead = 71_234_567n): WireProbe {
+  const methodCounts = new Map<string, number>();
+  const callBlockParams: unknown[] = [];
+  let head = firstHead;
+
+  const publicClient = createPublicClient({
+    chain: polygon,
+    transport: custom({
+      request: async ({ method, params }: { method: string; params?: unknown }) => {
+        methodCounts.set(method, (methodCounts.get(method) ?? 0) + 1);
+        if (method === 'eth_blockNumber') {
+          const answer = head;
+          head += 1n;
+          return `0x${answer.toString(16)}`;
+        }
+        if (method === 'eth_call') {
+          callBlockParams.push((params as unknown[])[1]);
+          return encodeAbiParameters(AGGREGATE3_RESULT, [
+            values.map((v) => ({
+              success: true,
+              returnData: encodeAbiParameters([{ type: 'uint256' }], [v]),
+            })),
+          ]);
+        }
+        throw new Error(`unexpected RPC method ${method} — the probe cannot answer it`);
+      },
+    }),
+  });
+
+  const ctx = {
+    api: {} as CommitmentsContext['api'],
+    getChainId: () => 137,
+    getAddresses: () =>
+      ({ matchingModule: MATCHING_MODULE }) as unknown as ReturnType<
+        CommitmentsContext['getAddresses']
+      >,
+    requireChainClient: () => publicClient,
+    nonceCounter: new NonceCounter(),
+  } as unknown as CommitmentsContext;
+
+  return { ctx, publicClient, methodCounts, callBlockParams };
+}
+
+describe('commitments.getFilledRisk — over a real viem client', () => {
+  it('decodes a real aggregate3 response into the mapping', async () => {
+    // Proves the ABI encode/decode round trip the fake clients stub out: the
+    // artifact's `s_filledRisk(bytes32)` entry encodes, and viem's multicall
+    // decoder returns bigints in request order.
+    const { ctx } = wireProbe([3_141_593n, 0n]);
+
+    const { filledRisk } = await getFilledRisk(ctx, { hashes: [H_PARTIAL, H_UNFILLED] });
+
+    expect([...filledRisk.entries()]).toStrictEqual([
+      [H_PARTIAL, 3_141_593n],
+      [H_UNFILLED, 0n],
+    ]);
+  });
+
+  it('resolves a FRESH head on every unpinned call, never a cached one', async () => {
+    const { ctx, methodCounts } = wireProbe([3_141_593n, 0n]);
+
+    const first = await getFilledRisk(ctx, { hashes: [H_PARTIAL, H_UNFILLED] });
+    const second = await getFilledRisk(ctx, { hashes: [H_PARTIAL, H_UNFILLED] });
+
+    expect(methodCounts.get('eth_blockNumber')).toBe(2);
+    expect(second.atBlock).toBe(first.atBlock + 1n);
+  });
+
+  it('control: viem DOES cache the head at its default, so the case above is not vacuous', async () => {
+    // NEGATIVE CONTROL for the case above (rule 3b-rescue: name the rival).
+    // Without this, "two calls, two requests" could also be explained by the
+    // probe having no cache to defeat — and the assertion would prove nothing.
+    // Same client, same transport, `getBlockNumber` at viem's default: one
+    // request answers both, and the second answer is the FIRST head.
+    const { publicClient, methodCounts } = wireProbe([0n]);
+
+    const a = await publicClient.getBlockNumber();
+    const b = await publicClient.getBlockNumber();
+
+    expect(methodCounts.get('eth_blockNumber')).toBe(1);
+    expect(b).toBe(a);
+  });
+
+  it('puts the pinned block on the WIRE, not just in the multicall argument', async () => {
+    const { ctx, callBlockParams, methodCounts } = wireProbe([3_141_593n, 0n]);
+
+    await getFilledRisk(ctx, { hashes: [H_PARTIAL, H_UNFILLED], blockNumber: PINNED_BLOCK });
+
+    // viem sends `eth_call` as [{ to, data }, <block>]. A dropped pin sends
+    // 'latest'; only a transmitted one sends this hex.
+    expect(callBlockParams).toStrictEqual([`0x${PINNED_BLOCK.toString(16)}`]);
+    expect(methodCounts.get('eth_blockNumber')).toBeUndefined();
+  });
+
+  it('puts the RESOLVED head on the wire when no block was given', async () => {
+    const { ctx, callBlockParams } = wireProbe([3_141_593n, 0n]);
+
+    const snapshot = await getFilledRisk(ctx, { hashes: [H_PARTIAL, H_UNFILLED] });
+
+    expect(callBlockParams).toStrictEqual([`0x${snapshot.atBlock.toString(16)}`]);
   });
 });
