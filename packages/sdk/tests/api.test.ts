@@ -8,8 +8,10 @@
 import { describe, expect, it } from 'vitest';
 import { OspexAPIError, OspexClient, OspexValidationError } from '../src/index.js';
 import {
+  CONTEST_INPUT_FIELDS,
   CONTEST_START_TIME_FIELDS,
   CONTEST_START_TIME_MATRIX,
+  GAME_INPUT_FIELDS,
   GAME_START_TIME_FIELDS,
   GAME_START_TIME_MATRIX,
   contestCase,
@@ -243,11 +245,12 @@ describe('OspexClient API surface', () => {
     }));
     const client = new OspexClient({ apiUrl, fetch });
     const [first] = await client.contests.list();
-    expect(first).not.toHaveProperty('chainStartTime');
-    expect(first).not.toHaveProperty('gameMatchTime');
-    expect(first).not.toHaveProperty('gameEarliestMatchTime');
-    expect(first).not.toHaveProperty('gameRundownMatchTime');
-    expect(first).not.toHaveProperty('gameSportspageMatchTime');
+    // Same consumer rule as the sweeps: `CONTEST_INPUT_FIELDS` is pinned
+    // against a literal in `start-time-fixtures.test.ts`, so a dropped entry
+    // reddens there rather than silently un-checking a key here.
+    for (const field of CONTEST_INPUT_FIELDS) {
+      expect(first, `list additivity: ${field}`).not.toHaveProperty(field);
+    }
   });
 
   it('contests.list({ date }) sends the date param and no window', async () => {
@@ -429,13 +432,14 @@ describe('OspexClient API surface', () => {
   // in core-api's contest projections. If that coalesce is ever dropped, this
   // boundary rejects the whole page rather than leaking `null` into a
   // `string`-typed public field — loud, and deliberately so.
-  for (const field of [
-    'chainStartTime',
-    'gameMatchTime',
-    'gameEarliestMatchTime',
-    'gameRundownMatchTime',
-    'gameSportspageMatchTime',
-  ] as const) {
+  // Driven by the module's list, not a private copy: this is a CONSUMER, and
+  // `CONTEST_INPUT_FIELDS` is pinned against a literal enumeration in
+  // `start-time-fixtures.test.ts`, so dropping an entry reddens there. The
+  // literal belongs in the pin; a second literal here would only shrink in
+  // lockstep with it. (Measured before this change: dropping `chainStartTime`
+  // or `gameSportspageMatchTime` from the copy that used to sit here took the
+  // suite from 1016 to 1014 passing with exit 0.)
+  for (const field of CONTEST_INPUT_FIELDS) {
     it(`contests.list REFUSES a null ${field}, with the field path`, async () => {
       const { fetch } = makeFetch(() => listBodyWith({ [field]: null }));
       const client = new OspexClient({ apiUrl, fetch });
@@ -702,12 +706,12 @@ describe('OspexClient API surface', () => {
     expect(detail.settledAt).toBe('2026-07-01T04:00:14+00:00');
     expect(detail.voided).toBe(false);
     // Negative control: this parent-context body predates the start-time
-    // companions — the keys must stay absent, not undefined-assigned.
-    expect(detail.contest).not.toHaveProperty('chainStartTime');
-    expect(detail.contest).not.toHaveProperty('gameMatchTime');
-    expect(detail.contest).not.toHaveProperty('gameEarliestMatchTime');
-    expect(detail.contest).not.toHaveProperty('gameRundownMatchTime');
-    expect(detail.contest).not.toHaveProperty('gameSportspageMatchTime');
+    // companions — the keys must stay absent, not undefined-assigned. Driven
+    // by the module's `CONTEST_INPUT_FIELDS`, which is pinned against a
+    // literal in `start-time-fixtures.test.ts`.
+    for (const field of CONTEST_INPUT_FIELDS) {
+      expect(detail.contest, `parent-context additivity: ${field}`).not.toHaveProperty(field);
+    }
   });
 
   // The parent-context mapper sees the WHOLE matrix, including the
@@ -810,7 +814,12 @@ describe('OspexClient API surface', () => {
     // null in one row and a string in another, in both cases beside a
     // non-null sibling, so neither a null-everything nor a
     // coalesce-everything mapper passes.
-    for (const field of ['earliestMatchTime', 'rundownMatchTime', 'sportspageMatchTime'] as const) {
+    // Consumer of the module's pinned list (`GAME_INPUT_FIELDS`, pinned
+    // against a literal in `start-time-fixtures.test.ts`), minus
+    // `gameMatchTime`: that input is the raw feed value `/v1/games` always
+    // serves — non-nullable in `GameStartTimes` — so it has no null row and
+    // asserting one would fail. The other three are the nullable inputs.
+    for (const field of GAME_INPUT_FIELDS.filter((f) => f !== 'gameMatchTime')) {
       expect(
         GAME_START_TIME_MATRIX.some((c) => c.served[field] === null),
         `${field} is never null in the matrix`,
@@ -838,10 +847,12 @@ describe('OspexClient API surface', () => {
     }));
     const client = new OspexClient({ apiUrl, fetch });
     const oldGame = await client.games.get('g1');
-    expect(oldGame).not.toHaveProperty('gameMatchTime');
-    expect(oldGame).not.toHaveProperty('earliestMatchTime');
-    expect(oldGame).not.toHaveProperty('rundownMatchTime');
-    expect(oldGame).not.toHaveProperty('sportspageMatchTime');
+    // The games surface's own input list, driven from the module rather than
+    // copied: `GAME_INPUT_FIELDS` is pinned against a literal in
+    // `start-time-fixtures.test.ts`.
+    for (const field of GAME_INPUT_FIELDS) {
+      expect(oldGame, `games additivity: ${field}`).not.toHaveProperty(field);
+    }
   });
 
   it('commitments.list passes the speculationId filter through', async () => {

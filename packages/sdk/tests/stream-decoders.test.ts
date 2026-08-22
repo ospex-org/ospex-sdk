@@ -7,6 +7,7 @@ import {
 } from '../src/realtime/decoders.js';
 import type { Contest } from '../src/types/contest.js';
 import {
+  CONTEST_INPUT_FIELDS,
   CONTEST_START_TIME_FIELDS,
   CONTEST_START_TIME_MATRIX,
   expectContestStartTimeInputsDistinct,
@@ -93,11 +94,12 @@ describe('decodeContestUpdate', () => {
     expect(out).not.toHaveProperty('jsonoddsId');
     // Negative control: this body predates the start-time companions —
     // the keys must stay absent on the decoded update, not undefined-assigned.
-    expect(out).not.toHaveProperty('chainStartTime');
-    expect(out).not.toHaveProperty('gameMatchTime');
-    expect(out).not.toHaveProperty('gameEarliestMatchTime');
-    expect(out).not.toHaveProperty('gameRundownMatchTime');
-    expect(out).not.toHaveProperty('gameSportspageMatchTime');
+    // Driven by the module's `CONTEST_INPUT_FIELDS`, which is pinned against a
+    // literal in `start-time-fixtures.test.ts`, so dropping an entry reddens
+    // there instead of quietly un-checking a key here.
+    for (const field of CONTEST_INPUT_FIELDS) {
+      expect(out, `decodeContestUpdate additivity: ${field}`).not.toHaveProperty(field);
+    }
   });
 
   for (const { id, served } of CONTEST_START_TIME_MATRIX) {
@@ -212,12 +214,12 @@ describe('contestToUpdate', () => {
     expect(out.verifiedAt).toBeNull();
     // Negative control: absent start-time companions on the Contest stay
     // absent on the projection — never null-coerced like the lifecycle
-    // fields, so the snapshot row matches a same-build stream body.
-    expect(out).not.toHaveProperty('chainStartTime');
-    expect(out).not.toHaveProperty('gameMatchTime');
-    expect(out).not.toHaveProperty('gameEarliestMatchTime');
-    expect(out).not.toHaveProperty('gameRundownMatchTime');
-    expect(out).not.toHaveProperty('gameSportspageMatchTime');
+    // fields, so the snapshot row matches a same-build stream body. Same
+    // consumer rule: `CONTEST_INPUT_FIELDS` is pinned against a literal in
+    // `start-time-fixtures.test.ts`.
+    for (const field of CONTEST_INPUT_FIELDS) {
+      expect(out, `contestToUpdate additivity: ${field}`).not.toHaveProperty(field);
+    }
   });
 
   for (const { id, served } of CONTEST_START_TIME_MATRIX) {
