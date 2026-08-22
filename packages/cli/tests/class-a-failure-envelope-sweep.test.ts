@@ -20,8 +20,10 @@
  *      that is neither Class A nor explicitly carved out is unclassified, and
  *      unclassified is how `filled-risk` got here.
  *   3. Every Class A command is executed and its stdout classified against a
- *      per-command literal expectation. One `it()` per command, so a failure
- *      names the command rather than a count.
+ *      per-command literal expectation — including the `action` the envelope
+ *      names, which is the field an agent switches on and the one a
+ *      copy-pasted catch block gets wrong. One `it()` per command, so a
+ *      failure names the command rather than a count.
  *
  * ── The gap this sweep records, deliberately ───────────────────────────────
  *
@@ -40,6 +42,11 @@
  * starts emitting the envelope reddens this file until its row is updated,
  * and a command that stops reddens it too. Closing those 19 is a follow-up —
  * it touches 19 command files that this PR does not otherwise change.
+ *
+ * `'no-envelope'` records history; it is not a choice available to a NEW
+ * command. A command written after this file exists wires the envelope and
+ * gets an `'envelope'` row. The roster assertions force whoever adds a command
+ * to come here and decide, which is the whole point — the last gate is review.
  *
  * ── Mechanism ──────────────────────────────────────────────────────────────
  *
@@ -201,18 +208,6 @@ const NOT_IN_SCOPE_PIN: readonly string[] = [
 /* ------------------------------------------------------------------ */
 
 /**
- * `'envelope'`    — §6 honoured: nonzero exit, stdout is one parseable v2
- *                   envelope with `ok: false`.
- * `'no-envelope'` — nonzero exit, stdout EMPTY. The outstanding gap; see the
- *                   header. Not an approval.
- * `'no-client'`   — the command builds no SDK client, so a dead endpoint
- *                   cannot push it into §6's post-client window at all. It
- *                   still has to leave one parseable v2 envelope on stdout,
- *                   which is what gets asserted.
- */
-type Expectation = 'envelope' | 'no-envelope' | 'no-client';
-
-/**
  * Two legitimate shapes of `ok: false` on stdout, and they are not
  * interchangeable:
  *
@@ -227,17 +222,47 @@ type Expectation = 'envelope' | 'no-envelope' | 'no-client';
  */
 type EnvelopeShape = 'thrown' | 'reported';
 
-interface Probe {
+interface ProbeBase {
   /** Argv AFTER the command path and BEFORE `--json`. */
   args: readonly string[];
   /** True when the command needs a working signer to get past `getClient()`. */
   signer?: boolean;
-  expect: Expectation;
-  /** Defaults to `'thrown'`; see {@link EnvelopeShape}. */
-  shape?: EnvelopeShape;
   /** Why this row reads the way it does, where that is not obvious. */
   note?: string;
 }
+
+/**
+ * One row per Class A command. The three expectations:
+ *
+ * `'envelope'`    — §6 honoured: nonzero exit, stdout is one parseable v2
+ *                   envelope with `ok: false`.
+ * `'no-envelope'` — nonzero exit, stdout EMPTY. The outstanding gap; see the
+ *                   header. Not an approval, and NOT a legal choice for a
+ *                   newly written command — a new Class A command wires the
+ *                   envelope and gets an `'envelope'` row.
+ * `'no-client'`   — the command builds no SDK client, so a dead endpoint
+ *                   cannot push it into §6's post-client window at all. It
+ *                   still has to leave one parseable v2 envelope on stdout,
+ *                   which is what gets asserted.
+ *
+ * A row whose command puts an envelope on stdout also carries the `action`
+ * that envelope must name, written out by hand here rather than read back
+ * from the command under test. `action` is the §1 field an agent switches on,
+ * and a catch block copy-pasted from a sibling command is exactly how it comes
+ * out wrong: before this pin existed, a mutant that changed the new
+ * `filled-risk` catch block's `action` to `commitments.match` survived both
+ * this sweep and the per-command test file.
+ *
+ * The union is what makes it structural rather than a convention — a new
+ * `'envelope'` row does not compile without an `action`. That end is held by
+ * `yarn typecheck:tests` and NOT by `yarn test`, which strips types without
+ * checking them; measured by deleting one row's `action` (TS2322, "Property
+ * 'action' is missing") and restoring it.
+ */
+type Probe =
+  | (ProbeBase & { expect: 'envelope'; action: string; shape?: EnvelopeShape })
+  | (ProbeBase & { expect: 'no-client'; action: string })
+  | (ProbeBase & { expect: 'no-envelope' });
 
 const OTHER_ADDRESS = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 const A_HASH = `0x${'ab'.repeat(32)}`;
@@ -248,12 +273,14 @@ const PROBES: Record<string, Probe> = {
   doctor: {
     args: [],
     expect: 'envelope',
+    action: 'doctor',
     shape: 'reported',
     note: 'converts a post-client failure into a finding in its report rather than a throw.',
   },
   'auth check': {
     args: [],
     expect: 'no-client',
+    action: 'auth.check',
     note: 'diagnoses the LOCAL signer configuration; never constructs a client.',
   },
   'approvals show': { args: ['--address', OTHER_ADDRESS], expect: 'no-envelope' },
@@ -261,6 +288,7 @@ const PROBES: Record<string, Probe> = {
     args: [],
     signer: true,
     expect: 'no-client',
+    action: 'wallet.address',
     note: 'reads the keystore only; never constructs a client.',
   },
   'commitments list': { args: [], expect: 'no-envelope' },
@@ -270,7 +298,11 @@ const PROBES: Record<string, Probe> = {
     args: ['--maker', OTHER_ADDRESS, '--contest-id', '1', '--scorer', OTHER_ADDRESS, '--line', '0'],
     expect: 'no-envelope',
   },
-  'commitments filled-risk': { args: [A_HASH], expect: 'envelope' },
+  'commitments filled-risk': {
+    args: [A_HASH],
+    expect: 'envelope',
+    action: 'commitments.filled-risk',
+  },
   'contests list': { args: [], expect: 'no-envelope' },
   'contests show': { args: ['1'], expect: 'no-envelope' },
   'contests wait-verified': { args: ['1'], expect: 'no-envelope' },
@@ -297,40 +329,85 @@ const PROBES: Record<string, Probe> = {
       '--expected-address', OTHER_ADDRESS,
     ],
     expect: 'envelope',
+    action: 'commitments.submit',
   },
   'commitments match': {
     args: [A_HASH, '--risk-usdc', '1', '--expected-address', OTHER_ADDRESS],
     expect: 'envelope',
+    action: 'commitments.match',
   },
-  'commitments approve': { args: ['25', '--yes'], signer: true, expect: 'envelope' },
-  'commitments approve-raw': { args: ['25000000', '--yes'], signer: true, expect: 'envelope' },
-  'approvals setup': { args: ['--risk-usdc', '5', '--yes'], signer: true, expect: 'envelope' },
+  'commitments approve': {
+    args: ['25', '--yes'],
+    signer: true,
+    expect: 'envelope',
+    action: 'commitments.approve',
+  },
+  'commitments approve-raw': {
+    args: ['25000000', '--yes'],
+    signer: true,
+    expect: 'envelope',
+    action: 'commitments.approve-raw',
+  },
+  'approvals setup': {
+    args: ['--risk-usdc', '5', '--yes'],
+    signer: true,
+    expect: 'envelope',
+    action: 'approvals.setup',
+  },
 
   /* §4.3 Fire-and-forget writes */
-  'commitments cancel': { args: [A_HASH], signer: true, expect: 'envelope' },
-  'commitments cancel-onchain': { args: [A_HASH], signer: true, expect: 'envelope' },
+  'commitments cancel': {
+    args: [A_HASH],
+    signer: true,
+    expect: 'envelope',
+    action: 'commitments.cancel',
+  },
+  'commitments cancel-onchain': {
+    args: [A_HASH],
+    signer: true,
+    expect: 'envelope',
+    action: 'commitments.cancel-onchain',
+  },
   'commitments cancel-all': {
     args: ['--contest-id', '1', '--scorer', OTHER_ADDRESS, '--line', '0', '--new-min-nonce', '5'],
     signer: true,
     expect: 'envelope',
+    action: 'commitments.cancel-all',
   },
-  claim: { args: ['1', '--type', 'upper'], signer: true, expect: 'envelope' },
-  'claim-all': { args: [], signer: true, expect: 'envelope' },
-  settle: { args: ['1'], signer: true, expect: 'envelope' },
+  claim: { args: ['1', '--type', 'upper'], signer: true, expect: 'envelope', action: 'claim' },
+  'claim-all': { args: [], signer: true, expect: 'envelope', action: 'claim-all' },
+  settle: { args: ['1'], signer: true, expect: 'envelope', action: 'settle' },
   'contests create': {
     args: ['--game-id', 'a-game-id', '--yes', '--no-wait'],
     signer: true,
     expect: 'envelope',
+    action: 'contests.create',
   },
-  'contests score': { args: ['1'], signer: true, expect: 'envelope' },
-  'contests update-markets': { args: ['1'], signer: true, expect: 'envelope' },
+  'contests score': {
+    args: ['1'],
+    signer: true,
+    expect: 'envelope',
+    action: 'contests.score',
+  },
+  'contests update-markets': {
+    args: ['1'],
+    signer: true,
+    expect: 'envelope',
+    action: 'contests.update-markets',
+  },
 };
 
 /* ------------------------------------------------------------------ */
 /* Fixtures — dead endpoints + a keystore that really unlocks           */
 /* ------------------------------------------------------------------ */
 
-/** IPv4 discard port: connections are refused immediately, so no probe waits. */
+/**
+ * IPv4 discard port. Nothing here waits on a socket: port 9 is on the WHATWG
+ * blocked-port list, so undici refuses the request before opening one (the
+ * cause chain bottoms out at `bad port`) and a listener on the host cannot
+ * change the answer. Same behaviour on Linux, which is where CI runs. A
+ * connection refusal would do just as well; this is simply more deterministic.
+ */
 const DEAD_URL = 'http://127.0.0.1:9';
 
 // Anvil account #0 — a throwaway test key, never used for anything real.
@@ -615,6 +692,13 @@ describe('Class A commands — what reaches stdout on a post-client failure', ()
           ).not.toBeNull();
           expect(envelope?.schemaVersion, `${name}: envelope schemaVersion`).toBe(2);
           expect(envelope?.ok, `${name}: envelope ok`).toBe(false);
+          // `action` is what an agent switches on, and it is the field a
+          // copy-pasted catch block gets wrong while every other assertion here
+          // stays green. The expected value is a literal in the probe table, so
+          // this compares the command against the table rather than the command
+          // against itself.
+          expect(envelope?.action, `${name}: the envelope must name the failing command`)
+            .toBe(probe.action);
           expect(exitCode, `${name}: exit code must be nonzero when ok:false`).not.toBe(0);
           expect(
             escaped,
@@ -643,7 +727,12 @@ describe('Class A commands — what reaches stdout on a post-client failure', ()
               `envelope, that is good news — move its row to 'envelope' and update the header ` +
               `count. Do not delete the row.`,
           ).toBe('');
-          expect(exitCode, `${name}: a failed read must still exit nonzero`).not.toBe(0);
+          // No exit-code assertion here on purpose: this runner sets
+          // `exitCode = 1` itself whenever an error escapes `parseAsync`, so
+          // asserting it nonzero on this branch would be asserting the
+          // harness, not the command. The `escaped` assertion below is what
+          // carries the content.
+          //
           // The failure went SOMEWHERE. Without this, a command that swallowed
           // the error and printed nothing would read as 'no-envelope' too, and
           // that is a different, worse bug: silent success on a failed read.
@@ -660,6 +749,7 @@ describe('Class A commands — what reaches stdout on a post-client failure', ()
         // to completion and still emitted a well-formed envelope.
         expect(envelope, `${name}: expected one parseable v2 envelope on stdout`).not.toBeNull();
         expect(envelope?.schemaVersion, `${name}: envelope schemaVersion`).toBe(2);
+        expect(envelope?.action, `${name}: the envelope must name the command`).toBe(probe.action);
         expect(exitCode, `${name}: nothing should have failed`).toBe(0);
       },
       30_000,
