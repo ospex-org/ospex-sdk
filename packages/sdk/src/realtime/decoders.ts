@@ -68,6 +68,12 @@ export function decodeContestUpdate(body: unknown): ContestUpdate {
   if (b.gameEarliestMatchTime !== undefined) {
     out.gameEarliestMatchTime = b.gameEarliestMatchTime;
   }
+  if (b.gameRundownMatchTime !== undefined) {
+    out.gameRundownMatchTime = b.gameRundownMatchTime;
+  }
+  if (b.gameSportspageMatchTime !== undefined) {
+    out.gameSportspageMatchTime = b.gameSportspageMatchTime;
+  }
   return out;
 }
 
@@ -135,6 +141,12 @@ export function contestToUpdate(c: Contest): ContestUpdate {
   if (c.gameMatchTime !== undefined) out.gameMatchTime = c.gameMatchTime;
   if (c.gameEarliestMatchTime !== undefined) {
     out.gameEarliestMatchTime = c.gameEarliestMatchTime;
+  }
+  if (c.gameRundownMatchTime !== undefined) {
+    out.gameRundownMatchTime = c.gameRundownMatchTime;
+  }
+  if (c.gameSportspageMatchTime !== undefined) {
+    out.gameSportspageMatchTime = c.gameSportspageMatchTime;
   }
   return out;
 }

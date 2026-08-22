@@ -7,6 +7,23 @@
 
 import { describe, expect, it } from 'vitest';
 import { OspexAPIError, OspexClient, OspexValidationError } from '../src/index.js';
+import {
+  CONTEST_INPUT_FIELDS,
+  CONTEST_START_TIME_FIELDS,
+  CONTEST_START_TIME_MATRIX,
+  GAME_INPUT_FIELDS,
+  GAME_START_TIME_FIELDS,
+  GAME_START_TIME_MATRIX,
+  contestCase,
+  expectContestStartTimeInputsDistinct,
+  expectGameStartTimeInputsDistinct,
+  expectMatrixSeparatesEveryPair,
+  expectUnlinkedGameStartTimes,
+  expectWireValidContestStartTimes,
+  expectWireValidGameStartTimes,
+  gameCase,
+  listableContestCases,
+} from './fixtures/start-times.js';
 
 interface CapturedRequest {
   url: string;
@@ -30,6 +47,24 @@ function makeFetch(
 }
 
 const apiUrl = 'https://api.example.test';
+
+/**
+ * The start-time fixtures come from `tests/fixtures/start-times.ts`, which
+ * also carries the guards run on them here. Two things worth knowing before
+ * editing one:
+ *
+ *   - `matchTime` is a `LEAST(...)` over the other served fields, so it EQUALS
+ *     one of them in every row core-api can produce. A fixture giving all six
+ *     fields distinct values asserts a body the view cannot serve.
+ *   - which input ties `matchTime` therefore changes per row, and that is the
+ *     point: distinctness holds ACROSS the matrix rather than within a row, so
+ *     no single pair of fields is shared everywhere.
+ *
+ * `expectWireValidContestStartTimes` pins the first; the pair-separation check
+ * in `start-time-fixtures.test.ts` pins the second. Both are call sites here,
+ * not structural properties of this file — re-sharing a literal inside a
+ * guarded fixture reddens, deleting the CALL along with the literal does not.
+ */
 
 describe('OspexClient API surface', () => {
   it('contests.list builds the right URL and decodes the response', async () => {
@@ -134,51 +169,57 @@ describe('OspexClient API surface', () => {
     expect(first).not.toHaveProperty('jsonoddsId');
   });
 
-  it('contests copy the start-time companion fields verbatim, including "" sentinels', async () => {
+  it('contests copy the start-time companion fields verbatim, over the whole listable matrix', async () => {
+    // This one runs on the LIST path, which decodes through the zod boundary
+    // in `api/contests.ts`. That schema end fails silently — a field on the
+    // types + copy site but missing from the schema is stripped at runtime
+    // with nothing to compile against — so this test is what pins it. The
+    // detail path (`contests.get`) is an unvalidated cast+copy and cannot.
+    //
+    // Every listable row is served in ONE page, so a mapper that copies the
+    // wrong field has to survive all of them. A different input ties
+    // `matchTime` in each row, which is what stops the (matchTime, driver)
+    // pair from being invisible everywhere at once.
+    const cases = listableContestCases();
+    for (const { id, served } of cases) {
+      expectWireValidContestStartTimes(served, `api list ${id}`);
+      expectContestStartTimeInputsDistinct(served, `api list ${id}`);
+    }
+    expectMatrixSeparatesEveryPair(
+      cases.map((c) => c.served),
+      CONTEST_START_TIME_FIELDS,
+      'api list matrix',
+    );
+    // The "" sentinels the unlinked row carries must survive verbatim — not
+    // dropped, not nulled. The two provider snapshots use the same sentinel
+    // on contest surfaces even though `/v1/games` serves them nullable.
+    expectUnlinkedGameStartTimes(contestCase('unlinked').served, 'api list unlinked');
+
     const { fetch } = makeFetch(() => ({
       status: 200,
       body: {
-        contests: [
-          {
-            contestId: '1',
-            awayTeam: 'A',
-            homeTeam: 'B',
-            sport: 'nba',
-            sportId: 1,
-            matchTime: '2026-05-02T23:30:00Z',
-            chainStartTime: '2026-05-03T00:00:00Z',
-            gameMatchTime: '2026-05-03T00:00:00Z',
-            gameEarliestMatchTime: '2026-05-02T23:30:00Z',
-            status: 'verified',
-            speculations: [],
-          },
-          {
-            contestId: '2',
-            awayTeam: 'C',
-            homeTeam: 'D',
-            sport: 'nba',
-            sportId: 1,
-            matchTime: '2026-05-04T00:00:00Z',
-            // Unverified + no games row → the server's "" sentinels must
-            // survive verbatim (not dropped, not nulled).
-            chainStartTime: '',
-            gameMatchTime: '',
-            gameEarliestMatchTime: '',
-            status: 'unverified',
-            speculations: [],
-          },
-        ],
-        pagination: { limit: 100, offset: 0, total: 2, hasMore: false },
+        contests: cases.map(({ served }, index) => ({
+          contestId: String(index + 1),
+          awayTeam: 'A',
+          homeTeam: 'B',
+          sport: 'nba',
+          sportId: 1,
+          ...served,
+          status: 'verified',
+          speculations: [],
+        })),
+        pagination: { limit: 100, offset: 0, total: cases.length, hasMore: false },
       },
     }));
     const client = new OspexClient({ apiUrl, fetch });
-    const [first, second] = await client.contests.list();
-    expect(first?.chainStartTime).toBe('2026-05-03T00:00:00Z');
-    expect(first?.gameMatchTime).toBe('2026-05-03T00:00:00Z');
-    expect(first?.gameEarliestMatchTime).toBe('2026-05-02T23:30:00Z');
-    expect(second?.chainStartTime).toBe('');
-    expect(second?.gameMatchTime).toBe('');
-    expect(second?.gameEarliestMatchTime).toBe('');
+    const rows = await client.contests.list();
+    expect(rows).toHaveLength(cases.length);
+    rows.forEach((row, index) => {
+      const { id, served } = cases[index]!;
+      for (const field of CONTEST_START_TIME_FIELDS) {
+        expect(row[field], `${id}.${field}`).toBe(served[field]);
+      }
+    });
   });
 
   it('contests leave the start-time companion keys ABSENT (not undefined-assigned) when the server omits them', async () => {
@@ -204,9 +245,12 @@ describe('OspexClient API surface', () => {
     }));
     const client = new OspexClient({ apiUrl, fetch });
     const [first] = await client.contests.list();
-    expect(first).not.toHaveProperty('chainStartTime');
-    expect(first).not.toHaveProperty('gameMatchTime');
-    expect(first).not.toHaveProperty('gameEarliestMatchTime');
+    // Same consumer rule as the sweeps: `CONTEST_INPUT_FIELDS` is pinned
+    // against a literal in `start-time-fixtures.test.ts`, so a dropped entry
+    // reddens there rather than silently un-checking a key here.
+    for (const field of CONTEST_INPUT_FIELDS) {
+      expect(first, `list additivity: ${field}`).not.toHaveProperty(field);
+    }
   });
 
   it('contests.list({ date }) sends the date param and no window', async () => {
@@ -374,6 +418,48 @@ describe('OspexClient API surface', () => {
     expect(err).toBeInstanceOf(OspexValidationError);
     expect((err as OspexValidationError).field).toBe('contests.0.gameFinalType');
   });
+
+  // The five start-time companions are `z.string().optional()` on the list
+  // row: absent is tolerated (older core-api builds), `""` is the sentinel,
+  // and `null` is refused. `null` is the discriminating input rather than a
+  // number — `z.string()`, `z.string().nullable()` and `z.any()` all refuse a
+  // number, and only the first refuses `null`. Measured before these existed:
+  // widening any of the five to `.nullable()` or `z.any()` left the whole
+  // suite green, so the KEYS were pinned but their TYPE was not.
+  //
+  // Worth stating because it is a live coupling: the underlying columns are
+  // nullable in the database, and what makes them strings here is a `?? ''`
+  // in core-api's contest projections. If that coalesce is ever dropped, this
+  // boundary rejects the whole page rather than leaking `null` into a
+  // `string`-typed public field — loud, and deliberately so.
+  // Driven by the module's list, not a private copy: this is a CONSUMER, and
+  // `CONTEST_INPUT_FIELDS` is pinned against a literal enumeration in
+  // `start-time-fixtures.test.ts`, so dropping an entry reddens there. The
+  // literal belongs in the pin; a second literal here would only shrink in
+  // lockstep with it. (Measured before this change: dropping `chainStartTime`
+  // or `gameSportspageMatchTime` from the copy that used to sit here took the
+  // suite from 1016 to 1014 passing with exit 0.)
+  for (const field of CONTEST_INPUT_FIELDS) {
+    it(`contests.list REFUSES a null ${field}, with the field path`, async () => {
+      const { fetch } = makeFetch(() => listBodyWith({ [field]: null }));
+      const client = new OspexClient({ apiUrl, fetch });
+      const err = await client.contests.list().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe(`contests.0.${field}`);
+    });
+
+    it(`contests.list ACCEPTS the "" sentinel on ${field}`, async () => {
+      // Negative control for the refusal above: a schema broken to refuse
+      // everything would pass the five tests above and fail these five.
+      const { fetch } = makeFetch(() => listBodyWith({ [field]: '' }));
+      const client = new OspexClient({ apiUrl, fetch });
+      const [row] = await client.contests.list();
+      expect(row?.[field]).toBe('');
+    });
+  }
 
   it('contests.list REFUSES a non-string, non-null gameId', async () => {
     const { fetch } = makeFetch(() => listBodyWith({ gameId: 123 }));
@@ -620,96 +706,153 @@ describe('OspexClient API surface', () => {
     expect(detail.settledAt).toBe('2026-07-01T04:00:14+00:00');
     expect(detail.voided).toBe(false);
     // Negative control: this parent-context body predates the start-time
-    // companions — the keys must stay absent, not undefined-assigned.
-    expect(detail.contest).not.toHaveProperty('chainStartTime');
-    expect(detail.contest).not.toHaveProperty('gameMatchTime');
-    expect(detail.contest).not.toHaveProperty('gameEarliestMatchTime');
+    // companions — the keys must stay absent, not undefined-assigned. Driven
+    // by the module's `CONTEST_INPUT_FIELDS`, which is pinned against a
+    // literal in `start-time-fixtures.test.ts`.
+    for (const field of CONTEST_INPUT_FIELDS) {
+      expect(detail.contest, `parent-context additivity: ${field}`).not.toHaveProperty(field);
+    }
   });
 
-  it('speculations.get parent context copies the start-time companion fields verbatim', async () => {
-    const { fetch } = makeFetch(() => ({
-      status: 200,
-      body: {
-        speculationId: '500',
-        contestId: '42',
-        type: 'moneyline',
-        lineTicks: 0,
-        line: null,
-        speculationStatus: 0,
-        winSide: null,
-        settledAt: null,
-        voided: false,
-        orderbook: [],
-        contest: {
+  // The parent-context mapper sees the WHOLE matrix, including the
+  // pre-verification row the list endpoint filters out: `speculations.get`
+  // has no `start_time IS NOT NULL` predicate, so a contest between
+  // CONTEST_CREATED and CONTEST_VERIFIED reaches this surface carrying the
+  // "" chainStartTime sentinel beside real game-derived values.
+  for (const { id, why, served } of CONTEST_START_TIME_MATRIX) {
+    it(`speculations.get parent context copies the start-time companions verbatim (${id})`, async () => {
+      expectWireValidContestStartTimes(served, `parent context ${id}`);
+      expectContestStartTimeInputsDistinct(served, `parent context ${id}`);
+      expect(why).not.toBe('');
+      if (id === 'unlinked') {
+        expectUnlinkedGameStartTimes(served, 'parent context unlinked');
+      }
+      const { fetch } = makeFetch(() => ({
+        status: 200,
+        body: {
+          speculationId: '500',
           contestId: '42',
-          awayTeam: 'Lakers',
-          homeTeam: 'Celtics',
-          sport: 'nba',
-          matchTime: '2026-05-02T23:30:00Z',
-          chainStartTime: '2026-05-03T00:00:00Z',
-          gameMatchTime: '2026-05-03T00:00:00Z',
-          gameEarliestMatchTime: '2026-05-02T23:30:00Z',
-          status: 'verified',
+          type: 'moneyline',
+          lineTicks: 0,
+          line: null,
+          speculationStatus: 0,
+          winSide: null,
+          settledAt: null,
+          voided: false,
+          orderbook: [],
+          contest: {
+            contestId: '42',
+            awayTeam: 'Lakers',
+            homeTeam: 'Celtics',
+            sport: 'nba',
+            ...served,
+            status: 'verified',
+          },
         },
-      },
-    }));
-    const client = new OspexClient({ apiUrl, fetch });
-    const detail = await client.speculations.get('500');
-    expect(detail.contest.chainStartTime).toBe('2026-05-03T00:00:00Z');
-    expect(detail.contest.gameMatchTime).toBe('2026-05-03T00:00:00Z');
-    expect(detail.contest.gameEarliestMatchTime).toBe('2026-05-02T23:30:00Z');
+      }));
+      const client = new OspexClient({ apiUrl, fetch });
+      const detail = await client.speculations.get('500');
+      for (const field of CONTEST_START_TIME_FIELDS) {
+        expect(detail.contest[field], `${id}.${field}`).toBe(served[field]);
+      }
+    });
+  }
+
+  it('the parent-context matrix separates every start-time pair somewhere', () => {
+    // Stated here as well as in `start-time-fixtures.test.ts` because this is
+    // the surface whose mapper the separation is protecting: a swap between
+    // two same-typed assignments in `toContext` dies in whichever row those
+    // two fields differ, and this is what asserts such a row exists.
+    expectMatrixSeparatesEveryPair(
+      CONTEST_START_TIME_MATRIX.map((c) => c.served),
+      CONTEST_START_TIME_FIELDS,
+      'parent context matrix',
+    );
   });
 
-  it('games.get copies the start-time diagnostics verbatim (null floor is a real value, absent keys stay absent)', async () => {
-    const gameBody = {
-      gameId: 'g1',
-      slug: 'stl-sd-2026-05-08',
-      sport: 'mlb',
-      matchTime: '2026-05-08T01:00:00Z',
-      status: 'upcoming',
-      homeTeam: { name: 'San Diego Padres', abbreviation: 'SD' },
-      awayTeam: { name: 'St. Louis Cardinals', abbreviation: 'STL' },
-      hasOdds: true,
-      contestCreated: false,
-      contestId: null,
-      canCreateContest: true,
-      externalIds: { jsonodds: 'g1', sportspage: '336545', rundown: 'rd1' },
-    };
-    // Served with a raw feed value + a null floor (column unset) — both
-    // must be copied verbatim; null is NOT collapsed into key-absence.
+  // `/v1/games` minimises over a DIFFERENT input set than the contest
+  // surfaces: no chain start (a games row precedes any contest), and `null`
+  // rather than `""` for an unheld value, because this endpoint passes the
+  // column through instead of coalescing it. Applying one surface's rule to
+  // the other is the mistake these two matrices exist to keep apart.
+  const gameBody = {
+    gameId: 'g1',
+    slug: 'stl-sd-2026-05-08',
+    sport: 'mlb',
+    status: 'upcoming',
+    homeTeam: { name: 'San Diego Padres', abbreviation: 'SD' },
+    awayTeam: { name: 'St. Louis Cardinals', abbreviation: 'STL' },
+    hasOdds: true,
+    contestCreated: false,
+    contestId: null,
+    canCreateContest: true,
+    externalIds: { jsonodds: 'g1', sportspage: '336545', rundown: 'rd1' },
+  };
+
+  for (const { id, why, served } of GAME_START_TIME_MATRIX) {
+    it(`games.get copies the start-time diagnostics verbatim (${id})`, async () => {
+      expectWireValidGameStartTimes(served, `games ${id}`);
+      expectGameStartTimeInputsDistinct(served, `games ${id}`);
+      expect(why).not.toBe('');
+      const { fetch } = makeFetch(() => ({ status: 200, body: { ...gameBody, ...served } }));
+      const client = new OspexClient({ apiUrl, fetch });
+      const game = await client.games.get('g1');
+      for (const field of GAME_START_TIME_FIELDS) {
+        // `toHaveProperty(k, v)` is the discriminating form for the nulls: it
+        // needs the key to EXIST and to hold the value. A mapper that dropped
+        // the key, or one that coalesced null to the contest surfaces' `""`,
+        // fails it — `toBe` on an absent key would pass against undefined.
+        expect(game, `${id}.${field}`).toHaveProperty(field, served[field]);
+      }
+    });
+  }
+
+  it('the games matrix carries each null beside a non-null sibling, and separates every pair', () => {
+    // A null assertion on one snapshot proves nothing about the other:
+    // measured, a `?? ''` on the rundown copy alone survived a version of
+    // this suite that only ever served rundown as a string. Each snapshot is
+    // null in one row and a string in another, in both cases beside a
+    // non-null sibling, so neither a null-everything nor a
+    // coalesce-everything mapper passes.
+    // Consumer of the module's pinned list (`GAME_INPUT_FIELDS`, pinned
+    // against a literal in `start-time-fixtures.test.ts`), minus
+    // `gameMatchTime`: that input is the raw feed value `/v1/games` always
+    // serves — non-nullable in `GameStartTimes` — so it has no null row and
+    // asserting one would fail. The other three are the nullable inputs.
+    for (const field of GAME_INPUT_FIELDS.filter((f) => f !== 'gameMatchTime')) {
+      expect(
+        GAME_START_TIME_MATRIX.some((c) => c.served[field] === null),
+        `${field} is never null in the matrix`,
+      ).toBe(true);
+      expect(
+        GAME_START_TIME_MATRIX.some((c) => typeof c.served[field] === 'string'),
+        `${field} is never a string in the matrix`,
+      ).toBe(true);
+    }
+    expectMatrixSeparatesEveryPair(
+      GAME_START_TIME_MATRIX.map((c) => c.served),
+      GAME_START_TIME_FIELDS,
+      'games matrix',
+    );
+  });
+
+  it('games.get leaves the start-time diagnostic keys ABSENT when the server omits them', async () => {
+    // Negative control: an older core-api body without the diagnostics
+    // decodes with the keys absent, not undefined-assigned. Distinct from
+    // the null rows above — `not.toHaveProperty` fails on a present null.
+    // `matchTime` is the pre-diagnostics raw feed value on such a build.
     const { fetch } = makeFetch(() => ({
       status: 200,
-      body: {
-        ...gameBody,
-        gameMatchTime: '2026-05-08T02:00:00Z',
-        earliestMatchTime: null,
-      },
+      body: { ...gameBody, matchTime: gameCase('retained-floor-drives').served.gameMatchTime },
     }));
     const client = new OspexClient({ apiUrl, fetch });
-    const game = await client.games.get('g1');
-    expect(game.gameMatchTime).toBe('2026-05-08T02:00:00Z');
-    expect(game).toHaveProperty('earliestMatchTime', null);
-
-    // A retained (string) floor is copied verbatim, not normalised.
-    const { fetch: flooredFetch } = makeFetch(() => ({
-      status: 200,
-      body: {
-        ...gameBody,
-        gameMatchTime: '2026-05-08T02:00:00Z',
-        earliestMatchTime: '2026-05-08T00:30:00Z',
-      },
-    }));
-    const flooredClient = new OspexClient({ apiUrl, fetch: flooredFetch });
-    const flooredGame = await flooredClient.games.get('g1');
-    expect(flooredGame.earliestMatchTime).toBe('2026-05-08T00:30:00Z');
-
-    // Negative control: an older core-api body without the diagnostics
-    // decodes with the keys absent, not undefined-assigned.
-    const { fetch: oldFetch } = makeFetch(() => ({ status: 200, body: gameBody }));
-    const oldClient = new OspexClient({ apiUrl, fetch: oldFetch });
-    const oldGame = await oldClient.games.get('g1');
-    expect(oldGame).not.toHaveProperty('gameMatchTime');
-    expect(oldGame).not.toHaveProperty('earliestMatchTime');
+    const oldGame = await client.games.get('g1');
+    // The games surface's own input list, driven from the module rather than
+    // copied: `GAME_INPUT_FIELDS` is pinned against a literal in
+    // `start-time-fixtures.test.ts`.
+    for (const field of GAME_INPUT_FIELDS) {
+      expect(oldGame, `games additivity: ${field}`).not.toHaveProperty(field);
+    }
   });
 
   it('commitments.list passes the speculationId filter through', async () => {

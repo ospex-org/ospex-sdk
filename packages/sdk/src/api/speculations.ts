@@ -103,5 +103,11 @@ function toContext(body: SpeculationParentContextBody): SpeculationParentContext
   if (body.gameEarliestMatchTime !== undefined) {
     out.gameEarliestMatchTime = body.gameEarliestMatchTime;
   }
+  if (body.gameRundownMatchTime !== undefined) {
+    out.gameRundownMatchTime = body.gameRundownMatchTime;
+  }
+  if (body.gameSportspageMatchTime !== undefined) {
+    out.gameSportspageMatchTime = body.gameSportspageMatchTime;
+  }
   return out;
 }

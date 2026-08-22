@@ -77,6 +77,8 @@ const ContestListRowSchema = z
     chainStartTime: z.string().optional(),
     gameMatchTime: z.string().optional(),
     gameEarliestMatchTime: z.string().optional(),
+    gameRundownMatchTime: z.string().optional(),
+    gameSportspageMatchTime: z.string().optional(),
     gameFinalType: z.string().optional(),
     gameId: z.string().nullable().optional(),
     jsonoddsId: z.string().nullable().optional(),
@@ -184,6 +186,12 @@ function toContest(body: ContestBody): Contest {
   if (body.gameMatchTime !== undefined) out.gameMatchTime = body.gameMatchTime;
   if (body.gameEarliestMatchTime !== undefined) {
     out.gameEarliestMatchTime = body.gameEarliestMatchTime;
+  }
+  if (body.gameRundownMatchTime !== undefined) {
+    out.gameRundownMatchTime = body.gameRundownMatchTime;
+  }
+  if (body.gameSportspageMatchTime !== undefined) {
+    out.gameSportspageMatchTime = body.gameSportspageMatchTime;
   }
   // Dated-list-only: `GET /v1/contests?date=` rows carry the linked game's
   // finality; every other contest surface omits the key.

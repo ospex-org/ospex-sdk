@@ -36,11 +36,12 @@ export interface Game {
   slug: string;
   sport: GameSport;
   /**
-   * ISO-8601 string. The earliest start currently held for this game — the
-   * minimum of the raw feed value and the retained floor on servers that
-   * carry the two diagnostic fields below (a conservative safety bound, not
-   * a prediction); the raw feed value on older core-api builds, which omit
-   * them. Matches the derivation contest surfaces apply to `matchTime`.
+   * ISO-8601 string. The earliest start currently held for this game — on
+   * servers that carry the diagnostic fields below, the minimum of the raw
+   * feed value, the retained floor, and whichever provider snapshots the
+   * server considered fresh (a conservative safety bound, not a prediction);
+   * the raw feed value on older core-api builds, which omit them. Matches the
+   * derivation contest surfaces apply to `matchTime`.
    */
   matchTime: string;
   /** The raw current feed value, unminimised. Diagnostic; absent against older core-api builds. */
@@ -51,6 +52,19 @@ export interface Game {
    * Absent against older core-api builds.
    */
   earliestMatchTime?: string | null;
+  /**
+   * First-successful-match snapshots of TheRundown's / Sportspage's scheduled
+   * start for this game, re-observed when the primary feed moves it, or `null`
+   * when no snapshot is held. Dated observations rather than live values: per
+   * core-api's contract a snapshot enters `matchTime` only while it is fresh
+   * (a one-hour guard, applied server-side), so a snapshot well below
+   * `gameMatchTime` may simply be stale. Diagnostics/display — gate on
+   * `matchTime`. Absent against older core-api builds; `null` here is a served
+   * value, distinct from the key being absent. (Nullable, unlike the `""`
+   * sentinel the contest surfaces use for the same two snapshots.)
+   */
+  rundownMatchTime?: string | null;
+  sportspageMatchTime?: string | null;
   status: GameStatus;
   homeTeam: GameTeam;
   awayTeam: GameTeam;

@@ -6,6 +6,29 @@ import {
   decodePositionDelta,
 } from '../src/realtime/decoders.js';
 import type { Contest } from '../src/types/contest.js';
+import {
+  CONTEST_INPUT_FIELDS,
+  CONTEST_START_TIME_FIELDS,
+  CONTEST_START_TIME_MATRIX,
+  expectContestStartTimeInputsDistinct,
+  expectMatrixSeparatesEveryPair,
+  expectUnlinkedGameStartTimes,
+  expectWireValidContestStartTimes,
+} from './fixtures/start-times.js';
+
+/**
+ * The start-time fixtures are the shared matrix from
+ * `tests/fixtures/start-times.ts`; the guards run on them here so a row
+ * edited into a body core-api cannot serve reddens in this file too.
+ *
+ * The stream carries the whole matrix — the contests stream resource has no
+ * `start_time IS NOT NULL` predicate, so the pre-verification row (a `""`
+ * chainStartTime beside real game-derived values) reaches a subscriber.
+ *
+ * Both guards are call sites, not structural properties of this file:
+ * re-sharing a literal inside a guarded fixture reddens, deleting the CALL
+ * along with the literal does not.
+ */
 
 describe('decodePositionDelta', () => {
   it('maps the recovery body to a Position carrying userAddress + claimedAt', () => {
@@ -71,33 +94,50 @@ describe('decodeContestUpdate', () => {
     expect(out).not.toHaveProperty('jsonoddsId');
     // Negative control: this body predates the start-time companions —
     // the keys must stay absent on the decoded update, not undefined-assigned.
-    expect(out).not.toHaveProperty('chainStartTime');
-    expect(out).not.toHaveProperty('gameMatchTime');
-    expect(out).not.toHaveProperty('gameEarliestMatchTime');
+    // Driven by the module's `CONTEST_INPUT_FIELDS`, which is pinned against a
+    // literal in `start-time-fixtures.test.ts`, so dropping an entry reddens
+    // there instead of quietly un-checking a key here.
+    for (const field of CONTEST_INPUT_FIELDS) {
+      expect(out, `decodeContestUpdate additivity: ${field}`).not.toHaveProperty(field);
+    }
   });
 
-  it('copies the start-time companion fields verbatim when the stream body carries them', () => {
-    const out = decodeContestUpdate({
-      contestId: '1',
-      awayTeam: 'A',
-      homeTeam: 'H',
-      sport: 'nba',
-      sportId: 1,
-      matchTime: '2026-05-02T23:30:00Z',
-      chainStartTime: '2026-05-03T00:00:00Z',
-      gameMatchTime: '2026-05-03T00:00:00Z',
-      gameEarliestMatchTime: '2026-05-02T23:30:00Z',
-      status: 'verified',
-      awayScore: null,
-      homeScore: null,
-      verifiedAt: 'v',
-      scoredAt: null,
-      voidedAt: null,
-      contestCreatedAt: 'c',
+  for (const { id, served } of CONTEST_START_TIME_MATRIX) {
+    it(`copies the start-time companion fields verbatim (${id})`, () => {
+      expectWireValidContestStartTimes(served, `decodeContestUpdate ${id}`);
+      expectContestStartTimeInputsDistinct(served, `decodeContestUpdate ${id}`);
+      if (id === 'unlinked') {
+        // Paired with the populated rows: a decoder broken to always emit ""
+        // fails those, one broken to drop "" fails this one.
+        expectUnlinkedGameStartTimes(served, 'decodeContestUpdate unlinked');
+      }
+      const out = decodeContestUpdate({
+        contestId: '1',
+        awayTeam: 'A',
+        homeTeam: 'H',
+        sport: 'nba',
+        sportId: 1,
+        ...served,
+        status: 'verified',
+        awayScore: null,
+        homeScore: null,
+        verifiedAt: 'v',
+        scoredAt: null,
+        voidedAt: null,
+        contestCreatedAt: 'c',
+      });
+      for (const field of CONTEST_START_TIME_FIELDS) {
+        expect(out[field], `${id}.${field}`).toBe(served[field]);
+      }
     });
-    expect(out.chainStartTime).toBe('2026-05-03T00:00:00Z');
-    expect(out.gameMatchTime).toBe('2026-05-03T00:00:00Z');
-    expect(out.gameEarliestMatchTime).toBe('2026-05-02T23:30:00Z');
+  }
+
+  it('the decoded matrix separates every start-time pair somewhere', () => {
+    expectMatrixSeparatesEveryPair(
+      CONTEST_START_TIME_MATRIX.map((c) => c.served),
+      CONTEST_START_TIME_FIELDS,
+      'decodeContestUpdate matrix',
+    );
   });
 });
 
@@ -174,29 +214,45 @@ describe('contestToUpdate', () => {
     expect(out.verifiedAt).toBeNull();
     // Negative control: absent start-time companions on the Contest stay
     // absent on the projection — never null-coerced like the lifecycle
-    // fields, so the snapshot row matches a same-build stream body.
-    expect(out).not.toHaveProperty('chainStartTime');
-    expect(out).not.toHaveProperty('gameMatchTime');
-    expect(out).not.toHaveProperty('gameEarliestMatchTime');
+    // fields, so the snapshot row matches a same-build stream body. Same
+    // consumer rule: `CONTEST_INPUT_FIELDS` is pinned against a literal in
+    // `start-time-fixtures.test.ts`.
+    for (const field of CONTEST_INPUT_FIELDS) {
+      expect(out, `contestToUpdate additivity: ${field}`).not.toHaveProperty(field);
+    }
   });
 
-  it('carries the start-time companion fields through the projection when present', () => {
-    const contest: Contest = {
-      contestId: '1',
-      awayTeam: 'A',
-      homeTeam: 'H',
-      sport: 'nba',
-      sportId: 1,
-      matchTime: '2026-05-02T23:30:00Z',
-      chainStartTime: '2026-05-03T00:00:00Z',
-      gameMatchTime: '2026-05-03T00:00:00Z',
-      gameEarliestMatchTime: '2026-05-02T23:30:00Z',
-      status: 'verified',
-      speculations: [],
-    };
-    const out = contestToUpdate(contest);
-    expect(out.chainStartTime).toBe('2026-05-03T00:00:00Z');
-    expect(out.gameMatchTime).toBe('2026-05-03T00:00:00Z');
-    expect(out.gameEarliestMatchTime).toBe('2026-05-02T23:30:00Z');
+  for (const { id, served } of CONTEST_START_TIME_MATRIX) {
+    it(`carries the start-time companion fields through the projection (${id})`, () => {
+      expectWireValidContestStartTimes(served, `contestToUpdate ${id}`);
+      expectContestStartTimeInputsDistinct(served, `contestToUpdate ${id}`);
+      if (id === 'unlinked') {
+        // Paired with the populated rows, so neither direction passes on a
+        // projection broken to always emit one shape.
+        expectUnlinkedGameStartTimes(served, 'contestToUpdate unlinked');
+      }
+      const contest: Contest = {
+        contestId: '1',
+        awayTeam: 'A',
+        homeTeam: 'H',
+        sport: 'nba',
+        sportId: 1,
+        ...served,
+        status: 'verified',
+        speculations: [],
+      };
+      const out = contestToUpdate(contest);
+      for (const field of CONTEST_START_TIME_FIELDS) {
+        expect(out[field], `${id}.${field}`).toBe(served[field]);
+      }
+    });
+  }
+
+  it('the projected matrix separates every start-time pair somewhere', () => {
+    expectMatrixSeparatesEveryPair(
+      CONTEST_START_TIME_MATRIX.map((c) => c.served),
+      CONTEST_START_TIME_FIELDS,
+      'contestToUpdate matrix',
+    );
   });
 });

@@ -316,8 +316,10 @@ export interface ContestBody {
   matchTime: string;
   /**
    * Raw on-chain start (`""` until the contest is verified). Optional on the
-   * wire — core-api builds predating the start-time floor surface omit it,
-   * along with `gameMatchTime` / `gameEarliestMatchTime` below.
+   * wire — a core-api build predating the start-time floor surface omits it
+   * along with the other start-time companions below. Each companion is
+   * separately optional; check the key you need rather than inferring one
+   * from another.
    */
   chainStartTime?: string;
   /** Raw odds-feed schedule for the linked game; `""` when no games row is linked. */
@@ -325,9 +327,17 @@ export interface ContestBody {
   /**
    * The game's current retained start-time safety floor, verbatim — never
    * clamped; `""` when no games row is linked. When it is the minimum of the
-   * three inputs, it is what is driving `matchTime`.
+   * inputs, it is what is driving `matchTime`.
    */
   gameEarliestMatchTime?: string;
+  /**
+   * Provider start-time snapshots for the linked game (`games.rundown_match_time`
+   * / `games.sportspage_match_time`), verbatim. `""` when no games row is linked
+   * or no snapshot has been captured. Optional on the wire — core-api builds
+   * predating the provider-snapshot surface omit them.
+   */
+  gameRundownMatchTime?: string;
+  gameSportspageMatchTime?: string;
   /**
    * The linked game's upstream result status (`games.final_type`), verbatim
    * (`'Finished'` / `'Postponed'` / … free text; `""` sentinel). On the wire
@@ -395,12 +405,14 @@ export interface SpeculationParentContextBody {
   sport: string;
   matchTime: string;
   /**
-   * Same three optional start-time companions as {@link ContestBody}
+   * Same five optional start-time companions as {@link ContestBody}
    * (`""` sentinels); optional on the wire — older core-api builds omit them.
    */
   chainStartTime?: string;
   gameMatchTime?: string;
   gameEarliestMatchTime?: string;
+  gameRundownMatchTime?: string;
+  gameSportspageMatchTime?: string;
   status: string;
 }
 
@@ -580,10 +592,11 @@ export interface GameBody {
   slug: string;
   sport: string;
   /**
-   * The earliest start currently held for this game — the minimum of the raw
-   * feed value and the retained floor (a conservative safety bound on servers
-   * that carry the two diagnostic fields below; the raw feed value on older
-   * core-api builds, which omit them).
+   * The earliest start currently held for this game — on servers that carry
+   * the diagnostic fields below, the minimum of the raw feed value, the
+   * retained floor, and whichever provider snapshots the server considered
+   * fresh (a conservative safety bound); the raw feed value on older core-api
+   * builds, which omit them.
    */
   matchTime: string;
   /** The raw current feed value, unminimised. Diagnostic. */
@@ -595,6 +608,15 @@ export interface GameBody {
    * surfaces — mirrors the wire.)
    */
   earliestMatchTime?: string | null;
+  /**
+   * Provider start-time snapshots (`games.rundown_match_time` /
+   * `games.sportspage_match_time`), or `null` when the underlying column is
+   * unset. Nullable for the same reason as `earliestMatchTime` above: this
+   * endpoint passes the column through, while the contest projections
+   * coalesce it to `""`.
+   */
+  rundownMatchTime?: string | null;
+  sportspageMatchTime?: string | null;
   status: string;
   homeTeam: GameTeamBody;
   awayTeam: GameTeamBody;

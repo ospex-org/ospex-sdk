@@ -104,8 +104,13 @@ function toGame(body: GameBody): Game {
   // Conditional copy per `exactOptionalPropertyTypes`: absent against
   // core-api builds predating the start-time diagnostic fields. Note
   // `earliestMatchTime` is nullable when present — `null` is a real served
-  // value ("floor unset"), distinct from the key being absent.
+  // value ("floor unset"), distinct from the key being absent. The same holds
+  // for the two provider snapshots below ("no snapshot captured").
   if (body.gameMatchTime !== undefined) out.gameMatchTime = body.gameMatchTime;
   if (body.earliestMatchTime !== undefined) out.earliestMatchTime = body.earliestMatchTime;
+  if (body.rundownMatchTime !== undefined) out.rundownMatchTime = body.rundownMatchTime;
+  if (body.sportspageMatchTime !== undefined) {
+    out.sportspageMatchTime = body.sportspageMatchTime;
+  }
   return out;
 }
