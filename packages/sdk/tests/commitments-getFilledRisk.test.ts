@@ -13,7 +13,14 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { createPublicClient, custom, encodeAbiParameters, type PublicClient } from 'viem';
+import {
+  createPublicClient,
+  custom,
+  decodeFunctionData,
+  encodeAbiParameters,
+  multicall3Abi,
+  type PublicClient,
+} from 'viem';
 import { polygon } from 'viem/chains';
 import { getFilledRisk } from '../src/commitments/getFilledRisk.js';
 import { matchingModuleAbi } from '../src/contracts/abi/index.js';
@@ -271,7 +278,13 @@ describe('commitments.getFilledRisk — block pinning', () => {
     expect(headCalls()).toBe(1);
   });
 
-  it('sends one aggregate for the whole book, not one call per hash', async () => {
+  it('hands viem ONE multicall operation carrying every hash, not one call per hash', async () => {
+    // Scope note: this fake replaces `publicClient.multicall` wholesale, so it
+    // sits ABOVE the layer that decides how many `eth_call`s go out — it can
+    // only ever show what the SDK handed viem, which is one operation whatever
+    // the hash count. How many Multicall3 aggregates that becomes on the wire
+    // is a viem decision, pinned by the chunk-coherence case at the bottom of
+    // this file. Do not read this assertion as "one eth_call".
     const { ctx, aggregates } = fakeContext();
     await getFilledRisk(ctx, { hashes: BOOK });
     expect(aggregates).toHaveLength(1);
@@ -538,5 +551,149 @@ describe('commitments.getFilledRisk — over a real viem client', () => {
     const snapshot = await getFilledRisk(ctx, { hashes: [H_PARTIAL, H_UNFILLED] });
 
     expect(callBlockParams).toStrictEqual([`0x${snapshot.atBlock.toString(16)}`]);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Chunking — several aggregates, one block                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One viem `multicall` operation is not one `eth_call`. viem splits the
+ * aggregate when its calldata outgrows `batchSize` (default 1024 bytes; a
+ * `s_filledRisk(bytes32)` Call3 is 36 bytes of payload plus tuple overhead),
+ * so a large book leaves as several Multicall3 aggregates. Measured on viem
+ * 2.55.10: 60 hashes → three `eth_call`s of 28 + 28 + 4.
+ *
+ * That split is fine, and the docs used to say the opposite. What makes it
+ * fine is that `readFilledRiskAtBlock` passes `blockNumber` INTO the
+ * multicall, so viem stamps every chunk with the same block — the values
+ * still describe one instant. This case pins that: several calls, one block,
+ * and every hash paired with its own value across the chunk seams.
+ *
+ * The transport below answers each chunk from the chunk's OWN calldata rather
+ * than from a fixed array, so a mis-stitched result cannot be masked by every
+ * chunk being handed the same answers.
+ */
+
+/** Enough hashes to clear the boundary by a wide margin at viem 2.55.10 (3 chunks). */
+const CHUNKED_HASH_COUNT = 60;
+
+/**
+ * Distinct hashes with distinct, non-round values derived from the hash byte
+ * itself. Deriving the EXPECTATION from the hash rather than from a position
+ * is what makes a cross-chunk mis-pairing visible: a swap between chunk 2 and
+ * chunk 3 changes which value a hash carries, and no positional coincidence
+ * covers it.
+ */
+function chunkedHash(i: number): Hex {
+  return ('0x' + i.toString(16).padStart(2, '0').repeat(32)) as Hex;
+}
+function chunkedValueFor(hash: Hex): bigint {
+  // Non-round, > 2^32, and unique per hash — a truncation, a Number() round
+  // trip or a reused chunk answer all have to disagree with it.
+  return BigInt(`0x${hash.slice(2, 4)}`) * 1_000_000_007n + 3_141_593n;
+}
+
+interface ChunkProbe {
+  ctx: CommitmentsContext;
+  /** Number of Call3 entries in each outgoing `eth_call`, in request order. */
+  chunkSizes: number[];
+  /** The block parameter of each outgoing `eth_call`. */
+  callBlockParams: unknown[];
+}
+
+function chunkProbe(headBlock: bigint): ChunkProbe {
+  const chunkSizes: number[] = [];
+  const callBlockParams: unknown[] = [];
+
+  const publicClient = createPublicClient({
+    chain: polygon,
+    transport: custom({
+      request: async ({ method, params }: { method: string; params?: unknown }) => {
+        if (method === 'eth_blockNumber') return `0x${headBlock.toString(16)}`;
+        if (method === 'eth_call') {
+          const [tx, block] = params as [{ data: Hex }, unknown];
+          callBlockParams.push(block);
+          const decoded = decodeFunctionData({ abi: multicall3Abi, data: tx.data });
+          const calls = decoded.args[0] as readonly { callData: Hex }[];
+          chunkSizes.push(calls.length);
+          return encodeAbiParameters(AGGREGATE3_RESULT, [
+            calls.map((call) => ({
+              success: true,
+              // The last 32 bytes of `s_filledRisk(bytes32)` calldata are the
+              // hash this element asked about — answer THAT hash's value.
+              returnData: encodeAbiParameters(
+                [{ type: 'uint256' }],
+                [chunkedValueFor(`0x${call.callData.slice(-64)}` as Hex)],
+              ),
+            })),
+          ]);
+        }
+        throw new Error(`unexpected RPC method ${method} — the probe cannot answer it`);
+      },
+    }),
+  });
+
+  const ctx = {
+    api: {} as CommitmentsContext['api'],
+    getChainId: () => 137,
+    getAddresses: () =>
+      ({ matchingModule: MATCHING_MODULE }) as unknown as ReturnType<
+        CommitmentsContext['getAddresses']
+      >,
+    requireChainClient: () => publicClient,
+    nonceCounter: new NonceCounter(),
+  } as unknown as CommitmentsContext;
+
+  return { ctx, chunkSizes, callBlockParams };
+}
+
+describe('commitments.getFilledRisk — a chunked read stays on one block', () => {
+  it('splits into MORE THAN ONE eth_call and pins every one of them to the same block', async () => {
+    const hashes = Array.from({ length: CHUNKED_HASH_COUNT }, (_, i) => chunkedHash(i));
+    const { ctx, chunkSizes, callBlockParams } = chunkProbe(HEAD_BLOCK);
+
+    const { atBlock, filledRisk } = await getFilledRisk(ctx, { hashes });
+
+    // (i) The fixture must actually clear a chunk boundary, asserted BEFORE
+    // the coherence claim. If a viem bump raises `batchSize`, 60 hashes could
+    // fit in one call and every assertion below would still pass while
+    // proving nothing about chunking — this line reddens instead, and the fix
+    // is to raise CHUNKED_HASH_COUNT, not to delete the case.
+    expect(chunkSizes.length).toBeGreaterThan(1);
+    // ...and it must still be BATCHING, not degenerating to one call per hash.
+    expect(chunkSizes.length).toBeLessThan(CHUNKED_HASH_COUNT);
+    expect(chunkSizes.reduce((a, b) => a + b, 0)).toBe(CHUNKED_HASH_COUNT);
+
+    // (ii) Every chunk carried the pinned block. `new Set` collapses to one
+    // entry only when they agree; asserting the set (not just the first
+    // element) is what makes a per-chunk drift visible.
+    expect(new Set(callBlockParams.map(String)).size).toBe(1);
+    expect(callBlockParams).toStrictEqual(
+      callBlockParams.map(() => `0x${HEAD_BLOCK.toString(16)}`),
+    );
+    expect(atBlock).toBe(HEAD_BLOCK);
+
+    // (iii) The chunks were stitched back in input order — every hash carries
+    // its OWN value across the seams, not its neighbour's.
+    expect([...filledRisk.entries()]).toStrictEqual(
+      hashes.map((hash) => [hash, chunkedValueFor(hash)]),
+    );
+  });
+
+  it('pins every chunk to a caller-supplied block too', async () => {
+    const hashes = Array.from({ length: CHUNKED_HASH_COUNT }, (_, i) => chunkedHash(i));
+    // headBlock is deliberately NOT the pinned block, so a chunk that fell
+    // back to the head (or to `latest`) cannot coincide with the expectation.
+    const { ctx, chunkSizes, callBlockParams } = chunkProbe(HEAD_BLOCK);
+
+    const { atBlock } = await getFilledRisk(ctx, { hashes, blockNumber: PINNED_BLOCK });
+
+    expect(chunkSizes.length).toBeGreaterThan(1);
+    expect(callBlockParams).toStrictEqual(
+      callBlockParams.map(() => `0x${PINNED_BLOCK.toString(16)}`),
+    );
+    expect(atBlock).toBe(PINNED_BLOCK);
   });
 });

@@ -9,8 +9,12 @@
  * split out from `getNonceFloor.ts`: the raw read owns the RPC failure
  * mapping, the caller owns argument validation.
  *
- * Batched through Multicall3 via viem's `multicall`, pinned to one
- * block. `allowFailure: false` is deliberate — with `allowFailure: true`
+ * Batched through Multicall3 via viem's `multicall` as one operation,
+ * pinned to one block. viem may split that operation across several
+ * Multicall3 aggregates when the calldata outgrows its batch limit; the
+ * `blockNumber` below rides on every one of them, so the values still
+ * come from a single block. `allowFailure: false` is deliberate — with
+ * `allowFailure: true`
  * a per-call revert comes back as `{ status: 'failure' }` and the
  * natural read of `result` is `undefined`, one coercion away from `0n`.
  * A `0n` filled risk means "nothing matched yet", which understates
@@ -45,7 +49,7 @@ export interface FilledRiskRead {
  * hash at it.
  *
  * When `blockNumber` is undefined this costs one extra round trip
- * (`eth_blockNumber`) before the aggregate. That is the price of
+ * (`eth_blockNumber`) before the batched read. That is the price of
  * `atBlock` being the block the values were actually read at rather
  * than a label raced alongside them — see the `getFilledRisk` docblock.
  *
@@ -54,7 +58,7 @@ export interface FilledRiskRead {
  * for `cacheTime` — which defaults to `pollingInterval`, 4_000 ms. Left at
  * the default, a caller polling this read on one client (which is what a
  * funding guard does) would be handed a head up to 4s old on every call
- * after the first: the aggregate would still be coherent, but a fill that
+ * after the first: the batch would still be coherent, but a fill that
  * landed in those seconds would be invisible, leaving filled risk
  * stale-low and the maker's remaining obligation OVERSTATED — the same
  * direction as the bug this read exists to remove. Measured on viem 2.55:

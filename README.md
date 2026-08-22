@@ -150,7 +150,10 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 
 `commitments.getFilledRisk({ hashes, blockNumber? })` reads
 `MatchingModule.s_filledRisk` for a batch of commitment hashes straight from
-the contract, batched into a single Multicall3 aggregate. A maker's remaining
+the contract, as one viem `multicall` operation. viem may split that operation
+into several Multicall3 aggregates once the calldata outgrows its batch limit
+(around 28 hashes per `eth_call`); every one of them carries the same pinned
+block, so a split cannot cost coherence. A maker's remaining
 obligation on one commitment is `riskAmount - filledRisk[hash]` — the same
 arithmetic `matchCommitment` performs on chain — so this is the figure to
 compare wallet balance and PositionModule allowance against.
@@ -205,7 +208,7 @@ stands in for a read that did not happen.
 | `ospex commitments cancel-onchain <hash-or-prefix>` | On-chain cancel only. Authoritative; cannot be reverted off-chain. |
 | `ospex commitments cancel-all --contest-id --scorer --line --new-min-nonce [--dry-run]` | Bulk-cancel every open commitment from this maker on one speculation by raising the on-chain nonce floor. `--new-min-nonce` is required (the SDK does not auto-compute — see [`docs/AGENT_CONTRACT.md` §1.5](./docs/AGENT_CONTRACT.md)). |
 | `ospex commitments nonce-floor --maker --contest-id --scorer --line` | Read the current on-chain `s_minNonces[maker][specKey]`. |
-| `ospex commitments filled-risk <hash...> [--block <n>] [--json]` | Read the on-chain `s_filledRisk[hash]` for one or more commitments — how much of each is already matched. Batched into a single Multicall3 aggregate pinned to one block, and prints that block so a funding read can be taken at the same instant. A hash with no fill reads `0`. |
+| `ospex commitments filled-risk <hash...> [--block <n>] [--json]` | Read the on-chain `s_filledRisk[hash]` for one or more commitments — how much of each is already matched. Sent as one viem multicall operation pinned to one block — viem may split it into several Multicall3 aggregates, all at that same block — and prints the block so a funding read can be taken at the same instant. A hash with no fill reads `0`. |
 | `ospex commitments fillability <hash-or-prefix> [--risk-usdc <decimal>] [--taker <addr>] [--json]` | Advisory, read-only check of whether a taker can fill this commitment right now — reads maker/taker USDC balance + PositionModule allowance and liveness and returns a structured verdict (fillable / not-fillable / unknown), no tx. Resolves over all statuses; needs an `rpcUrl`. `--json` emits a v2 `AgentEnvelope` (`action: commitments.fillability`, stage `read`). Point-in-time — funding can change before the fill. |
 | `ospex approvals setup [--risk-usdc <n>] [--fee-usdc <n>] [--yes --json]` | One-shot multi-spender USDC approval orchestration (PositionModule / TreasuryModule). Recommended baseline. |
 | `ospex approvals show [--address <addr>]` | Read-only allowance snapshot for a wallet. |

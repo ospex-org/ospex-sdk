@@ -61,14 +61,18 @@
  *
  * ## Batching
  *
- * The hashes go out as one Multicall3 aggregate through viem's
- * `multicall`. Both configured chains carry Multicall3 at the address
- * viem's own chain definitions supply, so no address plumbing is needed
- * and no per-hash round trip happens. viem chunks an aggregate at its
- * default 1024-byte calldata limit — 36 bytes per `s_filledRisk(bytes32)`
- * call, so roughly 28 hashes per `eth_call` at viem 2.55 — meaning a
- * large array becomes a few calls rather than one. Every chunk carries
- * the same pinned `blockNumber`, so a split cannot cost coherence.
+ * The hashes go out as ONE viem `multicall` operation, which viem may
+ * split into SEVERAL Multicall3 aggregates — not necessarily one. Both
+ * configured chains carry Multicall3 at the address viem's own chain
+ * definitions supply, so no address plumbing is needed and no per-hash
+ * round trip happens. viem chunks at its default 1024-byte calldata
+ * limit — 36 bytes per `s_filledRisk(bytes32)` call, so roughly 28
+ * hashes per `eth_call` at viem 2.55; a 60-hash read measured as three
+ * `eth_call`s (28 + 28 + 4). Every chunk carries the same pinned
+ * `blockNumber`, so a split cannot cost coherence — that guarantee, not
+ * the call count, is what the caller depends on. Pinned by
+ * `readFilledRiskAtBlock`, covered by the chunk-coherence case in
+ * `tests/commitments-getFilledRisk.test.ts`.
  */
 
 import { OspexChainError, OspexValidationError } from '../errors.js';

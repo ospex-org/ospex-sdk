@@ -419,6 +419,9 @@ Commands listed below adopt the wrapper. Anything not listed either does not hav
 - `own-state watch` — NDJSON stream with its own per-line contract (`{ kind: 'snapshot' | 'ready' | 'commitment' | 'fill' | 'positionStatus' | 'status' | 'heartbeat' | 'error' | 'summary', … }`; see [`AGENT_CONTRACT.md` §5.2](./AGENT_CONTRACT.md)). Same NDJSON carve-out rationale as `odds watch`. Owner-commitment lines are signature-redacted by default so the stream is safe to capture into a public artifact.
 - `init`, `wallet import`, `wallet unlock`, `wallet lock` — one-shot human config commands with no `--json` mode.
 - `auth use-foundry`, `auth clear-foundry` — one-shot config commands; their `schemaVersion: 1` envelope is preserved (agents do not run them in a loop).
+- `commitments submit-raw` — has a `--json` mode but emits no structured failure envelope, as [`AGENT_CONTRACT.md` §7](./AGENT_CONTRACT.md) already records: on an ambiguous submit failure the locally-computed `commitmentHash` is reachable only through the SDK error, not through stdout. Listed here so every registered command is classified; §4.1–4.3 or this section, never neither.
+
+§4.1–4.4 together are exhaustive over the registered command tree, and `packages/cli/tests/class-a-failure-envelope-sweep.test.ts` fails if a command appears in neither.
 
 ---
 
@@ -545,6 +548,7 @@ Rules:
 - `nextCommands[]` may include a `remediate` suggestion when the error has a known local fix.
 - `payload: null` when the command could not produce a payload.
 - Errors that prevent envelope construction at all (e.g. failure before SDK init) fall back to `error: <code>: <message>` on stderr with exit `1`. This is a narrow window: anything after `getClient()` succeeds emits a structured failure envelope.
+- **Conformance, measured rather than asserted.** Every Class A write command plus `doctor` and `commitments filled-risk` honours the rule above; the remaining read commands do not yet — they let a post-client failure escape to stderr, so `--json | jq .` gets nothing from them on a failed read. The rule stays as written because it is the requirement, not a description; what each command actually does is measured against a dead endpoint by `packages/cli/tests/class-a-failure-envelope-sweep.test.ts`, whose probe table is the one place the outstanding set is enumerated. That table is exact in both directions: a command that starts honouring the rule and a command that stops both redden it.
 - Validation errors thrown before `getClient()` (`OspexValidationError` on argument parse) also fall back to stderr.
 - **Failure-envelope intent flags are path-specific.** `requiresSignature: true` is set when the failed code path would have produced an EIP-712 signature or signed a tx had it succeeded — for every write command (sign-based or tx-based) this is always true. `requiresTransaction: true` is set ONLY when the failed code path would have sent or attempted an on-chain tx. The two are independent:
   - Pure on-chain writes (`commitments {match, cancel-onchain, cancel-all, approve, approve-raw}`, `contests {create, score}`, `positions {claim, settle, claim-all}`, `approvals setup`): both flags `true`.
