@@ -65,6 +65,33 @@ describe.skipIf(!RUN)('integration: M2.5 on-chain cancel', () => {
     expect(floor).toBe(0n);
   });
 
+  it('reads getFilledRisk for synthetic hashes against a real Multicall3', async () => {
+    if (!RPC_URL) throw new Error('OSPEX_TEST_RPC_URL required');
+    const client = makeClient();
+    // Two hashes no commitment can occupy, so both read the storage default.
+    // The point of running this against a live node is the parts a fake
+    // cannot exercise: that Multicall3 exists at the address viem's chain
+    // definition supplies, that the aggregate encodes/decodes, and that a
+    // pinned block is served.
+    const a = ('0x' + '11'.repeat(32)) as `0x${string}`;
+    const b = ('0x' + '22'.repeat(32)) as `0x${string}`;
+
+    const head = await client.commitments.getFilledRisk({ hashes: [a, b] });
+    expect(head.atBlock).toBeGreaterThan(0n);
+    expect([...head.filledRisk.entries()]).toStrictEqual([
+      [a, 0n],
+      [b, 0n],
+    ]);
+
+    // Pin a few blocks back: proves the block argument reaches the node
+    // rather than being dropped on the way.
+    const pinned = await client.commitments.getFilledRisk({
+      hashes: [a, b],
+      blockNumber: head.atBlock - 5n,
+    });
+    expect(pinned.atBlock).toBe(head.atBlock - 5n);
+  });
+
   describe.skipIf(!PRIVATE_KEY || !LIVE_HASH)('write paths (require OSPEX_TEST_PRIVATE_KEY + OSPEX_TEST_LIVE_HASH)', () => {
     it('Test 1 — submit + cancelOnchain: tx succeeds, indexer projection within 30s', async () => {
       if (!PRIVATE_KEY || !LIVE_HASH) throw new Error('write env required');

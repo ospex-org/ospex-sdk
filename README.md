@@ -146,6 +146,36 @@ Off-chain `commitments.cancel(hash)` (DELETE `/v1/commitments/:hash`) marks the 
 
 For bulk cancel ("revoke every order I have on this speculation"), `commitments.cancelAllOnSpeculation({ contestId, scorer, lineTicks, newMinNonce })` raises the maker's on-chain nonce floor so all sub-floor commitments become unmatchable in a single tx. `newMinNonce` is **required** — read the current floor with `commitments.getNonceFloor({ maker, contestId, scorer, lineTicks })`, add any headroom you need for cross-process signatures, and pass the result. The SDK does not auto-compute the floor: anonymous reads cannot enumerate the maker's book-hidden commitments, so any computed default would silently leave hidden-but-still-on-chain-matchable rows live (latent exposure). The contract has no `AlreadyCancelled` revert path; calling `cancelOnchain` on a hash that's already cancelled is a no-op success, so don't infer "first cancel" from tx success.
 
+### Chain-truth filled risk — sizing a funding guard
+
+`commitments.getFilledRisk({ hashes, blockNumber? })` reads
+`MatchingModule.s_filledRisk` for a batch of commitment hashes straight from
+the contract, batched into a single Multicall3 aggregate. A maker's remaining
+obligation on one commitment is `riskAmount - filledRisk[hash]` — the same
+arithmetic `matchCommitment` performs on chain — so this is the figure to
+compare wallet balance and PositionModule allowance against.
+
+Reading the filled figure from an indexed mirror instead compares two
+different instants: a landed match lowers the wallet immediately and the
+mirror seconds later, so a guard briefly believes it must back risk that is
+already matched, by exactly the fill size.
+
+The result carries `atBlock`, the block the values were read at (not a label
+recorded beside them), and `client.balances.read` / `client.approvals.read`
+both take the same optional `blockNumber` — so the whole comparison can be
+taken at one block:
+
+```ts
+const { atBlock, filledRisk } = await client.commitments.getFilledRisk({ hashes });
+const balances  = await client.balances.read({ owner, blockNumber: atBlock });
+const approvals = await client.approvals.read({ owner, blockNumber: atBlock });
+```
+
+A hash with no fill reads `0n`, which is a real value: `s_filledRisk` is a
+mapping, so an unfilled commitment and an unknown hash share the storage
+default. Every failure path throws `OspexChainError` instead, so `0n` never
+stands in for a read that did not happen.
+
 ## CLI command reference
 
 | Command | What it does |
@@ -175,6 +205,7 @@ For bulk cancel ("revoke every order I have on this speculation"), `commitments.
 | `ospex commitments cancel-onchain <hash-or-prefix>` | On-chain cancel only. Authoritative; cannot be reverted off-chain. |
 | `ospex commitments cancel-all --contest-id --scorer --line --new-min-nonce [--dry-run]` | Bulk-cancel every open commitment from this maker on one speculation by raising the on-chain nonce floor. `--new-min-nonce` is required (the SDK does not auto-compute — see [`docs/AGENT_CONTRACT.md` §1.5](./docs/AGENT_CONTRACT.md)). |
 | `ospex commitments nonce-floor --maker --contest-id --scorer --line` | Read the current on-chain `s_minNonces[maker][specKey]`. |
+| `ospex commitments filled-risk <hash...> [--block <n>] [--json]` | Read the on-chain `s_filledRisk[hash]` for one or more commitments — how much of each is already matched. Batched into a single Multicall3 aggregate pinned to one block, and prints that block so a funding read can be taken at the same instant. A hash with no fill reads `0`. |
 | `ospex commitments fillability <hash-or-prefix> [--risk-usdc <decimal>] [--taker <addr>] [--json]` | Advisory, read-only check of whether a taker can fill this commitment right now — reads maker/taker USDC balance + PositionModule allowance and liveness and returns a structured verdict (fillable / not-fillable / unknown), no tx. Resolves over all statuses; needs an `rpcUrl`. `--json` emits a v2 `AgentEnvelope` (`action: commitments.fillability`, stage `read`). Point-in-time — funding can change before the fill. |
 | `ospex approvals setup [--risk-usdc <n>] [--fee-usdc <n>] [--yes --json]` | One-shot multi-spender USDC approval orchestration (PositionModule / TreasuryModule). Recommended baseline. |
 | `ospex approvals show [--address <addr>]` | Read-only allowance snapshot for a wallet. |

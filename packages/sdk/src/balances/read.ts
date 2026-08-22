@@ -8,6 +8,10 @@
  *
  * Like `client.approvals.read()`, passing `owner` keeps the call fully
  * read-only and avoids a Foundry-keystore passphrase prompt.
+ *
+ * Passing `blockNumber` pins both reads to that block — see
+ * `ReadBalancesArgs.blockNumber` and the `commitments.getFilledRisk`
+ * docblock for why a funding comparison wants one instant.
  */
 
 import { erc20Abi } from '../contracts/abi/erc20.js';
@@ -32,13 +36,19 @@ export async function read(
 
   const usdc = addresses.usdc as Hex;
 
+  // Spread rather than pass `blockNumber: undefined` — `getBalance`'s
+  // parameters are a discriminated union over blockNumber/blockTag/blockHash,
+  // and `exactOptionalPropertyTypes` refuses an explicit undefined.
+  const at = args.blockNumber === undefined ? {} : { blockNumber: args.blockNumber };
+
   const [native, usdcBalance] = await Promise.all([
-    publicClient.getBalance({ address: owner }),
+    publicClient.getBalance({ address: owner, ...at }),
     publicClient.readContract({
       address: usdc,
       abi: erc20Abi,
       functionName: 'balanceOf',
       args: [owner],
+      ...at,
     }) as Promise<bigint>,
   ]);
 

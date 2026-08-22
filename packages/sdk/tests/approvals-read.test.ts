@@ -39,6 +39,7 @@ interface ReadCall {
   token: string;
   owner: string;
   spender: string;
+  blockNumber: bigint | undefined;
 }
 
 interface FakeOpts {
@@ -55,9 +56,10 @@ function makeContext(opts: FakeOpts = {}): { ctx: ApprovalsContext; calls: ReadC
     readContract: async (params: {
       address: string;
       args: readonly [string, string];
+      blockNumber?: bigint;
     }) => {
       const [owner, spender] = params.args;
-      calls.push({ token: params.address, owner, spender });
+      calls.push({ token: params.address, owner, spender, blockNumber: params.blockNumber });
       const k = `${params.address.toLowerCase()}:${owner.toLowerCase()}:${spender.toLowerCase()}`;
       return allowances.get(k) ?? 0n;
     },
@@ -159,5 +161,31 @@ describe('client.approvals.read', () => {
       ADDRESSES.treasuryModule.toLowerCase(),
     );
     expect(snap.usdc.decimals).toBe(6);
+  });
+
+  // `blockNumber` exists so a funding comparison can be taken at the same
+  // instant as `commitments.getFilledRisk`'s `atBlock`. Both allowance reads
+  // must carry it: a PositionModule allowance at block N beside a
+  // TreasuryModule allowance at head is the incoherence the option removes,
+  // and threading it through one `readAllowance` call site and not the other
+  // is the easy way to get that wrong.
+  it('pins BOTH allowance reads to an explicit blockNumber', async () => {
+    const { ctx, calls } = makeContext();
+
+    await read(ctx, { owner: OWNER_OVERRIDE, blockNumber: 71_234_501n });
+
+    expect(calls).toHaveLength(2);
+    expect(calls.map((c) => c.blockNumber)).toStrictEqual([71_234_501n, 71_234_501n]);
+  });
+
+  it('sends no block when blockNumber is omitted (the pre-existing behaviour)', async () => {
+    // Control for the case above: without this, a build that pinned every
+    // read to some constant would still pass it.
+    const { ctx, calls } = makeContext();
+
+    await read(ctx, { owner: OWNER_OVERRIDE });
+
+    expect(calls).toHaveLength(2);
+    expect(calls.map((c) => c.blockNumber)).toStrictEqual([undefined, undefined]);
   });
 });

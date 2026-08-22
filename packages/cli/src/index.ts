@@ -32,6 +32,7 @@ import { commitmentsCancelCommand } from './commands/commitments/cancel.js';
 import { commitmentsCancelOnchainCommand } from './commands/commitments/cancel-onchain.js';
 import { commitmentsCancelAllCommand } from './commands/commitments/cancel-all.js';
 import { commitmentsNonceFloorCommand } from './commands/commitments/nonce-floor.js';
+import { commitmentsFilledRiskCommand } from './commands/commitments/filled-risk.js';
 import { commitmentsShowCommand } from './commands/commitments/show.js';
 import { makeContestsCommand } from './commands/contests/index.js';
 import { gamesCommand } from './commands/games/index.js';
@@ -86,6 +87,7 @@ export function makeProgram(): Command {
   commitments.addCommand(commitmentsCancelOnchainCommand);
   commitments.addCommand(commitmentsCancelAllCommand);
   commitments.addCommand(commitmentsNonceFloorCommand);
+  commitments.addCommand(commitmentsFilledRiskCommand);
   program.addCommand(commitments);
 
   program.addCommand(makeContestsCommand());

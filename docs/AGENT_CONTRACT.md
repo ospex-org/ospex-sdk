@@ -247,6 +247,16 @@ Both preflights run on the **execute path** by default (not on a `--json`-only p
 
 The above are **per-fill / per-submit** checks. There is also a **book-wide read advisory**: `ospex commitments list --with-fillability` (SDK: `client.commitments.list({ includeFillability: true })`) attaches an advisory `fillability` object to each commitment, sourced from the indexer's ~30s maker-funding snapshot — no per-fill on-chain reads, so it's cheap to triage a whole book. Each object carries `makerFundingStatus` (`fully_backed` | `overcommitted` | `unknown` | `stale`), `orderIndividuallyBackedNow` (backing covers THIS order's remaining risk) vs `makerBookBackedNow` (backing covers the maker's *whole* visible book — a maker can be the former but not the latter, which is the "fake liquidity" signal), `makerBackingWei6` / `makerVisibleCommittedWei6` / `makerCoverageRatioBps`, `checkedAtBlock`, and `stale`. The `…BackedNow` booleans are `null` when `unknown`/`stale` (a "now" assertion can't be made from a missing/old snapshot). Advisory + point-in-time, **never folded into `status`**. Under `--json` each commitment in the `commitments.list` payload simply gains the `fillability` field; it's omitted entirely without the flag. For a definitive go/no-go on a *single* fill, use the `match` preflight / `checkCommitmentFillability` above.
 
+### Chain-truth filled risk (`commitments.getFilledRisk`)
+
+Everything above is advisory and takes the maker's already-matched risk from indexed data. An agent running its own funding guard — comparing what a wallet can back against what its open orders still owe — needs the authoritative figure instead, because the two sides move at different times: a landed match lowers the wallet immediately and the indexed figure seconds later, so the guard briefly believes it must back risk that is already matched, by exactly the fill size.
+
+`client.commitments.getFilledRisk({ hashes, blockNumber? })` reads `MatchingModule.s_filledRisk` for a batch of commitment hashes directly from the contract (one Multicall3 aggregate) and returns `{ atBlock, filledRisk }`, where `filledRisk` is a `Map` keyed by the hash strings passed in, verbatim. Remaining obligation on one commitment is `riskAmount - filledRisk.get(hash)` — the same arithmetic `MatchingModule.matchCommitment` performs on chain. A hash with no fill reads `0n`, which is a real value; the mapping cannot distinguish an unfilled commitment from an unknown hash, and every failure path throws `OspexChainError` rather than returning `0n`.
+
+`atBlock` is the block the values were read at. `client.balances.read` and `client.approvals.read` both accept the same optional `blockNumber`, so a funding comparison can be taken at one block by threading `atBlock` into them. This is a stronger property than the `checkedAtBlock` carried on the advisory verdicts above, which is fetched concurrently with those verdicts' funding reads and therefore labels them rather than pinning them.
+
+CLI: `ospex commitments filled-risk <hash...> [--block <n>] [--json]`.
+
 ### Numeric-field rule
 
 Every value that may exceed `Number.MAX_SAFE_INTEGER` is a **decimal string** (`'1000000'`, never `1000000`). This includes:

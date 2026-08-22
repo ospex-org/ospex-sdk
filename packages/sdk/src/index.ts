@@ -319,6 +319,14 @@ export type {
   SubmitFundabilityCoverage,
 } from './commitments/index.js';
 
+// Chain-truth filled-risk read. Root-exported (unlike `GetNonceFloorArgs`,
+// which consumers derive with `Parameters<>`) because the result is a
+// structured snapshot rather than a bare bigint — the same reason
+// `CheckCommitmentFillabilityResult` is exported above — and a consumer
+// threading `atBlock` into `balances.read` / `approvals.read` needs to name
+// the shape it came from.
+export type { FilledRiskSnapshot, GetFilledRiskArgs } from './commitments/index.js';
+
 // Match-flow preview model — parallels SubmitPreview but for the taker
 // side. CLI and agents render `MatchPreview`; the CLI's --json emits a v2
 // AgentEnvelope wrapping it (see docs/AGENT_CONTRACT.md). MatchPreviewEnvelope /

@@ -36,4 +36,16 @@ export interface ReadBalancesArgs {
    * read-only flows like `ospex doctor --address`.
    */
   owner?: Hex;
+  /**
+   * Pin both reads to this block. Omit for the current block (the
+   * behaviour that predates this option, unchanged).
+   *
+   * Exists so a funding comparison can be taken at one instant: pass the
+   * `atBlock` from `client.commitments.getFilledRisk(...)` and the
+   * balances describe the same block as the filled risk they are being
+   * compared against. On a load-balanced endpoint whose node has not
+   * reached that block the read throws rather than answering from a
+   * different one.
+   */
+  blockNumber?: bigint;
 }

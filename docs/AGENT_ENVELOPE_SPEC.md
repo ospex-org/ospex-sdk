@@ -401,7 +401,7 @@ Commands listed below adopt the wrapper. Anything not listed either does not hav
 
 ### 4.1 Reads
 
-`health`, `doctor`, `auth check`, `approvals show`, `wallet address`, `commitments list`, `commitments show`, `commitments fillability`, `commitments nonce-floor`, `contests list`, `contests show`, `contests wait-verified`, `contests wait-scored`, `contests score-status`, `games list`, `leaderboard show`, `odds show`, `positions list`, `positions status`, `positions history`, `speculations list`, `speculations show`.
+`health`, `doctor`, `auth check`, `approvals show`, `wallet address`, `commitments list`, `commitments show`, `commitments fillability`, `commitments nonce-floor`, `commitments filled-risk`, `contests list`, `contests show`, `contests wait-verified`, `contests wait-scored`, `contests score-status`, `games list`, `leaderboard show`, `odds show`, `positions list`, `positions status`, `positions history`, `speculations list`, `speculations show`.
 
 ### 4.2 Preview-bearing writes
 
@@ -470,6 +470,7 @@ Legend: `✓` populated · `∅` `null` / `[]` (does not apply) · `+` populated
 | `commitments show <hash>` | read | maker/subject/∅ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (e.g. `cancel`) | `Commitment` |
 | `commitments fillability <hash>` | read | taker/subject/∅ | ∅ | ∅ | ∅ | ∅ | ✓ (the maker commitment) | ∅ | ∅ | `CheckCommitmentFillabilityResult` |
 | `commitments nonce-floor` | read | maker/subject/∅ | ∅ | ∅ | ✓ | ✓ | ∅ | ✓ | ✓ | `{ maker, contestId, scorer, lineTicks, minNonce }` |
+| `commitments filled-risk` | read | ∅/none/∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | `{ atBlock, filledRisk[] }` — keyed by commitment hash and maker-agnostic, so no wallet shoulder field |
 | `contests list` | read | none | ∅ | ∅ | ∅ | ∅ | ∅ | ✓ | ✓ (e.g. `contests create`) | `Contest[]` |
 | `contests show <id>` | read | none | ∅ | ∅ | ✓ | ∅ | ∅ | ✓ | ✓ | `Contest` |
 | `contests wait-verified` | read | none | ∅ | ∅ | ✓ | ∅ | ∅ | ✓ (timeout warning) | ✓ (next: `contests show`) | `{ contestId, status }` |

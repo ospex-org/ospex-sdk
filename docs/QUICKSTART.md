@@ -607,6 +607,7 @@ The CLI separates **one-shot user actions** (request → reply → exits) from *
 | See your active and claimable positions | `ospex positions status <yourAddress>` |
 | Cancel an open commitment off-chain | `ospex commitments cancel <hash-or-prefix>` |
 | Cancel authoritatively on-chain | `ospex commitments cancel-onchain <hash-or-prefix>` |
+| Check how much of your open orders is already matched, on chain | `ospex commitments filled-risk <hash> [<hash> …]` |
 | Bulk-cancel all your orders on a speculation | `ospex commitments cancel-all --contest-id <id> --scorer <addr> --line <ticks> --new-min-nonce <n>` (read the current floor first with `ospex commitments nonce-floor ...`) |
 | Claim a winning position after settlement | `ospex claim <speculationId> --type upper\|lower` |
 | Claim everything claimable for a wallet | `ospex claim-all` |

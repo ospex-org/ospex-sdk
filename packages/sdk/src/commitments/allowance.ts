@@ -12,17 +12,26 @@ import { erc20Abi } from '../contracts/abi/erc20.js';
 import { OspexAllowanceError } from '../errors.js';
 import type { Hex } from '../types/signer.js';
 
+/**
+ * `blockNumber` is optional and pins the read to that block; omitted, it
+ * reads the current block exactly as before. Only `approvals.read` passes
+ * it today — the fillability / fundability preflights read the latest
+ * block deliberately.
+ */
 export async function readAllowance(
   publicClient: PublicClient,
   token: Hex,
   owner: Hex,
   spender: Hex,
+  blockNumber?: bigint,
 ): Promise<bigint> {
+  const at = blockNumber === undefined ? {} : { blockNumber };
   return (await publicClient.readContract({
     address: token,
     abi: erc20Abi,
     functionName: 'allowance',
     args: [owner, spender],
+    ...at,
   })) as bigint;
 }
 
