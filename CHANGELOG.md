@@ -4,6 +4,10 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.15.0] — 2026-08-22
+
 ### Added
 
 - **`@ospex/sdk` + `@ospex/cli`: chain-truth filled risk — `commitments.getFilledRisk({ hashes, blockNumber? })` and `ospex commitments filled-risk <hash...>`.** Reads `MatchingModule.s_filledRisk` for a batch of commitment hashes straight from the contract and returns `{ atBlock, filledRisk }`, where `filledRisk` is a `Map` keyed by the hash strings that were passed in — **verbatim**, not case-normalised, so `get(h)` is defined for every `h` the caller supplied and the map's size equals the input length. Duplicate hashes are refused rather than collapsed, since the one-entry-per-hash contract is what makes that total. A maker's remaining obligation on one commitment is `riskAmount - filledRisk.get(hash)`, which is the arithmetic `MatchingModule.matchCommitment` performs on chain and which its own NatSpec directs off-chain callers to size against; taking the filled half from an indexed mirror instead compares two different instants, and a landed match lowers a wallet immediately while the mirror follows seconds later, so a funding guard briefly believes it must back risk that is already matched — by exactly the fill size. **`0n` is a real value, not a sentinel**: `s_filledRisk` is a mapping, so an unfilled commitment and a hash no commitment ever occupied share the storage default and this read cannot separate them. Every failure path throws `OspexChainError` instead — a reverting call, a short or non-`uint256` result, a chain without Multicall3, a node that has not reached the pinned block — so `0n` never stands in for a read that did not happen, which on the consumer side would understate filled risk and therefore overstate what a maker still owes. Batched through one viem `multicall` operation: the Multicall3 address comes from viem's own chain definitions for both configured chains, so no address plumbing was added and N hashes are not N round trips. viem may split that operation into several Multicall3 aggregates once the calldata outgrows its default 1024-byte batch limit — `s_filledRisk(bytes32)` encodes to 36 bytes, so roughly 28 hashes per `eth_call` at viem 2.55.10, and a 60-hash read measured as three — and every one of them carries the same pinned block, which is the property the caller depends on rather than the call count. `allowFailure: false` is deliberate and load-bearing — with failures allowed a reverting element decodes to `{ status: 'failure' }` whose `result` is `undefined`, one coercion away from the `0n` this read refuses to fabricate. New root exports: `GetFilledRiskArgs`, `FilledRiskSnapshot`. The CLI command is a Class-A read (`action: commitments.filled-risk`, stage `read`) with no wallet shoulder field, because the read is keyed by commitment hash and any address can run it for any hash; its payload is `{ atBlock, filledRisk: [{ hash, filledRiskWei6, filledRiskUSDC }] }`, one row per input hash in input order, with `atBlock` and `filledRiskWei6` as decimal strings per the numeric-field rule and the `…USDC` / `…Wei6` pairing the rest of the surface uses.
@@ -536,7 +540,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.15.0
 [0.14.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.14.0
 [0.13.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.13.0
 [0.12.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.12.0
