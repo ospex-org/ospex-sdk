@@ -92,6 +92,7 @@ import {
 } from '@ospex/sdk/signers/keystore';
 import {
   buildAgentEnvelope,
+  exitAfterStdoutFlush,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -255,7 +256,7 @@ export const authCheckCommand = addSignerOptions(
     } else {
       renderHuman(envelope, process.stdout);
     }
-    process.exit(envelope.ok ? 0 : 1);
+    await exitAfterStdoutFlush(envelope.ok ? 0 : 1);
   });
 
 // ── v1 → v2 envelope transform ──────────────────────────────────────

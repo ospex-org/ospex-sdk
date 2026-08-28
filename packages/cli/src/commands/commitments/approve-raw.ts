@@ -19,6 +19,7 @@ import { OspexValidationError, wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  exitAfterStdoutFlush,
   emitJsonFailureAndExit,
   networkForChainId,
   writeAgentEnvelope,
@@ -84,7 +85,7 @@ export const commitmentsApproveRawCommand = addSignerOptions(
       const ok = await promptYesNo('Proceed?');
       if (!ok) {
         process.stderr.write('Cancelled.\n');
-        process.exit(130);
+        await exitAfterStdoutFlush(130);
       }
     }
 

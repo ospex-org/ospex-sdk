@@ -41,6 +41,7 @@ import {
 } from '@ospex/sdk';
 import {
   buildAgentEnvelope,
+  exitAfterStdoutFlush,
   emitJsonFailureAndExit,
   formatTokenAmount,
   networkForChainId,
@@ -207,7 +208,7 @@ export const approvalsSetupCommand = addSignerOptions(
       const ok = await promptYesNo('\nProceed?');
       if (!ok) {
         process.stderr.write('Cancelled.\n');
-        process.exit(130);
+        await exitAfterStdoutFlush(130);
       }
     }
 

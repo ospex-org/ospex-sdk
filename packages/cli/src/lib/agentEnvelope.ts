@@ -331,9 +331,11 @@ export interface EmitJsonFailureArgs {
  * blocks call this when `--json` is set and a thrown error needs to
  * surface as a structured envelope instead of legacy stderr.
  *
- * The caller is responsible for `process.exit(1)` after — this helper
- * doesn't exit so call sites stay explicit about flow control (and
- * tests can assert without process termination).
+ * Prefer {@link emitJsonFailureAndExit}, which pairs this with a flush-safe
+ * exit. This helper does NOT exit, and a bare `process.exit(1)` after it
+ * truncates a large envelope on a POSIX pipe — see {@link exitAfterStdoutFlush}.
+ * It stays exported for the paths that emit without exiting, and for tests that
+ * assert the written envelope without intercepting process termination.
  *
  * Stdout-only: the envelope goes to stdout (the agent contract);
  * anything that was already on stderr (renderers, prompts, progress
@@ -564,9 +566,11 @@ export async function withReadFailureEnvelope<T>(
  *
  * Sets `process.exitCode` (NOT `process.exit()`): the written envelope flushes
  * before the process exits, the action returns cleanly, and tests can assert
- * the emitted envelope without intercepting a process-termination signal. (The
- * failure path keeps `emitJsonFailure(...)` + an explicit `process.exit(1)` —
- * it is always `ok: false` and wants to short-circuit immediately.)
+ * the emitted envelope without intercepting a process-termination signal. That
+ * makes this the flush-safe choice by construction, and the right one wherever
+ * the command can simply return afterwards. The failure path uses
+ * {@link emitJsonFailureAndExit} instead — it wants to short-circuit, so it
+ * drains stdout explicitly and then exits.
  *
  * Commands whose success envelope is ALWAYS `ok: true` (genuine failures throw
  * → caught → `emitJsonFailure` + exit 1) may also adopt this: the exit code is

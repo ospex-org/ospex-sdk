@@ -81,6 +81,7 @@ import {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  exitAfterStdoutFlush,
   emitJsonFailureAndExit,
   mapPreviewApprovals,
   networkForChainId,
@@ -333,7 +334,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
         } else {
           process.stderr.write(renderSubmitPreflightRefusal(blocking));
         }
-        process.exit(1);
+        await exitAfterStdoutFlush(1);
       }
     }
 
@@ -355,7 +356,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
       const ok = await promptYesNo('Submit?', true);
       if (!ok) {
         process.stderr.write('Submit cancelled.\n');
-        process.exit(130);
+        await exitAfterStdoutFlush(130);
       }
     }
 
@@ -418,7 +419,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
         );
         if (!allow) {
           process.stderr.write(`Approval declined; submit cancelled.\n`);
-          process.exit(130);
+          await exitAfterStdoutFlush(130);
         }
         const choice = await promptValue(
           `Amount in USDC (number, or "max" for unlimited)`,

@@ -31,6 +31,7 @@ import {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  exitAfterStdoutFlush,
   emitJsonFailureAndExit,
   networkForChainId,
   writeAgentEnvelope,
@@ -132,7 +133,7 @@ export const contestCreateCommand = addSignerOptions(
           const ok = await promptYesNo('Create contest for this game?', true);
           if (!ok) {
             process.stderr.write('Cancelled.\n');
-            process.exit(130);
+            await exitAfterStdoutFlush(130);
           }
         }
       }

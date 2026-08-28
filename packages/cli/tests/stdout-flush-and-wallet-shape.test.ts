@@ -150,9 +150,24 @@ describe('stdout survives process exit on a real pipe', () => {
     expect(stdout.length).toBeLessThan(PIPE_BUFFER_BYTES);
   }, 60_000);
 
-  it('a failure envelope larger than the pipe buffer arrives whole', async () => {
+  /**
+   * Both envelope-emitting SHAPES, because the first round of this fix covered
+   * only one of them. `health` throws and is caught by
+   * `emitJsonFailureAndExit`; `doctor` never throws — it turns a post-client
+   * failure into a finding and writes the report with `writeAgentEnvelope`,
+   * then exits on a code computed from the report. A migration keyed to the
+   * `emitJsonFailure` + `process.exit` shape could not see the second one, and
+   * did not: `doctor --address <addr> --json` truncated at 65,534 bytes while
+   * `health` was already fixed. One case per shape, named, so the next shape
+   * added has an obvious place to go.
+   */
+  for (const [shape, argv] of [
+    ['thrown (health)', ['health']],
+    ['reported (doctor)', ['doctor', '--address', '0x70997970C51812dc3A010C7d01b50e0d17dc79C8']],
+  ] as const) {
+  it(`a failure envelope larger than the pipe buffer arrives whole — ${shape}`, async () => {
     bodyBytes = BIG;
-    const { stdout, code } = await run(['health'], `http://127.0.0.1:${port}`);
+    const { stdout, code } = await run([...argv], `http://127.0.0.1:${port}`);
 
     // Assert the case DISCRIMINATES before asserting the outcome. If a later
     // change bounds the error message, this envelope shrinks below the pipe
@@ -166,10 +181,10 @@ describe('stdout survives process exit on a real pipe', () => {
     expect(code).toBe(1);
     // The whole document, not a prefix of it. Before the fix this threw
     // "Unterminated string in JSON at position 65536" on Linux.
-    const env = JSON.parse(stdout) as { ok: boolean; errors: Array<{ code: string }> };
+    const env = JSON.parse(stdout) as { ok: boolean };
     expect(env.ok).toBe(false);
-    expect(env.errors[0]?.code).toBe('API_ERROR');
   }, 60_000);
+  }
 });
 
 describe('wallet is a real address or it is null — in a real process', () => {

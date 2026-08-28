@@ -13,6 +13,7 @@ import { getKeystoreAddressIfPresent } from '../../lib/keystore.js';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
+  exitAfterStdoutFlush,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -65,7 +66,7 @@ export const walletAddressCommand = addSignerOptions(
               'per-shell override, or pass --account/--keystore-path inline. ' +
               'See docs/QUICKSTART.md.',
           );
-          process.exit(1);
+          await exitAfterStdoutFlush(1);
         }
         throw err;
       }
