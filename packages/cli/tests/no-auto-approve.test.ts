@@ -15,6 +15,8 @@ vi.mock('../src/lib/client.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/lib/client.js')>();
   return { ...actual, getClient: vi.fn() };
 });
+vi.mock('../src/lib/matchPreviewRender.js', () => ({ renderMatchPreview: vi.fn() }));
+vi.mock('../src/lib/previewRender.js', () => ({ renderPreview: vi.fn() }));
 
 import { getClient } from '../src/lib/client.js';
 import { commitmentsMatchCommand } from '../src/commands/commitments/match.js';
@@ -80,22 +82,27 @@ function envelope(stdout: string): AgentEnvelope<unknown> {
   return JSON.parse(stdout) as AgentEnvelope<unknown>;
 }
 
-function matchClient() {
+function matchClient(approval = APPROVAL) {
   const approve = vi.fn().mockRejectedValue(new Error('implicit match approval attempted'));
   const approveCreationFee = vi.fn().mockRejectedValue(new Error('implicit match fee approval attempted'));
-  const matchFromPreview = vi.fn();
+  const matchFromPreview = vi.fn().mockResolvedValue({
+    txHash: `0x${'11'.repeat(32)}`,
+    takerRisk: 1_000_000n,
+    fillMakerRisk: 1_000_000n,
+    receipt: { status: 'success', blockNumber: 1n },
+  });
   const checkCommitmentFillability = vi.fn().mockResolvedValue({
     commitmentHash: HASH,
-    fillableNow: false,
-    outcome: 'not-fillable',
+    fillableNow: !approval.needsApproval,
+    outcome: approval.needsApproval ? 'not-fillable' : 'fillable',
     advisory: true,
-    reasons: [{
+    reasons: approval.needsApproval ? [{
       code: 'TAKER_POSITION_ALLOWANCE_INSUFFICIENT',
       requiredWei6: '1000000',
       actualWei6: '0',
-    }],
+    }] : [],
   });
-  const preview = { taker: WALLET, approvals: [APPROVAL] };
+  const preview = { taker: WALLET, approvals: [approval] };
   const client = {
     chainId: () => 137,
     signer: () => ({ getAddress: vi.fn().mockResolvedValue(WALLET) }),
@@ -111,20 +118,27 @@ function matchClient() {
   return { client, checkCommitmentFillability, approve, approveCreationFee, matchFromPreview };
 }
 
-function submitClient() {
+function submitClient(approval = APPROVAL) {
   const approve = vi.fn().mockRejectedValue(new Error('implicit submit approval attempted'));
   const approveCreationFee = vi.fn().mockRejectedValue(new Error('implicit submit fee approval attempted'));
-  const submitPrepared = vi.fn();
+  const submitPrepared = vi.fn().mockResolvedValue({
+    hash: HASH,
+    commitment: { status: 'open', riskAmount: '1000000', nonce: '1', expiry: '123' },
+  });
   const checkSubmitFundability = vi.fn().mockResolvedValue({
-    fundableNow: false,
-    outcome: 'not-fundable',
-    reasons: [{
+    maker: WALLET,
+    fundableNow: !approval.needsApproval,
+    outcome: approval.needsApproval ? 'not-fundable' : 'fundable',
+    scope: 'visible-book-only',
+    coverage: { visible: 'included', hidden: 'excluded', source: 'public-commitments' },
+    advisory: true,
+    reasons: approval.needsApproval ? [{
       code: 'MAKER_POSITION_ALLOWANCE_INSUFFICIENT',
       requiredWei6: '1000000',
       actualWei6: '0',
-    }],
+    }] : [],
   });
-  const preview = { maker: WALLET, raw: { maker: WALLET }, approvals: [APPROVAL] };
+  const preview = { maker: WALLET, raw: { maker: WALLET }, approvals: [approval] };
   const client = {
     chainId: () => 137,
     signer: () => ({ getAddress: vi.fn().mockResolvedValue(WALLET) }),
@@ -210,5 +224,38 @@ describe('--no-auto-approve', () => {
     expect(fake.approve).not.toHaveBeenCalled();
     expect(fake.approveCreationFee).not.toHaveBeenCalled();
     expect(fake.submitPrepared).not.toHaveBeenCalled();
+  });
+
+  it('lets commitments match dispatch when its allowance is sufficient', async () => {
+    const sufficient = { ...APPROVAL, current: APPROVAL.required, needsApproval: false };
+    expect(BigInt(sufficient.current)).toBeGreaterThanOrEqual(BigInt(sufficient.required));
+    const fake = matchClient(sufficient);
+    vi.mocked(getClient).mockResolvedValue(fake.client as never);
+
+    const result = await run(commitmentsMatchCommand, [
+      HASH, '--risk-usdc', '1', '--yes', '--no-auto-approve',
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.exitCode).toBe(0);
+    expect(fake.approve).not.toHaveBeenCalled();
+    expect(fake.matchFromPreview).toHaveBeenCalledOnce();
+  });
+
+  it('lets commitments submit dispatch when its allowance is sufficient', async () => {
+    const sufficient = { ...APPROVAL, current: APPROVAL.required, needsApproval: false };
+    expect(BigInt(sufficient.current)).toBeGreaterThanOrEqual(BigInt(sufficient.required));
+    const fake = submitClient(sufficient);
+    vi.mocked(getClient).mockResolvedValue(fake.client as never);
+
+    const result = await run(commitmentsSubmitCommand, [
+      '--speculation', '101', '--side', 'away', '--odds', '+110', '--risk-usdc', '1',
+      '--yes', '--no-auto-approve',
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.exitCode).toBe(0);
+    expect(fake.approve).not.toHaveBeenCalled();
+    expect(fake.submitPrepared).toHaveBeenCalledOnce();
   });
 });
