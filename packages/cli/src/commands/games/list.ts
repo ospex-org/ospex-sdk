@@ -26,6 +26,7 @@ import { getClient } from '../../lib/client.js';
 import {
   buildAgentEnvelope,
   networkForChainId,
+  withReadFailureEnvelope,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 import { formatMatchTime, formatOutput } from '../../lib/format.js';
@@ -42,6 +43,9 @@ const optionsSchema = z.object({
   creatableOnly: z.boolean().optional(),
 });
 
+/** Named once so the success envelope and the §6 failure envelope cannot drift. */
+const ACTION = 'games.list';
+
 export const gamesListCommand = new Command('list')
   .description('List upcoming games on the schedule (creatable + pending).')
   .option('--json', 'output as JSON (includes externalIds)')
@@ -54,46 +58,50 @@ export const gamesListCommand = new Command('list')
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
     const client = await getClient({ requiresSigner: false });
+    // Hoisted out of the `--json` branch so the catch can name the chain.
+    const chainId = client.chainId();
 
-    const listOpts: Parameters<typeof client.games.list>[0] = {};
-    if (opts.sport !== undefined) listOpts.sport = opts.sport as GameSport;
-    if (opts.hours !== undefined) listOpts.hours = opts.hours;
-    if (opts.limit !== undefined) listOpts.limit = opts.limit;
-    if (opts.offset !== undefined) listOpts.offset = opts.offset;
-    // Default: show every upcoming game (availableOnly=false). `--creatable-only`
-    // re-applies the strict filter. `--all` is preserved as a no-op alias.
-    listOpts.availableOnly = opts.creatableOnly === true;
+    // No `subject`: this command has no wallet context at all (§5.3 `none`).
+    await withReadFailureEnvelope({ action: ACTION, chainId, json: opts.json === true }, async () => {
+      const listOpts: Parameters<typeof client.games.list>[0] = {};
+      if (opts.sport !== undefined) listOpts.sport = opts.sport as GameSport;
+      if (opts.hours !== undefined) listOpts.hours = opts.hours;
+      if (opts.limit !== undefined) listOpts.limit = opts.limit;
+      if (opts.offset !== undefined) listOpts.offset = opts.offset;
+      // Default: show every upcoming game (availableOnly=false). `--creatable-only`
+      // re-applies the strict filter. `--all` is preserved as a no-op alias.
+      listOpts.availableOnly = opts.creatableOnly === true;
 
-    const games = await client.games.list(listOpts);
+      const games = await client.games.list(listOpts);
 
-    if (opts.json === true) {
-      const chainId = client.chainId();
-      writeAgentEnvelope(
-        buildAgentEnvelope({
-          ok: true,
-          action: 'games.list',
-          stage: 'read',
-          network: networkForChainId(chainId),
-          chainId,
-          payload: games,
-        }),
+      if (opts.json === true) {
+        writeAgentEnvelope(
+          buildAgentEnvelope({
+            ok: true,
+            action: ACTION,
+            stage: 'read',
+            network: networkForChainId(chainId),
+            chainId,
+            payload: games,
+          }),
+        );
+        return;
+      }
+      if (games.length === 0) {
+        process.stdout.write('(no games)\n');
+        return;
+      }
+      formatOutput(
+        games.map((g) => ({
+          gameId: g.gameId,
+          slug: g.slug,
+          sport: g.sport,
+          away: g.awayTeam.abbreviation,
+          home: g.homeTeam.abbreviation,
+          matchTime: formatMatchTime(g.matchTime),
+          creatable: g.canCreateContest ? 'yes' : 'no',
+        })),
+        { json: false },
       );
-      return;
-    }
-    if (games.length === 0) {
-      process.stdout.write('(no games)\n');
-      return;
-    }
-    formatOutput(
-      games.map((g) => ({
-        gameId: g.gameId,
-        slug: g.slug,
-        sport: g.sport,
-        away: g.awayTeam.abbreviation,
-        home: g.homeTeam.abbreviation,
-        matchTime: formatMatchTime(g.matchTime),
-        creatable: g.canCreateContest ? 'yes' : 'no',
-      })),
-      { json: false },
-    );
+    });
   });

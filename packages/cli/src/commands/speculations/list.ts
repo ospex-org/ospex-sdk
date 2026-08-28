@@ -13,6 +13,7 @@ import { getClient } from '../../lib/client.js';
 import {
   buildAgentEnvelope,
   networkForChainId,
+  withReadFailureEnvelope,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
@@ -26,6 +27,9 @@ const optionsSchema = z.object({
   offset: z.coerce.number().int().nonnegative().optional(),
 });
 
+/** Named once so the success envelope and the §6 failure envelope cannot drift. */
+const ACTION = 'speculations.list';
+
 export const speculationsListCommand = new Command('list')
   .description('List speculations (optionally scoped to a contest, sport, or status).')
   .option('--json', 'output as JSON')
@@ -37,39 +41,43 @@ export const speculationsListCommand = new Command('list')
   .action(async (rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
     const client = await getClient({ requiresSigner: false });
+    // Hoisted out of the `--json` branch so the catch can name the chain.
+    const chainId = client.chainId();
 
-    const listOpts: Parameters<typeof client.speculations.list>[0] = {};
-    if (opts.contest !== undefined) listOpts.contestId = opts.contest;
-    if (opts.sport !== undefined) listOpts.sport = opts.sport;
-    if (opts.status !== undefined) listOpts.status = opts.status;
-    if (opts.limit !== undefined) listOpts.limit = opts.limit;
-    if (opts.offset !== undefined) listOpts.offset = opts.offset;
+    // No `subject`: this command has no wallet context at all (§5.3 `∅/none/∅`).
+    await withReadFailureEnvelope({ action: ACTION, chainId, json: opts.json === true }, async () => {
+      const listOpts: Parameters<typeof client.speculations.list>[0] = {};
+      if (opts.contest !== undefined) listOpts.contestId = opts.contest;
+      if (opts.sport !== undefined) listOpts.sport = opts.sport;
+      if (opts.status !== undefined) listOpts.status = opts.status;
+      if (opts.limit !== undefined) listOpts.limit = opts.limit;
+      if (opts.offset !== undefined) listOpts.offset = opts.offset;
 
-    const speculations = await client.speculations.list(listOpts);
+      const speculations = await client.speculations.list(listOpts);
 
-    if (opts.json === true) {
-      const chainId = client.chainId();
-      writeAgentEnvelope(
-        buildAgentEnvelope({
-          ok: true,
-          action: 'speculations.list',
-          stage: 'read',
-          network: networkForChainId(chainId),
-          chainId,
-          payload: speculations,
-        }),
+      if (opts.json === true) {
+        writeAgentEnvelope(
+          buildAgentEnvelope({
+            ok: true,
+            action: ACTION,
+            stage: 'read',
+            network: networkForChainId(chainId),
+            chainId,
+            payload: speculations,
+          }),
+        );
+        return;
+      }
+      formatOutput(
+        speculations.map((s) => ({
+          speculationId: s.speculationId,
+          contestId: s.contestId,
+          type: s.type,
+          line: s.line ?? '-',
+          status: s.speculationStatus === 0 ? 'open' : 'closed',
+          winSide: s.winSide ?? '-',
+        })),
+        { json: false },
       );
-      return;
-    }
-    formatOutput(
-      speculations.map((s) => ({
-        speculationId: s.speculationId,
-        contestId: s.contestId,
-        type: s.type,
-        line: s.line ?? '-',
-        status: s.speculationStatus === 0 ? 'open' : 'closed',
-        winSide: s.winSide ?? '-',
-      })),
-      { json: false },
-    );
+    });
   });

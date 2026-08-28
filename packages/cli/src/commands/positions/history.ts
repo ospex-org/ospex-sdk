@@ -16,8 +16,10 @@ import { z } from 'zod';
 import type { Hex } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
 import {
+  NO_READ_SUBJECT,
   buildAgentEnvelope,
   networkForChainId,
+  withReadFailureEnvelope,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
@@ -27,6 +29,9 @@ const optionsSchema = z.object({
   includeClaimed: z.boolean().optional(),
   json: z.boolean().optional(),
 });
+
+/** Named once so the success envelope and the §6 failure envelope cannot drift. */
+const ACTION = 'positions.history';
 
 export const positionsHistoryCommand = new Command('history')
   .description('Show position history for an address (defaults to the configured signer).')
@@ -40,32 +45,57 @@ export const positionsHistoryCommand = new Command('history')
     // No chain required — pure read.
     const requiresSigner = opts.address === undefined;
     const client = await getClient({ requiresSigner });
+    // Hoisted out of the `--json` branch so the catch can name the chain.
+    const chainId = client.chainId();
 
-    let address = opts.address;
-    if (address === undefined) {
-      const signer = client.signer();
-      address = (await signer.getAddress()).toLowerCase();
-    }
+    // Declared out here so the failure envelope can report the subject when
+    // one was resolved. `--address` is known from argv; without it the address
+    // comes off the signer INSIDE the guarded window and a failure at that step
+    // legitimately has no subject to name (§6: `null` is reserved for exactly
+    // that). Lowercased on assignment, because the option's regex accepts
+    // mixed-case hex and the success envelope lowercases — the same argv must
+    // not produce two spellings of one wallet.
+    let subject: Hex | null =
+      opts.address === undefined ? null : (opts.address.toLowerCase() as Hex);
 
-    const all = await client.positions.byAddress(address);
-    const filtered = includeClaimed ? all : all.filter((p) => !p.claimed);
+    await withReadFailureEnvelope(
+      {
+        action: ACTION,
+        chainId,
+        json: opts.json === true,
+        // A thunk, not an object: `subject` is still null at call time on the
+        // signer-derived path and only becomes known part-way through the body.
+        subject: () =>
+          subject === null ? NO_READ_SUBJECT : { wallet: subject, walletRole: 'subject' },
+      },
+      async () => {
+        let address = opts.address;
+        if (address === undefined) {
+          const signer = client.signer();
+          address = (await signer.getAddress()).toLowerCase();
+          subject = address as Hex;
+        }
 
-    if (opts.json === true) {
-      const chainId = client.chainId();
-      const wallet = address.toLowerCase() as Hex;
-      writeAgentEnvelope(
-        buildAgentEnvelope({
-          ok: true,
-          action: 'positions.history',
-          stage: 'read',
-          network: networkForChainId(chainId),
-          chainId,
-          wallet,
-          walletRole: 'subject',
-          payload: filtered,
-        }),
-      );
-      return;
-    }
-    formatOutput(filtered, { json: false });
+        const all = await client.positions.byAddress(address);
+        const filtered = includeClaimed ? all : all.filter((p) => !p.claimed);
+
+        if (opts.json === true) {
+          const wallet = address.toLowerCase() as Hex;
+          writeAgentEnvelope(
+            buildAgentEnvelope({
+              ok: true,
+              action: ACTION,
+              stage: 'read',
+              network: networkForChainId(chainId),
+              chainId,
+              wallet,
+              walletRole: 'subject',
+              payload: filtered,
+            }),
+          );
+          return;
+        }
+        formatOutput(filtered, { json: false });
+      },
+    );
   });

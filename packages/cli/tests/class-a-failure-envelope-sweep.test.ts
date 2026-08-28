@@ -25,28 +25,22 @@
  *      copy-pasted catch block gets wrong. One `it()` per command, so a
  *      failure names the command rather than a count.
  *
- * ── The gap this sweep records, deliberately ───────────────────────────────
+ * ── The gap this sweep used to record ──────────────────────────────────────
  *
- * Measured at the time of writing, against a dead API + dead RPC: all 14
- * Class A write commands emit the envelope, `doctor` and `commitments
- * filled-risk` emit it, and the OTHER 19 read commands emit NOTHING on
- * stdout — a plain stderr line and exit 1. That is a real, pre-existing
- * violation of §6 with a real consequence: an agent piping `--json` through
- * `jq` gets an empty document from a failed `contests show`, `positions
- * status`, `odds show`, and sixteen others, and has to fall back to scraping
- * stderr.
+ * When this file was written, 19 of the reads emitted NOTHING on stdout when
+ * they failed — a plain stderr line and exit 1 — and each carried a
+ * `'no-envelope'` row recording the measurement rather than blessing it
+ * (`verification-discipline.md` §3j). Those 19 were closed together, and with
+ * them the `'no-envelope'` expectation was DELETED rather than emptied: while
+ * the variant existed, a future command could opt back out of §6 by writing
+ * one word in this table. It no longer type-checks. A Class A command that
+ * genuinely cannot emit an envelope belongs in §4.4, which is a decision made
+ * in the spec and reviewed there, not a row here.
  *
- * They are marked `'no-envelope'` below to record the measurement, NOT to
- * bless it (`verification-discipline.md` §3j). The expectation is exact in
- * both directions, so the list can only change deliberately: a command that
- * starts emitting the envelope reddens this file until its row is updated,
- * and a command that stops reddens it too. Closing those 19 is a follow-up —
- * it touches 19 command files that this PR does not otherwise change.
- *
- * `'no-envelope'` records history; it is not a choice available to a NEW
- * command. A command written after this file exists wires the envelope and
- * gets an `'envelope'` row. The roster assertions force whoever adds a command
- * to come here and decide, which is the whole point — the last gate is review.
+ * What remains is the property that made the gap findable: the table is exact
+ * in BOTH directions, so a command that stops emitting reddens it, and one
+ * whose shoulder block drifts reddens it too. The roster assertions force
+ * whoever adds a command to come here and decide.
  *
  * ── Mechanism ──────────────────────────────────────────────────────────────
  *
@@ -71,6 +65,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encryptKeystoreJson } from 'ethers';
+import type { AgentStage, WalletRole } from '@ospex/sdk';
 import type { Command } from '@commander-js/extra-typings';
 import { makeProgram } from '../src/index.js';
 
@@ -222,6 +217,31 @@ const NOT_IN_SCOPE_PIN: readonly string[] = [
  */
 type EnvelopeShape = 'thrown' | 'reported';
 
+/**
+ * The §5.3 shoulder block a command's envelope must carry, written out per row.
+ *
+ * `action` alone was not enough. The shoulder fields are where a mechanically
+ * applied change goes wrong: they differ per command — §5.3 gives `positions
+ * status` a `'subject'`, `commitments list --maker` a `'filter'`, and `contests
+ * list` a `'none'` — and nothing else in this file could see them, so nineteen
+ * reads could have been wired with a uniform `wallet: null, walletRole: 'none'`
+ * and passed every assertion here. The two intent flags are pinned for the same
+ * reason in the other direction: a read that advertised `requiresSignature:
+ * true` would tell an agent's recovery logic that a signature was attempted on
+ * a command that cannot sign.
+ *
+ * Written as literals, never read back from the command under test — otherwise
+ * this compares the command against itself.
+ */
+interface ShoulderPin {
+  stage: AgentStage;
+  /** Lowercase, as the envelope reports it. `null` when the command names no wallet. */
+  wallet: string | null;
+  walletRole: WalletRole;
+  requiresSignature: boolean;
+  requiresTransaction: boolean;
+}
+
 interface ProbeBase {
   /** Argv AFTER the command path and BEFORE `--json`. */
   args: readonly string[];
@@ -232,14 +252,11 @@ interface ProbeBase {
 }
 
 /**
- * One row per Class A command. The three expectations:
+ * One row per Class A command. The two expectations:
  *
  * `'envelope'`    — §6 honoured: nonzero exit, stdout is one parseable v2
- *                   envelope with `ok: false`.
- * `'no-envelope'` — nonzero exit, stdout EMPTY. The outstanding gap; see the
- *                   header. Not an approval, and NOT a legal choice for a
- *                   newly written command — a new Class A command wires the
- *                   envelope and gets an `'envelope'` row.
+ *                   envelope with `ok: false`, naming this command and
+ *                   carrying the `shoulder` block written out beside it.
  * `'no-client'`   — the command builds no SDK client, so a dead endpoint
  *                   cannot push it into §6's post-client window at all. It
  *                   still has to leave one parseable v2 envelope on stdout,
@@ -260,21 +277,55 @@ interface ProbeBase {
  * 'action' is missing") and restoring it.
  */
 type Probe =
-  | (ProbeBase & { expect: 'envelope'; action: string; shape?: EnvelopeShape })
-  | (ProbeBase & { expect: 'no-client'; action: string })
-  | (ProbeBase & { expect: 'no-envelope' });
+  | (ProbeBase & { expect: 'envelope'; action: string; shoulder: ShoulderPin; shape?: EnvelopeShape })
+  | (ProbeBase & { expect: 'no-client'; action: string });
 
 const OTHER_ADDRESS = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 const A_HASH = `0x${'ab'.repeat(32)}`;
 
+/**
+ * The two probe addresses as the envelope reports them. Written out rather than
+ * derived with `.toLowerCase()`, so a command that stopped normalising its
+ * wallet would still be caught; the equality checks below are what stop these
+ * from drifting into a different address entirely.
+ */
+const OTHER_LC = '0x70997970c51812dc3a010c7d01b50e0d17dc79c8';
+const SIGNER_LC = '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266';
+
+/* ------------------------------------------------------------------ */
+/* Shoulder shapes — one literal per §5.3 / §6 category                */
+/* ------------------------------------------------------------------ */
+
+/** §5.3 `∅/none/∅`: a read that names no wallet at all. */
+const READ_NO_WALLET: ShoulderPin = {
+  stage: 'read',
+  wallet: null,
+  walletRole: 'none',
+  requiresSignature: false,
+  requiresTransaction: false,
+};
+
+/** §3.2 "read scoped to a wallet": the address is the thing being read about. */
+const readSubject = (wallet: string): ShoulderPin => ({ ...READ_NO_WALLET, wallet, walletRole: 'subject' });
+
+/** §6 "pure on-chain writes": the signer was resolved, and both a signature and a tx were intended. */
+const WRITE_SIGN_AND_TX: ShoulderPin = {
+  stage: 'execute',
+  wallet: SIGNER_LC,
+  walletRole: 'signer',
+  requiresSignature: true,
+  requiresTransaction: true,
+};
+
 const PROBES: Record<string, Probe> = {
   /* §4.1 Reads */
-  health: { args: [], expect: 'no-envelope' },
+  health: { args: [], expect: 'envelope', action: 'health', shoulder: READ_NO_WALLET },
   doctor: {
     args: [],
     expect: 'envelope',
     action: 'doctor',
     shape: 'reported',
+    shoulder: readSubject(SIGNER_LC),
     note: 'converts a post-client failure into a finding in its report rather than a throw.',
   },
   'auth check': {
@@ -283,7 +334,12 @@ const PROBES: Record<string, Probe> = {
     action: 'auth.check',
     note: 'diagnoses the LOCAL signer configuration; never constructs a client.',
   },
-  'approvals show': { args: ['--address', OTHER_ADDRESS], expect: 'no-envelope' },
+  'approvals show': {
+    args: ['--address', OTHER_ADDRESS],
+    expect: 'envelope',
+    action: 'approvals.show',
+    shoulder: readSubject(OTHER_LC),
+  },
   'wallet address': {
     args: [],
     signer: true,
@@ -291,31 +347,97 @@ const PROBES: Record<string, Probe> = {
     action: 'wallet.address',
     note: 'reads the keystore only; never constructs a client.',
   },
-  'commitments list': { args: [], expect: 'no-envelope' },
-  'commitments show': { args: [A_HASH], expect: 'no-envelope' },
-  'commitments fillability': { args: [A_HASH], expect: 'no-envelope' },
+  'commitments list': {
+    args: [],
+    expect: 'envelope',
+    action: 'commitments.list',
+    shoulder: READ_NO_WALLET,
+    note: 'no --maker here, so the wallet shoulder is genuinely absent; the `filter` shape it takes WITH --maker is pinned in command-failure-envelope.test.ts.',
+  },
+  'commitments show': {
+    args: [A_HASH],
+    expect: 'envelope',
+    action: 'commitments.show',
+    shoulder: READ_NO_WALLET,
+    note: 'the success envelope names the maker as `subject`, but the maker arrives in the response that never came — §6 reserves null for exactly that.',
+  },
+  'commitments fillability': {
+    args: [A_HASH],
+    expect: 'envelope',
+    action: 'commitments.fillability',
+    shoulder: READ_NO_WALLET,
+    note: 'no --taker and no configured signer, so this row fails INSIDE the window at resolvePreviewAddress with no subject resolved. Deliberately kept flag-free: the resolved-taker shape lives in command-failure-envelope.test.ts, so both are covered rather than one replacing the other.',
+  },
   'commitments nonce-floor': {
     args: ['--maker', OTHER_ADDRESS, '--contest-id', '1', '--scorer', OTHER_ADDRESS, '--line', '0'],
-    expect: 'no-envelope',
+    expect: 'envelope',
+    action: 'commitments.nonce-floor',
+    shoulder: readSubject(OTHER_LC),
   },
   'commitments filled-risk': {
     args: [A_HASH],
     expect: 'envelope',
     action: 'commitments.filled-risk',
+    shoulder: READ_NO_WALLET,
   },
-  'contests list': { args: [], expect: 'no-envelope' },
-  'contests show': { args: ['1'], expect: 'no-envelope' },
-  'contests wait-verified': { args: ['1'], expect: 'no-envelope' },
-  'contests wait-scored': { args: ['1'], expect: 'no-envelope' },
-  'contests score-status': { args: ['1'], expect: 'no-envelope' },
-  'games list': { args: [], expect: 'no-envelope' },
-  'leaderboard show': { args: [], expect: 'no-envelope' },
-  'odds show': { args: ['1'], expect: 'no-envelope' },
-  'positions list': { args: [OTHER_ADDRESS], expect: 'no-envelope' },
-  'positions status': { args: [OTHER_ADDRESS], expect: 'no-envelope' },
-  'positions history': { args: ['--address', OTHER_ADDRESS], expect: 'no-envelope' },
-  'speculations list': { args: [], expect: 'no-envelope' },
-  'speculations show': { args: ['1'], expect: 'no-envelope' },
+  'contests list': { args: [], expect: 'envelope', action: 'contests.list', shoulder: READ_NO_WALLET },
+  'contests show': { args: ['1'], expect: 'envelope', action: 'contests.show', shoulder: READ_NO_WALLET },
+  'contests wait-verified': {
+    args: ['1'],
+    expect: 'envelope',
+    action: 'contests.wait-verified',
+    shoulder: READ_NO_WALLET,
+  },
+  'contests wait-scored': {
+    args: ['1'],
+    expect: 'envelope',
+    action: 'contests.wait-scored',
+    shoulder: READ_NO_WALLET,
+  },
+  'contests score-status': {
+    args: ['1'],
+    expect: 'envelope',
+    action: 'contests.score-status',
+    shoulder: READ_NO_WALLET,
+  },
+  'games list': { args: [], expect: 'envelope', action: 'games.list', shoulder: READ_NO_WALLET },
+  'leaderboard show': {
+    args: [],
+    expect: 'envelope',
+    action: 'leaderboard.show',
+    shoulder: READ_NO_WALLET,
+  },
+  'odds show': { args: ['1'], expect: 'envelope', action: 'odds.show', shoulder: READ_NO_WALLET },
+  'positions list': {
+    args: [OTHER_ADDRESS],
+    expect: 'envelope',
+    action: 'positions.list',
+    shoulder: readSubject(OTHER_LC),
+  },
+  'positions status': {
+    args: [OTHER_ADDRESS],
+    expect: 'envelope',
+    action: 'positions.status',
+    shoulder: readSubject(OTHER_LC),
+  },
+  'positions history': {
+    args: ['--address', OTHER_ADDRESS],
+    expect: 'envelope',
+    action: 'positions.history',
+    shoulder: readSubject(OTHER_LC),
+  },
+  'speculations list': {
+    args: [],
+    expect: 'envelope',
+    action: 'speculations.list',
+    shoulder: READ_NO_WALLET,
+  },
+  'speculations show': {
+    args: ['1'],
+    expect: 'envelope',
+    action: 'speculations.show',
+    shoulder: READ_NO_WALLET,
+  },
 
   /* §4.2 Preview-bearing writes */
   'commitments submit': {
@@ -330,29 +452,42 @@ const PROBES: Record<string, Probe> = {
     ],
     expect: 'envelope',
     action: 'commitments.submit',
+    // §6: the EIP-712-then-POST core is off-chain, so a preview-path failure
+    // with no approval attempted keeps `requiresTransaction: false`.
+    shoulder: {
+      stage: 'preview',
+      wallet: OTHER_LC,
+      walletRole: 'signer',
+      requiresSignature: true,
+      requiresTransaction: false,
+    },
   },
   'commitments match': {
     args: [A_HASH, '--risk-usdc', '1', '--expected-address', OTHER_ADDRESS],
     expect: 'envelope',
     action: 'commitments.match',
+    shoulder: { ...WRITE_SIGN_AND_TX, stage: 'preview', wallet: OTHER_LC },
   },
   'commitments approve': {
     args: ['25', '--yes'],
     signer: true,
     expect: 'envelope',
     action: 'commitments.approve',
+    shoulder: WRITE_SIGN_AND_TX,
   },
   'commitments approve-raw': {
     args: ['25000000', '--yes'],
     signer: true,
     expect: 'envelope',
     action: 'commitments.approve-raw',
+    shoulder: WRITE_SIGN_AND_TX,
   },
   'approvals setup': {
     args: ['--risk-usdc', '5', '--yes'],
     signer: true,
     expect: 'envelope',
     action: 'approvals.setup',
+    shoulder: WRITE_SIGN_AND_TX,
   },
 
   /* §4.3 Fire-and-forget writes */
@@ -361,39 +496,64 @@ const PROBES: Record<string, Probe> = {
     signer: true,
     expect: 'envelope',
     action: 'commitments.cancel',
+    // §6: EIP-712 cancel-auth always; a tx only with `--also-onchain`, not passed here.
+    shoulder: { ...WRITE_SIGN_AND_TX, requiresTransaction: false },
   },
   'commitments cancel-onchain': {
     args: [A_HASH],
     signer: true,
     expect: 'envelope',
     action: 'commitments.cancel-onchain',
+    shoulder: WRITE_SIGN_AND_TX,
   },
   'commitments cancel-all': {
     args: ['--contest-id', '1', '--scorer', OTHER_ADDRESS, '--line', '0', '--new-min-nonce', '5'],
     signer: true,
     expect: 'envelope',
     action: 'commitments.cancel-all',
+    shoulder: WRITE_SIGN_AND_TX,
   },
-  claim: { args: ['1', '--type', 'upper'], signer: true, expect: 'envelope', action: 'claim' },
-  'claim-all': { args: [], signer: true, expect: 'envelope', action: 'claim-all' },
-  settle: { args: ['1'], signer: true, expect: 'envelope', action: 'settle' },
+  claim: {
+    args: ['1', '--type', 'upper'],
+    signer: true,
+    expect: 'envelope',
+    action: 'claim',
+    shoulder: WRITE_SIGN_AND_TX,
+  },
+  'claim-all': {
+    args: [],
+    signer: true,
+    expect: 'envelope',
+    action: 'claim-all',
+    shoulder: WRITE_SIGN_AND_TX,
+  },
+  settle: {
+    args: ['1'],
+    signer: true,
+    expect: 'envelope',
+    action: 'settle',
+    shoulder: WRITE_SIGN_AND_TX,
+  },
   'contests create': {
     args: ['--game-id', 'a-game-id', '--yes', '--no-wait'],
     signer: true,
     expect: 'envelope',
     action: 'contests.create',
+    shoulder: WRITE_SIGN_AND_TX,
   },
   'contests score': {
     args: ['1'],
     signer: true,
     expect: 'envelope',
     action: 'contests.score',
+    shoulder: WRITE_SIGN_AND_TX,
   },
   'contests update-markets': {
     args: ['1'],
     signer: true,
     expect: 'envelope',
     action: 'contests.update-markets',
+    shoulder: WRITE_SIGN_AND_TX,
   },
 };
 
@@ -570,8 +730,24 @@ interface ParsedEnvelope {
   schemaVersion?: number;
   ok?: boolean;
   action?: string;
+  stage?: string;
+  wallet?: string | null;
+  walletRole?: string;
+  requiresSignature?: boolean;
+  requiresTransaction?: boolean;
   payload?: unknown;
   errors?: unknown[];
+}
+
+/** The subset of a parsed envelope a {@link ShoulderPin} covers, for one whole-object compare. */
+function shoulderOf(envelope: ParsedEnvelope): ShoulderPin {
+  return {
+    stage: envelope.stage as AgentStage,
+    wallet: envelope.wallet ?? null,
+    walletRole: envelope.walletRole as WalletRole,
+    requiresSignature: envelope.requiresSignature as boolean,
+    requiresTransaction: envelope.requiresTransaction as boolean,
+  };
 }
 
 /** Parse the WHOLE stdout. A prefix line, a suffix line, or two documents all fail. */
@@ -653,13 +829,13 @@ function leafCommandPaths(program: Command): Set<string> {
 /* ------------------------------------------------------------------ */
 
 describe('Class A commands — what reaches stdout on a post-client failure', () => {
-  // Negative control for the whole sweep: if the dead endpoints were not
-  // actually dead — a proxy answering, a stale config file winning — every
-  // command would SUCCEED and every `'no-envelope'` row would still pass,
-  // because a successful command writes nothing to stdout without `--json`…
-  // and with `--json` writes an `ok: true` envelope, which this classifier
-  // does NOT accept for an `'envelope'` row. This case makes the premise
-  // explicit rather than assumed.
+  // Negative control for the whole sweep: every case below asserts what a
+  // command does when it FAILS, so all of them rest on the premise that the
+  // probe endpoints really are unreachable. If they were not — a proxy
+  // answering, a stale config file winning — the commands would succeed and
+  // emit `ok: true`, which no assertion below accepts; but the premise is
+  // worth failing on directly, and by name, rather than as 35 confusing
+  // downstream mismatches. This case makes it explicit rather than assumed.
   it('control: the probe endpoints really do fail a read', async () => {
     const { stdout, exitCode } = await runCommand(['commitments', 'filled-risk', A_HASH, '--json']);
     const envelope = parseWholeStdout(stdout);
@@ -671,9 +847,7 @@ describe('Class A commands — what reaches stdout on a post-client failure', ()
     const label =
       probe.expect === 'envelope'
         ? `${name} — emits a parseable v2 failure envelope on stdout`
-        : probe.expect === 'no-envelope'
-          ? `${name} — KNOWN GAP: emits nothing on stdout (§6 not yet honoured)`
-          : `${name} — builds no client; still emits one parseable v2 envelope`;
+        : `${name} — builds no client; still emits one parseable v2 envelope`;
 
     it(
       label,
@@ -699,6 +873,16 @@ describe('Class A commands — what reaches stdout on a post-client failure', ()
           // against itself.
           expect(envelope?.action, `${name}: the envelope must name the failing command`)
             .toBe(probe.action);
+          // Whole-object compare, not field-by-field: five separate assertions
+          // would each have to be remembered, and the one nobody added is the
+          // one that goes wrong. This also means a NEW shoulder field shows up
+          // as a diff here rather than passing unnoticed.
+          expect(
+            shoulderOf(envelope as ParsedEnvelope),
+            `${name}: the failure envelope's §5.3 shoulder block. A read must name the wallet ` +
+              `it was reading ABOUT (or null, never a role without an address), and must not ` +
+              `advertise write intent it never had.`,
+          ).toStrictEqual(probe.shoulder);
           expect(exitCode, `${name}: exit code must be nonzero when ok:false`).not.toBe(0);
           expect(
             escaped,
@@ -717,31 +901,6 @@ describe('Class A commands — what reaches stdout on a post-client failure', ()
             // payload would mean the command answered nothing.
             expect(envelope?.payload, `${name}: the report is the payload`).not.toBeNull();
           }
-          return;
-        }
-
-        if (probe.expect === 'no-envelope') {
-          expect(
-            stdout.trim(),
-            `${name}: this row records the OUTSTANDING §6 gap. If this command now emits an ` +
-              `envelope, that is good news — move its row to 'envelope' and update the header ` +
-              `count. Do not delete the row.`,
-          ).toBe('');
-          // No exit-code assertion here on purpose: this runner sets
-          // `exitCode = 1` itself whenever an error escapes `parseAsync`, so
-          // asserting it nonzero on this branch would be asserting the
-          // harness, not the command. The `escaped` assertion below is what
-          // carries the content.
-          //
-          // The failure went SOMEWHERE. Without this, a command that swallowed
-          // the error and printed nothing would read as 'no-envelope' too, and
-          // that is a different, worse bug: silent success on a failed read.
-          expect(
-            escaped,
-            `${name}: expected the failure to escape to the top-level handler ` +
-              `(the §6 stderr fallback). Nothing on stdout AND nothing thrown means ` +
-              `the failure was swallowed.`,
-          ).not.toBeNull();
           return;
         }
 

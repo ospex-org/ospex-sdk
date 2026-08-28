@@ -27,8 +27,10 @@ import {
 import { getClient, resolvePreviewAddress } from '../../lib/client.js';
 import { addSignerOptions, parseSignerIntent } from '../../lib/signer-options.js';
 import {
+  NO_READ_SUBJECT,
   buildAgentEnvelope,
   networkForChainId,
+  withReadFailureEnvelope,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
@@ -38,6 +40,9 @@ const optionsSchema = z.object({
   taker: z.string().optional(),
   json: z.boolean().optional(),
 });
+
+/** Named once so the success envelope and the §6 failure envelope cannot drift. */
+const ACTION = 'commitments.fillability';
 
 export const commitmentsFillabilityCommand = addSignerOptions(
   new Command('fillability')
@@ -68,75 +73,101 @@ export const commitmentsFillabilityCommand = addSignerOptions(
   // is named explicitly via --taker, else resolved from --expected-address /
   // non-interactive creds / a cached session (never an interactive prompt).
   const client = await getClient({ requiresChain: true });
-  let taker: Hex;
-  if (opts.taker !== undefined) {
-    if (!/^0x[0-9a-fA-F]{40}$/.test(opts.taker)) {
-      throw new OspexValidationError(
-        `--taker must be a 0x-prefixed 20-byte address; got "${opts.taker}".`,
-        { field: 'taker' },
-      );
-    }
-    taker = opts.taker.toLowerCase() as Hex;
-  } else {
-    taker = await resolvePreviewAddress(signerIntent);
-  }
+  // Hoisted out of the `--json` branch so the catch can name the chain.
+  const chainId = client.chainId();
 
-  // 'any' status — fillability reports on cancelled/expired/filled rows too
-  // (NOT_LIVE / EXPIRED / NO_REMAINING_CAPACITY) rather than failing to resolve.
-  const commitment = await client.commitments.resolveByPrefix(hashArg, { status: 'any' });
-  if (commitment.commitmentHash.toLowerCase() !== hashArg.toLowerCase()) {
-    process.stderr.write(`Resolved ${hashArg} → ${commitment.commitmentHash}\n`);
-  }
+  // Declared out here so the failure envelope can report the subject when one
+  // was resolved. `--taker` is known from argv; without it the taker is
+  // resolved INSIDE the guarded window (`resolvePreviewAddress` throws
+  // SIGNER_RESOLUTION_ERROR when no signer is configured), and a failure at
+  // that step legitimately has no subject to name (§6: `null` is reserved for
+  // exactly that).
+  let subject: Hex | null = null;
 
-  const checkArgs: Parameters<typeof client.commitments.checkCommitmentFillability>[0] = {
-    commitment,
-    taker,
-  };
-  if (opts.riskUsdc !== undefined) {
-    checkArgs.takerDesiredRiskWei6 = usdcDecimalToAmountWei6(opts.riskUsdc);
-  }
-  const result = await client.commitments.checkCommitmentFillability(checkArgs);
-
-  if (opts.json === true) {
-    const chainId = client.chainId();
-    // ok:true — the CHECK ran successfully; the verdict (fillableNow / outcome /
-    // reasons) lives in the payload. A genuine error (404, missing rpcUrl) still
-    // bubbles to the top-level handler. The taker is the subject of the check.
-    writeAgentEnvelope(
-      buildAgentEnvelope({
-        ok: true,
-        action: 'commitments.fillability',
-        stage: 'read',
-        network: networkForChainId(chainId),
-        chainId,
-        wallet: taker,
-        walletRole: 'subject',
-        commitment,
-        payload: result,
-      }),
-    );
-    return;
-  }
-
-  formatOutput(
+  await withReadFailureEnvelope(
     {
-      hash: result.commitmentHash,
-      taker,
-      fillableNow: result.fillableNow,
-      outcome: result.outcome,
-      ...(result.fill !== undefined
-        ? {
-            takerRisk: `${wei6ToDecimalUSDC(result.fill.takerRiskWei6)} USDC`,
-            fillMakerRisk: `${wei6ToDecimalUSDC(result.fill.makerRiskWei6)} USDC`,
-            selfMatch: result.fill.selfMatch,
-          }
-        : {}),
-      ...(result.checkedAtBlock !== undefined
-        ? { checkedAtBlock: result.checkedAtBlock.toString() }
-        : {}),
-      reasons: result.reasons.length > 0 ? result.reasons.map(formatReason).join('; ') : 'none',
+      action: ACTION,
+      chainId,
+      json: opts.json === true,
+      // A thunk, not an object: `subject` is still null at call time and only
+      // becomes known part-way through the body.
+      subject: () =>
+        subject === null ? NO_READ_SUBJECT : { wallet: subject, walletRole: 'subject' },
     },
-    { json: false },
+    async () => {
+      let taker: Hex;
+      if (opts.taker !== undefined) {
+        if (!/^0x[0-9a-fA-F]{40}$/.test(opts.taker)) {
+          throw new OspexValidationError(
+            `--taker must be a 0x-prefixed 20-byte address; got "${opts.taker}".`,
+            { field: 'taker' },
+          );
+        }
+        taker = opts.taker.toLowerCase() as Hex;
+        subject = taker;
+      } else {
+        taker = await resolvePreviewAddress(signerIntent);
+        subject = taker;
+      }
+
+      // 'any' status — fillability reports on cancelled/expired/filled rows too
+      // (NOT_LIVE / EXPIRED / NO_REMAINING_CAPACITY) rather than failing to resolve.
+      const commitment = await client.commitments.resolveByPrefix(hashArg, { status: 'any' });
+      if (commitment.commitmentHash.toLowerCase() !== hashArg.toLowerCase()) {
+        process.stderr.write(`Resolved ${hashArg} → ${commitment.commitmentHash}\n`);
+      }
+
+      const checkArgs: Parameters<typeof client.commitments.checkCommitmentFillability>[0] = {
+        commitment,
+        taker,
+      };
+      if (opts.riskUsdc !== undefined) {
+        checkArgs.takerDesiredRiskWei6 = usdcDecimalToAmountWei6(opts.riskUsdc);
+      }
+      const result = await client.commitments.checkCommitmentFillability(checkArgs);
+
+      if (opts.json === true) {
+        // ok:true — the CHECK ran successfully; the verdict (fillableNow / outcome /
+        // reasons) lives in the payload. A genuine error (a 404, a missing rpcUrl)
+        // reaches the wrapper above and becomes an `ok:false` failure envelope under
+        // `--json`, or keeps the stderr path without it. The taker is the subject.
+        writeAgentEnvelope(
+          buildAgentEnvelope({
+            ok: true,
+            action: ACTION,
+            stage: 'read',
+            network: networkForChainId(chainId),
+            chainId,
+            wallet: taker,
+            walletRole: 'subject',
+            commitment,
+            payload: result,
+          }),
+        );
+        return;
+      }
+
+      formatOutput(
+        {
+          hash: result.commitmentHash,
+          taker,
+          fillableNow: result.fillableNow,
+          outcome: result.outcome,
+          ...(result.fill !== undefined
+            ? {
+                takerRisk: `${wei6ToDecimalUSDC(result.fill.takerRiskWei6)} USDC`,
+                fillMakerRisk: `${wei6ToDecimalUSDC(result.fill.makerRiskWei6)} USDC`,
+                selfMatch: result.fill.selfMatch,
+              }
+            : {}),
+          ...(result.checkedAtBlock !== undefined
+            ? { checkedAtBlock: result.checkedAtBlock.toString() }
+            : {}),
+          reasons: result.reasons.length > 0 ? result.reasons.map(formatReason).join('; ') : 'none',
+        },
+        { json: false },
+      );
+    },
   );
 });
 

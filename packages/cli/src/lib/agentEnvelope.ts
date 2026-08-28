@@ -359,6 +359,112 @@ export function emitJsonFailure(args: EmitJsonFailureArgs): void {
   writeAgentEnvelope(env);
 }
 
+/* ------------------------------------------------------------------------- */
+/* Class A READ commands — the §6 wrapper                                    */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The `wallet` / `walletRole` pair a read command's FAILURE envelope carries.
+ *
+ * Not a constant, because it is not uniform across the reads: §5.3 gives
+ * `positions {list,status,history}` and `approvals show` a `'subject'`, gives
+ * `commitments list --maker` a `'filter'`, and gives `contests list` a
+ * `'none'`. A failure envelope that flattened all of those to `'none'` would
+ * contradict the success envelope of the same command on the same invocation,
+ * and `walletRole` is a §5.3 field an agent reads.
+ */
+export interface ReadSubject {
+  wallet: Hex | null;
+  walletRole: WalletRole;
+}
+
+/**
+ * The subject of a read with no wallet context — `contests list`, `health`,
+ * and the case where a command's subject had not been resolved yet when the
+ * failure fired. §6: "`null` is reserved for 'signer never came into scope'
+ * failures."
+ */
+export const NO_READ_SUBJECT: ReadSubject = { wallet: null, walletRole: 'none' };
+
+/**
+ * Run a Class A READ command's body under the §6 failure-envelope contract:
+ * a post-`getClient()` failure leaves one parseable v2 envelope on stdout and
+ * exits nonzero, so `--json | jq .` works on failures as well as successes.
+ *
+ * ── Why a wrapper, and why only for reads ─────────────────────────────────
+ *
+ * The 19 reads all want the SAME catch block — the taxonomy code, `stage:
+ * 'read'`, and both intent flags false. Nineteen more hand-rolled copies of
+ * one `try/catch` is how the gap being closed here arose in the first place
+ * (`commitments filled-risk` shipped without one and a reviewer found it by
+ * hand). The WRITE commands are deliberately NOT retrofitted: their catch
+ * blocks do command-specific work — `positions claim` decodes a NotSettled
+ * revert and writes a hint to stderr, `commitments submit` branches on
+ * `NONCE_TOO_LOW`, several carry `effects[]` that landed before the failure —
+ * so a shared wrapper there would either lose that or grow options until it
+ * was the union of fifteen bespoke blocks.
+ *
+ * ── `subject` is a THUNK, deliberately ────────────────────────────────────
+ *
+ * Two commands resolve their own subject AFTER `getClient()`, inside the
+ * window this wrapper covers, and can fail before it is known:
+ *
+ *   - `commitments fillability` without `--taker` resolves the taker via
+ *     `resolvePreviewAddress`, which throws `SIGNER_RESOLUTION_ERROR` when no
+ *     signer is configured — a post-client failure with no subject.
+ *   - `positions history` without `--address` reads the address off the
+ *     resolved signer.
+ *
+ * A static object would have to be built before the body runs, which is
+ * before those values exist; evaluating it in the catch reports what was
+ * actually known at failure time. Commands whose subject comes from a parsed
+ * argument (`positions status <address>`) pass a thunk over a `const` and pay
+ * nothing for it.
+ *
+ * `requiresSignature` / `requiresTransaction` are passed explicitly rather
+ * than left to the builder's defaults. They happen to agree today, but a read
+ * advertising write intent is the specific thing §5.3 forbids, and passing
+ * them makes that a property of THIS function that a mutation can redden —
+ * not a property of a default two modules away.
+ *
+ * `getClient()` stays OUTSIDE: §6's stderr fallback is defined as the window
+ * before the client exists, so a config or keystore failure must keep
+ * escaping to the top-level handler rather than being dressed as an envelope.
+ */
+export async function withReadFailureEnvelope<T>(
+  spec: {
+    /** The §1 `action` — the field an agent switches on. */
+    action: string;
+    chainId: ChainId;
+    /** Whether `--json` was passed. When false the error is re-thrown untouched. */
+    json: boolean;
+    /** Evaluated in the catch, NOT at call time. Omit for a read with no wallet context. */
+    subject?: () => ReadSubject;
+  },
+  body: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await body();
+  } catch (err) {
+    // Not `--json`: the legacy path is an unmodified throw to the top-level
+    // handler, which prints to stderr and exits 1. Swallowing it here would
+    // turn a failed read into a silent success for every human caller.
+    if (!spec.json) throw err;
+    const { wallet, walletRole } = spec.subject?.() ?? NO_READ_SUBJECT;
+    emitJsonFailure({
+      action: spec.action,
+      stage: 'read',
+      chainId: spec.chainId,
+      error: err,
+      wallet,
+      walletRole,
+      requiresSignature: false,
+      requiresTransaction: false,
+    });
+    process.exit(1);
+  }
+}
+
 /**
  * Success-path twin of {@link emitJsonFailure}: write an already-built v2
  * envelope to stdout AND set the process exit code per AGENT_ENVELOPE_SPEC §6
