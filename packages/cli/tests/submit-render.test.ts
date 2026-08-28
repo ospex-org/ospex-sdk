@@ -140,3 +140,11 @@ describe('commitments submit — --raw flag wiring', () => {
     expect(help.toLowerCase()).toMatch(/protocol-native|positionType|debug/);
   });
 });
+
+describe('commitments submit — approval policy flag wiring', () => {
+  it('exposes --no-auto-approve as a refuse-before-sign control', () => {
+    const help = commitmentsSubmitCommand.helpInformation();
+    expect(help).toMatch(/--no-auto-approve/);
+    expect(help.replace(/\s+/g, ' ').toLowerCase()).toMatch(/refuse.*before signing/);
+  });
+});

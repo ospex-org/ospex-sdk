@@ -26,8 +26,9 @@
  *      Decline → exit 130 (Ctrl-C convention).
  *   5. Run any required approvals (commitment-risk on PositionModule;
  *      lazy-creation-fee on TreasuryModule when the commitment matches
- *      a not-yet-created speculation). `--approve-max` non-interactive
- *      shorthand for unlimited; otherwise prompt.
+ *      a not-yet-created speculation). `--no-auto-approve` refuses before
+ *      this step; `--approve-max` is the non-interactive shorthand for
+ *      unlimited; otherwise prompt.
  *   6. Call `client.commitments.matchFromPreview(preview)` — always
  *      re-fetches and re-checks state immediately before sending.
  *
@@ -80,6 +81,7 @@ import {
   renderMatchPreflightRefusal,
   selectBlockingMatchReasons,
 } from '../../lib/matchFillabilityPreflight.js';
+import { refuseRequiredAutoApproval } from '../../lib/noAutoApprove.js';
 import {
   VERIFY_COMMITMENT,
   deriveRemediationNextCommands,
@@ -95,6 +97,7 @@ const optionsSchema = z.object({
   yes: z.boolean().optional(),
   json: z.boolean().optional(),
   approveMax: z.boolean().optional(),
+  autoApprove: z.boolean().optional(),
   raw: z.boolean().optional(),
   skipFillabilityPreflight: z.boolean().optional(),
   force: z.boolean().optional(),
@@ -121,6 +124,11 @@ export const commitmentsMatchCommand = addSignerOptions(
       '--approve-max',
       'with --yes (non-interactive), approve unlimited USDC instead of the exact required amount. ' +
         'Ignored in interactive mode — to grant unlimited interactively, type "max" at the amount prompt.',
+    )
+    .option(
+      '--no-auto-approve',
+      'refuse before signing or sending when a USDC approval would be required instead of ' +
+        'sending an approval automatically. Use when approvals are executed and ledgered separately.',
     )
     .option(
       '--raw',
@@ -249,6 +257,13 @@ export const commitmentsMatchCommand = addSignerOptions(
       writeAgentEnvelope(toMatchPreviewEnvelope(preview, { chainId }));
       return;
     }
+
+    refuseRequiredAutoApproval(
+      preview.approvals,
+      opts.autoApprove === false,
+      chainId,
+      'commitments match',
+    );
 
     // ── 4.5 Fillability preflight (execute path). ──────────────────
     // Refuse an obviously-unfillable match BEFORE rendering, approving,
