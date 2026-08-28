@@ -1,8 +1,9 @@
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
-import type { Hex } from '@ospex/sdk';
+import type { Hex, WalletRole } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
 import {
+  asWalletAddress,
   buildAgentEnvelope,
   networkForChainId,
   withReadFailureEnvelope,
@@ -27,16 +28,18 @@ export const positionsListCommand = new Command('list')
     // Hoisted out of the `--json` branch so the catch can name the chain.
     const chainId = client.chainId();
     // The subject is the positional argument, so it is known before the read
-    // and stays known if the read fails. Lowercased HERE as well as on the
-    // success path, or the same argv would report two spellings of one wallet.
-    const wallet = address.toLowerCase() as Hex;
+    // and stays known if the read fails. NARROWED, not cast: `<address>` has no
+    // schema, and `AgentEnvelope.wallet` is `0x${string} | null` — an input that
+    // is not an address gets no wallet and no role, on both paths alike.
+    const wallet = asWalletAddress(address);
+    const walletRole: WalletRole = wallet !== null ? 'subject' : 'none';
 
     await withReadFailureEnvelope(
       {
         action: ACTION,
         chainId,
         json: parsed.json === true,
-        subject: () => ({ wallet, walletRole: 'subject' }),
+        subject: () => ({ wallet, walletRole }),
       },
       async () => {
         const positions = await client.positions.byAddress(address);
@@ -49,7 +52,7 @@ export const positionsListCommand = new Command('list')
               network: networkForChainId(chainId),
               chainId,
               wallet,
-              walletRole: 'subject',
+              walletRole,
               payload: positions,
             }),
           );

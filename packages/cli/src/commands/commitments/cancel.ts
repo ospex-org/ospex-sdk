@@ -18,7 +18,7 @@ import { OspexChainError } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   emitJsonSuccess,
   errorToAgentError,
   networkForChainId,
@@ -203,7 +203,7 @@ export const commitmentsCancelCommand = addSignerOptions(
       // toCancelDualAgentEnvelope which preserves the off-chain
       // effects in its effects[] regardless of the on-chain outcome.
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'commitments.cancel',
           stage: 'execute',
           chainId,
@@ -218,7 +218,6 @@ export const commitmentsCancelCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

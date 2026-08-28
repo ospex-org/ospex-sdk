@@ -81,7 +81,7 @@ import {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   mapPreviewApprovals,
   networkForChainId,
   writeAgentEnvelope,
@@ -574,7 +574,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
       // throw. Without this, a NONCE_TOO_LOW after a successful USDC
       // approve would lose the approve tx hash to stderr (legacy path).
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'commitments.submit',
           stage: stageForFailure,
           chainId,
@@ -603,7 +603,6 @@ export const commitmentsSubmitCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

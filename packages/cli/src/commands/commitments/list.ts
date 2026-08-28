@@ -53,6 +53,7 @@ import {
 } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
 import {
+  asWalletAddress,
   buildAgentEnvelope,
   networkForChainId,
   withReadFailureEnvelope,
@@ -122,12 +123,16 @@ export const commitmentsListCommand = new Command('list')
     const client = await getClient({ requiresSigner: false });
     // Hoisted out of the `--json` branch so the catch can name the chain.
     const chainId = client.chainId();
-    // Hoisted with it, and mirrored verbatim: §5.3 gives `commitments list
-    // --maker` a `'filter'` subject, so one pair of consts feeds both the
-    // success envelope and the failure envelope and the same argv cannot
-    // report two spellings of one wallet.
-    const wallet: Hex | null =
-      parsed.maker !== undefined ? (parsed.maker.toLowerCase() as Hex) : null;
+    // Hoisted with it: §5.3 gives `commitments list --maker` a `'filter'`
+    // subject, and one pair of consts feeds both envelopes so the same argv
+    // cannot report two spellings of one wallet.
+    //
+    // `--maker` has no schema (see optionsSchema above), so this NARROWS rather
+    // than casts: a value that is not an address yields no wallet, and no role
+    // to go with it. The filter is still sent verbatim — the API decides what a
+    // malformed maker matches — but the envelope will not publish a `wallet`
+    // that violates its own `0x${string} | null` type.
+    const wallet: Hex | null = asWalletAddress(parsed.maker);
     const walletRole: WalletRole = wallet !== null ? 'filter' : 'none';
 
     await withReadFailureEnvelope(

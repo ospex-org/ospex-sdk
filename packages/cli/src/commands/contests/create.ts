@@ -31,7 +31,7 @@ import {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -215,7 +215,7 @@ export const contestCreateCommand = addSignerOptions(
       // BOTH the approve effects AND the create-contest tx in
       // effects[]. Otherwise it's the regular success envelope.
       if (verificationError !== null) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'contests.create',
           stage: 'execute',
           chainId,
@@ -238,7 +238,6 @@ export const contestCreateCommand = addSignerOptions(
           ],
           error: verificationError,
         });
-        process.exit(1);
       }
       writeAgentEnvelope(
         toContestCreateAgentEnvelope(result, {
@@ -261,7 +260,7 @@ export const contestCreateCommand = addSignerOptions(
       // approves the USDC creation fee successfully and then hits a
       // create-time revert would lose the approve tx hash to stderr.
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'contests.create',
           stage: 'execute',
           chainId,
@@ -280,7 +279,6 @@ export const contestCreateCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

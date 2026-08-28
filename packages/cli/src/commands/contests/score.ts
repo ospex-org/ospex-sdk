@@ -28,7 +28,7 @@ import {
 } from '@ospex/sdk';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   errorToAgentError,
   networkForChainId,
   writeAgentEnvelope,
@@ -170,7 +170,7 @@ export const contestScoreCommand = addSignerOptions(
       // score-contest tx effect(s) — including the auto re-request tx when it
       // landed — and points at the standalone poll helper.
       if (scoringError !== null) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'contests.score',
           stage: 'execute',
           chainId,
@@ -185,7 +185,6 @@ export const contestScoreCommand = addSignerOptions(
           ],
           error: scoringError,
         });
-        process.exit(1);
       }
       writeAgentEnvelope(
         toContestScoreAgentEnvelope(result, {
@@ -210,7 +209,7 @@ export const contestScoreCommand = addSignerOptions(
         // not only as `errors[].details.txHash`. A pre-broadcast / signer failure carries
         // no txHash → no effect.
         const scoreEffect = scoreContestEffectFromError(err);
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'contests.score',
           stage: 'execute',
           chainId,
@@ -230,7 +229,6 @@ export const contestScoreCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

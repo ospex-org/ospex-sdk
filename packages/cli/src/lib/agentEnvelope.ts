@@ -339,6 +339,62 @@ export interface EmitJsonFailureArgs {
  * anything that was already on stderr (renderers, prompts, progress
  * lines) stays there.
  */
+/**
+ * Narrow an arbitrary string to the envelope's `wallet` type, or `null`.
+ *
+ * `AgentEnvelope.wallet` is typed `0x${string} | null`, and several commands
+ * take an address as a bare positional or an unvalidated option — `positions
+ * {list,status} <address>` and `commitments list --maker` have no schema for it
+ * — so a `.toLowerCase() as Hex` cast at the envelope boundary publishes
+ * whatever the user typed. Measured: `positions status not-an-address --json`
+ * emitted `wallet: "not-an-address"` with `walletRole: "subject"`.
+ *
+ * A cast is not validation. This is, and it is deliberately the ONLY way the
+ * shoulder block gets a wallet: an input that is not an address produces no
+ * wallet, and {@link withReadFailureEnvelope} then reports no role either,
+ * rather than naming a subject the envelope cannot identify.
+ */
+export function asWalletAddress(value: string | null | undefined): Hex | null {
+  if (typeof value !== 'string') return null;
+  return /^0x[0-9a-fA-F]{40}$/.test(value) ? (value.toLowerCase() as Hex) : null;
+}
+
+/**
+ * Exit with `code`, but never before stdout has actually reached the OS.
+ *
+ * `process.exit()` discards whatever is still queued on stdout. On POSIX a
+ * write to a PIPE larger than the kernel pipe buffer completes asynchronously,
+ * so `write(...)` followed by `exit()` silently truncates — measured on Linux
+ * through the packed bundle: an upstream HTTP 500 carrying a 100KB error body
+ * produced a 100,782-byte envelope, of which the consumer received 65,536 and
+ * a `JSONDecodeError: Unterminated string`. Windows stdio pipes are
+ * synchronous, so it cannot be observed there, and CI is the platform where it
+ * can — the exact shape `verification-discipline.md` §3b-platform warns about.
+ *
+ * `writableLength` is the byte count still queued inside the stream, and it
+ * discriminates the case precisely. Measured on Linux with stdout on a real
+ * pipe: 0 after a 900-byte write (it fitted the pipe buffer and went out
+ * synchronously) and 100,040 after the 100KB one. It is also 0 for a TTY, a
+ * file, `/dev/null`, all Windows stdio — and under every test double in this
+ * repo, which swaps `write` for a string accumulator and queues nothing on the
+ * real stdout. So the fast path stays exactly what it was.
+ *
+ * An empty write's callback is the barrier: stream write callbacks run in
+ * order, so it fires only after every chunk queued before it has been handed
+ * to the OS. `error` resolves it too, because a consumer that closed the pipe
+ * (`--json | head -1`) is not a reason to hang.
+ */
+export async function exitAfterStdoutFlush(code: number): Promise<never> {
+  const out = process.stdout;
+  if (out.writableLength > 0) {
+    await new Promise<void>((resolve) => {
+      out.write('', () => resolve());
+      out.once('error', () => resolve());
+    });
+  }
+  process.exit(code);
+}
+
 export function emitJsonFailure(args: EmitJsonFailureArgs): void {
   const env = buildFailureEnvelope({
     action: args.action,
@@ -357,6 +413,21 @@ export function emitJsonFailure(args: EmitJsonFailureArgs): void {
     ...(args.nextCommands !== undefined ? { nextCommands: args.nextCommands } : {}),
   });
   writeAgentEnvelope(env);
+}
+
+/**
+ * {@link emitJsonFailure} followed by a flush-safe `exit(1)` — the whole of
+ * §6's promise in one call, and the form every `--json` catch block should use.
+ *
+ * The two halves are inseparable in practice: an envelope that was written but
+ * not flushed is not an envelope an agent can parse, and every call site that
+ * paired the emit with a bare `process.exit(1)` had the truncation bug
+ * described on {@link exitAfterStdoutFlush}. Pairing them here means a new
+ * command gets both by writing one line, and cannot get one without the other.
+ */
+export async function emitJsonFailureAndExit(args: EmitJsonFailureArgs): Promise<never> {
+  emitJsonFailure(args);
+  return exitAfterStdoutFlush(1);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -450,8 +521,16 @@ export async function withReadFailureEnvelope<T>(
     // handler, which prints to stderr and exits 1. Swallowing it here would
     // turn a failed read into a silent success for every human caller.
     if (!spec.json) throw err;
-    const { wallet, walletRole } = spec.subject?.() ?? NO_READ_SUBJECT;
-    emitJsonFailure({
+    const claimed = spec.subject?.() ?? NO_READ_SUBJECT;
+    // Re-narrowed here rather than trusted from the caller: three of these
+    // commands take their address as a bare positional or an unschema'd
+    // option, so `subject` can hand back a string that is not an address.
+    // Doing it at the boundary makes "never a role without the address it
+    // describes" a property of THIS function — a command cannot opt out of it,
+    // and a command added later inherits it without knowing it exists.
+    const wallet = asWalletAddress(claimed.wallet);
+    const walletRole = wallet === null ? 'none' : claimed.walletRole;
+    await emitJsonFailureAndExit({
       action: spec.action,
       stage: 'read',
       chainId: spec.chainId,
@@ -461,7 +540,12 @@ export async function withReadFailureEnvelope<T>(
       requiresSignature: false,
       requiresTransaction: false,
     });
-    process.exit(1);
+    // Unreachable: the call above ends in `process.exit`. TypeScript does not
+    // narrow control flow through an awaited `Promise<never>`, so the branch
+    // needs a terminator anyway — and re-throwing is the right one to pick. If
+    // the exit ever failed to exit, the error reaching the top-level handler is
+    // strictly better than this function returning `undefined` as a `T`.
+    throw err;
   }
 }
 

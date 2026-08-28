@@ -968,6 +968,49 @@ describe('withReadFailureEnvelope', () => {
   // would still pass. Both spellings are non-null on purpose, so this fails
   // on the VALUE rather than on a null the `?? NO_READ_SUBJECT` path could
   // also produce.
+  // The commands ALSO narrow their wallet before handing it over, so a
+  // command-level test cannot tell whether this boundary is doing anything —
+  // either layer alone produces the same envelope (`verification-discipline.md`
+  // §3b-rescue: with defence in depth, every layer is a rival explanation for
+  // the same green test). These two cases hand the wrapper a hostile subject
+  // directly, so only the boundary can produce the expected answer.
+  it('refuses a subject whose wallet is not an address, and drops the role with it', async () => {
+    const { stdout } = await run(
+      {
+        ...SPEC,
+        json: true,
+        // What a command that cast instead of narrowing would hand over.
+        subject: () => ({ wallet: 'not-an-address' as `0x${string}`, walletRole: 'subject' }),
+      },
+      async () => {
+        throw BOOM;
+      },
+    );
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(parsed.wallet).toBeNull();
+    // The role goes with it. A `'subject'` beside a null wallet claims a
+    // subject the envelope cannot name.
+    expect(parsed.walletRole).toBe('none');
+  });
+
+  it('lowercases a valid subject, and keeps the role the command chose', async () => {
+    const { stdout } = await run(
+      {
+        ...SPEC,
+        json: true,
+        // Mixed case, and a role that is NOT 'subject' — so this fails if the
+        // boundary drops the case OR hardcodes the role it re-attaches.
+        subject: () => ({ wallet: '0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', walletRole: 'filter' }),
+      },
+      async () => {
+        throw BOOM;
+      },
+    );
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(parsed.wallet).toBe(SUBJECT_A);
+    expect(parsed.walletRole).toBe('filter');
+  });
+
   it('evaluates the subject at failure time, not at call time', async () => {
     let subject = SUBJECT_A as string;
     const { stdout } = await run(

@@ -35,7 +35,7 @@ import type {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -131,7 +131,7 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
     );
     } catch (err) {
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'commitments.cancel-onchain',
           stage: 'execute',
           chainId,
@@ -143,7 +143,6 @@ export const commitmentsCancelOnchainCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

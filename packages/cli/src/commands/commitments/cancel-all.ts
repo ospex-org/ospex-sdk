@@ -40,7 +40,7 @@ import type {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   emitJsonSuccess,
   networkForChainId,
 } from '../../lib/agentEnvelope.js';
@@ -232,7 +232,7 @@ export const commitmentsCancelAllCommand = addSignerOptions(
     );
     } catch (err) {
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'commitments.cancel-all',
           stage: dryRun ? 'dry-run' : 'execute',
           chainId,
@@ -247,7 +247,6 @@ export const commitmentsCancelAllCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

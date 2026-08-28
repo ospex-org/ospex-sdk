@@ -374,6 +374,8 @@ Rules:
 | Read with no wallet context (e.g. `contests list`) | `null` | `'none'` | `null` |
 | `wallet address` | the resolved keystore address | `'subject'` | same as `wallet` |
 
+`wallet` is `0x${string} | null` and the CLI narrows to it rather than casting: several commands take an address as a bare positional or an unvalidated option, and a value that is not a 20-byte 0x address yields `wallet: null` with `walletRole: 'none'` — never the raw input, and never a role without the address it describes. The address is lowercased, so one argv cannot produce two spellings of one wallet across the success and failure envelopes.
+
 ### 3.3 `risk` / `payout`
 
 - Single-action previews (`submit`, `match`): pull from `preview.you.risk` and `preview.you.profit/totalReturn`.
@@ -571,7 +573,7 @@ Every Class A `--json` invocation must satisfy:
 - **All diagnostics go to stderr.** Allowance prompts, "Resolved `0xabc → …`" address echoes, log lines, stack traces — stderr only.
 - **No interactive prompts in `--json` mode.** Preview-bearing commands without `--yes` emit the preview and exit `0`; with `--yes` they execute non-interactively. Anything that would prompt under interactive mode either uses a configured non-interactive credential or errors out structurally with `errors: [{ code: 'non_interactive_password_required', ... }]`.
 - **No secrets in any output.** Keystore content, passphrases, decrypted private keys never appear on stdout *or* stderr.
-- **`--json | jq .` always works** for both success and failure envelopes. (Measured for every Class A command, against a dead endpoint, by `packages/cli/tests/class-a-failure-envelope-sweep.test.ts`. The bound is §6's: a failure BEFORE `getClient()` returns still falls back to stderr by design, and `jq` gets nothing there.)
+- **`--json | jq .` always works** for both success and failure envelopes, at any envelope size. (Measured for every Class A command against a dead endpoint by `packages/cli/tests/class-a-failure-envelope-sweep.test.ts`, and over a real pipe past the 64KiB kernel pipe buffer by `packages/cli/tests/stdout-flush-and-wallet-shape.test.ts` — an emit followed by an immediate `process.exit()` truncates a large document on POSIX, so the CLI drains stdout before exiting. The bound is §6's: a failure BEFORE `getClient()` returns still falls back to stderr by design, and `jq` gets nothing there.)
 
 ---
 

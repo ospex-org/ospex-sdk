@@ -69,7 +69,7 @@ import type { MatchPreviewSpeculation } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   mapPreviewApprovals,
   networkForChainId,
   writeAgentEnvelope,
@@ -512,7 +512,7 @@ export const commitmentsMatchCommand = addSignerOptions(
       // throw. NONCE_TOO_LOW (or any other matchFromPreview revert)
       // would otherwise drop those approve tx hashes to stderr.
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'commitments.match',
           stage: stageForFailure,
           chainId,
@@ -535,7 +535,6 @@ export const commitmentsMatchCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

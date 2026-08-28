@@ -41,7 +41,7 @@ import {
 } from '@ospex/sdk';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   formatTokenAmount,
   networkForChainId,
   writeAgentEnvelope,
@@ -252,7 +252,7 @@ export const approvalsSetupCommand = addSignerOptions(
       // exactly what was committed before the throw.
       if (wantJson) {
         const effects = plan !== null ? setupResultsToEffects(plan, results) : [];
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'approvals.setup',
           stage: 'execute',
           chainId,
@@ -265,7 +265,6 @@ export const approvalsSetupCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

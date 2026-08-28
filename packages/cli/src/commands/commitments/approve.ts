@@ -26,7 +26,7 @@ import { OspexValidationError, wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -147,7 +147,7 @@ export const commitmentsApproveCommand = addSignerOptions(
     );
     } catch (err) {
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'commitments.approve',
           stage: 'execute',
           chainId,
@@ -162,7 +162,6 @@ export const commitmentsApproveCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

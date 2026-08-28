@@ -17,7 +17,7 @@ import {
 } from '@ospex/sdk';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -76,7 +76,7 @@ export const contestUpdateMarketsCommand = addSignerOptions(
     }
     } catch (err) {
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'contests.update-markets',
           stage: 'execute',
           chainId,
@@ -94,7 +94,6 @@ export const contestUpdateMarketsCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }
