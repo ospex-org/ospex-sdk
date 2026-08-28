@@ -105,11 +105,12 @@ function captureRender(
 }
 
 describe('commitments match — command structure', () => {
-  it('accepts --risk-usdc / --yes / --approve-max / --json', () => {
+  it('accepts --risk-usdc / --yes / --approve-max / --no-auto-approve / --json', () => {
     const help = commitmentsMatchCommand.helpInformation();
     expect(help).toMatch(/--risk-usdc/);
     expect(help).toMatch(/--yes/);
     expect(help).toMatch(/--approve-max/);
+    expect(help).toMatch(/--no-auto-approve/);
     expect(help).toMatch(/--json/);
   });
 

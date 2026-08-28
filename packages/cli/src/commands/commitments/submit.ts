@@ -44,6 +44,8 @@
  *                            needed. In interactive mode the user
  *                            chooses the amount at the per-approval
  *                            prompt and this flag is unused.
+ *   --no-auto-approve        refuse before approval/sign/post when the
+ *                            execute-time preview needs an approval.
  *
  * Contract corollaries:
  *   - `--json` is output format only. It does NOT imply `--yes`.
@@ -92,6 +94,7 @@ import {
   renderSubmitPreflightRefusal,
   selectBlockingSubmitReasons,
 } from '../../lib/submitFundabilityPreflight.js';
+import { refuseRequiredAutoApproval } from '../../lib/noAutoApprove.js';
 import {
   VERIFY_COMMITMENT,
   deriveRemediationNextCommands,
@@ -117,6 +120,7 @@ const optionsSchema = z.object({
   yes: z.boolean().optional(),
   json: z.boolean().optional(),
   approveMax: z.boolean().optional(),
+  autoApprove: z.boolean().optional(),
   raw: z.boolean().optional(),
   skipFundabilityPreflight: z.boolean().optional(),
   force: z.boolean().optional(),
@@ -148,6 +152,11 @@ export const commitmentsSubmitCommand = addSignerOptions(
     .option(
       '--approve-max',
       'with --yes (non-interactive), approve unlimited USDC instead of the exact required amount. Ignored in interactive mode — to grant unlimited interactively, type "max" at the amount prompt.',
+    )
+    .option(
+      '--no-auto-approve',
+      'refuse before signing or posting when a USDC approval would be required instead of ' +
+        'sending an approval automatically. Use when approvals are executed and ledgered separately.',
     )
     .option(
       '--raw',
@@ -288,6 +297,13 @@ export const commitmentsSubmitCommand = addSignerOptions(
       );
     }
 
+    refuseRequiredAutoApproval(
+      preview.approvals,
+      opts.autoApprove === false,
+      chainId,
+      'commitments submit',
+    );
+
     // 3.5 Fundability preflight (execute path only — mirrors `match`). Read the
     //     maker's USDC balance + PositionModule/TreasuryModule allowance and
     //     their open-commitment book, and check whether the WHOLE VISIBLE book
@@ -343,7 +359,8 @@ export const commitmentsSubmitCommand = addSignerOptions(
       }
     }
 
-    // 6. Run approvals if needed. The preview's `approvals[]` may
+    // 6. Run approvals if needed. `--no-auto-approve` has already refused
+    //    any short row above, before this loop. The preview's `approvals[]` may
     //    carry up to TWO short-allowance rows for a lazy commit:
     //
     //      - 'commitment-risk'    (USDC → PositionModule)  — always

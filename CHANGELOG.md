@@ -4,7 +4,9 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
-—
+### Added
+
+- **`@ospex/cli`: `commitments submit` and `commitments match` gain `--no-auto-approve` for approval-ledgered automation.** By default, `--yes` still remediates a short execute-time preview by sending the exact required USDC approval (or unlimited with `--approve-max`). With `--no-auto-approve`, either command instead throws `OspexAllowanceError` before entering its approval loop, before the commitment signature/POST, and before the match transaction. The `--json` failure envelope is `ok: false`, carries `ALLOWANCE_INSUFFICIENT` details, and has empty `effects[]`, so an outer executor can delete its tentative claim, run its own claim-before-send / receipt-after-mine approval flow, and retry. This closes the race where allowance changes after the outer executor's wallet check but before the CLI's execute-time preview; default human/CLI behavior is unchanged.
 
 ## [0.15.0] — 2026-08-22
 
