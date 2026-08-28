@@ -516,6 +516,22 @@ describe('OspexClient API surface', () => {
       field: 'contests.0.gameId',
     },
   ];
+  it('covers every identity-pair refusal shape it names', () => {
+    // #208: each row is the ONLY assertion for its shape, and dropping one
+    // stops refusing that shape with nothing to notice — the suite stays green
+    // and only the case count moves, which nothing reads. Pinning the names
+    // makes a deletion explicit. The accepting states have their own controls
+    // above, so this is the refusing half of an enumerated boundary.
+    expect(PAIR_REJECTS.map((r) => r.name)).toEqual([
+      'only gameId present',
+      'only jsonoddsId present',
+      'unequal non-empty strings',
+      'null gameId beside a string jsonoddsId',
+      'string gameId beside a null jsonoddsId',
+      'both empty strings (the server normalizes "" to null; "" here is no known server)',
+    ]);
+  });
+
   for (const { name, row, field } of PAIR_REJECTS) {
     it(`identity-pair contract: REFUSES ${name}`, async () => {
       const { fetch } = makeFetch(() => listBodyWith(row));
