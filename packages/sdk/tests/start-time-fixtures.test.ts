@@ -465,24 +465,49 @@ describe('expectWireValidContestStartTimes refuses a body the view cannot serve'
 });
 
 describe('the fixture-hygiene guards refuse a collapsed matrix', () => {
+  // ⚠ THESE TWO ENUMERATIONS ARE LITERALS RATHER THAN THE MODULE'S OWN LISTS,
+  //   on purpose. Importing a list would shrink the loops below in lockstep
+  //   with a mutant that shrinks that list — the shape where a test supplies
+  //   its own expected value and can then only fail on a broken copy.
+  //
+  //   A literal that nothing pins is the defect one level down, and that is
+  //   #208: dropping an entry silently removed that field's only assertion and
+  //   the suite stayed green, with the case count unmoved because the loop is
+  //   inside one `it`. The two `pins …` cases below equate each enumeration
+  //   against the module list it mirrors, and those lists are themselves pinned
+  //   against literals in `PINNED_FIELD_LISTS` at the top of this file. So the
+  //   loops can neither shrink WITH the module nor drift FROM it, and neither
+  //   half of that is load-bearing on its own.
+  const CONTEST_DISTINCTNESS_INPUTS = [
+    'chainStartTime',
+    'gameMatchTime',
+    'gameEarliestMatchTime',
+    'gameRundownMatchTime',
+    'gameSportspageMatchTime',
+  ] as const;
+
+  const GAME_DISTINCTNESS_INPUTS = [
+    'gameMatchTime',
+    'earliestMatchTime',
+    'rundownMatchTime',
+    'sportspageMatchTime',
+  ] as const;
+
+  it('pins the contest distinctness enumeration against the module list', () => {
+    expect([...CONTEST_DISTINCTNESS_INPUTS]).toEqual([...CONTEST_INPUT_FIELDS]);
+  });
+
+  it('pins the games distinctness enumeration against the module list', () => {
+    expect([...GAME_DISTINCTNESS_INPUTS]).toEqual([...GAME_INPUT_FIELDS]);
+  });
+
   it('expectContestStartTimeInputsDistinct refuses a shared literal on EVERY input it covers', () => {
     // N fields in the guard's list are N properties. A control that collides
     // one pair leaves the other inputs unchecked, and dropping any of them
     // from `CONTEST_INPUT_FIELDS` then stays green — measured: dropping
     // `gameSportspageMatchTime`, and separately `chainStartTime`, both
     // survived the single-pair version of this case.
-    //
-    // The enumeration below is a LITERAL rather than the module's own list on
-    // purpose. Importing that list would shrink this loop in lockstep with the
-    // mutant that shrinks the list, which is the shape where a test supplies
-    // its own expected value and can then only fail on a broken copy.
-    const INPUTS = [
-      'chainStartTime',
-      'gameMatchTime',
-      'gameEarliestMatchTime',
-      'gameRundownMatchTime',
-      'gameSportspageMatchTime',
-    ] as const;
+    const INPUTS = CONTEST_DISTINCTNESS_INPUTS;
     const { served } = contestCase('chain-start-drives');
     // A value no field in that row carries, so the collision this builds is
     // the only one and the guard cannot refuse for an unrelated pair.
@@ -515,12 +540,7 @@ describe('the fixture-hygiene guards refuse a collapsed matrix', () => {
     // Its `null` skip needs no control of its own: the matrix carries rows
     // with two absent snapshots, so a guard that stopped skipping `null` would
     // redden on the per-row loop at the top of this file. Measured.
-    const INPUTS = [
-      'gameMatchTime',
-      'earliestMatchTime',
-      'rundownMatchTime',
-      'sportspageMatchTime',
-    ] as const;
+    const INPUTS = GAME_DISTINCTNESS_INPUTS;
     const { served } = gameCase('retained-floor-drives');
     const shared = '2026-05-08T05:55:00Z';
     for (const field of INPUTS) {
@@ -669,12 +689,32 @@ describe('the freshness guards refuse the wrong case', () => {
 });
 
 describe('instantMs refuses a rendering it cannot order', () => {
-  it.each([
+  // Each row is a distinct REFUSAL SHAPE rather than a sample of one: an offset
+  // form and a sub-second value both order fine but are not the canonical
+  // rendering the matrices use, a missing zone designator is ambiguous, and
+  // `2026-02-30` is the `Date.parse` rollover — it becomes March 2 rather than
+  // NaN, so only an explicit calendar check refuses it.
+  //
+  // Dropping a row loses that shape with nothing to notice (#208): the suite's
+  // case count moves by one and no assertion reads it. The pin below is what
+  // makes a deletion explicit instead of silent.
+  const INSTANT_MS_REJECTS: Array<[string, string]> = [
     ['2026-05-03T00:00:00+00:00', 'an offset form'],
     ['2026-05-03T00:00:00.500Z', 'a sub-second value'],
     ['2026-05-03T00:00:00', 'no zone designator'],
     ['2026-02-30T00:00:00Z', 'a day that does not exist'],
-  ])('refuses %s (%s)', (value) => {
+  ];
+
+  it('covers every refusal shape it names', () => {
+    expect(INSTANT_MS_REJECTS.map(([, shape]) => shape)).toEqual([
+      'an offset form',
+      'a sub-second value',
+      'no zone designator',
+      'a day that does not exist',
+    ]);
+  });
+
+  it.each(INSTANT_MS_REJECTS)('refuses %s (%s)', (value) => {
     expect(() => instantMs(value, 'probe')).toThrow();
   });
 

@@ -20,6 +20,7 @@ import { ApiClient } from '../src/api/client.js';
 import { OspexAPIError, OspexValidationError } from '../src/errors.js';
 import { OwnStateApi } from '../src/api/ownState.js';
 import { loadOwnStateSnapshot, decodeSnapshot } from '../src/ownState/snapshot.js';
+import { OwnerCommitmentBodySchema } from '../src/ownState/schemas.js';
 import { KeystoreSigner } from '../src/signers/keystore.js';
 import type {
   OwnerCommitmentBody,
@@ -363,7 +364,32 @@ describe('decodeSnapshot — wire → public', () => {
   // decode time rather than throwing a raw `SyntaxError` from a downstream
   // `BigInt(...)` (e.g. `computeOwnerIsLive`'s `BigInt(remainingRiskAmount)`) or
   // flowing through unvalidated. Mirrors the signedPayload rejection above.
-  for (const field of ['riskAmount', 'filledRiskAmount', 'remainingRiskAmount', 'nonce'] as const) {
+  const UINT256_BODY_FIELDS = [
+    'riskAmount',
+    'filledRiskAmount',
+    'remainingRiskAmount',
+    'nonce',
+  ] as const;
+
+  it('covers every uint256 field the body schema actually guards', () => {
+    // #208: the loop below is each field's only assertion, so dropping an entry
+    // removed it silently. Derived from the SCHEMA rather than restated from the
+    // list above, which makes the two sources independent — this reddens both
+    // when an entry is dropped from the loop AND when a new UINT256_STRING
+    // field is added to the body and left uncovered.
+    //
+    // The predicate is behavioural rather than structural: only UINT256_STRING
+    // accepts a bare integer and refuses a decimal. Every other field on this
+    // body accepts both (`z.string()`, `.nullable()`) or refuses both (numbers,
+    // booleans, enums), so nothing else can satisfy it.
+    const guarded = Object.entries(OwnerCommitmentBodySchema.shape)
+      .filter(([, schema]) => schema.safeParse('1').success && !schema.safeParse('1.5').success)
+      .map(([name]) => name)
+      .sort();
+    expect(guarded).toEqual([...UINT256_BODY_FIELDS].sort());
+  });
+
+  for (const field of UINT256_BODY_FIELDS) {
     it(`rejects a non-decimal ${field} with OspexValidationError (not a raw BigInt SyntaxError)`, () => {
       const body = snapshotResponse({
         commitments: [visibleCommitmentBody({ [field]: '1.5' } as Partial<OwnerCommitmentBody>)],
