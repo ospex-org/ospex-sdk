@@ -7,10 +7,11 @@
  * consumers still catch `OspexValidationError`, never a raw `ZodError`.
  * The callers today are exactly: the own-state bodies (snapshot /
  * commitment / position / positionStatus), own-state health, the fill
- * stream frame, and the contests-list REST read (since 0.13.0). Every
- * other decode path — the other stream frames and the remaining REST
- * reads — is still the pre-rule cast+copy; CLAUDE.md's wire-validation
- * hard rule tracks that coverage state and is the authority. The `field` carries the
+ * stream frame, the contests-list REST read (since 0.13.0), and the
+ * contest + position stream frames and the three `games.*` reads. The
+ * commitment and speculation stream frames and the remaining REST reads
+ * are still the pre-rule cast+copy; CLAUDE.md's wire-validation hard rule
+ * tracks that coverage state and is the authority. The `field` carries the
  * dotted path of the first failing element (e.g. `commitments.0.maker`),
  * falling back to `fallbackField` for a top-level/whole-body failure where
  * the issue path is empty (a `null` or non-object body).
