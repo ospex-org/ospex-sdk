@@ -33,7 +33,7 @@ import { wei6ToDecimalUSDC, type Hex } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -118,13 +118,12 @@ export const commitmentsFilledRiskCommand = new Command('filled-risk')
         // `walletRole: 'none'`, `signer: null`, both intent flags false) —
         // the same maker-agnostic, read-only shape §5.3 gives the success
         // envelope. A failure here must not advertise write intent.
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'commitments.filled-risk',
           stage: 'read',
           chainId,
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

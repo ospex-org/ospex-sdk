@@ -34,6 +34,7 @@ import type {
 import { formatOutput } from '../lib/format.js';
 import {
   buildAgentEnvelope,
+  exitAfterStdoutFlush,
   networkForChainId,
   writeAgentEnvelope,
 } from '../lib/agentEnvelope.js';
@@ -176,7 +177,7 @@ export const doctorCommand = new Command('doctor')
       renderDoctorReport(report, process.stdout);
     }
 
-    process.exit(report.ready.matchCommitments.ok ? 0 : 1);
+    await exitAfterStdoutFlush(report.ready.matchCommitments.ok ? 0 : 1);
   });
 
 // ── v1 → v2 envelope transform ──────────────────────────────────────

@@ -27,7 +27,7 @@ import { wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   emitJsonSuccess,
   networkForChainId,
 } from '../../lib/agentEnvelope.js';
@@ -169,7 +169,7 @@ export const positionsClaimAllCommand = addSignerOptions(
           : signerAddress !== null
             ? 'signer'
             : 'none';
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'claim-all',
           stage: dryRun ? 'dry-run' : 'execute',
           chainId,
@@ -186,7 +186,6 @@ export const positionsClaimAllCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

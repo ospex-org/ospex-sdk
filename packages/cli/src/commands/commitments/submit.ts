@@ -81,7 +81,8 @@ import {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  exitAfterStdoutFlush,
+  emitJsonFailureAndExit,
   mapPreviewApprovals,
   networkForChainId,
   writeAgentEnvelope,
@@ -333,7 +334,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
         } else {
           process.stderr.write(renderSubmitPreflightRefusal(blocking));
         }
-        process.exit(1);
+        await exitAfterStdoutFlush(1);
       }
     }
 
@@ -355,7 +356,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
       const ok = await promptYesNo('Submit?', true);
       if (!ok) {
         process.stderr.write('Submit cancelled.\n');
-        process.exit(130);
+        await exitAfterStdoutFlush(130);
       }
     }
 
@@ -418,7 +419,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
         );
         if (!allow) {
           process.stderr.write(`Approval declined; submit cancelled.\n`);
-          process.exit(130);
+          await exitAfterStdoutFlush(130);
         }
         const choice = await promptValue(
           `Amount in USDC (number, or "max" for unlimited)`,
@@ -574,7 +575,7 @@ export const commitmentsSubmitCommand = addSignerOptions(
       // throw. Without this, a NONCE_TOO_LOW after a successful USDC
       // approve would lose the approve tx hash to stderr (legacy path).
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'commitments.submit',
           stage: stageForFailure,
           chainId,
@@ -603,7 +604,6 @@ export const commitmentsSubmitCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

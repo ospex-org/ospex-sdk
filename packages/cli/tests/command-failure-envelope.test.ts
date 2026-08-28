@@ -33,6 +33,8 @@ import path from 'node:path';
 import type { Hex } from '@ospex/sdk';
 import { commitmentsSubmitCommand } from '../src/commands/commitments/submit.js';
 import { commitmentsMatchCommand } from '../src/commands/commitments/match.js';
+import { commitmentsListCommand } from '../src/commands/commitments/list.js';
+import { commitmentsFillabilityCommand } from '../src/commands/commitments/fillability.js';
 import { positionsClaimAllCommand } from '../src/commands/positions/claim-all.js';
 
 const DEAD_API_URL = 'http://127.0.0.1:9';
@@ -270,5 +272,107 @@ describe('positions claim-all — command-level failure envelope (--dry-run --ad
     expect(env.walletRole).toBe('subject');
     expect(env.signer).toBeNull();
     expect(env.errors.length).toBeGreaterThan(0);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Read commands — the shoulder shapes the sweep cannot reach          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `class-a-failure-envelope-sweep.test.ts` drives one argv per command, so a
+ * command whose shoulder block DEPENDS on its arguments has exactly one of its
+ * shapes covered there. These are the others.
+ *
+ * They are not extra credit. `commitments list` and `commitments fillability`
+ * are the only two reads whose `walletRole` is computed rather than constant,
+ * which makes them the two most likely to be wrong — and each is covered by
+ * the sweep in the shape where the computation returns its DEFAULT, i.e. the
+ * shape a broken computation would also produce.
+ */
+describe('read commands — argument-dependent shoulder shapes', () => {
+  const MAKER = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
+  const MAKER_LC = '0x70997970c51812dc3a010c7d01b50e0d17dc79c8';
+  const HASH = ('0x' + 'ab'.repeat(32)) as Hex;
+
+  interface ReadEnvelope {
+    ok: boolean;
+    action: string;
+    stage: string;
+    wallet: string | null;
+    walletRole: string;
+    signer: string | null;
+    requiresSignature: boolean;
+    requiresTransaction: boolean;
+    payload: unknown;
+    errors: Array<{ code: string }>;
+  }
+
+  // The sweep runs `commitments list` with no flags, where `walletRole` is
+  // 'none' — which is also what a build that ignored `--maker` entirely would
+  // report. Only this case distinguishes the two.
+  it('commitments list --maker: the address is a filter, not a subject', async () => {
+    const { stdout, exitCode } = await runActionAndCaptureFailure(() =>
+      commitmentsListCommand.parseAsync(['--maker', MAKER, '--json'], { from: 'user' }),
+    );
+
+    expect(exitCode).toBe(1);
+    const env = JSON.parse(stdout.trim()) as ReadEnvelope;
+    expect(env.ok).toBe(false);
+    expect(env.action).toBe('commitments.list');
+    expect(env.stage).toBe('read');
+    expect(env.wallet).toBe(MAKER_LC);
+    // 'filter', NOT 'subject' — §3.2: `--maker` selects rows, it does not make
+    // that wallet the thing being read about. The success envelope of this
+    // same invocation says 'filter'; a failure envelope that said 'subject'
+    // would describe a different query than the one that was run.
+    expect(env.walletRole).toBe('filter');
+    expect(env.signer).toBeNull();
+    expect(env.requiresSignature).toBe(false);
+    expect(env.requiresTransaction).toBe(false);
+    expect(env.payload).toBeNull();
+  });
+
+  // The sweep's `commitments fillability` row passes no --taker and configures
+  // no signer, so it fails at `resolvePreviewAddress` with the subject still
+  // unresolved and reports `wallet: null`. That is the DEFAULT branch. This
+  // case takes the other one: the taker is known before the read, so a failure
+  // of the read must still name it.
+  it('commitments fillability --taker: names the resolved taker as the subject', async () => {
+    const { stdout, exitCode } = await runActionAndCaptureFailure(() =>
+      commitmentsFillabilityCommand.parseAsync([HASH, '--taker', MAKER, '--json'], {
+        from: 'user',
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    const env = JSON.parse(stdout.trim()) as ReadEnvelope;
+    expect(env.action).toBe('commitments.fillability');
+    expect(env.wallet).toBe(MAKER_LC);
+    expect(env.walletRole).toBe('subject');
+    // The read is what failed, so the error is the dead endpoint rather than
+    // the signer resolution the sweep's row hits.
+    expect(env.errors[0]?.code).toBe('API_ERROR');
+  });
+
+  // A DELIBERATE behaviour change, pinned so it stays deliberate. `--taker`'s
+  // shape is validated after `getClient()` — an accident of ordering, but it
+  // puts the refusal inside §6's window, so it now arrives as an envelope
+  // instead of a bare stderr line. The subject stays null because the taker
+  // never resolved: a role without an address would claim a subject the
+  // envelope does not name.
+  it('commitments fillability --taker <malformed>: enveloped, and still subject-less', async () => {
+    const { stdout, exitCode } = await runActionAndCaptureFailure(() =>
+      commitmentsFillabilityCommand.parseAsync([HASH, '--taker', 'not-an-address', '--json'], {
+        from: 'user',
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    const env = JSON.parse(stdout.trim()) as ReadEnvelope;
+    expect(env.action).toBe('commitments.fillability');
+    expect(env.errors[0]?.code).toBe('VALIDATION_ERROR');
+    expect(env.wallet).toBeNull();
+    expect(env.walletRole).toBe('none');
   });
 });

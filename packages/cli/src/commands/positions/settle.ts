@@ -34,7 +34,7 @@ import type {
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -127,7 +127,7 @@ export const positionsSettleCommand = addSignerOptions(
       }
     } catch (err) {
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'settle',
           stage: 'execute',
           chainId,
@@ -139,7 +139,6 @@ export const positionsSettleCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

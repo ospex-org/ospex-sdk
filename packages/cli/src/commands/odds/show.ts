@@ -28,6 +28,7 @@ import { getClient } from '../../lib/client.js';
 import {
   buildAgentEnvelope,
   networkForChainId,
+  withReadFailureEnvelope,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 
@@ -37,6 +38,9 @@ const optionsSchema = z.object({
   json: z.boolean().optional(),
   market: z.enum(MARKET_VALUES).optional(),
 });
+
+/** Named once so the success envelope and the §6 failure envelope cannot drift. */
+const ACTION = 'odds.show';
 
 export const oddsShowCommand = new Command('show')
   .description(
@@ -51,88 +55,93 @@ export const oddsShowCommand = new Command('show')
   .action(async (contestId, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
     const client = await getClient({ requiresSigner: false });
+    // Hoisted out of the `--json` branch so the catch can name the chain.
+    const chainId = client.chainId();
 
-    // Fetch contest detail + odds snapshot in parallel — the contest
-    // gives us team names + matchup display, the snapshot gives us
-    // the prices.
-    const [contest, snapshot] = await Promise.all([
-      client.contests.get(contestId),
-      client.odds.snapshot(contestId),
-    ]);
+    // No `subject`: this command never resolves a wallet, and its success
+    // envelope leaves `wallet` / `walletRole` at their defaults (§5.3 `∅/none/∅`).
+    await withReadFailureEnvelope({ action: ACTION, chainId, json: opts.json === true }, async () => {
+      // Fetch contest detail + odds snapshot in parallel — the contest
+      // gives us team names + matchup display, the snapshot gives us
+      // the prices.
+      const [contest, snapshot] = await Promise.all([
+        client.contests.get(contestId),
+        client.odds.snapshot(contestId),
+      ]);
 
-    if (opts.json === true) {
-      const chainId = client.chainId();
-      // Top-level `contest` shoulder field not populated: the v1
-      // Contest summary inside payload differs from the v2
-      // PreviewContest shoulder shape (latter is preview-resolver-
-      // specific). Contest→PreviewContest mapper queued for PR-6.
-      // Payload's `contest` sub-object still carries the full info.
-      writeAgentEnvelope(
-        buildAgentEnvelope({
-          ok: true,
-          action: 'odds.show',
-          stage: 'read',
-          network: networkForChainId(chainId),
-          chainId,
-          payload: {
-            contest: {
-              contestId: contest.contestId,
-              awayTeam: contest.awayTeam,
-              homeTeam: contest.homeTeam,
-              sport: contest.sport,
-              matchTime: contest.matchTime,
-              jsonoddsId: contest.jsonoddsId ?? null,
+      if (opts.json === true) {
+        // Top-level `contest` shoulder field not populated: the v1
+        // Contest summary inside payload differs from the v2
+        // PreviewContest shoulder shape (latter is preview-resolver-
+        // specific). Contest→PreviewContest mapper queued for PR-6.
+        // Payload's `contest` sub-object still carries the full info.
+        writeAgentEnvelope(
+          buildAgentEnvelope({
+            ok: true,
+            action: ACTION,
+            stage: 'read',
+            network: networkForChainId(chainId),
+            chainId,
+            payload: {
+              contest: {
+                contestId: contest.contestId,
+                awayTeam: contest.awayTeam,
+                homeTeam: contest.homeTeam,
+                sport: contest.sport,
+                matchTime: contest.matchTime,
+                jsonoddsId: contest.jsonoddsId ?? null,
+              },
+              odds: snapshot.odds,
             },
-            odds: snapshot.odds,
-          },
-        }),
-      );
-      return;
-    }
+          }),
+        );
+        return;
+      }
 
-    // Human output.
-    process.stdout.write(
-      `${contest.awayTeam} @ ${contest.homeTeam} — ${contest.sport.toUpperCase()}\n`,
-    );
-    process.stdout.write(`  start:    ${contest.matchTime}\n`);
-    process.stdout.write(`  contest:  ${contest.contestId}\n`);
-    if (contest.jsonoddsId) {
-      process.stdout.write(`  upstream: ${contest.jsonoddsId}\n`);
-    }
-    process.stdout.write('\n');
-
-    if (!contest.jsonoddsId) {
+      // Human output.
       process.stdout.write(
-        '  (no upstream odds linkage — reference odds unavailable for this contest)\n',
+        `${contest.awayTeam} @ ${contest.homeTeam} — ${contest.sport.toUpperCase()}\n`,
       );
-      return;
-    }
+      process.stdout.write(`  start:    ${contest.matchTime}\n`);
+      process.stdout.write(`  contest:  ${contest.contestId}\n`);
+      if (contest.jsonoddsId) {
+        process.stdout.write(`  upstream: ${contest.jsonoddsId}\n`);
+      }
+      process.stdout.write('\n');
 
-    const allEmpty =
-      snapshot.odds.moneyline === null &&
-      snapshot.odds.spread === null &&
-      snapshot.odds.total === null;
-    if (allEmpty) {
-      process.stdout.write(
-        '  (writer has not populated any markets yet — try again in ~30s)\n',
-      );
-      return;
-    }
+      if (!contest.jsonoddsId) {
+        process.stdout.write(
+          '  (no upstream odds linkage — reference odds unavailable for this contest)\n',
+        );
+        return;
+      }
 
-    // --market filters the human render to a single market. The JSON
-    // envelope shape (above) is intentionally NOT filtered so an agent
-    // sees the same `{ moneyline, spread, total }` triple regardless of
-    // whether the flag was passed — let the agent's own pipeline pick
-    // the field it cares about.
-    if (opts.market === undefined || opts.market === 'moneyline') {
-      renderMoneyline(snapshot.odds.moneyline, contest);
-    }
-    if (opts.market === undefined || opts.market === 'spread') {
-      renderSpread(snapshot.odds.spread, contest);
-    }
-    if (opts.market === undefined || opts.market === 'total') {
-      renderTotal(snapshot.odds.total);
-    }
+      const allEmpty =
+        snapshot.odds.moneyline === null &&
+        snapshot.odds.spread === null &&
+        snapshot.odds.total === null;
+      if (allEmpty) {
+        process.stdout.write(
+          '  (writer has not populated any markets yet — try again in ~30s)\n',
+        );
+        return;
+      }
+
+      // --market filters the human render to a single market. The JSON
+      // envelope shape (above) is intentionally NOT filtered so an agent
+      // sees the same `{ moneyline, spread, total }` triple regardless of
+      // whether the flag was passed — let the agent's own pipeline pick
+      // the field it cares about.
+      if (opts.market === undefined || opts.market === 'moneyline') {
+        renderMoneyline(snapshot.odds.moneyline, contest);
+      }
+      if (opts.market === undefined || opts.market === 'spread') {
+        renderSpread(snapshot.odds.spread, contest);
+      }
+      if (opts.market === undefined || opts.market === 'total') {
+        renderTotal(snapshot.odds.total);
+      }
+    });
   });
 
 function renderMoneyline(

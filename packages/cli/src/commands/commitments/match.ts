@@ -69,7 +69,8 @@ import type { MatchPreviewSpeculation } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  exitAfterStdoutFlush,
+  emitJsonFailureAndExit,
   mapPreviewApprovals,
   networkForChainId,
   writeAgentEnvelope,
@@ -301,7 +302,7 @@ export const commitmentsMatchCommand = addSignerOptions(
         } else {
           process.stderr.write(renderMatchPreflightRefusal(blocking));
         }
-        process.exit(1);
+        await exitAfterStdoutFlush(1);
       }
       if (preflightFillability.outcome === 'unknown') {
         process.stderr.write(
@@ -317,7 +318,7 @@ export const commitmentsMatchCommand = addSignerOptions(
       const ok = await promptYesNo('Match?', true);
       if (!ok) {
         process.stderr.write('Match cancelled.\n');
-        process.exit(130);
+        await exitAfterStdoutFlush(130);
       }
     }
 
@@ -358,7 +359,7 @@ export const commitmentsMatchCommand = addSignerOptions(
         );
         if (!allow) {
           process.stderr.write('Approval declined; match cancelled.\n');
-          process.exit(130);
+          await exitAfterStdoutFlush(130);
         }
         const choice = await promptValue(
           'Amount in USDC (number, or "max" for unlimited)',
@@ -512,7 +513,7 @@ export const commitmentsMatchCommand = addSignerOptions(
       // throw. NONCE_TOO_LOW (or any other matchFromPreview revert)
       // would otherwise drop those approve tx hashes to stderr.
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'commitments.match',
           stage: stageForFailure,
           chainId,
@@ -535,7 +536,6 @@ export const commitmentsMatchCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

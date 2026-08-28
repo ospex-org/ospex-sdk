@@ -1,3 +1,4 @@
+import { exitAfterStdoutFlush } from '../../lib/agentEnvelope.js';
 /**
  * `ospex odds watch <contestId>` — opens a live odds stream (core-api
  * SSE) for the contest across all three markets and prints a line per
@@ -59,7 +60,7 @@ export const oddsWatchCommand = new Command('watch')
         `Contest ${contestId} has no upstream odds linkage — odds watching is ` +
           `unavailable for this contest.`,
       );
-      process.exit(1);
+      await exitAfterStdoutFlush(1);
     }
 
     const emit = (market: MarketType, kind: EventKind, odds: AnyOdds | null): void => {
@@ -106,7 +107,7 @@ export const oddsWatchCommand = new Command('watch')
 
     const stop = async (): Promise<void> => {
       await Promise.all(subs.map((s) => s.unsubscribe().catch(() => undefined)));
-      process.exit(0);
+      await exitAfterStdoutFlush(0);
     };
     process.on('SIGINT', () => {
       void stop();

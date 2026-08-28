@@ -1,3 +1,4 @@
+import { exitAfterStdoutFlush } from '../../lib/agentEnvelope.js';
 import { promises as fs } from 'node:fs';
 import { Command } from '@commander-js/extra-typings';
 import { z } from 'zod';
@@ -25,7 +26,7 @@ export const walletImportCommand = new Command('import')
         console.error(
           `Keystore already exists at ${file}. Use --force to overwrite.`,
         );
-        process.exit(1);
+        await exitAfterStdoutFlush(1);
       } catch (err) {
         if (!isFileNotFound(err)) throw err;
       }
@@ -38,7 +39,7 @@ export const walletImportCommand = new Command('import')
     const privateKey = rawPk.trim().startsWith('0x') ? rawPk.trim() : `0x${rawPk.trim()}`;
     if (!PRIVATE_KEY_REGEX.test(privateKey)) {
       console.error('Invalid private key. Expected 0x-prefixed 64 hex characters.');
-      process.exit(1);
+      await exitAfterStdoutFlush(1);
     }
 
     const passphrase = await promptPassphraseConfirmed();

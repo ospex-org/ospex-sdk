@@ -5,12 +5,16 @@ import { formatOutput } from '../lib/format.js';
 import {
   buildAgentEnvelope,
   networkForChainId,
+  withReadFailureEnvelope,
   writeAgentEnvelope,
 } from '../lib/agentEnvelope.js';
 
 const optionsSchema = z.object({
   json: z.boolean().optional(),
 });
+
+/** Named once so the success envelope and the §6 failure envelope cannot drift. */
+const ACTION = 'health';
 
 export const healthCommand = new Command('health')
   .description('Check the API liveness probe.')
@@ -19,21 +23,27 @@ export const healthCommand = new Command('health')
     const parsed = optionsSchema.parse(opts);
     const wantJson = parsed.json === true;
     const client = await getClient({ requiresSigner: false });
-    const result = await client.health.check();
+    // Hoisted out of the `--json` branch so the catch can name the chain.
+    // Pure getter over a field the constructor always sets; cannot throw.
+    const chainId = client.chainId();
 
-    if (wantJson) {
-      const chainId = client.chainId();
-      writeAgentEnvelope(
-        buildAgentEnvelope({
-          ok: true,
-          action: 'health',
-          stage: 'read',
-          network: networkForChainId(chainId),
-          chainId,
-          payload: result,
-        }),
-      );
-      return;
-    }
-    formatOutput(result, { json: false });
+    // No `subject`: this command has no wallet context at all (§5.3 `∅/none/∅`).
+    await withReadFailureEnvelope({ action: ACTION, chainId, json: wantJson }, async () => {
+      const result = await client.health.check();
+
+      if (wantJson) {
+        writeAgentEnvelope(
+          buildAgentEnvelope({
+            ok: true,
+            action: ACTION,
+            stage: 'read',
+            network: networkForChainId(chainId),
+            chainId,
+            payload: result,
+          }),
+        );
+        return;
+      }
+      formatOutput(result, { json: false });
+    });
   });

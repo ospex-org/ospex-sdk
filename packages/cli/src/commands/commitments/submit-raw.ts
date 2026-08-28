@@ -1,3 +1,4 @@
+import { exitAfterStdoutFlush } from '../../lib/agentEnvelope.js';
 /**
  * `ospex commitments submit-raw <contestId> <scorer> <lineTicks> <position> <oddsTick> <riskAmount>`
  *

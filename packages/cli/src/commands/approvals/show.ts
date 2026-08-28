@@ -21,6 +21,7 @@ import { getClient } from '../../lib/client.js';
 import {
   buildAgentEnvelope,
   networkForChainId,
+  withReadFailureEnvelope,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 import {
@@ -33,6 +34,9 @@ const optionsSchema = z.object({
   address: z.string().optional(),
   json: z.boolean().optional(),
 });
+
+/** Named once so the success envelope and the §6 failure envelope cannot drift. */
+const ACTION = 'approvals.show';
 
 export const approvalsShowCommand = new Command('show')
   .description(
@@ -47,29 +51,44 @@ export const approvalsShowCommand = new Command('show')
     const owner = await resolveWalletAddress(opts.address);
 
     const client = await getClient({ requiresChain: true });
-    const snapshot = await client.approvals.read({ owner });
+    // Hoisted out of the `--json` branch so the catch can name the chain.
+    const chainId = client.chainId();
+    // `owner` is resolved BEFORE getClient, so the subject stays known in the
+    // catch. Lowercased once, here, so the failure and success envelopes cannot
+    // report two spellings of one wallet.
+    const wallet = owner.toLowerCase() as Hex;
 
-    if (wantJson) {
-      const chainId = client.chainId();
-      const wallet = owner.toLowerCase() as Hex;
-      // Per spec §3.1, reads always emit `approvalRequirements: []` —
-      // the live allowance snapshot lives in `payload`. The shoulder
-      // field is "what would be needed to advance to the next stage";
-      // a read has no next stage.
-      writeAgentEnvelope(
-        buildAgentEnvelope({
-          ok: true,
-          action: 'approvals.show',
-          stage: 'read',
-          network: networkForChainId(chainId),
-          chainId,
-          wallet,
-          walletRole: 'subject',
-          payload: snapshotToJson(snapshot),
-        }),
-      );
-      return;
-    }
+    await withReadFailureEnvelope(
+      {
+        action: ACTION,
+        chainId,
+        json: wantJson,
+        subject: () => ({ wallet, walletRole: 'subject' }),
+      },
+      async () => {
+        const snapshot = await client.approvals.read({ owner });
 
-    renderApprovalsSnapshot(snapshot, process.stdout);
+        if (wantJson) {
+          // Per spec §3.1, reads always emit `approvalRequirements: []` —
+          // the live allowance snapshot lives in `payload`. The shoulder
+          // field is "what would be needed to advance to the next stage";
+          // a read has no next stage.
+          writeAgentEnvelope(
+            buildAgentEnvelope({
+              ok: true,
+              action: ACTION,
+              stage: 'read',
+              network: networkForChainId(chainId),
+              chainId,
+              wallet,
+              walletRole: 'subject',
+              payload: snapshotToJson(snapshot),
+            }),
+          );
+          return;
+        }
+
+        renderApprovalsSnapshot(snapshot, process.stdout);
+      },
+    );
   });

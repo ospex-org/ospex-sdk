@@ -41,7 +41,8 @@ import {
 } from '@ospex/sdk';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  exitAfterStdoutFlush,
+  emitJsonFailureAndExit,
   formatTokenAmount,
   networkForChainId,
   writeAgentEnvelope,
@@ -207,7 +208,7 @@ export const approvalsSetupCommand = addSignerOptions(
       const ok = await promptYesNo('\nProceed?');
       if (!ok) {
         process.stderr.write('Cancelled.\n');
-        process.exit(130);
+        await exitAfterStdoutFlush(130);
       }
     }
 
@@ -252,7 +253,7 @@ export const approvalsSetupCommand = addSignerOptions(
       // exactly what was committed before the throw.
       if (wantJson) {
         const effects = plan !== null ? setupResultsToEffects(plan, results) : [];
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'approvals.setup',
           stage: 'execute',
           chainId,
@@ -265,7 +266,6 @@ export const approvalsSetupCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

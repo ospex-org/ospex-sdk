@@ -11,6 +11,7 @@ import { getClient } from '../../lib/client.js';
 import {
   buildAgentEnvelope,
   networkForChainId,
+  withReadFailureEnvelope,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
@@ -22,6 +23,9 @@ const optionsSchema = z.object({
   pollIntervalSeconds: z.coerce.number().int().positive().max(3600).optional(),
 });
 
+/** Named once so the success envelope and the §6 failure envelope cannot drift. */
+const ACTION = 'contests.wait-scored';
+
 export const contestWaitScoredCommand = new Command('wait-scored')
   .description('Poll on-chain ContestModule.getContest until the contest reaches Scored (or Voided).')
   .argument('<contestId>', 'contest id (uint256)')
@@ -31,38 +35,42 @@ export const contestWaitScoredCommand = new Command('wait-scored')
   .action(async (contestIdArg, rawOpts) => {
     const opts = optionsSchema.parse(rawOpts);
     const client = await getClient({ requiresSigner: false, requiresChain: true });
+    // Hoisted out of the `--json` branch so the catch can name the chain.
+    const chainId = client.chainId();
 
-    const waitOpts: Parameters<typeof client.contests.waitForScored>[1] = {};
-    if (opts.timeoutSeconds !== undefined) waitOpts.timeoutMs = opts.timeoutSeconds * 1000;
-    if (opts.pollIntervalSeconds !== undefined) {
-      waitOpts.pollIntervalMs = opts.pollIntervalSeconds * 1000;
-    }
+    // No `subject`: this signer-free read has no wallet context at all.
+    await withReadFailureEnvelope({ action: ACTION, chainId, json: opts.json === true }, async () => {
+      const waitOpts: Parameters<typeof client.contests.waitForScored>[1] = {};
+      if (opts.timeoutSeconds !== undefined) waitOpts.timeoutMs = opts.timeoutSeconds * 1000;
+      if (opts.pollIntervalSeconds !== undefined) {
+        waitOpts.pollIntervalMs = opts.pollIntervalSeconds * 1000;
+      }
 
-    const result = await client.contests.waitForScored(BigInt(contestIdArg), waitOpts);
-    if (opts.json === true) {
-      const chainId = client.chainId();
-      writeAgentEnvelope(
-        buildAgentEnvelope({
-          ok: true,
-          action: 'contests.wait-scored',
-          stage: 'read',
-          network: networkForChainId(chainId),
-          chainId,
-          ...(result.status === 'voided'
-            ? { warnings: [contestVoidedWarning(result.contestId)] }
-            : {}),
-          payload: {
-            contestId: result.contestId.toString(),
-            status: result.status,
-            awayScore: result.awayScore,
-            homeScore: result.homeScore,
-          },
-        }),
-      );
-    } else if (result.status === 'voided') {
-      formatOutput(`Contest ${result.contestId} voided; it will not be scored.`, { json: false });
-    } else {
-      const teams = await resolveTeamsBestEffort(client, result.contestId);
-      formatOutput(renderScoredLine(teams, result.awayScore, result.homeScore), { json: false });
-    }
+      const result = await client.contests.waitForScored(BigInt(contestIdArg), waitOpts);
+      if (opts.json === true) {
+        writeAgentEnvelope(
+          buildAgentEnvelope({
+            ok: true,
+            action: ACTION,
+            stage: 'read',
+            network: networkForChainId(chainId),
+            chainId,
+            ...(result.status === 'voided'
+              ? { warnings: [contestVoidedWarning(result.contestId)] }
+              : {}),
+            payload: {
+              contestId: result.contestId.toString(),
+              status: result.status,
+              awayScore: result.awayScore,
+              homeScore: result.homeScore,
+            },
+          }),
+        );
+      } else if (result.status === 'voided') {
+        formatOutput(`Contest ${result.contestId} voided; it will not be scored.`, { json: false });
+      } else {
+        const teams = await resolveTeamsBestEffort(client, result.contestId);
+        formatOutput(renderScoredLine(teams, result.awayScore, result.homeScore), { json: false });
+      }
+    });
   });

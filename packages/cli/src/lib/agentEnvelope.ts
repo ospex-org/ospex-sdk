@@ -331,14 +331,72 @@ export interface EmitJsonFailureArgs {
  * blocks call this when `--json` is set and a thrown error needs to
  * surface as a structured envelope instead of legacy stderr.
  *
- * The caller is responsible for `process.exit(1)` after — this helper
- * doesn't exit so call sites stay explicit about flow control (and
- * tests can assert without process termination).
+ * Prefer {@link emitJsonFailureAndExit}, which pairs this with a flush-safe
+ * exit. This helper does NOT exit, and a bare `process.exit(1)` after it
+ * truncates a large envelope on a POSIX pipe — see {@link exitAfterStdoutFlush}.
+ * It stays exported for the paths that emit without exiting, and for tests that
+ * assert the written envelope without intercepting process termination.
  *
  * Stdout-only: the envelope goes to stdout (the agent contract);
  * anything that was already on stderr (renderers, prompts, progress
  * lines) stays there.
  */
+/**
+ * Narrow an arbitrary string to the envelope's `wallet` type, or `null`.
+ *
+ * `AgentEnvelope.wallet` is typed `0x${string} | null`, and several commands
+ * take an address as a bare positional or an unvalidated option — `positions
+ * {list,status} <address>` and `commitments list --maker` have no schema for it
+ * — so a `.toLowerCase() as Hex` cast at the envelope boundary publishes
+ * whatever the user typed. Measured: `positions status not-an-address --json`
+ * emitted `wallet: "not-an-address"` with `walletRole: "subject"`.
+ *
+ * A cast is not validation. This is, and it is deliberately the ONLY way the
+ * shoulder block gets a wallet: an input that is not an address produces no
+ * wallet, and {@link withReadFailureEnvelope} then reports no role either,
+ * rather than naming a subject the envelope cannot identify.
+ */
+export function asWalletAddress(value: string | null | undefined): Hex | null {
+  if (typeof value !== 'string') return null;
+  return /^0x[0-9a-fA-F]{40}$/.test(value) ? (value.toLowerCase() as Hex) : null;
+}
+
+/**
+ * Exit with `code`, but never before stdout has actually reached the OS.
+ *
+ * `process.exit()` discards whatever is still queued on stdout. On POSIX a
+ * write to a PIPE larger than the kernel pipe buffer completes asynchronously,
+ * so `write(...)` followed by `exit()` silently truncates — measured on Linux
+ * through the packed bundle: an upstream HTTP 500 carrying a 100KB error body
+ * produced a 100,782-byte envelope, of which the consumer received 65,536 and
+ * a `JSONDecodeError: Unterminated string`. Windows stdio pipes are
+ * synchronous, so it cannot be observed there, and CI is the platform where it
+ * can — the exact shape `verification-discipline.md` §3b-platform warns about.
+ *
+ * `writableLength` is the byte count still queued inside the stream, and it
+ * discriminates the case precisely. Measured on Linux with stdout on a real
+ * pipe: 0 after a 900-byte write (it fitted the pipe buffer and went out
+ * synchronously) and 100,040 after the 100KB one. It is also 0 for a TTY, a
+ * file, `/dev/null`, all Windows stdio — and under every test double in this
+ * repo, which swaps `write` for a string accumulator and queues nothing on the
+ * real stdout. So the fast path stays exactly what it was.
+ *
+ * An empty write's callback is the barrier: stream write callbacks run in
+ * order, so it fires only after every chunk queued before it has been handed
+ * to the OS. `error` resolves it too, because a consumer that closed the pipe
+ * (`--json | head -1`) is not a reason to hang.
+ */
+export async function exitAfterStdoutFlush(code: number): Promise<never> {
+  const out = process.stdout;
+  if (out.writableLength > 0) {
+    await new Promise<void>((resolve) => {
+      out.write('', () => resolve());
+      out.once('error', () => resolve());
+    });
+  }
+  process.exit(code);
+}
+
 export function emitJsonFailure(args: EmitJsonFailureArgs): void {
   const env = buildFailureEnvelope({
     action: args.action,
@@ -360,6 +418,140 @@ export function emitJsonFailure(args: EmitJsonFailureArgs): void {
 }
 
 /**
+ * {@link emitJsonFailure} followed by a flush-safe `exit(1)` — the whole of
+ * §6's promise in one call, and the form every `--json` catch block should use.
+ *
+ * The two halves are inseparable in practice: an envelope that was written but
+ * not flushed is not an envelope an agent can parse, and every call site that
+ * paired the emit with a bare `process.exit(1)` had the truncation bug
+ * described on {@link exitAfterStdoutFlush}. Pairing them here means a new
+ * command gets both by writing one line, and cannot get one without the other.
+ */
+export async function emitJsonFailureAndExit(args: EmitJsonFailureArgs): Promise<never> {
+  emitJsonFailure(args);
+  return exitAfterStdoutFlush(1);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Class A READ commands — the §6 wrapper                                    */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The `wallet` / `walletRole` pair a read command's FAILURE envelope carries.
+ *
+ * Not a constant, because it is not uniform across the reads: §5.3 gives
+ * `positions {list,status,history}` and `approvals show` a `'subject'`, gives
+ * `commitments list --maker` a `'filter'`, and gives `contests list` a
+ * `'none'`. A failure envelope that flattened all of those to `'none'` would
+ * contradict the success envelope of the same command on the same invocation,
+ * and `walletRole` is a §5.3 field an agent reads.
+ */
+export interface ReadSubject {
+  wallet: Hex | null;
+  walletRole: WalletRole;
+}
+
+/**
+ * The subject of a read with no wallet context — `contests list`, `health`,
+ * and the case where a command's subject had not been resolved yet when the
+ * failure fired. §6: "`null` is reserved for 'signer never came into scope'
+ * failures."
+ */
+export const NO_READ_SUBJECT: ReadSubject = { wallet: null, walletRole: 'none' };
+
+/**
+ * Run a Class A READ command's body under the §6 failure-envelope contract:
+ * a post-`getClient()` failure leaves one parseable v2 envelope on stdout and
+ * exits nonzero, so `--json | jq .` works on failures as well as successes.
+ *
+ * ── Why a wrapper, and why only for reads ─────────────────────────────────
+ *
+ * The 19 reads all want the SAME catch block — the taxonomy code, `stage:
+ * 'read'`, and both intent flags false. Nineteen more hand-rolled copies of
+ * one `try/catch` is how the gap being closed here arose in the first place
+ * (`commitments filled-risk` shipped without one and a reviewer found it by
+ * hand). The WRITE commands are deliberately NOT retrofitted: their catch
+ * blocks do command-specific work — `positions claim` decodes a NotSettled
+ * revert and writes a hint to stderr, `commitments submit` branches on
+ * `NONCE_TOO_LOW`, several carry `effects[]` that landed before the failure —
+ * so a shared wrapper there would either lose that or grow options until it
+ * was the union of fifteen bespoke blocks.
+ *
+ * ── `subject` is a THUNK, deliberately ────────────────────────────────────
+ *
+ * Two commands resolve their own subject AFTER `getClient()`, inside the
+ * window this wrapper covers, and can fail before it is known:
+ *
+ *   - `commitments fillability` without `--taker` resolves the taker via
+ *     `resolvePreviewAddress`, which throws `SIGNER_RESOLUTION_ERROR` when no
+ *     signer is configured — a post-client failure with no subject.
+ *   - `positions history` without `--address` reads the address off the
+ *     resolved signer.
+ *
+ * A static object would have to be built before the body runs, which is
+ * before those values exist; evaluating it in the catch reports what was
+ * actually known at failure time. Commands whose subject comes from a parsed
+ * argument (`positions status <address>`) pass a thunk over a `const` and pay
+ * nothing for it.
+ *
+ * `requiresSignature` / `requiresTransaction` are passed explicitly rather
+ * than left to the builder's defaults. They happen to agree today, but a read
+ * advertising write intent is the specific thing §5.3 forbids, and passing
+ * them makes that a property of THIS function that a mutation can redden —
+ * not a property of a default two modules away.
+ *
+ * `getClient()` stays OUTSIDE: §6's stderr fallback is defined as the window
+ * before the client exists, so a config or keystore failure must keep
+ * escaping to the top-level handler rather than being dressed as an envelope.
+ */
+export async function withReadFailureEnvelope<T>(
+  spec: {
+    /** The §1 `action` — the field an agent switches on. */
+    action: string;
+    chainId: ChainId;
+    /** Whether `--json` was passed. When false the error is re-thrown untouched. */
+    json: boolean;
+    /** Evaluated in the catch, NOT at call time. Omit for a read with no wallet context. */
+    subject?: () => ReadSubject;
+  },
+  body: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await body();
+  } catch (err) {
+    // Not `--json`: the legacy path is an unmodified throw to the top-level
+    // handler, which prints to stderr and exits 1. Swallowing it here would
+    // turn a failed read into a silent success for every human caller.
+    if (!spec.json) throw err;
+    const claimed = spec.subject?.() ?? NO_READ_SUBJECT;
+    // Re-narrowed here rather than trusted from the caller: three of these
+    // commands take their address as a bare positional or an unschema'd
+    // option, so `subject` can hand back a string that is not an address.
+    // Doing it at the boundary makes "never a role without the address it
+    // describes" a property of THIS function — a command cannot opt out of it,
+    // and a command added later inherits it without knowing it exists.
+    const wallet = asWalletAddress(claimed.wallet);
+    const walletRole = wallet === null ? 'none' : claimed.walletRole;
+    await emitJsonFailureAndExit({
+      action: spec.action,
+      stage: 'read',
+      chainId: spec.chainId,
+      error: err,
+      wallet,
+      walletRole,
+      requiresSignature: false,
+      requiresTransaction: false,
+    });
+    // Unreachable: the call above ends in `process.exit`. TypeScript does not
+    // narrow control flow through an awaited `Promise<never>`, so the branch
+    // needs a terminator anyway — and re-throwing is the right one to pick. If
+    // the exit ever failed to exit, the error reaching the top-level handler is
+    // strictly better than this function returning `undefined` as a `T`.
+    throw err;
+  }
+}
+
+/**
  * Success-path twin of {@link emitJsonFailure}: write an already-built v2
  * envelope to stdout AND set the process exit code per AGENT_ENVELOPE_SPEC §6
  * — nonzero exactly when `envelope.ok` is false.
@@ -374,9 +566,11 @@ export function emitJsonFailure(args: EmitJsonFailureArgs): void {
  *
  * Sets `process.exitCode` (NOT `process.exit()`): the written envelope flushes
  * before the process exits, the action returns cleanly, and tests can assert
- * the emitted envelope without intercepting a process-termination signal. (The
- * failure path keeps `emitJsonFailure(...)` + an explicit `process.exit(1)` —
- * it is always `ok: false` and wants to short-circuit immediately.)
+ * the emitted envelope without intercepting a process-termination signal. That
+ * makes this the flush-safe choice by construction, and the right one wherever
+ * the command can simply return afterwards. The failure path uses
+ * {@link emitJsonFailureAndExit} instead — it wants to short-circuit, so it
+ * drains stdout explicitly and then exits.
  *
  * Commands whose success envelope is ALWAYS `ok: true` (genuine failures throw
  * → caught → `emitJsonFailure` + exit 1) may also adopt this: the exit code is

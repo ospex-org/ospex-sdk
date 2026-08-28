@@ -1,3 +1,4 @@
+import { exitAfterStdoutFlush } from '../../lib/agentEnvelope.js';
 /**
  * `ospex own-state watch [--address <wallet>]` — opens the owner-auth
  * composite own-state SSE stream (own-state SSE plan §2.4, Phase 5) and
@@ -466,7 +467,7 @@ export const ownStateWatchCommand = addSignerOptions(
       // window; being unref'd, it never delays an otherwise-clean exit.
       process.exitCode = code;
       void Promise.resolve(sub?.unsubscribe()).catch(() => undefined);
-      setTimeout(() => process.exit(code), 2000).unref?.();
+      setTimeout(() => { void exitAfterStdoutFlush(code); }, 2000).unref?.();
     };
 
     const recordCursor = (meta: OwnStateEventMeta): void => {

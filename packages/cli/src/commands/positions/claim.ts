@@ -39,7 +39,7 @@ import { isNotSettledRevert, wei6ToDecimalUSDC } from '@ospex/sdk';
 import { formatOutput } from '../../lib/format.js';
 import {
   buildAgentEnvelope,
-  emitJsonFailure,
+  emitJsonFailureAndExit,
   networkForChainId,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
@@ -157,7 +157,7 @@ export const positionsClaimCommand = addSignerOptions(
         );
       }
       if (wantJson) {
-        emitJsonFailure({
+        await emitJsonFailureAndExit({
           action: 'claim',
           stage: 'execute',
           chainId,
@@ -169,7 +169,6 @@ export const positionsClaimCommand = addSignerOptions(
           nextCommands: deriveRemediationNextCommands(err, chainId),
           error: err,
         });
-        process.exit(1);
       }
       throw err;
     }

@@ -1,3 +1,4 @@
+import { exitAfterStdoutFlush } from '../../lib/agentEnvelope.js';
 import { promises as fs } from 'node:fs';
 import { Command } from '@commander-js/extra-typings';
 import { KeystoreSigner } from '@ospex/sdk/signers/keystore';
@@ -19,7 +20,7 @@ export const walletUnlockCommand = new Command('unlock')
     } catch (err) {
       if (isFileNotFound(err)) {
         console.error(`No keystore at ${file}. Run \`ospex wallet import\` first.`);
-        process.exit(1);
+        await exitAfterStdoutFlush(1);
       }
       throw err;
     }

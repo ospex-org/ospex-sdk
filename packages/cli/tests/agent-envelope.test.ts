@@ -19,8 +19,12 @@ import {
   emitJsonSuccess,
   errorToAgentError,
   networkForChainId,
+  withReadFailureEnvelope,
   writeAgentEnvelope,
 } from '../src/lib/agentEnvelope.js';
+
+/** Stands in for process termination so a `process.exit(1)` stops the body without killing vitest. */
+class ExitCalled extends Error {}
 
 class StringSink extends Writable {
   buf = '';
@@ -830,5 +834,197 @@ describe('emitJsonSuccess — writes envelope + sets the §6 exit code', () => {
       process.stdout.write = writeOrig;
       process.exitCode = origExitCode;
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* withReadFailureEnvelope — the shared Class A read wrapper          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Unit coverage for the wrapper's own branches. The WIRING — that each of
+ * the 19 read commands actually routes through it, with the shoulder fields
+ * §5.3 gives that command — is pinned separately by
+ * `class-a-failure-envelope-sweep.test.ts`, which drives the real program
+ * tree. Both are needed: `verification-discipline.md` §3i-install, unit
+ * tests of a factory leave the install sites unexecuted.
+ */
+describe('withReadFailureEnvelope', () => {
+  /** Run the wrapper with stdout and process.exit captured, and restore both. */
+  async function run(
+    spec: Parameters<typeof withReadFailureEnvelope>[0],
+    body: () => Promise<unknown>,
+  ): Promise<{ stdout: string; exitCalls: number[]; threw: unknown }> {
+    const sink = new StringSink();
+    const writeOrig = process.stdout.write.bind(process.stdout);
+    const exitCalls: number[] = [];
+    const exitOrig = process.exit;
+    process.stdout.write = ((chunk: string | Buffer) => {
+      sink.write(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    // The wrapper calls process.exit(1) after emitting. Throw a sentinel so
+    // control stops exactly where the real process would, WITHOUT killing the
+    // test runner — and record that it was called, because "the envelope was
+    // written" and "the command stopped" are two separate promises of §6.
+    process.exit = ((code?: number) => {
+      exitCalls.push(code ?? 0);
+      throw new ExitCalled();
+    }) as never;
+    let threw: unknown = null;
+    try {
+      await withReadFailureEnvelope(spec, body);
+    } catch (err) {
+      threw = err instanceof ExitCalled ? null : err;
+    } finally {
+      process.stdout.write = writeOrig;
+      process.exit = exitOrig;
+    }
+    return { stdout: sink.buf, exitCalls, threw };
+  }
+
+  const SPEC = { action: 'positions.status', chainId: 137 as const };
+  const BOOM = new OspexAPIError('upstream is down');
+  const SUBJECT_A = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as const;
+  const SUBJECT_B = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as const;
+
+  it('returns the body value and writes nothing when the body succeeds', async () => {
+    const sink = new StringSink();
+    const writeOrig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Buffer) => {
+      sink.write(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    let value: string;
+    try {
+      value = await withReadFailureEnvelope({ ...SPEC, json: true }, async () => 'the payload');
+    } finally {
+      process.stdout.write = writeOrig;
+    }
+    expect(value).toBe('the payload');
+    // The wrapper is not an emitter — the command's own success path writes.
+    expect(sink.buf).toBe('');
+  });
+
+  // NEGATIVE CONTROL. Every case below asserts "the failure is captured";
+  // without this one they would all still pass on a wrapper that captured
+  // EVERY failure, which would silently convert a failed human-mode read
+  // into a swallowed error or an envelope nobody asked for.
+  it('re-throws the original error untouched, and emits nothing, without --json', async () => {
+    const { stdout, exitCalls, threw } = await run({ ...SPEC, json: false }, async () => {
+      throw BOOM;
+    });
+    expect(threw).toBe(BOOM);
+    expect(stdout).toBe('');
+    expect(exitCalls).toStrictEqual([]);
+  });
+
+  it('emits one read-shaped failure envelope and exits 1 with --json', async () => {
+    const { stdout, exitCalls, threw } = await run({ ...SPEC, json: true }, async () => {
+      throw BOOM;
+    });
+    expect(threw).toBeNull();
+    expect(exitCalls).toStrictEqual([1]);
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(parsed.schemaVersion).toBe(2);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.action).toBe('positions.status');
+    expect(parsed.stage).toBe('read');
+    expect(parsed.payload).toBeNull();
+    expect((parsed.errors as Array<{ code: string }>)[0]?.code).toBe('API_ERROR');
+    // §5.3: a read must never advertise write intent, whatever it was doing.
+    expect(parsed.requiresSignature).toBe(false);
+    expect(parsed.requiresTransaction).toBe(false);
+    expect(parsed.signer).toBeNull();
+  });
+
+  it('reports no subject when the command has no wallet context', async () => {
+    const { stdout } = await run({ ...SPEC, json: true }, async () => {
+      throw BOOM;
+    });
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(parsed.wallet).toBeNull();
+    expect(parsed.walletRole).toBe('none');
+  });
+
+  it('carries the subject a wallet-scoped read names', async () => {
+    const { stdout } = await run(
+      { ...SPEC, json: true, subject: () => ({ wallet: SUBJECT_A, walletRole: 'subject' }) },
+      async () => {
+        throw BOOM;
+      },
+    );
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(parsed.wallet).toBe(SUBJECT_A);
+    expect(parsed.walletRole).toBe('subject');
+  });
+
+  // THE DISCRIMINATING CASE for the thunk. `commitments fillability` and
+  // `positions history` resolve their own subject INSIDE the guarded window,
+  // so the value the envelope should name does not exist when the wrapper is
+  // called. The thunk here reads a `let` that the body reassigns before it
+  // throws: an eager implementation — one that captured the subject at call
+  // time — would report SUBJECT_A, and every other case in this describe
+  // would still pass. Both spellings are non-null on purpose, so this fails
+  // on the VALUE rather than on a null the `?? NO_READ_SUBJECT` path could
+  // also produce.
+  // The commands ALSO narrow their wallet before handing it over, so a
+  // command-level test cannot tell whether this boundary is doing anything —
+  // either layer alone produces the same envelope (`verification-discipline.md`
+  // §3b-rescue: with defence in depth, every layer is a rival explanation for
+  // the same green test). These two cases hand the wrapper a hostile subject
+  // directly, so only the boundary can produce the expected answer.
+  it('refuses a subject whose wallet is not an address, and drops the role with it', async () => {
+    const { stdout } = await run(
+      {
+        ...SPEC,
+        json: true,
+        // What a command that cast instead of narrowing would hand over.
+        subject: () => ({ wallet: 'not-an-address' as `0x${string}`, walletRole: 'subject' }),
+      },
+      async () => {
+        throw BOOM;
+      },
+    );
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(parsed.wallet).toBeNull();
+    // The role goes with it. A `'subject'` beside a null wallet claims a
+    // subject the envelope cannot name.
+    expect(parsed.walletRole).toBe('none');
+  });
+
+  it('lowercases a valid subject, and keeps the role the command chose', async () => {
+    const { stdout } = await run(
+      {
+        ...SPEC,
+        json: true,
+        // Mixed case, and a role that is NOT 'subject' — so this fails if the
+        // boundary drops the case OR hardcodes the role it re-attaches.
+        subject: () => ({ wallet: '0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', walletRole: 'filter' }),
+      },
+      async () => {
+        throw BOOM;
+      },
+    );
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(parsed.wallet).toBe(SUBJECT_A);
+    expect(parsed.walletRole).toBe('filter');
+  });
+
+  it('evaluates the subject at failure time, not at call time', async () => {
+    let subject = SUBJECT_A as string;
+    const { stdout } = await run(
+      {
+        ...SPEC,
+        json: true,
+        subject: () => ({ wallet: subject as `0x${string}`, walletRole: 'subject' }),
+      },
+      async () => {
+        subject = SUBJECT_B;
+        throw BOOM;
+      },
+    );
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(parsed.wallet).toBe(SUBJECT_B);
   });
 });

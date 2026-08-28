@@ -166,7 +166,7 @@ type ContestScorePayload = {
 
 // contests wait-scored <id> --json   →  AgentEnvelope<{ contestId, status: 'scored'|'voided', awayScore: number|null, homeScore: number|null }>
 //   stage 'read'; signer-free; resolves on Scored OR Voided (info `contest-voided`). A poll timeout throws OspexChainError → the CLI
-//   exits non-zero with a stderr `error (CHAIN_ERROR)` line (NO JSON envelope on that path — same contract as `wait-verified`).
+//   exits non-zero with an `ok:false` failure envelope carrying `errors[0].code === 'CHAIN_ERROR'` (same contract as `wait-verified`).
 // contests score-status <id> --json  →  AgentEnvelope<{ contestId, status, scored: boolean, awayScore: number|null, homeScore: number|null }>
 //   stage 'read'; signer-free; one-shot, never throws on "not scored yet"; scores gated on status === 'scored' (a real 0-0 is 0s, a pre-score contest is null).
 ```
@@ -303,7 +303,9 @@ Each unpaired field still has an exact integer available **elsewhere in the same
 
 Stdout is reserved for the JSON payload. Anything else — passphrase prompts, "Resolved 0xabc → 0xabcdef…" prefix-resolution echoes, progress logs, allowance prompts — goes to **stderr**. So whatever a Class A command writes to stdout is parseable, on the success path and on the failure path alike.
 
-What that does **not** yet mean is that a failure always writes something. Every Class A write command, plus `doctor` and `commitments filled-risk`, emits a failure envelope on stdout when a read or a broadcast fails after the client is built; the other read commands emit **nothing** on stdout and report only on stderr with exit 1, so `--json | jq .` yields an empty document there. Route on the exit status first and treat empty stdout as "the diagnosis is on stderr". The per-command state is measured, not asserted — see [`AGENT_ENVELOPE_SPEC.md` §6](./AGENT_ENVELOPE_SPEC.md) and the sweep it names.
+A failure writes something too. Once the client is built, every Class A command turns a failure into an `ok: false` envelope on stdout with `payload: null` and the reason in `errors[]` — reads included, so `contests show`, `positions status` and `odds show` are parseable on the way down as well as up. Route on the exit status first regardless: it is nonzero whenever `ok` is false, and it is also what tells you about the one window that still has no envelope. A failure BEFORE the client exists — an unreadable config, a keystore that will not unlock, a signer that cannot be resolved — reports on stderr with exit 1 and leaves stdout empty, by design. Treat empty stdout as "the diagnosis is on stderr, and it happened before the command started work". The per-command state is measured, not asserted — see [`AGENT_ENVELOPE_SPEC.md` §6](./AGENT_ENVELOPE_SPEC.md) and the sweep it names.
+
+The envelope's shoulder block says which invocation failed: a failed read carries `requiresSignature: false`, `requiresTransaction: false` and `signer: null`, with `wallet` / `walletRole` describing the wallet the read was scoped to (`'subject'`, or `'filter'` for `commitments list --maker`) — or `null` / `'none'` where it had no wallet context, or had not resolved one yet. A role is never reported without the address it describes.
 
 A non-TTY run that wants `--json` output and would otherwise prompt for a passphrase fails up-front with `OspexSignerResolutionError({ reason: 'non_interactive_password_required' })` rather than hanging on hidden-input read. The agent-friendly fixes (in order of preference): pass `--expected-address` to skip the unlock entirely; pin a Foundry account + password file via `ospex auth use-foundry`; or pass `--account` + `--password-file` per invocation. The legacy `ospex wallet unlock` cached session is kept for compatibility but is not the recommended posture — see §4 for the full surface.
 

@@ -53,8 +53,10 @@ import {
 } from '@ospex/sdk';
 import { getClient } from '../../lib/client.js';
 import {
+  asWalletAddress,
   buildAgentEnvelope,
   networkForChainId,
+  withReadFailureEnvelope,
   writeAgentEnvelope,
 } from '../../lib/agentEnvelope.js';
 import { formatOutput } from '../../lib/format.js';
@@ -78,6 +80,9 @@ const optionsSchema = z.object({
   sort: z.enum(SORT_VALUES).optional(),
   withFillability: z.boolean().optional(),
 });
+
+/** Named once so the success envelope and the §6 failure envelope cannot drift. */
+const ACTION = 'commitments.list';
 
 export const commitmentsListCommand = new Command('list')
   .description(
@@ -116,96 +121,116 @@ export const commitmentsListCommand = new Command('list')
   .action(async (opts) => {
     const parsed = optionsSchema.parse(opts);
     const client = await getClient({ requiresSigner: false });
-    const listOpts: Parameters<typeof client.commitments.list>[0] = {};
-    if (parsed.maker !== undefined) listOpts.maker = parsed.maker;
-    if (parsed.scorer !== undefined) listOpts.scorer = parsed.scorer;
-    if (parsed.contestId !== undefined) listOpts.contestId = parsed.contestId;
-    if (parsed.speculation !== undefined) listOpts.speculationId = parsed.speculation;
-    if (parsed.status !== undefined) listOpts.status = parsed.status;
-    if (parsed.includeInvalidated !== undefined) {
-      listOpts.includeInvalidated = parsed.includeInvalidated;
-    }
-    if (parsed.includeExpired !== undefined) {
-      listOpts.includeExpired = parsed.includeExpired;
-    }
-    if (parsed.withFillability !== undefined) {
-      listOpts.includeFillability = parsed.withFillability;
-    }
-    if (parsed.limit !== undefined) listOpts.limit = parsed.limit;
-    if (parsed.offset !== undefined) listOpts.offset = parsed.offset;
-    const commitments = await client.commitments.list(listOpts);
+    // Hoisted out of the `--json` branch so the catch can name the chain.
+    const chainId = client.chainId();
+    // Hoisted with it: §5.3 gives `commitments list --maker` a `'filter'`
+    // subject, and one pair of consts feeds both envelopes so the same argv
+    // cannot report two spellings of one wallet.
+    //
+    // `--maker` has no schema (see optionsSchema above), so this NARROWS rather
+    // than casts: a value that is not an address yields no wallet, and no role
+    // to go with it. The filter is still sent verbatim — the API decides what a
+    // malformed maker matches — but the envelope will not publish a `wallet`
+    // that violates its own `0x${string} | null` type.
+    const wallet: Hex | null = asWalletAddress(parsed.maker);
+    const walletRole: WalletRole = wallet !== null ? 'filter' : 'none';
 
-    // --json: keep the on-chain commitment shape stable for agents.
-    // Filters / sort are taker-view concerns and don't apply here.
-    if (parsed.json === true) {
-      const chainId = client.chainId();
-      const wallet: Hex | null =
-        parsed.maker !== undefined ? (parsed.maker.toLowerCase() as Hex) : null;
-      const walletRole: WalletRole = wallet !== null ? 'filter' : 'none';
-      writeAgentEnvelope(
-        buildAgentEnvelope({
-          ok: true,
-          action: 'commitments.list',
-          stage: 'read',
-          network: networkForChainId(chainId),
-          chainId,
-          wallet,
-          walletRole,
-          payload: commitments,
-        }),
-      );
-      return;
-    }
+    await withReadFailureEnvelope(
+      {
+        action: ACTION,
+        chainId,
+        json: parsed.json === true,
+        subject: () => ({ wallet, walletRole }),
+      },
+      async () => {
+        const listOpts: Parameters<typeof client.commitments.list>[0] = {};
+        if (parsed.maker !== undefined) listOpts.maker = parsed.maker;
+        if (parsed.scorer !== undefined) listOpts.scorer = parsed.scorer;
+        if (parsed.contestId !== undefined) listOpts.contestId = parsed.contestId;
+        if (parsed.speculation !== undefined) listOpts.speculationId = parsed.speculation;
+        if (parsed.status !== undefined) listOpts.status = parsed.status;
+        if (parsed.includeInvalidated !== undefined) {
+          listOpts.includeInvalidated = parsed.includeInvalidated;
+        }
+        if (parsed.includeExpired !== undefined) {
+          listOpts.includeExpired = parsed.includeExpired;
+        }
+        if (parsed.withFillability !== undefined) {
+          listOpts.includeFillability = parsed.withFillability;
+        }
+        if (parsed.limit !== undefined) listOpts.limit = parsed.limit;
+        if (parsed.offset !== undefined) listOpts.offset = parsed.offset;
+        const commitments = await client.commitments.list(listOpts);
 
-    // --raw: protocol view, no contest join. Same as the pre-redesign
-    // human output.
-    if (parsed.raw === true) {
-      renderRaw(commitments, parsed.fullHash === true, parsed.withFillability === true);
-      return;
-    }
+        // --json: keep the on-chain commitment shape stable for agents.
+        // Filters / sort are taker-view concerns and don't apply here.
+        if (parsed.json === true) {
+          writeAgentEnvelope(
+            buildAgentEnvelope({
+              ok: true,
+              action: ACTION,
+              stage: 'read',
+              network: networkForChainId(chainId),
+              chainId,
+              wallet,
+              walletRole,
+              payload: commitments,
+            }),
+          );
+          return;
+        }
 
-    // Default: taker-centric. Join each commitment to its contest so
-    // we have team names for the side resolver.
-    const contestsById = await fetchContestsForCommitments(client, commitments);
-    const rows = enrich(commitments, contestsById);
+        // --raw: protocol view, no contest join. Same as the pre-redesign
+        // human output.
+        if (parsed.raw === true) {
+          renderRaw(commitments, parsed.fullHash === true, parsed.withFillability === true);
+          return;
+        }
 
-    const filtered =
-      parsed.side !== undefined ? filterBySide(rows, parsed.side) : rows;
-    const sorted = sortRows(filtered, parsed.sort ?? 'size');
+        // Default: taker-centric. Join each commitment to its contest so
+        // we have team names for the side resolver.
+        const contestsById = await fetchContestsForCommitments(client, commitments);
+        const rows = enrich(commitments, contestsById);
 
-    if (sorted.length === 0) {
-      process.stdout.write('(no commitments match)\n');
-      return;
-    }
-    formatOutput(
-      sorted.map((r) => {
-        // Hidden rows redact `marketType` + `fillability` — keep the row in
-        // the table for grep-ability but flag the redaction in the market
-        // column so the operator sees there's nothing to fill from this row.
-        const market = r.commitment.redacted === true
-          ? '[hidden]'
-          : (r.commitment.marketType ?? '-');
-        const funding = r.commitment.redacted === true
-          ? '-'
-          : fundingLabel(r.commitment.fillability);
-        return {
-          hash: parsed.fullHash === true
-            ? r.commitment.commitmentHash
-            : r.commitment.commitmentHash.slice(0, 2 + MIN_PREFIX_HEX_LEN) + '…',
-          matchup: r.contest !== null
-            ? `${r.contest.awayTeam} @ ${r.contest.homeTeam}`
-            : '-',
-          market,
-          'you back': r.taker?.youBack ?? '-',
-          'your odds': r.taker !== null
-            ? `${r.taker.takerDecimal} / ${r.taker.takerAmerican}`
-            : '-',
-          'max bet': r.taker !== null ? `$${r.taker.maxBetUSDC}` : '-',
-          'to win': r.taker !== null ? `$${r.taker.toWinUSDC}` : '-',
-          ...(parsed.withFillability === true ? { funding } : {}),
-        };
-      }),
-      { json: false },
+        const filtered =
+          parsed.side !== undefined ? filterBySide(rows, parsed.side) : rows;
+        const sorted = sortRows(filtered, parsed.sort ?? 'size');
+
+        if (sorted.length === 0) {
+          process.stdout.write('(no commitments match)\n');
+          return;
+        }
+        formatOutput(
+          sorted.map((r) => {
+            // Hidden rows redact `marketType` + `fillability` — keep the row in
+            // the table for grep-ability but flag the redaction in the market
+            // column so the operator sees there's nothing to fill from this row.
+            const market = r.commitment.redacted === true
+              ? '[hidden]'
+              : (r.commitment.marketType ?? '-');
+            const funding = r.commitment.redacted === true
+              ? '-'
+              : fundingLabel(r.commitment.fillability);
+            return {
+              hash: parsed.fullHash === true
+                ? r.commitment.commitmentHash
+                : r.commitment.commitmentHash.slice(0, 2 + MIN_PREFIX_HEX_LEN) + '…',
+              matchup: r.contest !== null
+                ? `${r.contest.awayTeam} @ ${r.contest.homeTeam}`
+                : '-',
+              market,
+              'you back': r.taker?.youBack ?? '-',
+              'your odds': r.taker !== null
+                ? `${r.taker.takerDecimal} / ${r.taker.takerAmerican}`
+                : '-',
+              'max bet': r.taker !== null ? `$${r.taker.maxBetUSDC}` : '-',
+              'to win': r.taker !== null ? `$${r.taker.toWinUSDC}` : '-',
+              ...(parsed.withFillability === true ? { funding } : {}),
+            };
+          }),
+          { json: false },
+        );
+      },
     );
   });
 
