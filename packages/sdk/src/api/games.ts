@@ -18,7 +18,6 @@ import type {
   GameStatus,
   GamesListOptions,
 } from '../types/game.js';
-import type { GameBody } from './types.js';
 
 /* ── wire schema: the `/v1/games` decode boundary ─────────────────────────
  *
@@ -56,6 +55,13 @@ const GameBodySchema = z.object({
   gameId: z.string(),
   slug: z.string(),
   sport: z.string(),
+  /**
+   * The earliest start currently held for this game — on servers that carry
+   * the diagnostic fields below, the minimum of the raw feed value, the
+   * retained floor, and whichever provider snapshots the server considered
+   * fresh (a conservative safety bound); the raw feed value on older core-api
+   * builds, which omit them.
+   */
   matchTime: z.string(),
   // The four diagnostics are `.optional()` because a core-api build predating
   // them omits the keys, and the last three are additionally `.nullable()`
@@ -64,8 +70,22 @@ const GameBodySchema = z.object({
   // being absent, and the mapper's guarded copies preserve that difference.
   // Note this is the opposite of the contest surface, which coalesces the same
   // three ideas to `''`. The two conventions must not be unified.
+  /** The raw current feed value, unminimised. Diagnostic. */
   gameMatchTime: z.string().optional(),
+  /**
+   * The retained monotone floor, or `null` when the underlying column is
+   * unset. Diagnostic: when this is below `gameMatchTime`, it is what is
+   * driving `matchTime`. (Nullable here, unlike the `""` sentinel on contest
+   * surfaces — mirrors the wire.)
+   */
   earliestMatchTime: z.string().nullable().optional(),
+  /**
+   * Provider start-time snapshots (`games.rundown_match_time` /
+   * `games.sportspage_match_time`), or `null` when the underlying column is
+   * unset. Nullable for the same reason as `earliestMatchTime` above: this
+   * endpoint passes the column through, while the contest projections
+   * coalesce it to `""`.
+   */
   rundownMatchTime: z.string().nullable().optional(),
   sportspageMatchTime: z.string().nullable().optional(),
   status: z.string(),
@@ -116,13 +136,7 @@ export class GamesApi {
     if (options.offset !== undefined) query.offset = options.offset;
     const raw = await this.client.request<unknown>('/v1/games', { query });
     const body = parseWire(GamesListBodySchema, raw);
-    // Mapped from the PARSED value, so the schema is the single enumeration of
-    // what a game row can carry. The cast bridges zod's `?: T | undefined`
-    // optional inference to `GameBody`'s exact-optional keys — the same one-line
-    // exception the contests-list boundary takes, and safe for the same reason:
-    // the runtime check just ran, and JSON cannot encode `undefined`, so an
-    // optional key is either absent or holds a real value.
-    return body.games.map((row) => toGame(row as GameBody));
+    return body.games.map(toGame);
   }
 
   /**
@@ -150,7 +164,7 @@ export class GamesApi {
       if (options.availableOnly !== undefined) query.availableOnly = options.availableOnly;
       const raw = await this.client.request<unknown>('/v1/games', { query });
       const body = parseWire(GamesListBodySchema, raw);
-      all.push(...body.games.map((row) => toGame(row as GameBody)));
+      all.push(...body.games.map(toGame));
       if (!body.pagination.hasMore) return all;
       if (body.games.length === 0) {
         throw new OspexAPIError(
@@ -172,11 +186,23 @@ export class GamesApi {
     const raw = await this.client.request<unknown>(
       `/v1/games/${encodeURIComponent(gameId)}`,
     );
-    return toGame(parseWire(GameBodySchema, raw) as GameBody);
+    return toGame(parseWire(GameBodySchema, raw));
   }
 }
 
-function toGame(body: GameBody): Game {
+/**
+ * The wire row, derived from the schema rather than declared beside it.
+ *
+ * This is what makes the schema load-bearing. While a hand-written `GameBody`
+ * existed and the parsed value was cast to it, the two could disagree in
+ * silence: widening `gameId` to `z.string().nullable()` passed `tsc` and all
+ * 1,096 tests, and a `null` reached `Game.gameId`, which is declared `string`.
+ * With the input inferred, that same widening is a compile error at the
+ * assignment below — the schema cannot drift from the shape the mapper reads.
+ */
+type GameWireRow = z.infer<typeof GameBodySchema>;
+
+function toGame(body: GameWireRow): Game {
   const out: Game = {
     gameId: body.gameId,
     slug: body.slug,

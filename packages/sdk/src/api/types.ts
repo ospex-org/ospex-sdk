@@ -576,64 +576,17 @@ export interface LeaderboardBody {
   pagination: PaginationBody;
 }
 
-export interface GameTeamBody {
-  name: string;
-  abbreviation: string;
-}
-
-export interface GameExternalIdsBody {
-  jsonodds: string;
-  sportspage: string | null;
-  rundown: string | null;
-}
-
-export interface GameBody {
-  gameId: string;
-  slug: string;
-  sport: string;
-  /**
-   * The earliest start currently held for this game — on servers that carry
-   * the diagnostic fields below, the minimum of the raw feed value, the
-   * retained floor, and whichever provider snapshots the server considered
-   * fresh (a conservative safety bound); the raw feed value on older core-api
-   * builds, which omit them.
-   */
-  matchTime: string;
-  /** The raw current feed value, unminimised. Diagnostic. */
-  gameMatchTime?: string;
-  /**
-   * The retained monotone floor, or `null` when the underlying column is
-   * unset. Diagnostic: when this is below `gameMatchTime`, it is what is
-   * driving `matchTime`. (Nullable here, unlike the `""` sentinel on contest
-   * surfaces — mirrors the wire.)
-   */
-  earliestMatchTime?: string | null;
-  /**
-   * Provider start-time snapshots (`games.rundown_match_time` /
-   * `games.sportspage_match_time`), or `null` when the underlying column is
-   * unset. Nullable for the same reason as `earliestMatchTime` above: this
-   * endpoint passes the column through, while the contest projections
-   * coalesce it to `""`.
-   */
-  rundownMatchTime?: string | null;
-  sportspageMatchTime?: string | null;
-  status: string;
-  homeTeam: GameTeamBody;
-  awayTeam: GameTeamBody;
-  hasOdds: boolean;
-  contestCreated: boolean;
-  contestId: string | null;
-  canCreateContest: boolean;
-  externalIds: GameExternalIdsBody;
-}
-
-export interface GamesListBody {
-  sport: string | null;
-  windowHours: number;
-  availableOnly: boolean;
-  games: GameBody[];
-  pagination: PaginationBody;
-}
+/*
+ * The `/v1/games` wire bodies are NOT declared here.
+ *
+ * `GameBody` / `GamesListBody` / `GameTeamBody` / `GameExternalIdsBody` used
+ * to sit at this spot beside the zod schema in `api/games.ts`, and the mapper
+ * cast the parsed value to the interface. Two declarations of one shape drift
+ * in silence: widening the schema's `gameId` to `z.string().nullable()` passed
+ * `tsc` and the whole suite, and a `null` reached `Game.gameId`. The shape now
+ * has exactly one declaration — the schema — and the mapper's input is
+ * `z.infer` of it. See `api/games.ts`.
+ */
 
 /**
  * Wire bodies for `GET /v1/contests/:contestId/odds`. Per-market

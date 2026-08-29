@@ -310,6 +310,24 @@ describe('decodePositionDelta — wire boundary', () => {
     expect(() => decodePositionDelta(partial)).toThrow(OspexValidationError);
   });
 
+  // A number is refused by `z.string()` and by `z.string().nullable()` alike,
+  // so the mistyped cases above cannot tell a nullable field from a
+  // non-nullable one. These can.
+  for (const field of ['speculationId', 'userAddress', 'riskAmountUSDC', 'claimed'] as const) {
+    it(`REFUSES a null ${field}`, () => {
+      const err = ((): unknown => {
+        try {
+          decodePositionDelta({ ...wire, [field]: null });
+          return null;
+        } catch (e) {
+          return e;
+        }
+      })();
+      expect(err, `${field} accepted a null`).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe(field);
+    });
+  }
+
   it('ACCEPTS a null positionType — the serializer has a branch that emits it', () => {
     // Negative control for dropping `.nullable()`. The column is NOT NULL
     // today so this is unreachable in production, but the public `Position`
@@ -377,6 +395,32 @@ describe('decodeContestUpdate — wire boundary', () => {
       expect((err as OspexValidationError).field).toBe(field);
     });
   }
+
+  // Same reason as the position deltas: the mistyped-number cases above do not
+  // discriminate the nullability axis, and `""` does not either — a widened
+  // `.nullable()` accepts every one of them.
+  for (const field of ['contestId', 'awayTeam', 'sport', 'sportId', 'matchTime', 'status'] as const) {
+    it(`REFUSES a null ${field}`, () => {
+      const err = ((): unknown => {
+        try {
+          decodeContestUpdate({ ...wire, [field]: null });
+          return null;
+        } catch (e) {
+          return e;
+        }
+      })();
+      expect(err, `${field} accepted a null`).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe(field);
+    });
+  }
+
+  it('ACCEPTS a null on the four lifecycle timestamps and both scores', () => {
+    // The control for the loop above: a schema broken to refuse every null
+    // would pass all six of those and fail this one.
+    const out = decodeContestUpdate(wire);
+    expect(out.verifiedAt).toBeNull();
+    expect(out.awayScore).toBeNull();
+  });
 
   it('ACCEPTS "" on EVERY string, including matchTime', () => {
     // The negative control for copying `FillSchema`'s `.min(1)` habit onto
