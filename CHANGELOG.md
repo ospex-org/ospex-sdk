@@ -4,6 +4,12 @@ All notable changes to `@ospex/sdk` and `@ospex/cli` are recorded here. The form
 
 ## [Unreleased]
 
+—
+
+## [0.16.0] — 2026-08-29
+
+> **Behaviour changes, called out per [`docs/AGENT_CONTRACT.md` §13](./docs/AGENT_CONTRACT.md)** — pre-1.0 minors are not guaranteed additive, and caret-pinning locks the 0.x line, so `^0.15.0` does NOT float here. Four decode paths that previously passed a malformed value through now throw `OspexValidationError`: a mistyped field on `contests.get` / `speculations.{list,get}` or a speculations stream delta, a non-decimal commitment amount, an effective `expired` with no `storedStatus`, and a `speculations.get` body with no `orderbook` key. `contests.get` no longer surfaces `gameFinalType` (dated-list-only on the wire; `contests.list` is unchanged). On the CLI, 19 Class A read commands now write a `--json` failure envelope where they previously wrote nothing — switch on the exit status rather than on empty stdout. No public type or method was removed; the six deleted `*Body` interfaces were internal and never exported.
+
 ### Changed
 
 - **`@ospex/sdk`: the zod wire boundary now covers the contest and position stream frames and all three `games.*` reads.** `parseWire()` previously guarded the own-state bodies, own-state health, the fill frame and `contests.list`; the rest of the wire→model boundaries were a TypeScript cast plus a conditional copy, so a value of the wrong runtime type landed unexamined in a field the public type declares as `string`. `decodeContestUpdate`, `decodePositionDelta`, `games.list`, `games.listAll` and `games.get` now throw `OspexValidationError` with the failing field's dotted path (`games.0.matchTime`) instead. `contests.get` and `speculations.*` were deliberately NOT in this pass — their bodies embed per-speculation orderbooks, a much wider surface with its own hazards — and are the subject of the entry below.
@@ -563,7 +569,8 @@ Initial public release.
 - Realtime channels do not replay missed events on reconnect — re-poll snapshots if you need a known-good baseline.
 - Contest creation is mainnet-only; Polygon Amoy script approvals are not committed.
 
-[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/ospex-org/ospex-sdk/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.16.0
 [0.15.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.15.0
 [0.14.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.14.0
 [0.13.0]: https://github.com/ospex-org/ospex-sdk/releases/tag/v0.13.0
