@@ -32,6 +32,7 @@
  * `''` instead, accepted where core-api genuinely serves it.
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { OspexClient, OspexValidationError } from '../src/index.js';
 import type { Commitment } from '../src/types/commitment.js';
@@ -79,7 +80,10 @@ function expectRefusal(e: unknown, field: string, why: string): void {
  * case overrides both with values core-api cannot emit.
  */
 const visibleCommitmentWire = {
-  redacted: false,
+  // No `redacted` key: core-api's `rowToBody` does not emit one, and only the
+  // redaction projection adds it (as `true`). An absent flag is the ordinary
+  // visible shape, so the fixture carries the ordinary shape; an explicit
+  // `false` has its own case below.
   commitmentHash: '0xhash-commitmentHash',
   maker: '0xmaker-maker',
   contestId: 'cid-contestId',
@@ -641,23 +645,187 @@ describe('contests.get wire boundary — acceptances', () => {
     });
   });
 
-  it('ACCEPTS a commitment with no redacted / bookVisible / storedStatus — the pre-M2 shape', async () => {
-    // Three separate back-compat tolerances in one body. `storedStatus`
-    // falling back to `status` is the observable one.
-    const {
-      redacted: _r,
-      bookVisible: _bv,
-      storedStatus: _ss,
-      ...preM2
-    } = visibleCommitmentWire;
+  it('ACCEPTS a commitment with no bookVisible / storedStatus — the two real back-compat shapes', async () => {
+    // `bookVisible` is omitted by a build predating the M2 own-state migration
+    // and `storedStatus` by one predating effective-status. `redacted` is NOT
+    // in this list: no build sends it on a full body, so its absence is the
+    // ordinary shape rather than a tolerance — the fixture already omits it.
+    //
+    // The observable here is the `storedStatus` fallback landing on `status`,
+    // which is only sound because `status` holds a value that CAN be stored.
+    // The case where it does not is refused, below.
+    const { bookVisible: _bv, storedStatus: _ss, ...older } = visibleCommitmentWire;
     const body = {
       ...contestDetailWire,
-      speculations: [{ ...speculationRowWire, orderbook: [preM2] }],
+      speculations: [{ ...speculationRowWire, orderbook: [older] }],
     };
     const contest = await clientFor(body).contests.get('42');
     const row = contest.speculations[0]?.orderbook?.[0];
     expect(row?.redacted).toBe(false);
     expect(row?.storedStatus).toBe('partially_filled');
+  });
+
+  it('ACCEPTS an explicit redacted:false — a producer may state the discriminant', async () => {
+    // The negative control for the fixture's omission: the visible arm's
+    // discriminant is `z.literal(false).optional()`, so BOTH an absent key and
+    // an explicit `false` must select that arm. Without this, narrowing it to
+    // a required literal would pass every other case in the file.
+    const body = {
+      ...contestDetailWire,
+      speculations: [
+        { ...speculationRowWire, orderbook: [{ ...visibleCommitmentWire, redacted: false }] },
+      ],
+    };
+    const contest = await clientFor(body).contests.get('42');
+    expect(contest.speculations[0]?.orderbook?.[0]?.visibility).toBe('visible');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* storedStatus — the one combination the legacy fallback cannot express */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `storedStatus` may be omitted by a core-api predating effective-status, and
+ * the mapper then reads the raw lifecycle off `status`. That is sound only
+ * while `status` holds a value that can be STORED. `'expired'` cannot: it is
+ * derived, no writer stores it, and a build old enough to omit `storedStatus`
+ * never derived it.
+ *
+ * Until the #207 review, the pair was reconciled with
+ * `body.storedStatus ?? (body.status as StoredCommitmentStatus)` — and that
+ * cast published `storedStatus: 'expired'` into a field the public type
+ * declares as four values. Measured against the built SDK, which is where the
+ * claim lives: a consumer reads the artifact, not the source.
+ */
+describe('commitment storedStatus / status invariant', () => {
+  const withoutStored = (over: Record<string, unknown> = {}): unknown => {
+    const { storedStatus: _drop, ...rest } = visibleCommitmentWire;
+    return { ...rest, ...over };
+  };
+  const bookOf = (row: unknown): unknown => ({ ...speculationDetailWire, orderbook: [row] });
+
+  it('REFUSES an effective `expired` with no storedStatus, naming the missing field', async () => {
+    expectRefusal(
+      await err(clientFor(bookOf(withoutStored({ status: 'expired' }))).speculations.get('500')),
+      'orderbook.0.storedStatus',
+      'expired without storedStatus',
+    );
+  });
+
+  it('ACCEPTS an effective `expired` WITH a storedStatus — the shape core-api actually serves', async () => {
+    // The negative control. Without it, a schema that refused every `expired`
+    // row would pass the case above, and `expired` is an ordinary effective
+    // status for a time-expired open commitment.
+    const detail = await clientFor(
+      bookOf({ ...visibleCommitmentWire, status: 'expired', storedStatus: 'open' }),
+    ).speculations.get('500');
+    const row = detail.orderbook[0];
+    expect(row?.status).toBe('expired');
+    expect(row?.storedStatus).toBe('open');
+  });
+
+  it('ACCEPTS every OTHER status with no storedStatus — the legacy fallback still works', async () => {
+    // The second control: the refusal above must be about `expired` alone, not
+    // about an absent `storedStatus`. All four stored values fall back cleanly.
+    for (const status of ['open', 'partially_filled', 'filled', 'cancelled'] as const) {
+      const detail = await clientFor(bookOf(withoutStored({ status }))).speculations.get('500');
+      expect(detail.orderbook[0]?.storedStatus, status).toBe(status);
+    }
+  });
+
+  it('REFUSES the same shape on the UNGUARDED commitments.list path, as a typed error', async () => {
+    // `commitments.list` has no schema yet, so the boundary cannot refuse this
+    // one — the resolver does, and it must still be an `OspexValidationError`
+    // rather than a value outside the declared union. This is the case that
+    // covers `resolveStoredStatus`'s own guard, which is unreachable from the
+    // two guarded endpoints.
+    const listBody = {
+      commitments: [withoutStored({ status: 'expired' })],
+      pagination: { limit: 100, offset: 0, total: 1, hasMore: false },
+    };
+    const e = await err(clientFor(listBody).commitments.list());
+    expect(e).toBeInstanceOf(OspexValidationError);
+    expect((e as OspexValidationError).field).toBe('storedStatus');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* The uint256 amounts — the one content rule, and why it is allowed    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * These four are the repo rule's stated exception rather than a departure
+ * from it: a content rule belongs at a boundary when something downstream
+ * coerces the value. `computeIsLive` calls `BigInt(remainingRiskAmount)`, and
+ * the public type documents all four as uint256 decimal strings that a
+ * consumer may parse.
+ *
+ * Measured against the built SDK before the guard existed: a
+ * `remainingRiskAmount` of `'not-decimal'` escaped as a raw `SyntaxError`
+ * ("Cannot convert not-decimal to a BigInt"), which is not an
+ * `OspexValidationError` and so is not something a consumer's catch is
+ * documented to see; and the other three were published verbatim.
+ */
+describe('commitment uint256 amounts', () => {
+  const bookOf = (over: Record<string, unknown>): unknown => ({
+    ...speculationDetailWire,
+    orderbook: [{ ...visibleCommitmentWire, ...over }],
+  });
+
+  for (const field of [
+    'riskAmount',
+    'filledRiskAmount',
+    'remainingRiskAmount',
+    'nonce',
+  ] as const) {
+    it(`REFUSES a non-decimal ${field} as a TYPED error, naming the field`, async () => {
+      expectRefusal(
+        await err(clientFor(bookOf({ [field]: 'not-decimal' })).speculations.get('500')),
+        `orderbook.0.${field}`,
+        field,
+      );
+    });
+
+    it(`REFUSES an empty ${field} — "" is not a uint256 and BigInt("") is 0n, which is a lie`, async () => {
+      // `BigInt('')` does NOT throw; it returns `0n`. So an empty string is the
+      // input a "does BigInt survive it" rule would miss while still corrupting
+      // every amount it touches.
+      expectRefusal(
+        await err(clientFor(bookOf({ [field]: '' })).speculations.get('500')),
+        `orderbook.0.${field}`,
+        `${field} empty`,
+      );
+    });
+  }
+
+  it('ACCEPTS a full-width uint256 and a zero — the rule bounds FORM, not magnitude', async () => {
+    // The negative control. A `.max()` or a `Number`-based check would refuse
+    // the first; core-api serves `numeric(78,0)` values that exceed every
+    // float. `'0'` is the routine value for an unfilled commitment.
+    const max = '115792089237316195423570985008687907853269984665640564039457584007913129639935';
+    const detail = await clientFor(
+      bookOf({ riskAmount: max, filledRiskAmount: '0', remainingRiskAmount: max, nonce: '0' }),
+    ).speculations.get('500');
+    const row = detail.orderbook[0];
+    expect(row?.visibility === 'visible' ? row.riskAmount : null).toBe(max);
+    expect(row?.filledRiskAmount).toBe('0');
+  });
+
+  it('REFUSES a non-decimal filledRiskAmount on the REDACTED arm too', async () => {
+    // The hidden allow-list carries `filledRiskAmount`, so the guard has to be
+    // on both arms. Enumerating the arm the mapper touches less is exactly how
+    // the first pass at this missed `doctor` on the CLI side.
+    expectRefusal(
+      await err(
+        clientFor({
+          ...speculationDetailWire,
+          orderbook: [{ ...hiddenCommitmentWire, filledRiskAmount: '12.5' }],
+        }).speculations.get('500'),
+      ),
+      'orderbook.0.filledRiskAmount',
+      'hidden arm',
+    );
   });
 });
 
@@ -676,6 +844,20 @@ describe('contests.get wire boundary — the list-only gameId', () => {
     }).contests.get('42');
     expect(contest).not.toHaveProperty('gameId');
     expect(contest.jsonoddsId).toBe('v-jsonoddsId');
+  });
+
+  it('REFUSES to mint the dated-list-only gameFinalType either, by the same mechanism', async () => {
+    // `gameFinalType` reaches the wire ONLY on `GET /v1/contests?date=` rows.
+    // It was declared on the detail schema so the shared `toContest` could copy
+    // it, and the #207 review reproduced a detail body minting it — the exact
+    // asymmetry this file argues against for `gameId`. It is attached on the
+    // list path now, and `ContestWire` declares neither, so a copy added to
+    // `toContest` for either key does not compile.
+    const contest = await clientFor({
+      ...contestDetailWire,
+      gameFinalType: 'Finished',
+    }).contests.get('42');
+    expect(contest).not.toHaveProperty('gameFinalType');
   });
 
   it('does NOT apply the list schema’s identity-pair refinement', async () => {
@@ -1127,6 +1309,121 @@ describe('commitment status enums', () => {
     // The wire-only flag is stripped from the public visible type.
     expect(detail.orderbook[0]).not.toHaveProperty('bookVisible');
   });
+});
+
+/* ------------------------------------------------------------------ */
+/* The nullish-absorber class — enumerated from source, not sampled     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A blind spot the #207 review found by mutation, and this closes the CLASS
+ * rather than the instance.
+ *
+ * `x ?? y` absorbs BOTH `null` and `undefined`. So for any field a mapper
+ * reads that way, widening its schema to `.nullable()` changes NO type — the
+ * `??` swallows the null before it reaches the public field — and reddens no
+ * assertion unless some case actually sends `null`. Reproduced on this branch:
+ * widening `voided` to `.nullable().optional()` passed `tsc` and all 1,242
+ * tests. That is precisely the nullability drift #207 exists to catch.
+ *
+ * Guarded fields fail differently and safely: `if (x !== undefined) out.x = x`
+ * puts the widened type straight into the public field, so `tsc` catches it.
+ * It is only the `??` sites that need a runtime case.
+ *
+ * So: scan the mappers for those sites and require every one to be classified
+ * below, then drive each classification. A new `??` fails the scan until it is
+ * listed, which is the maintenance rule this file cannot enforce by convention.
+ */
+describe('nullish-absorbing mapper fields', () => {
+  const SRC = new URL('../src/', import.meta.url);
+  const MAPPER_FILES = ['api/contests.ts', 'api/speculations.ts', 'api/commitments.ts'];
+
+  /**
+   * Comments are stripped BEFORE the scan. This is not hygiene — it is
+   * required: documenting one of these sites naturally means quoting a
+   * `body.x ??` expression, and a scan over raw text would report the prose as
+   * a live site.
+   */
+  const stripComments = (src: string): string =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+  const executableCode = (file: string): string =>
+    stripComments(readFileSync(new URL(file, SRC), 'utf8'));
+
+  function absorbedFields(): string[] {
+    const found = new Set<string>();
+    for (const file of MAPPER_FILES) {
+      for (const m of executableCode(file).matchAll(/body\.([A-Za-z][A-Za-z0-9]*)\s*\?\?/g)) {
+        found.add(m[1]!);
+      }
+    }
+    return [...found].sort();
+  }
+
+  /**
+   * Every absorbing site, and what `null` must do there. `null-is-a-value` is
+   * the other half of the control: without it, a schema broken to refuse every
+   * null would pass the `refuses-null` half.
+   */
+  const CLASSIFIED = {
+    winSide: 'null-is-a-value',
+    settledAt: 'null-is-a-value',
+    voided: 'refuses-null',
+    awayTeamId: 'null-is-a-value',
+    homeTeamId: 'null-is-a-value',
+  } as const;
+
+  /** Where each field lives on the wire, so `null` reaches the right schema. */
+  const PROBE: Record<keyof typeof CLASSIFIED, (client: OspexClient) => Promise<unknown>> = {
+    winSide: (c) => c.speculations.list(),
+    settledAt: (c) => c.speculations.list(),
+    voided: (c) => c.speculations.list(),
+    awayTeamId: (c) => c.speculations.get('500'),
+    homeTeamId: (c) => c.speculations.get('500'),
+  };
+
+  const bodyWithNull = (field: keyof typeof CLASSIFIED): unknown =>
+    field === 'awayTeamId' || field === 'homeTeamId'
+      ? { ...speculationDetailWire, contest: { ...parentContextWire, [field]: null } }
+      : listBody([{ ...speculationRowWire, [field]: null }]);
+
+  it('every `??` site in the mappers is classified here', () => {
+    // The maintenance rule, enforced. Adding a `?? ` to a mapper without
+    // classifying its field fails HERE rather than opening the hole silently.
+    expect(absorbedFields()).toStrictEqual(Object.keys(CLASSIFIED).sort());
+  });
+
+  it('the scan reads executable code, not prose', () => {
+    // Guards the guard — on a SYNTHETIC input, deliberately, and that is the
+    // whole point. Asserting this against the current mapper files does not
+    // work: measured, no comment in the three of them contains `body.x ??`
+    // today, so a mutant deleting the comment stripping SURVIVED a battery.
+    // A guard whose own test cannot go red is decoration. This one exercises
+    // the stripper on an input that discriminates, so the day someone
+    // documents one of these sites in prose — the natural thing to do — the
+    // scan does not silently start reporting it.
+    const sample = [
+      '/* a block comment mentioning body.blockDecoy ?? null */',
+      '// a line comment mentioning body.lineDecoy ?? null',
+      'const x = body.realSite ?? null;',
+    ].join('\n');
+    const stripped = stripComments(sample);
+    expect(stripped, 'a block comment leaked into the scan').not.toContain('body.blockDecoy');
+    expect(stripped, 'a line comment leaked into the scan').not.toContain('body.lineDecoy');
+    expect(stripped, 'the stripper ate executable code').toContain('body.realSite');
+  });
+
+  for (const [field, expected] of Object.entries(CLASSIFIED)) {
+    it(`${field}: null is ${expected}`, async () => {
+      const key = field as keyof typeof CLASSIFIED;
+      const e = await err(PROBE[key](clientFor(bodyWithNull(key))));
+      if (expected === 'refuses-null') {
+        expect(e, `${field} accepted a null`).toBeInstanceOf(OspexValidationError);
+      } else {
+        expect(e, `${field} refused a null core-api serves`).toBeNull();
+      }
+    });
+  }
 });
 
 /* ------------------------------------------------------------------ */

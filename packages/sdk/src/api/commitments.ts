@@ -10,6 +10,7 @@ import type {
 import type { CommitmentsListBody, CommitmentWireBody } from './types.js';
 import type { Hex } from '../types/signer.js';
 import { OspexValidationError } from '../errors.js';
+import { UINT256_STRING, resolveStoredStatus } from '../wireSchema.js';
 
 const HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 
@@ -49,6 +50,21 @@ const HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
  * No `.min(1)` and no `.datetime()`: `expiry` / `createdAt` are passed
  * through from PostgREST verbatim, so they carry the `+00:00` microsecond
  * form that zod v3's Z-only `.datetime()` refuses.
+ *
+ * The four uint256 amounts ARE content-guarded, and that is the repo rule's
+ * own stated exception rather than a departure from it: something downstream
+ * coerces them. Measured before the guard existed, against the built SDK — a
+ * `remainingRiskAmount` of `'not-decimal'` escaped `computeIsLive`'s
+ * `BigInt(...)` as a raw `SyntaxError`, not an `OspexValidationError`, and
+ * `riskAmount` / `filledRiskAmount` / `nonce` were published verbatim into
+ * fields the public type documents as BigInt-parseable. The own-state
+ * commitment body already guards the same four for the same reason; the rule
+ * is shared from `wireSchema.ts` rather than copied.
+ *
+ * These refuse nothing core-api can serve: it builds the first three with
+ * `BigInt(...).toString()`, so a value PostgREST rendered in a form `BigInt`
+ * cannot read would have thrown server-side first — which bounds `nonce` too,
+ * since it comes from a column of the same `numeric(78,0)` type.
  */
 
 /** Advisory maker-funding block — `?includeFillability=true` only. */
@@ -73,11 +89,14 @@ const EFFECTIVE_STATUSES = ['open', 'partially_filled', 'filled', 'cancelled', '
  * A publicly visible commitment (`book_visible=true`) — the full matchable
  * payload.
  *
- * `redacted`, `storedStatus` and `bookVisible` are `.optional()` for
- * back-compat: core-api builds predating the M2 own-state migration emit no
- * `redacted` / `bookVisible` flag, and builds predating effective-status omit
- * `storedStatus` (`toVisibleCommitment` falls back to `status`). The current
- * build always sends all three.
+ * `redacted` is `.optional()` because core-api NEVER sends it on a full
+ * body: `rowToBody` emits no such key, and only the redaction projection
+ * adds it, as `true`. So an absent flag is the ordinary shape rather than a
+ * back-compat allowance, and an explicit `false` is accepted for any
+ * producer that chooses to be explicit. (`bookVisible` and `storedStatus`
+ * are the genuine back-compat pair — builds predating the M2 own-state
+ * migration omit the first, builds predating effective-status the second;
+ * the current build always sends both.)
  *
  * `bookVisible` is `z.boolean()` rather than `z.literal(true)` because
  * core-api types the field `boolean` on the full body: under the
@@ -94,10 +113,10 @@ const VisibleCommitmentSchema = z.object({
   positionType: z.union([z.literal(0), z.literal(1)]).nullable(),
   oddsTick: z.number().nullable(),
   marketType: z.enum(['moneyline', 'spread', 'total']).nullable(),
-  riskAmount: z.string(),
-  filledRiskAmount: z.string(),
-  remainingRiskAmount: z.string(),
-  nonce: z.string(),
+  riskAmount: UINT256_STRING,
+  filledRiskAmount: UINT256_STRING,
+  remainingRiskAmount: UINT256_STRING,
+  nonce: UINT256_STRING,
   expiry: z.string().nullable(),
   speculationKey: z.string().nullable(),
   signature: z.string().nullable(),
@@ -136,7 +155,7 @@ const HiddenCommitmentSchema = z.object({
   positionType: z.union([z.literal(0), z.literal(1)]).nullable(),
   status: z.enum(EFFECTIVE_STATUSES),
   storedStatus: z.enum(STORED_STATUSES),
-  filledRiskAmount: z.string(),
+  filledRiskAmount: UINT256_STRING,
   expiry: z.string().nullable(),
   bookVisible: z.literal(false),
   nonceInvalidated: z.boolean(),
@@ -153,10 +172,36 @@ const HiddenCommitmentSchema = z.object({
  * optional literal on the visible arm, which is what makes it usable here at
  * all.
  */
-export const CommitmentWireSchema = z.discriminatedUnion('redacted', [
-  HiddenCommitmentSchema,
-  VisibleCommitmentSchema,
-]);
+export const CommitmentWireSchema = z
+  .discriminatedUnion('redacted', [HiddenCommitmentSchema, VisibleCommitmentSchema])
+  /**
+   * The one cross-field invariant on this body, and it is here rather than in
+   * the mapper because the mapper is where it used to be — as a cast.
+   *
+   * `storedStatus` may be omitted (a core-api predating effective-status), and
+   * `toCommitment` then reads the raw lifecycle off `status`. That fallback is
+   * only sound while `status` holds a value that CAN be stored: `'expired'` is
+   * derived, never written by any writer, and a build old enough to omit
+   * `storedStatus` never derived it. The combination is therefore a shape no
+   * build produces — and it was silently publishing `storedStatus: 'expired'`
+   * into a field the public type declares as four values, measured against the
+   * built SDK.
+   *
+   * Refusing it at the boundary is what makes `resolveStoredStatus` total
+   * instead of asserted, and it names the field rather than the row.
+   */
+  .superRefine((body, ctx) => {
+    if (body.redacted === true) return; // the hidden arm requires `storedStatus`
+    if (body.storedStatus === undefined && body.status === 'expired') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['storedStatus'],
+        message:
+          'an effective status of `expired` requires `storedStatus`: `expired` is derived, ' +
+          'never stored, so no raw lifecycle can be recovered from it',
+      });
+    }
+  });
 
 type VisibleCommitmentWire = z.infer<typeof VisibleCommitmentSchema>;
 type HiddenCommitmentWire = z.infer<typeof HiddenCommitmentSchema>;
@@ -252,15 +297,17 @@ function toVisibleCommitment(body: VisibleCommitmentWire): PublicVisibleCommitme
   // `?: T`. Copying it conditionally is the same guarded-copy idiom the other
   // mappers use, and it keeps an absent key absent.
   const { redacted: _redacted, bookVisible: _bookVisible, fillability, ...rest } = body;
+  // Resolved ONCE and shared with the liveness predicate, which needs the same
+  // raw lifecycle: two independent `?? status` fallbacks are two chances to
+  // disagree. `resolveStoredStatus` refuses the combination the fallback cannot
+  // express rather than casting through it — see its docblock.
+  const storedStatus = resolveStoredStatus(body);
   const out: PublicVisibleCommitment = {
     ...rest,
     visibility: 'visible',
     redacted: false,
-    // Old core-api builds omit storedStatus; their `status` is the raw stored
-    // value (those builds never derived an effective `expired`), so the cast is
-    // sound on that path and short-circuited when storedStatus is present.
-    storedStatus: body.storedStatus ?? (body.status as StoredCommitmentStatus),
-    isLive: computeIsLive(body),
+    storedStatus,
+    isLive: computeIsLive(body, storedStatus),
   };
   if (fillability !== undefined) out.fillability = fillability;
   return out;
@@ -304,10 +351,11 @@ function toHiddenCommitment(body: HiddenCommitmentWire): PublicHiddenCommitment 
  *      MatchingModule__CommitmentExpired otherwise. Null expiry only
  *      appears on legacy / indexer-only rows that aren't matchable.
  */
-function computeIsLive(body: VisibleCommitmentWire): boolean {
+function computeIsLive(body: VisibleCommitmentWire, lifecycle: StoredCommitmentStatus): boolean {
   // Raw on-chain lifecycle, NOT the effective `status` (which folds in book-visibility —
   // a book-hidden but on-chain-matchable row reads effective 'cancelled'). See precondition 1.
-  const lifecycle = body.storedStatus ?? body.status;
+  // Passed in rather than re-derived: the caller already resolved it, and a
+  // second `?? status` fallback here could disagree with the one published.
   if (lifecycle !== 'open' && lifecycle !== 'partially_filled') return false;
   if (body.nonceInvalidated) return false;
   if (BigInt(body.remainingRiskAmount) <= 0n) return false;

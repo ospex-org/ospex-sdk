@@ -227,15 +227,17 @@ const ContestsListBodySchema = z.object({
  * `null` there. A non-empty rule borrowed from the list path would refuse a
  * body this endpoint actually serves.
  *
- * `gameFinalType` is declared because the shared `toContest` copies it; on
- * the wire it is dated-list-only. An optional key the endpoint does not
- * serve refuses nothing.
+ * `gameFinalType` is NOT declared either, for the same reason and by the
+ * same mechanism. It reaches the wire only on `GET /v1/contests?date=`
+ * rows; declaring it here so the SHARED mapper could copy it let a detail
+ * body mint a dated-list-only field, which the #207 review reproduced. It
+ * is attached on the list path beside `gameId` now, so both list-only keys
+ * are handled the same way and neither is reachable from `toContest`.
  */
 const ContestDetailBodySchema = z.object({
   ...contestCoreShape,
   ...contestStartTimeShape,
   ...contestDetailOnlyShape,
-  gameFinalType: z.string().optional(),
   jsonoddsId: z.string().nullable().optional(),
   speculations: z.array(SpeculationWireSchema),
 });
@@ -268,12 +270,14 @@ export class ContestsApi {
     // mapper's assignment into the public `Contest` stops compiling.
     return body.contests.map((row) => {
       const contest = toContest(row);
-      // `gameId` is a LIST-row key and is attached HERE, on the list path
-      // only — never in the shared `toContest`, whose input type does not
-      // declare it, so the detail path cannot mint the key even from a body
-      // that carries one. Pinned in both directions (list surfaces it
-      // verbatim; detail refuses to mint it).
+      // The two LIST-ROW-ONLY keys are attached HERE, never in the shared
+      // `toContest` — whose input type declares neither, so the detail path
+      // cannot mint one even from a body that carries it. `gameFinalType`
+      // joined `gameId` here after the #207 review reproduced a detail body
+      // minting it. Pinned in both directions (list surfaces them verbatim;
+      // detail refuses to mint either).
       if (row.gameId !== undefined) contest.gameId = row.gameId;
+      if (row.gameFinalType !== undefined) contest.gameFinalType = row.gameFinalType;
       return contest;
     });
   }
@@ -311,16 +315,13 @@ function toContest(body: ContestWire): Contest {
   if (body.gameSportspageMatchTime !== undefined) {
     out.gameSportspageMatchTime = body.gameSportspageMatchTime;
   }
-  // Dated-list-only: `GET /v1/contests?date=` rows carry the linked game's
-  // finality; every other contest surface omits the key.
-  if (body.gameFinalType !== undefined) out.gameFinalType = body.gameFinalType;
   // Game identity. `jsonoddsId` arrives on detail reads and (since the
   // game-identity change) list rows; `null` is a VALUE here (no linkage)
   // and is copied — only an absent key stays absent, per
-  // `exactOptionalPropertyTypes`. `gameId` is deliberately NOT copied by
-  // this shared mapper: it is a list-only key, attached by `list()` after
-  // this mapper runs. `ContestWire` does not declare it, so adding a copy
-  // here does not compile.
+  // `exactOptionalPropertyTypes`. `gameId` and `gameFinalType` are
+  // deliberately NOT copied by this shared mapper: both are list-row-only
+  // keys, attached by `list()` after this mapper runs. `ContestWire`
+  // declares neither, so adding a copy here does not compile.
   if (body.jsonoddsId !== undefined) out.jsonoddsId = body.jsonoddsId;
   // Detail-endpoint-only fields — the list endpoint omits them entirely.
   if (body.rundownId !== undefined) out.rundownId = body.rundownId;
