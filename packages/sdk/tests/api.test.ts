@@ -1345,14 +1345,14 @@ describe('games wire boundary — nullability', () => {
    * the fields where `null` is a VALUE core-api serves, and refusing one is an
    * outage rather than a caught bug.
    */
-  const NULLABLE_WITH_VALUE: Array<[string, (g: Record<string, unknown>) => unknown]> = [
-    ['contestId', (g) => g.contestId],
-    ['earliestMatchTime', (g) => g.earliestMatchTime],
-    ['rundownMatchTime', (g) => g.rundownMatchTime],
-    ['sportspageMatchTime', (g) => g.sportspageMatchTime],
-  ];
+  const NULLABLE_WITH_VALUE = [
+    'contestId',
+    'earliestMatchTime',
+    'rundownMatchTime',
+    'sportspageMatchTime',
+  ] as const;
 
-  for (const [field, read] of NULLABLE_WITH_VALUE) {
+  for (const field of NULLABLE_WITH_VALUE) {
     it(`ACCEPTS a null ${field}, and keeps it distinct from the key being absent`, async () => {
       // Present-and-null: the key EXISTS and holds null. `toBe(null)` alone
       // would also pass on an absent key reading back as undefined, so the
@@ -1364,7 +1364,11 @@ describe('games wire boundary — nullability', () => {
       // `.nullable()`, and an older core-api omits them entirely. `contestId`
       // is nullable but REQUIRED, so it is not part of this half.
       if (field === 'contestId') return;
-      const { [field]: _omitted, ...withoutKey } = { ...gameWire, [field]: null };
+      // Typed as a Record before the computed-key destructure: an object
+      // literal has no string index signature, so destructuring it by a
+      // computed key is TS2537 under `yarn typecheck:tests`.
+      const served: Record<string, unknown> = { ...gameWire, [field]: null };
+      const { [field]: _omitted, ...withoutKey } = served;
       const absent = await clientFor(withoutKey).games.get('g1');
       expect(absent, `${field} absent`).not.toHaveProperty(field);
     });
