@@ -5,6 +5,7 @@ import {
   decodeFill,
   decodePositionDelta,
 } from '../src/realtime/decoders.js';
+import { OspexValidationError } from '../src/index.js';
 import type { Contest } from '../src/types/contest.js';
 import {
   CONTEST_INPUT_FIELDS,
@@ -254,5 +255,221 @@ describe('contestToUpdate', () => {
       CONTEST_START_TIME_FIELDS,
       'contestToUpdate matrix',
     );
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* The stream decode boundary (sdk#207)                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `decodePositionDelta` and `decodeContestUpdate` validate through
+ * `parseWire` now. A refusal here is NOT loud: the stream runner catches it,
+ * emits `connection_failed`, and skips the frame — so a schema tightened past
+ * what core-api serves loses real deltas silently for any consumer not
+ * listening on `onError`. That is why the acceptance cases below outnumber
+ * the refusals, and why each names the specific wrong schema it rules out.
+ */
+describe('decodePositionDelta — wire boundary', () => {
+  const wire = {
+    speculationId: '7',
+    userAddress: '0xabc',
+    positionType: 1 as const,
+    riskAmountUSDC: 10,
+    profitAmountUSDC: 5,
+    claimed: true,
+    positionCreatedAt: 't0',
+    claimedAt: 't1',
+  };
+
+  for (const [field, bad] of [
+    ['speculationId', 7],
+    ['userAddress', 7],
+    ['riskAmountUSDC', '10'],
+    ['claimed', 'yes'],
+    ['positionCreatedAt', 7],
+  ] as const) {
+    it(`REFUSES a mistyped ${field}, naming it`, () => {
+      const err = ((): unknown => {
+        try {
+          decodePositionDelta({ ...wire, [field]: bad });
+          return null;
+        } catch (e) {
+          return e;
+        }
+      })();
+      expect(err).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe(field);
+    });
+  }
+
+  it('REFUSES a body missing a required key — the one behavioural tightening', () => {
+    // Previously an absent key became an own property holding `undefined` and
+    // flowed into the public `Position`. This is the change consumers see.
+    const { claimed: _dropped, ...partial } = wire;
+    expect(() => decodePositionDelta(partial)).toThrow(OspexValidationError);
+  });
+
+  // A number is refused by `z.string()` and by `z.string().nullable()` alike,
+  // so the mistyped cases above cannot tell a nullable field from a
+  // non-nullable one. These can.
+  for (const field of ['speculationId', 'userAddress', 'riskAmountUSDC', 'claimed'] as const) {
+    it(`REFUSES a null ${field}`, () => {
+      const err = ((): unknown => {
+        try {
+          decodePositionDelta({ ...wire, [field]: null });
+          return null;
+        } catch (e) {
+          return e;
+        }
+      })();
+      expect(err, `${field} accepted a null`).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe(field);
+    });
+  }
+
+  it('ACCEPTS a null positionType — the serializer has a branch that emits it', () => {
+    // Negative control for dropping `.nullable()`. The column is NOT NULL
+    // today so this is unreachable in production, but the public `Position`
+    // declares `0 | 1 | null` and the cost of guessing wrong is a dropped
+    // delta rather than an error anyone sees.
+    expect(decodePositionDelta({ ...wire, positionType: null }).positionType).toBeNull();
+  });
+
+  it('ACCEPTS null timestamps and an empty userAddress', () => {
+    // No `.min(1)` and no `.nonnegative()`: both would hold against today's
+    // rows and both would only add a way to drop a frame.
+    const out = decodePositionDelta({
+      ...wire,
+      userAddress: '',
+      positionCreatedAt: null,
+      claimedAt: null,
+      profitAmountUSDC: -3,
+    });
+    expect(out.claimedAt).toBeNull();
+    expect(out.userAddress).toBe('');
+  });
+
+  it('STRIPS an unknown server field rather than refusing it', () => {
+    const out = decodePositionDelta({ ...wire, somethingNew: 1 });
+    expect(out).not.toHaveProperty('somethingNew');
+    expect(out.speculationId).toBe('7');
+  });
+});
+
+describe('decodeContestUpdate — wire boundary', () => {
+  const wire = {
+    contestId: '1',
+    awayTeam: 'STL',
+    homeTeam: 'SD',
+    sport: 'mlb',
+    sportId: 3,
+    matchTime: '2026-05-08T23:40:00+00:00',
+    status: 'verified',
+    awayScore: null,
+    homeScore: null,
+    verifiedAt: null,
+    scoredAt: null,
+    voidedAt: null,
+    contestCreatedAt: null,
+  };
+
+  for (const [field, bad] of [
+    ['contestId', 1],
+    ['awayTeam', 1],
+    ['sportId', '3'],
+    ['status', 1],
+    ['awayScore', '0'],
+    ['verifiedAt', 1],
+  ] as const) {
+    it(`REFUSES a mistyped ${field}, naming it`, () => {
+      const err = ((): unknown => {
+        try {
+          decodeContestUpdate({ ...wire, [field]: bad });
+          return null;
+        } catch (e) {
+          return e;
+        }
+      })();
+      expect(err).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe(field);
+    });
+  }
+
+  // Same reason as the position deltas: the mistyped-number cases above do not
+  // discriminate the nullability axis, and `""` does not either — a widened
+  // `.nullable()` accepts every one of them.
+  for (const field of ['contestId', 'awayTeam', 'sport', 'sportId', 'matchTime', 'status'] as const) {
+    it(`REFUSES a null ${field}`, () => {
+      const err = ((): unknown => {
+        try {
+          decodeContestUpdate({ ...wire, [field]: null });
+          return null;
+        } catch (e) {
+          return e;
+        }
+      })();
+      expect(err, `${field} accepted a null`).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe(field);
+    });
+  }
+
+  it('ACCEPTS a null on the four lifecycle timestamps and both scores', () => {
+    // The control for the loop above: a schema broken to refuse every null
+    // would pass all six of those and fail this one.
+    const out = decodeContestUpdate(wire);
+    expect(out.verifiedAt).toBeNull();
+    expect(out.awayScore).toBeNull();
+  });
+
+  it('ACCEPTS "" on EVERY string, including matchTime', () => {
+    // The negative control for copying `FillSchema`'s `.min(1)` habit onto
+    // this surface. `""` is core-api's own encoding of "not verified yet" /
+    // "no games row linked", minted by its `?? ''` coalescing.
+    //
+    // `matchTime: ""` specifically is NOT in `CONTEST_START_TIME_MATRIX`,
+    // which every other case here reuses: the matrix rows all carry a
+    // non-empty matchTime. It is reachable on the STREAM because the list
+    // endpoint filters those contests out and the stream does not — so
+    // without this line, a `.min(1)` on matchTime would ship green.
+    const out = decodeContestUpdate({
+      ...wire,
+      contestId: '1',
+      awayTeam: '',
+      homeTeam: '',
+      sport: '',
+      matchTime: '',
+      status: '',
+      chainStartTime: '',
+      gameMatchTime: '',
+      gameEarliestMatchTime: '',
+      gameRundownMatchTime: '',
+      gameSportspageMatchTime: '',
+    });
+    expect(out.matchTime).toBe('');
+    expect(out.chainStartTime).toBe('');
+    expect(out.sport).toBe('');
+  });
+
+  it('ACCEPTS the PostgREST +00:00 microsecond timestamp', () => {
+    // `.datetime()` on this field would refuse every row core-api serves.
+    const out = decodeContestUpdate({ ...wire, matchTime: '2026-05-08T23:40:00.123456+00:00' });
+    expect(out.matchTime).toBe('2026-05-08T23:40:00.123456+00:00');
+  });
+
+  it('leaves the five companions ABSENT when the server omits them', () => {
+    // Not merely "undefined": an older core-api omits the keys, and a
+    // present-but-undefined key would stop a delta row and a projected
+    // snapshot row from the same build comparing equal.
+    const out = decodeContestUpdate(wire);
+    for (const field of [
+      'chainStartTime',
+      'gameMatchTime',
+      'gameEarliestMatchTime',
+      'gameRundownMatchTime',
+      'gameSportspageMatchTime',
+    ]) {
+      expect(out, `omitted companion ${field}`).not.toHaveProperty(field);
+    }
   });
 });

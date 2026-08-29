@@ -1109,3 +1109,303 @@ describe('OspexClient API surface', () => {
   });
 
 });
+
+/* ------------------------------------------------------------------ */
+/* The `/v1/games` wire boundary (sdk#207)                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `games.{list,listAll,get}` decode through `parseWire` now, so a mistyped
+ * field fails as a typed `OspexValidationError` instead of landing in a
+ * `Game` whose public type declares it a string.
+ *
+ * The refusals are the easy half. The cases that matter here are the
+ * ACCEPTANCES: every one of them is a shape core-api actually serves, and a
+ * schema tightened past it takes the whole endpoint down rather than one
+ * field. They are written as the negative controls for a specific wrong
+ * schema, named in each case, because "it still passes" means nothing unless
+ * something plausible would have failed it.
+ */
+describe('games wire boundary', () => {
+  const gameWire = {
+    gameId: 'g1',
+    slug: 'stl-sd-2026-05-08',
+    sport: 'mlb',
+    matchTime: '2026-05-08T23:40:00+00:00',
+    status: 'upcoming',
+    homeTeam: { name: 'San Diego Padres', abbreviation: 'SD' },
+    awayTeam: { name: 'St. Louis Cardinals', abbreviation: 'STL' },
+    hasOdds: true,
+    contestCreated: false,
+    contestId: null,
+    canCreateContest: true,
+    externalIds: { jsonodds: 'g1', sportspage: '336545', rundown: 'rd1' },
+  };
+  const listWire = (games: unknown[], hasMore = false, offset = 0) => ({
+    sport: null,
+    windowHours: 72,
+    availableOnly: true,
+    games,
+    pagination: { limit: 200, offset, total: games.length + (hasMore ? 1 : 0), hasMore },
+  });
+
+  const clientFor = (body: unknown) =>
+    new OspexClient({ apiUrl, fetch: makeFetch(() => ({ status: 200, body })).fetch });
+
+  /* ── refusals, with the dotted path ── */
+
+  const MISTYPED: Array<[string, unknown]> = [
+    ['gameId', 123],
+    ['slug', 123],
+    ['sport', 123],
+    ['matchTime', 123],
+    ['status', 123],
+    ['hasOdds', 'yes'],
+    ['contestCreated', 'no'],
+    ['canCreateContest', 1],
+    ['contestId', 7],
+  ];
+
+  for (const [field, bad] of MISTYPED) {
+    it(`games.get REFUSES a mistyped ${field}, naming it`, async () => {
+      const err = await clientFor({ ...gameWire, [field]: bad })
+        .games.get('g1')
+        .then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe(field);
+    });
+
+    it(`games.list REFUSES a mistyped ${field}, naming the row and the field`, async () => {
+      const err = await clientFor(listWire([{ ...gameWire, [field]: bad }]))
+        .games.list()
+        .then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(OspexValidationError);
+      // The row index is what makes this actionable on a 200-row page.
+      expect((err as OspexValidationError).field).toBe(`games.0.${field}`);
+    });
+  }
+
+  it('games.get REFUSES a mistyped NESTED field, naming the path through it', async () => {
+    const err = await clientFor({ ...gameWire, homeTeam: { name: 1, abbreviation: 'SD' } })
+      .games.get('g1')
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(OspexValidationError);
+    expect((err as OspexValidationError).field).toBe('homeTeam.name');
+  });
+
+  /* ── acceptances: each is the negative control for one wrong schema ── */
+
+  it('ACCEPTS the PostgREST +00:00 microsecond timestamp — `.datetime()` would refuse every row', async () => {
+    // zod v3's `.datetime()` defaults to Z-only. Measured against it: this
+    // exact string is refused, and so is its fractionless form. PostgREST
+    // renders every timestamptz this way, so that one modifier is a total
+    // outage on both endpoints.
+    const game = await clientFor({
+      ...gameWire,
+      matchTime: '2026-05-08T23:40:00.123456+00:00',
+    }).games.get('g1');
+    expect(game.matchTime).toBe('2026-05-08T23:40:00.123456+00:00');
+  });
+
+  it('ACCEPTS an unknown sport and status — an enum would fail a whole page on one row', async () => {
+    const game = await clientFor({ ...gameWire, sport: 'cricket', status: 'rain-delay' })
+      .games.get('g1');
+    expect(game.sport).toBe('cricket');
+    expect(game.status).toBe('rain-delay');
+  });
+
+  it('ACCEPTS "" ids — core-api guards them as values, it does not normalise them away', async () => {
+    const game = await clientFor({
+      ...gameWire,
+      gameId: '',
+      slug: '',
+      externalIds: { jsonodds: '', sportspage: '', rundown: '' },
+    }).games.get('g1');
+    expect(game.gameId).toBe('');
+    expect(game.externalIds.sportspage).toBe('');
+  });
+
+  it('ACCEPTS an extra server block — `.strict()` would refuse it, and core-api sends one', async () => {
+    // `probablePitchers` is emitted by core-api and is not declared on
+    // `GameBody`; zod's default strip drops it, which is the property that
+    // lets a new server field ship without breaking a deployed SDK.
+    const game = await clientFor({
+      ...gameWire,
+      probablePitchers: { home: 'Cease', away: 'Mikolas' },
+    }).games.get('g1');
+    expect(game.gameId).toBe('g1');
+    expect(game).not.toHaveProperty('probablePitchers');
+  });
+
+  it('ACCEPTS a non-integer windowHours — the handler validates only finiteness', async () => {
+    const games = await clientFor({ ...listWire([gameWire]), windowHours: 1.5 }).games.list();
+    expect(games).toHaveLength(1);
+  });
+
+  it('ACCEPTS an empty page — `.nonempty()` would refuse an ordinary 200', async () => {
+    expect(await clientFor(listWire([])).games.list()).toStrictEqual([]);
+  });
+
+  /* ── the strip trap ── */
+
+  it('listAll walks BOTH pages — dropping `hasMore` from the schema loses page 2 silently', async () => {
+    // The regression this exists for is not a throw. Omit `hasMore` from the
+    // pagination schema and zod STRIPS it: `body.pagination.hasMore` becomes
+    // undefined, `!undefined` is true, and listAll returns page one as the
+    // whole slate. No error, no type error, a wrong answer — and downstream
+    // it turns a real slug into "did not match any upcoming game".
+    let call = 0;
+    const { fetch } = makeFetch(() => {
+      call += 1;
+      return call === 1
+        ? { status: 200, body: listWire([{ ...gameWire, gameId: 'p1', slug: 'page-one-2026-05-08' }], true, 0) }
+        : { status: 200, body: listWire([{ ...gameWire, gameId: 'p2', slug: 'page-two-only-2026-05-08' }], false, 1) };
+    });
+    // Driven through `resolveGameId`, the public caller of `listAll` and the
+    // one that carries the consequence: it matches a slug against the
+    // candidate list, so a lost page 2 becomes "no such game".
+    const resolved = await new OspexClient({ apiUrl, fetch }).games.resolveGameId(
+      'page-two-only-2026-05-08',
+    );
+    expect(resolved.gameId).toBe('p2');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Nullability — the axis a mistyped-number case cannot reach          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A number is refused by `z.string()`, by `z.string().nullable()`, and by
+ * `z.string().min(1)` alike, so a mistyped-number case says nothing about
+ * whether a field is nullable. `null` is the input that separates them, and
+ * it is the one that matters here: a schema widened to `.nullable()` lets a
+ * `null` through into a `Game` field the public type declares `string`.
+ *
+ * Measured before these existed: widening `gameId` to `z.string().nullable()`
+ * passed `tsc` AND all 1,096 tests, because the mapper's input was a
+ * hand-written interface and the parsed value was cast to it. The input is
+ * inferred from the schema now, so that widening is a compile error — and
+ * these cases pin the runtime half, per field, in both directions.
+ */
+describe('games wire boundary — nullability', () => {
+  const gameWire = {
+    gameId: 'g1',
+    slug: 'stl-sd-2026-05-08',
+    sport: 'mlb',
+    matchTime: '2026-05-08T23:40:00+00:00',
+    status: 'upcoming',
+    homeTeam: { name: 'San Diego Padres', abbreviation: 'SD' },
+    awayTeam: { name: 'St. Louis Cardinals', abbreviation: 'STL' },
+    hasOdds: true,
+    contestCreated: false,
+    contestId: null,
+    canCreateContest: true,
+    externalIds: { jsonodds: 'g1', sportspage: '336545', rundown: 'rd1' },
+  };
+  const clientFor = (body: unknown) =>
+    new OspexClient({ apiUrl, fetch: makeFetch(() => ({ status: 200, body })).fetch });
+
+  /** Every field the wire declares NON-nullable. `null` on any of them is a bug. */
+  const NON_NULLABLE = [
+    'gameId',
+    'slug',
+    'sport',
+    'matchTime',
+    'status',
+    'homeTeam',
+    'awayTeam',
+    'hasOdds',
+    'contestCreated',
+    'canCreateContest',
+    'externalIds',
+  ] as const;
+
+  for (const field of NON_NULLABLE) {
+    it(`REFUSES a null ${field}`, async () => {
+      const err = await clientFor({ ...gameWire, [field]: null })
+        .games.get('g1')
+        .then(() => null, (e: unknown) => e);
+      expect(err, `${field} accepted a null`).toBeInstanceOf(OspexValidationError);
+      expect((err as OspexValidationError).field).toBe(field);
+    });
+  }
+
+  it('REFUSES a null inside a nested object', async () => {
+    const err = await clientFor({ ...gameWire, externalIds: { ...gameWire.externalIds, jsonodds: null } })
+      .games.get('g1')
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(OspexValidationError);
+    expect((err as OspexValidationError).field).toBe('externalIds.jsonodds');
+  });
+
+  /**
+   * The other direction, and it is not symmetry for its own sake: a schema
+   * broken to refuse every null would pass all eleven cases above. These are
+   * the fields where `null` is a VALUE core-api serves, and refusing one is an
+   * outage rather than a caught bug.
+   */
+  const NULLABLE_WITH_VALUE = [
+    'contestId',
+    'earliestMatchTime',
+    'rundownMatchTime',
+    'sportspageMatchTime',
+  ] as const;
+
+  for (const field of NULLABLE_WITH_VALUE) {
+    it(`ACCEPTS a null ${field}, and keeps it distinct from the key being absent`, async () => {
+      // Present-and-null: the key EXISTS and holds null. `toBe(null)` alone
+      // would also pass on an absent key reading back as undefined, so the
+      // property check is what discriminates.
+      const withNull = await clientFor({ ...gameWire, [field]: null }).games.get('g1');
+      expect(withNull, `${field} present-and-null`).toHaveProperty(field, null);
+
+      // Absent: `earliestMatchTime` and friends are `.optional()` as well as
+      // `.nullable()`, and an older core-api omits them entirely. `contestId`
+      // is nullable but REQUIRED, so it is not part of this half.
+      if (field === 'contestId') return;
+      // Typed as a Record before the computed-key destructure: an object
+      // literal has no string index signature, so destructuring it by a
+      // computed key is TS2537 under `yarn typecheck:tests`.
+      const served: Record<string, unknown> = { ...gameWire, [field]: null };
+      const { [field]: _omitted, ...withoutKey } = served;
+      const absent = await clientFor(withoutKey).games.get('g1');
+      expect(absent, `${field} absent`).not.toHaveProperty(field);
+    });
+  }
+
+  it('ACCEPTS a null externalIds.{sportspage,rundown} — the columns are nullable', async () => {
+    const game = await clientFor({
+      ...gameWire,
+      externalIds: { jsonodds: 'g1', sportspage: null, rundown: null },
+    }).games.get('g1');
+    expect(game.externalIds.sportspage).toBeNull();
+    expect(game.externalIds.rundown).toBeNull();
+  });
+
+  it('REFUSES a null on the list wrapper fields, naming the path', async () => {
+    const listWire = {
+      sport: null,
+      windowHours: 72,
+      availableOnly: true,
+      games: [gameWire],
+      pagination: { limit: 200, offset: 0, total: 1, hasMore: false },
+    };
+    for (const field of ['windowHours', 'availableOnly', 'games'] as const) {
+      const err = await clientFor({ ...listWire, [field]: null })
+        .games.list()
+        .then(() => null, (e: unknown) => e);
+      expect(err, `list.${field} accepted a null`).toBeInstanceOf(OspexValidationError);
+    }
+    // `sport` is the echo of an optional query param and IS nullable — the
+    // control that stops the loop above from passing on a refuse-everything
+    // schema.
+    expect(await clientFor({ ...listWire, sport: null }).games.list()).toHaveLength(1);
+
+    const err = await clientFor({ ...listWire, pagination: { ...listWire.pagination, hasMore: null } })
+      .games.list()
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(OspexValidationError);
+    expect((err as OspexValidationError).field).toBe('pagination.hasMore');
+  });
+});
