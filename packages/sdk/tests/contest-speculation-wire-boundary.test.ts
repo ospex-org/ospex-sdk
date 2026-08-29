@@ -32,7 +32,7 @@
  * `''` instead, accepted where core-api genuinely serves it.
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { OspexClient, OspexValidationError } from '../src/index.js';
 import type { Commitment } from '../src/types/commitment.js';
@@ -1336,7 +1336,23 @@ describe('commitment status enums', () => {
  */
 describe('nullish-absorbing mapper fields', () => {
   const SRC = new URL('../src/', import.meta.url);
-  const MAPPER_FILES = ['api/contests.ts', 'api/speculations.ts', 'api/commitments.ts'];
+
+  /**
+   * Every directory a wire mapper lives in, not just the three files this
+   * boundary touches. Measured while writing this: those three hold every
+   * `body.x ??` site in `src/` today — but the guard is worth nothing if a
+   * fourth can appear beside them unnoticed, and a decode path in `ownState/`
+   * or `realtime/` has exactly the same hazard. Scoped to the decode
+   * directories rather than all of `src/` because `body` is an ordinary
+   * variable name elsewhere (a request being built, not a wire body decoded).
+   */
+  const MAPPER_DIRS = ['api', 'ownState', 'realtime'];
+
+  const MAPPER_FILES = MAPPER_DIRS.flatMap((dir) =>
+    readdirSync(new URL(`${dir}/`, SRC), { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts'))
+      .map((f) => `${dir}/${f.split('\\').join('/')}`),
+  );
 
   /**
    * Comments are stripped BEFORE the scan. This is not hygiene — it is
