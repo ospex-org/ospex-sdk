@@ -91,7 +91,17 @@ describe('Commitment.isLive predicate', () => {
     { name: 'open + null expiry (legacy/indexer-only row)', overrides: { status: 'open', expiry: null }, expectIsLive: false },
     { name: 'filled', overrides: { status: 'filled', remainingRiskAmount: '0', filledRiskAmount: '1000000' }, expectIsLive: false },
     { name: 'cancelled', overrides: { status: 'cancelled' }, expectIsLive: false },
-    { name: 'expired', overrides: { status: 'expired' }, expectIsLive: false },
+    // An effective `expired` ALWAYS arrives with a `storedStatus` — the value
+    // is derived from a stored open/partially_filled row whose expiry passed,
+    // and a build old enough to omit `storedStatus` never derived it. This
+    // case used to omit it, which made it a body no core-api build can serve
+    // AND the one input that reached the `storedStatus ?? status` fallback
+    // with a value `StoredCommitmentStatus` does not contain; that fallback
+    // published `storedStatus: 'expired'` into a four-value field until the
+    // #207 review found it, and the boundary now refuses the shape. Written
+    // realistically it still asserts not-live, and for the sharper reason:
+    // the raw lifecycle is OPEN, so only the past expiry can produce `false`.
+    { name: 'effective expired (storedStatus open, expiry past)', overrides: { status: 'expired', storedStatus: 'open', expiry: '2000-01-01T00:00:00.000Z' }, expectIsLive: false },
     // ── book-visibility split: isLive keys off the RAW on-chain lifecycle (`storedStatus`),
     //    NOT the effective `status`. A book-hidden row (pulled from the orderbook off-chain →
     //    effective `status: 'cancelled'`) whose storedStatus is still open / partially_filled is

@@ -13,77 +13,161 @@
  */
 import { z } from 'zod';
 import type { ApiClient } from './client.js';
-import { toCommitment } from './commitments.js';
+import { CommitmentWireSchema, toCommitment } from './commitments.js';
 import { parseWire } from '../wireSchema.js';
 import type {
   Contest,
   ContestsListOptions,
   Speculation,
 } from '../types/contest.js';
-import type {
-  ContestBody,
-  SpeculationBody,
-} from './types.js';
 
-// ── wire schema: the `GET /v1/contests` (list) decode boundary ──────────
+// ── wire schemas: the `/v1/contests` decode boundaries ──────────────────
 //
-// The list body is validated through `parseWire()` per the repo hard rule:
+// Both reads are validated through `parseWire()` per the repo hard rule:
 // a mistyped field in an untrusted wire body must fail as a typed
 // `OspexValidationError`, never propagate into the public `Contest` (the
 // concrete hazard: a non-string `gameFinalType` flowing verbatim into the
-// CLI's agent JSON payload). The schema enumerates exactly the fields the
-// list mapper copies; zod's default unknown-key strip drops everything
-// else, so new server fields still can't break a deployed SDK.
+// CLI's agent JSON payload). Each schema enumerates exactly the fields its
+// endpoint serves; zod's default unknown-key strip drops everything else,
+// so new server fields still can't break a deployed SDK.
 //
-// Tolerances mirror the mapper's documented ones: the settlement trio is
-// optional (a pre-#41 core-api omits it — `toSpeculation` degrades to
-// null/false), the start-time companions + `gameFinalType` are optional
-// (older builds / non-dated listings omit the keys), and the game identity
-// pair `gameId` / `jsonoddsId` is optional-nullable (core-api builds ≥ the
-// game-identity change serve both on every list row, `null` when the
-// contest has no JSONOdds linkage; older builds omit the keys). The pair
-// is additionally cross-validated (see the superRefine below): the two
-// keys arrive together or not at all, and when present they are either
-// both null or the same non-empty string — every other combination is a
-// shape no known server emits, and passing one through would let two
-// consumers pick different "canonical" identifiers from the same row.
+// The two endpoints share their field DECLARATIONS through the shape
+// constants below and nothing else, so a widened field moves both schemas
+// and the mapper's input type together. The mapper's input type is
+// `z.infer` of the detail schema — there is no hand-written `*Body`
+// interface to drift against, which is the defect the games boundary was
+// blocked on: while `GameBody` sat beside `GameBodySchema` with the parsed
+// row cast to it, widening the schema's `gameId` to `.nullable()` passed
+// `tsc` and the whole suite, and a `null` reached a field declared
+// `string`.
 //
-// The DETAIL read (`get`) keeps the pre-existing cast+copy decode: its
-// body embeds per-speculation orderbooks of signed commitments — a much
-// wider surface whose schema boundary is a deliberate separate change,
-// not a rider on the list fix.
-const SpeculationListRowSchema = z.object({
+// Tolerances mirror the mapper's documented ones, and every one of them is
+// a real older-server shape rather than defensive padding: the settlement
+// trio is optional (a pre-#41 core-api omits it — `toSpeculation` degrades
+// to null/false), the start-time companions + `gameFinalType` are optional
+// (older builds / non-dated listings omit the keys), the detail-only block
+// is optional (older builds omit it; the current build always sends all of
+// it), and the game identity pair `gameId` / `jsonoddsId` is
+// optional-nullable.
+//
+// Types, not content. `.min(1)` is wrong on every contest-shaped string:
+// core-api coalesces a missing value to `''` on nine of them, so a
+// non-empty rule refuses a contest with no linked games row. `.datetime()`
+// is wrong on every timestamp: PostgREST renders `timestamptz` with a
+// `+00:00` offset and zod v3's `.datetime()` is Z-only. Enums on `sport` /
+// `status` are exact today and wrong the moment a migration lands.
+
+/** Present on every contest surface, list and detail alike. */
+const contestCoreShape = {
+  contestId: z.string(),
+  awayTeam: z.string(),
+  homeTeam: z.string(),
+  sport: z.string(),
+  sportId: z.number(),
+  matchTime: z.string(),
+  status: z.string(),
+};
+
+/**
+ * The five start-time companions. `''` — never `null` — is core-api's
+ * sentinel on contest surfaces for "not verified yet" / "no games row
+ * linked"; `/v1/games` passes the same three ideas through as `null`. The
+ * two conventions must not be unified.
+ */
+const contestStartTimeShape = {
+  chainStartTime: z.string().optional(),
+  gameMatchTime: z.string().optional(),
+  gameEarliestMatchTime: z.string().optional(),
+  gameRundownMatchTime: z.string().optional(),
+  gameSportspageMatchTime: z.string().optional(),
+};
+
+/**
+ * Detail-endpoint-only enrichment. The list body omits every one of these;
+ * the current detail build sends all twelve unconditionally, and each is
+ * `.optional()` only so an older build still decodes.
+ *
+ * The split between `''` and `null` here is core-api's, not a choice: the
+ * two id strings and the lifecycle timestamps use `?? null`, while
+ * `contestCreator` uses `?? ''` and `leagueId` uses `?? 'unknown'`.
+ */
+const contestDetailOnlyShape = {
+  rundownId: z.string().nullable().optional(),
+  sportspageId: z.string().nullable().optional(),
+  contestCreator: z.string().optional(),
+  leagueId: z.string().optional(),
+  awayScore: z.number().nullable().optional(),
+  homeScore: z.number().nullable().optional(),
+  contestCreatedAt: z.string().nullable().optional(),
+  verifiedAt: z.string().nullable().optional(),
+  scoredAt: z.string().nullable().optional(),
+  voidedAt: z.string().nullable().optional(),
+  awayTeamId: z.string().nullable().optional(),
+  homeTeamId: z.string().nullable().optional(),
+};
+
+/** The eleven flat fields every speculation body carries, on every surface. */
+const speculationCoreShape = {
   speculationId: z.string(),
   contestId: z.string(),
   type: z.enum(['moneyline', 'spread', 'total']),
   lineTicks: z.number().nullable(),
   line: z.number().nullable(),
+  // Emitted together, and only on a spread with a non-null line.
   awayLine: z.number().optional(),
   homeLine: z.number().optional(),
   speculationStatus: z.union([z.literal(0), z.literal(1)]),
+  // The settlement trio. Always sent by a current core-api; `.optional()`
+  // for a pre-#41 build, which `toSpeculation` degrades to null/false.
   winSide: z.enum(['away', 'home', 'over', 'under', 'push', 'void']).nullable().optional(),
   settledAt: z.string().nullable().optional(),
   voided: z.boolean().optional(),
+};
+
+/**
+ * A speculation with no orderbook — a `/v1/contests` list row, a
+ * `/v1/speculations` list row, and a speculations stream/recovery frame all
+ * have exactly this shape. (The stream frame differs from the list row by
+ * one key, `closing`, which no mapper reads and zod strips.)
+ */
+export const SpeculationRowSchema = z.object(speculationCoreShape);
+
+/**
+ * A speculation nested in a CONTEST detail body, and the shape
+ * {@link toSpeculation} reads.
+ *
+ * `orderbook` is `.optional()` rather than required for the same
+ * older-build tolerance as everything else here; the current build always
+ * sends the key, `[]` included.
+ *
+ * Its element is the full commitment union even though this handler DROPS a
+ * redacted row rather than surfacing one (a redacted body carries no
+ * `speculationKey` to group on, so it has nothing to group under). Mirroring
+ * that narrower server type would buy nothing — the public
+ * `Speculation.orderbook` is already `Commitment[]`, the union — and would
+ * cost a whole-contest `OspexValidationError` on the market-maker's
+ * discovery path the day core-api surfaces one. Accepting a shape the server
+ * does not currently send is free; refusing one it might is not.
+ */
+const SpeculationWireSchema = z.object({
+  ...speculationCoreShape,
+  orderbook: z.array(CommitmentWireSchema).optional(),
 });
+export type SpeculationWire = z.infer<typeof SpeculationWireSchema>;
 
 const ContestListRowSchema = z
   .object({
-    contestId: z.string(),
-    awayTeam: z.string(),
-    homeTeam: z.string(),
-    sport: z.string(),
-    sportId: z.number(),
-    matchTime: z.string(),
-    chainStartTime: z.string().optional(),
-    gameMatchTime: z.string().optional(),
-    gameEarliestMatchTime: z.string().optional(),
-    gameRundownMatchTime: z.string().optional(),
-    gameSportspageMatchTime: z.string().optional(),
+    ...contestCoreShape,
+    ...contestStartTimeShape,
     gameFinalType: z.string().optional(),
+    // The identity pair is cross-validated below: the two keys arrive
+    // together or not at all, and when present they are either both null or
+    // the same non-empty string. Every other combination is a shape no known
+    // server emits, and passing one through would let two consumers pick
+    // different "canonical" identifiers from the same row.
     gameId: z.string().nullable().optional(),
     jsonoddsId: z.string().nullable().optional(),
-    status: z.string(),
-    speculations: z.array(SpeculationListRowSchema),
+    speculations: z.array(SpeculationRowSchema),
   })
   .superRefine((row, ctx) => {
     // Identity-pair contract. The accept set is exactly what real servers
@@ -126,6 +210,45 @@ const ContestsListBodySchema = z.object({
   }),
 });
 
+/**
+ * `GET /v1/contests/:contestId`.
+ *
+ * `gameId` is deliberately NOT declared. It is a LIST-row key — core-api's
+ * detail handler never emits it — and leaving it out makes the "a detail
+ * body cannot mint `Contest.gameId`" contract structural at three layers
+ * instead of one: zod strips the key before the mapper sees it, the mapper's
+ * input type has no such property so reading it is a compile error, and
+ * `list()` attaches it after the shared mapper runs.
+ *
+ * The identity-pair `superRefine` is NOT lifted from the list schema
+ * either, and that is a correctness point rather than an omission: the
+ * detail handler coalesces `jsonodds_id` with `??` where the list handler
+ * uses `||`, so a row whose column holds `''` is served as `''` here and as
+ * `null` there. A non-empty rule borrowed from the list path would refuse a
+ * body this endpoint actually serves.
+ *
+ * `gameFinalType` is NOT declared either, for the same reason and by the
+ * same mechanism. It reaches the wire only on `GET /v1/contests?date=`
+ * rows; declaring it here so the SHARED mapper could copy it let a detail
+ * body mint a dated-list-only field, which the #207 review reproduced. It
+ * is attached on the list path beside `gameId` now, so both list-only keys
+ * are handled the same way and neither is reachable from `toContest`.
+ */
+const ContestDetailBodySchema = z.object({
+  ...contestCoreShape,
+  ...contestStartTimeShape,
+  ...contestDetailOnlyShape,
+  jsonoddsId: z.string().nullable().optional(),
+  speculations: z.array(SpeculationWireSchema),
+});
+
+/**
+ * The contest shape {@link toContest} reads — the detail body, which is the
+ * superset. A list row is assignable to it: the keys it lacks are all
+ * `.optional()`, and its speculations lack only the optional `orderbook`.
+ */
+type ContestWire = z.infer<typeof ContestDetailBodySchema>;
+
 export class ContestsApi {
   constructor(private readonly client: ApiClient) {}
 
@@ -142,33 +265,32 @@ export class ContestsApi {
     if (options.offset !== undefined) query.offset = options.offset;
     const raw = await this.client.request<unknown>('/v1/contests', { query });
     const body = parseWire(ContestsListBodySchema, raw);
-    // Mapped from the PARSED value, so the schema is the single enumeration
-    // of what a list row can carry. The cast bridges zod's `?: T | undefined`
-    // optional inference to `ContestBody`'s exact-optional keys — safe here
-    // because the runtime check just ran, and JSON can't encode `undefined`.
+    // Mapped from the PARSED value with no cast, so the schema is the only
+    // declaration of what a list row can carry: widen a field here and the
+    // mapper's assignment into the public `Contest` stops compiling.
     return body.contests.map((row) => {
-      const c = row as ContestBody;
-      const contest = toContest(c);
-      // `gameId` is a LIST-row key and is attached HERE, on the validated
-      // list path only — never in the shared `toContest`, which the detail
-      // path reuses on an unvalidated cast+copy body. Copying it there
-      // would let a detail body carrying an unexpected `gameId` mint the
-      // key the contract promises is list-only. Pinned in both directions
-      // (list surfaces it verbatim; detail refuses to mint it).
-      if (c.gameId !== undefined) contest.gameId = c.gameId;
+      const contest = toContest(row);
+      // The two LIST-ROW-ONLY keys are attached HERE, never in the shared
+      // `toContest` — whose input type declares neither, so the detail path
+      // cannot mint one even from a body that carries it. `gameFinalType`
+      // joined `gameId` here after the #207 review reproduced a detail body
+      // minting it. Pinned in both directions (list surfaces them verbatim;
+      // detail refuses to mint either).
+      if (row.gameId !== undefined) contest.gameId = row.gameId;
+      if (row.gameFinalType !== undefined) contest.gameFinalType = row.gameFinalType;
       return contest;
     });
   }
 
   async get(contestId: string | number): Promise<Contest> {
-    const body = await this.client.request<ContestBody>(
+    const raw = await this.client.request<unknown>(
       `/v1/contests/${encodeURIComponent(String(contestId))}`,
     );
-    return toContest(body);
+    return toContest(parseWire(ContestDetailBodySchema, raw));
   }
 }
 
-function toContest(body: ContestBody): Contest {
+function toContest(body: ContestWire): Contest {
   const out: Contest = {
     contestId: body.contestId,
     awayTeam: body.awayTeam,
@@ -193,16 +315,13 @@ function toContest(body: ContestBody): Contest {
   if (body.gameSportspageMatchTime !== undefined) {
     out.gameSportspageMatchTime = body.gameSportspageMatchTime;
   }
-  // Dated-list-only: `GET /v1/contests?date=` rows carry the linked game's
-  // finality; every other contest surface omits the key.
-  if (body.gameFinalType !== undefined) out.gameFinalType = body.gameFinalType;
   // Game identity. `jsonoddsId` arrives on detail reads and (since the
   // game-identity change) list rows; `null` is a VALUE here (no linkage)
   // and is copied — only an absent key stays absent, per
-  // `exactOptionalPropertyTypes`. `gameId` is deliberately NOT copied by
-  // this shared mapper: it is a list-only key, attached by `list()` after
-  // this mapper runs, so a detail body carrying an unexpected `gameId`
-  // cannot mint it here.
+  // `exactOptionalPropertyTypes`. `gameId` and `gameFinalType` are
+  // deliberately NOT copied by this shared mapper: both are list-row-only
+  // keys, attached by `list()` after this mapper runs. `ContestWire`
+  // declares neither, so adding a copy here does not compile.
   if (body.jsonoddsId !== undefined) out.jsonoddsId = body.jsonoddsId;
   // Detail-endpoint-only fields — the list endpoint omits them entirely.
   if (body.rundownId !== undefined) out.rundownId = body.rundownId;
@@ -220,7 +339,7 @@ function toContest(body: ContestBody): Contest {
   return out;
 }
 
-export function toSpeculation(body: SpeculationBody): Speculation {
+export function toSpeculation(body: SpeculationWire): Speculation {
   const out: Speculation = {
     speculationId: body.speculationId,
     contestId: body.contestId,

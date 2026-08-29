@@ -29,6 +29,7 @@
  */
 
 import { z } from 'zod';
+import { UINT256_STRING } from '../wireSchema.js';
 
 const POSITION_TYPE = z.union([z.literal(0), z.literal(1)]);
 const MARKET_TYPE = z.enum(['moneyline', 'spread', 'total']);
@@ -57,9 +58,8 @@ const POSITION_LIFECYCLE = z.enum([
 ]);
 const POSITION_RESULT = z.enum(['won', 'push', 'void']);
 const PREDICTED_WIN_SIDE = z.enum(['away', 'home', 'over', 'under', 'push']);
-/** A uint256 on the wire — a non-empty decimal string. `.regex` guarantees a
- *  later `BigInt(...)` coercion can't throw on a non-numeric value. */
-const UINT256_STRING = z.string().regex(/^\d+$/, 'must be a decimal uint256 string');
+// `UINT256_STRING` moved to `../wireSchema.js` when the public commitment
+// body needed the identical rule; imported above rather than copied.
 
 /**
  * Wire shape of the canonical signed payload carried on owner commitments

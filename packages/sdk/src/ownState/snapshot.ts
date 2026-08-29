@@ -42,7 +42,7 @@ import { OwnStateApi } from '../api/ownState.js';
 import type { ApiClient } from '../api/client.js';
 import { mintStreamToken } from './auth.js';
 import { isOwnerCommitmentLiveAt } from './liveness.js';
-import { parseWire } from '../wireSchema.js';
+import { parseWire, resolveStoredStatus } from '../wireSchema.js';
 import {
   OwnerCommitmentBodySchema,
   OwnerStateSnapshotBodySchema,
@@ -164,8 +164,12 @@ function toOwnerCommitmentFromParsed(body: OwnerCommitmentBodyParsed): OwnerComm
     signature: body.signature,
     status: body.status,
     // Older core-api builds (predating effective-status) omit `storedStatus`;
-    // fall back to `status` (which equals the raw value on those builds).
-    storedStatus: body.storedStatus ?? (body.status as StoredCommitmentStatus),
+    // `resolveStoredStatus` falls back to `status` (the raw value on those
+    // builds) and REFUSES the one combination the fallback cannot express:
+    // an effective `expired` with no stored value. This was a cast until the
+    // #207 review found the same shape on the public commitment path, where
+    // it published `storedStatus: 'expired'` into a four-value field.
+    storedStatus: resolveStoredStatus(body),
     source: body.source,
     network: body.network,
     nonceInvalidated: body.nonceInvalidated,
@@ -248,7 +252,7 @@ export function decodePositionStatusEvent(body: unknown): PositionStatusEvent {
 function computeOwnerIsLive(body: OwnerCommitmentBodyParsed): boolean {
   return isOwnerCommitmentLiveAt(
     {
-      storedStatus: body.storedStatus ?? body.status,
+      storedStatus: resolveStoredStatus(body),
       remainingRiskAmount: body.remainingRiskAmount,
       expiry: body.expiry,
       nonceInvalidated: body.nonceInvalidated,

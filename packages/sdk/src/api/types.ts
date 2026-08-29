@@ -218,12 +218,14 @@ export interface AuthDomainBody {
 /**
  * Wire body for a publicly visible commitment (`book_visible=true`). Carries the
  * full matchable payload (signature, EIP-712 fields). The `redacted` discriminant
- * is optional on the wire for back-compat with core-api builds predating M2 of
- * the own-state SSE migration stack — those builds emit no flag and `toCommitment`
- * treats the absence as visible.
+ * is optional because NO build sends it on a full body: core-api's `rowToBody`
+ * emits no such key and only the redaction projection adds one, as `true`. So an
+ * absent flag is the ordinary visible shape rather than a back-compat allowance,
+ * and `toCommitment` treats the absence as visible.
  */
 export interface CommitmentBody {
-  /** Discriminator — present on M2+ wire; absent on pre-M2 (interpreted as visible). */
+  /** Discriminator — ABSENT on every full body core-api serves; interpreted as
+   *  visible. Declared so a producer that states it explicitly still decodes. */
   redacted?: false;
   commitmentHash: string;
   maker: string;
@@ -251,7 +253,11 @@ export interface CommitmentBody {
   source: string;
   network: string;
   nonceInvalidated: boolean;
-  /** Optional on the wire — pre-M2 builds omit it; post-M2 always emits `true` for visible bodies. */
+  /** Optional on the wire — builds predating M2 omit it. Note core-api types the
+   *  field `boolean`, not `true`: under its `REDACT_HIDDEN_PUBLIC=false`
+   *  deploy-window rollback a hidden row renders as a full body carrying `false`.
+   *  The zod boundary in `api/commitments.ts` mirrors the wider server type; this
+   *  hand-written declaration is the narrower one the unguarded paths still use. */
   bookVisible?: true;
   createdAt: string;
   /** Advisory maker-funding fillability — present only when the list was
@@ -290,143 +296,27 @@ export interface CommitmentHiddenBody {
  */
 export type CommitmentWireBody = CommitmentBody | CommitmentHiddenBody;
 
-export interface SpeculationBody {
-  speculationId: string;
-  contestId: string;
-  type: 'moneyline' | 'spread' | 'total';
-  lineTicks: number | null;
-  line: number | null;
-  awayLine?: number;
-  homeLine?: number;
-  speculationStatus: 0 | 1;
-  // Settlement outcome (core-api #41+). Projected from the same row as
-  // speculationStatus, so speculationStatus===1 ⟺ winSide!==null.
-  winSide: 'away' | 'home' | 'over' | 'under' | 'push' | 'void' | null;
-  settledAt: string | null;
-  voided: boolean;
-  orderbook?: CommitmentBody[];
-}
+/*
+ * The contest / speculation wire bodies used to be declared here as
+ * `ContestBody`, `ContestsListBody`, `SpeculationBody`,
+ * `SpeculationParentContextBody`, `SpeculationDetailBody` and
+ * `SpeculationsListBody`. They are gone: those surfaces decode through zod
+ * now, and their shapes are declared once, by the schemas beside their
+ * boundaries in `api/contests.ts` and `api/speculations.ts`, with the
+ * mappers' input types taken from `z.infer`.
+ *
+ * A hand-written interface beside a schema is not documentation, it is a
+ * second declaration that drifts in silence: while one existed for the
+ * games bodies and the parsed row was cast to it, widening the schema's
+ * `gameId` to `.nullable()` passed `tsc` AND the whole suite, and a `null`
+ * reached a field declared `string`. Two of these carried a live instance
+ * of the same defect - `SpeculationBody` declared the settlement trio
+ * required and `SpeculationParentContextBody` declared both team ids
+ * required, while every wire boundary and every fixture treats them as
+ * optional. Do not reintroduce them.
+ */
 
-export interface ContestBody {
-  contestId: string;
-  awayTeam: string;
-  homeTeam: string;
-  sport: string;
-  sportId: number;
-  matchTime: string;
-  /**
-   * Raw on-chain start (`""` until the contest is verified). Optional on the
-   * wire — a core-api build predating the start-time floor surface omits it
-   * along with the other start-time companions below. Each companion is
-   * separately optional; check the key you need rather than inferring one
-   * from another.
-   */
-  chainStartTime?: string;
-  /** Raw odds-feed schedule for the linked game; `""` when no games row is linked. */
-  gameMatchTime?: string;
-  /**
-   * The game's current retained start-time safety floor, verbatim — never
-   * clamped; `""` when no games row is linked. When it is the minimum of the
-   * inputs, it is what is driving `matchTime`.
-   */
-  gameEarliestMatchTime?: string;
-  /**
-   * Provider start-time snapshots for the linked game (`games.rundown_match_time`
-   * / `games.sportspage_match_time`), verbatim. `""` when no games row is linked
-   * or no snapshot has been captured. Optional on the wire — core-api builds
-   * predating the provider-snapshot surface omit them.
-   */
-  gameRundownMatchTime?: string;
-  gameSportspageMatchTime?: string;
-  /**
-   * The linked game's upstream result status (`games.final_type`), verbatim
-   * (`'Finished'` / `'Postponed'` / … free text; `""` sentinel). On the wire
-   * ONLY for `GET /v1/contests?date=` rows — absent on default listings and
-   * on the detail endpoint.
-   */
-  gameFinalType?: string;
-  /**
-   * Game identity: the contest's JSONOdds linkage, the same string
-   * `/v1/games` serves as its `gameId` (`null` when the contest has no
-   * linkage). `gameId` is on every LIST row from core-api builds ≥ the
-   * game-identity change (absent on older builds and on detail bodies);
-   * `jsonoddsId` is the same value under the detail endpoint's historical
-   * name — on detail bodies always, and on list rows from the same
-   * core-api builds. The redundancy is deliberate (it mirrors
-   * `/v1/games`'s `gameId` / `externalIds.jsonodds` pair), and the list
-   * boundary cross-validates it (both keys together — both null or the
-   * same non-empty string — or neither). `gameId` is copied to the public
-   * `Contest` by the LIST path only, never by the shared `toContest`
-   * mapper, so a detail body carrying it cannot mint the key.
-   */
-  gameId?: string | null;
-  jsonoddsId?: string | null;
-  status: string;
-  speculations: SpeculationBody[];
-  // Detail-endpoint-only fields — undefined on /v1/contests list rows.
-  // Populated by /v1/contests/:contestId.
-  rundownId?: string | null;
-  sportspageId?: string | null;
-  contestCreator?: string;
-  leagueId?: string;
-  awayScore?: number | null;
-  homeScore?: number | null;
-  contestCreatedAt?: string | null;
-  verifiedAt?: string | null;
-  scoredAt?: string | null;
-  voidedAt?: string | null;
-  /**
-   * Team UUIDs from `teams`, resolved server-side via the games-row
-   * join. Detail-endpoint-only. Null when the contest has no
-   * JSONOdds linkage or the games row is missing — the SDK
-   * resolver falls back to exact + nickname matching in that case.
-   */
-  awayTeamId?: string | null;
-  homeTeamId?: string | null;
-}
 
-/** Wire body for `GET /v1/contests`. */
-export interface ContestsListBody {
-  contests: ContestBody[];
-  pagination: PaginationBody;
-}
-
-export interface SpeculationParentContextBody {
-  contestId: string;
-  awayTeam: string;
-  homeTeam: string;
-  /**
-   * Team UUIDs from the games-row join. Null when the contest has no
-   * JSONOdds linkage — the SDK resolver scopes alias matching to these
-   * when both are non-null and falls back to exact + nickname otherwise.
-   */
-  awayTeamId: string | null;
-  homeTeamId: string | null;
-  sport: string;
-  matchTime: string;
-  /**
-   * Same five optional start-time companions as {@link ContestBody}
-   * (`""` sentinels); optional on the wire — older core-api builds omit them.
-   */
-  chainStartTime?: string;
-  gameMatchTime?: string;
-  gameEarliestMatchTime?: string;
-  gameRundownMatchTime?: string;
-  gameSportspageMatchTime?: string;
-  status: string;
-}
-
-/** Wire body for `GET /v1/speculations/:speculationId`. */
-export interface SpeculationDetailBody extends SpeculationBody {
-  orderbook: CommitmentBody[];
-  contest: SpeculationParentContextBody;
-}
-
-/** Wire body for `GET /v1/speculations`. */
-export interface SpeculationsListBody {
-  speculations: SpeculationBody[];
-  pagination: PaginationBody;
-}
 
 export interface CommitmentsListBody {
   /**
