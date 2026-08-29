@@ -1366,31 +1366,81 @@ describe('nullish-absorbing mapper fields', () => {
   const executableCode = (file: string): string =>
     stripComments(readFileSync(new URL(file, SRC), 'utf8'));
 
+  /**
+   * Identifiers that hold a PARSED wire value, derived from source.
+   *
+   * Anchoring on the literal name `body` is what the review defeated, and it
+   * was wrong in two places rather than one: the contest-update decoder binds
+   * `const b = parseWire(...)` and own-state binds `const p = ...`. A mutation
+   * adding `b.awayScore ?? null` beside a widened schema field passed `tsc`
+   * AND all 1,265 tests against a scan that only knew `body`.
+   *
+   * Two shapes hold a parsed value: a local bound from `parseWire`, and a
+   * mapper parameter typed from a schema (`…Wire` / `…Parsed` / `z.infer<…>`).
+   * `options.x ?? y` in the client and `c.awayScore ?? null` in
+   * `contestToUpdate` are deliberately NOT matched — the first is caller
+   * options and the second projects an already-decoded public `Contest`, so
+   * neither has a schema behind it to widen.
+   */
+  function parsedValueIdentifiers(code: string): string[] {
+    const ids = new Set<string>();
+    for (const m of code.matchAll(
+      /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?parseWire\s*\(/g,
+    )) {
+      ids.add(m[1]!);
+    }
+    for (const m of code.matchAll(
+      /\(\s*([A-Za-z_$][\w$]*)\s*:\s*(?:[A-Za-z_$][\w$]*?(?:Wire|WireRow|Parsed)\b|z\.infer<)/g,
+    )) {
+      ids.add(m[1]!);
+    }
+    return [...ids];
+  }
+
   function absorbedFields(): string[] {
     const found = new Set<string>();
     for (const file of MAPPER_FILES) {
-      for (const m of executableCode(file).matchAll(/body\.([A-Za-z][A-Za-z0-9]*)\s*\?\?/g)) {
-        found.add(m[1]!);
+      const code = executableCode(file);
+      for (const id of parsedValueIdentifiers(code)) {
+        // `\b` before the identifier so `a.b` does not also match as `b`.
+        const re = new RegExp(`\\b${id}\\.([A-Za-z][A-Za-z0-9]*)\\s*\\?\\?`, 'g');
+        for (const m of code.matchAll(re)) found.add(m[1]!);
       }
     }
     return [...found].sort();
   }
 
   /**
-   * Every absorbing site, and what `null` must do there. `null-is-a-value` is
-   * the other half of the control: without it, a schema broken to refuse every
-   * null would pass the `refuses-null` half.
+   * Every absorbing site, on BOTH axes — because `??` absorbs `null` AND an
+   * absent key, and a probe of one says nothing about the other.
+   *
+   * The omission axis is the one the review's mutation lives on: widening a
+   * REQUIRED wire field to `.optional()` cannot compile without introducing a
+   * `??` (a conditional copy leaves a required public property unset, which is
+   * also a type error), so the `??` is the forced tell — but what changes is
+   * that an ABSENT key starts decoding to a value instead of being refused.
+   * A `null` probe cannot see that.
+   *
+   * `accepted` on both axes is not a weaker entry: it is the negative control
+   * that stops a schema broken to refuse everything from passing the
+   * `refused` half.
    */
   const CLASSIFIED = {
-    winSide: 'null-is-a-value',
-    settledAt: 'null-is-a-value',
-    voided: 'refuses-null',
-    awayTeamId: 'null-is-a-value',
-    homeTeamId: 'null-is-a-value',
-  } as const;
+    winSide: { null: 'accepted', absent: 'accepted' },
+    settledAt: { null: 'accepted', absent: 'accepted' },
+    voided: { null: 'refused', absent: 'accepted' },
+    awayTeamId: { null: 'accepted', absent: 'accepted' },
+    homeTeamId: { null: 'accepted', absent: 'accepted' },
+  } as const satisfies Record<string, { null: 'refused' | 'accepted'; absent: 'refused' | 'accepted' }>;
 
-  /** Where each field lives on the wire, so `null` reaches the right schema. */
-  const PROBE: Record<keyof typeof CLASSIFIED, (client: OspexClient) => Promise<unknown>> = {
+  type Absorbed = keyof typeof CLASSIFIED;
+
+  /**
+   * Where each field lives on the wire, so the probe reaches the right schema.
+   * Keyed by `Absorbed`, so classifying a new field without giving it a probe
+   * is a compile error under `yarn typecheck:tests` rather than a silent skip.
+   */
+  const PROBE: Record<Absorbed, (client: OspexClient) => Promise<unknown>> = {
     winSide: (c) => c.speculations.list(),
     settledAt: (c) => c.speculations.list(),
     voided: (c) => c.speculations.list(),
@@ -1398,15 +1448,66 @@ describe('nullish-absorbing mapper fields', () => {
     homeTeamId: (c) => c.speculations.get('500'),
   };
 
-  const bodyWithNull = (field: keyof typeof CLASSIFIED): unknown =>
-    field === 'awayTeamId' || field === 'homeTeamId'
-      ? { ...speculationDetailWire, contest: { ...parentContextWire, [field]: null } }
-      : listBody([{ ...speculationRowWire, [field]: null }]);
+  const onContext = (field: Absorbed): boolean =>
+    field === 'awayTeamId' || field === 'homeTeamId';
 
-  it('every `??` site in the mappers is classified here', () => {
-    // The maintenance rule, enforced. Adding a `?? ` to a mapper without
+  function bodyWith(field: Absorbed, mode: 'null' | 'absent'): unknown {
+    if (onContext(field)) {
+      const served: Record<string, unknown> = { ...parentContextWire, [field]: null };
+      if (mode === 'absent') delete served[field];
+      return { ...speculationDetailWire, contest: served };
+    }
+    const row: Record<string, unknown> = { ...speculationRowWire, [field]: null };
+    if (mode === 'absent') delete row[field];
+    return listBody([row]);
+  }
+
+  it('every `??` site on a parsed wire value is classified here', () => {
+    // The maintenance rule, enforced. Adding a `??` on a parsed body without
     // classifying its field fails HERE rather than opening the hole silently.
     expect(absorbedFields()).toStrictEqual(Object.keys(CLASSIFIED).sort());
+  });
+
+  it('the identifier extraction still sees the non-`body` bindings', () => {
+    // Guards the guard, and names the exact regression: the first version of
+    // this scan matched only the literal `body`, so `const b = parseWire(...)`
+    // in the contest-update decoder and `const p = ...` in own-state were
+    // invisible. If the extraction narrows again, this reddens instead of the
+    // classified list silently shrinking to whatever it can still see.
+    const ids = new Set(MAPPER_FILES.flatMap((f) => parsedValueIdentifiers(executableCode(f))));
+    for (const expected of ['body', 'b', 'p']) {
+      expect(ids, `parsed-value binding \`${expected}\` is no longer recognised`).toContain(
+        expected,
+      );
+    }
+  });
+
+  it('the extraction recognises all three parsed-value shapes', () => {
+    // On a SYNTHETIC input, for the same reason the comment stripper is tested
+    // that way: a branch the current sources never exercise is a branch that
+    // can be deleted without anything going red. Measured — every mapper
+    // parameter here is typed through a named alias, so breaking the
+    // `z.infer<…>` alternative SURVIVED a battery until this case existed.
+    //
+    // The negative half matters as much: `options` and a public-type parameter
+    // must NOT be collected, or the scan starts demanding classifications for
+    // `options.limit ?? 0` and for projections of already-decoded values.
+    const sample = [
+      'const parsedLocal = parseWire(SomeSchema, body);',
+      'function fromAlias(aliased: SomethingWire): Out {',
+      'function fromRow(rowAliased: SomethingWireRow): Out {',
+      'function fromParsed(parsedAlias: SomethingParsed): Out {',
+      'function fromInfer(inferred: z.infer<typeof SomeSchema>): Out {',
+      'function notAWireBody(publicValue: Contest): Out {',
+      'async function request(options: RequestOptions): Out {',
+    ].join('\n');
+    expect(parsedValueIdentifiers(sample).sort()).toStrictEqual([
+      'aliased',
+      'inferred',
+      'parsedAlias',
+      'parsedLocal',
+      'rowAliased',
+    ]);
   });
 
   it('the scan reads executable code, not prose', () => {
@@ -1429,16 +1530,20 @@ describe('nullish-absorbing mapper fields', () => {
     expect(stripped, 'the stripper ate executable code').toContain('body.realSite');
   });
 
-  for (const [field, expected] of Object.entries(CLASSIFIED)) {
-    it(`${field}: null is ${expected}`, async () => {
-      const key = field as keyof typeof CLASSIFIED;
-      const e = await err(PROBE[key](clientFor(bodyWithNull(key))));
-      if (expected === 'refuses-null') {
-        expect(e, `${field} accepted a null`).toBeInstanceOf(OspexValidationError);
-      } else {
-        expect(e, `${field} refused a null core-api serves`).toBeNull();
-      }
-    });
+  for (const [field, axes] of Object.entries(CLASSIFIED)) {
+    for (const mode of ['null', 'absent'] as const) {
+      it(`${field}: ${mode} is ${axes[mode]}`, async () => {
+        const key = field as Absorbed;
+        const e = await err(PROBE[key](clientFor(bodyWith(key, mode))));
+        if (axes[mode] === 'refused') {
+          expect(e, `${field} accepted a ${mode} the schema should refuse`).toBeInstanceOf(
+            OspexValidationError,
+          );
+        } else {
+          expect(e, `${field} refused a ${mode} core-api serves`).toBeNull();
+        }
+      });
+    }
   }
 });
 

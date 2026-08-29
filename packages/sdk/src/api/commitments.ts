@@ -270,9 +270,10 @@ export class CommitmentsApi {
  * core-api M2 `redacted` discriminant: a `true` value yields
  * {@link PublicHiddenCommitment} (matchable payload suppressed); a `false` /
  * `undefined` value yields {@link PublicVisibleCommitment} with the `isLive`
- * predicate computed at decode time. The undefined-fallback handles core-api
- * builds predating M2 — those emit the legacy visible-only shape with no flag,
- * and the SDK treats their bodies as visible by default.
+ * predicate computed at decode time. The undefined case is not a legacy path:
+ * core-api sends no `redacted` key on ANY full body — `rowToBody` emits none and
+ * only the redaction projection adds one, as `true` — so an absent flag is the
+ * ordinary visible shape, and an explicit `false` decodes the same way.
  *
  * Exported (vs file-local) so other API mappers — orderbooks embedded in
  * contest detail responses, the body returned by `match`, the canonical row

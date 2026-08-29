@@ -218,12 +218,14 @@ export interface AuthDomainBody {
 /**
  * Wire body for a publicly visible commitment (`book_visible=true`). Carries the
  * full matchable payload (signature, EIP-712 fields). The `redacted` discriminant
- * is optional on the wire for back-compat with core-api builds predating M2 of
- * the own-state SSE migration stack — those builds emit no flag and `toCommitment`
- * treats the absence as visible.
+ * is optional because NO build sends it on a full body: core-api's `rowToBody`
+ * emits no such key and only the redaction projection adds one, as `true`. So an
+ * absent flag is the ordinary visible shape rather than a back-compat allowance,
+ * and `toCommitment` treats the absence as visible.
  */
 export interface CommitmentBody {
-  /** Discriminator — present on M2+ wire; absent on pre-M2 (interpreted as visible). */
+  /** Discriminator — ABSENT on every full body core-api serves; interpreted as
+   *  visible. Declared so a producer that states it explicitly still decodes. */
   redacted?: false;
   commitmentHash: string;
   maker: string;
@@ -251,7 +253,11 @@ export interface CommitmentBody {
   source: string;
   network: string;
   nonceInvalidated: boolean;
-  /** Optional on the wire — pre-M2 builds omit it; post-M2 always emits `true` for visible bodies. */
+  /** Optional on the wire — builds predating M2 omit it. Note core-api types the
+   *  field `boolean`, not `true`: under its `REDACT_HIDDEN_PUBLIC=false`
+   *  deploy-window rollback a hidden row renders as a full body carrying `false`.
+   *  The zod boundary in `api/commitments.ts` mirrors the wider server type; this
+   *  hand-written declaration is the narrower one the unguarded paths still use. */
   bookVisible?: true;
   createdAt: string;
   /** Advisory maker-funding fillability — present only when the list was
