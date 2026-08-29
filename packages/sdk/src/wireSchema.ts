@@ -6,10 +6,11 @@
  * failure through this helper, so the public error surface is unchanged:
  * consumers still catch `OspexValidationError`, never a raw `ZodError`.
  * The callers today are exactly: the own-state bodies (snapshot /
- * commitment / position / positionStatus), own-state health, the fill
- * stream frame, the contests-list REST read (since 0.13.0), and the
- * contest + position stream frames and the three `games.*` reads. The
- * commitment and speculation stream frames and the remaining REST reads
+ * commitment / position / positionStatus), own-state health, the fill /
+ * contest / position / speculation stream frames, and the REST reads
+ * `contests.{list,get}`, `speculations.{list,get}` and all three
+ * `games.*`. The commitment stream frame and the remaining REST reads
+ * (commitments, positions, odds, teams, leaderboard, protocol, health)
  * are still the pre-rule cast+copy; CLAUDE.md's wire-validation hard rule
  * tracks that coverage state and is the authority. The `field` carries the
  * dotted path of the first failing element (e.g. `commitments.0.maker`),

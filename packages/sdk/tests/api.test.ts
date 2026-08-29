@@ -171,10 +171,13 @@ describe('OspexClient API surface', () => {
 
   it('contests copy the start-time companion fields verbatim, over the whole listable matrix', async () => {
     // This one runs on the LIST path, which decodes through the zod boundary
-    // in `api/contests.ts`. That schema end fails silently — a field on the
-    // types + copy site but missing from the schema is stripped at runtime
-    // with nothing to compile against — so this test is what pins it. The
-    // detail path (`contests.get`) is an unvalidated cast+copy and cannot.
+    // in `api/contests.ts`. That schema end fails silently — a field in the
+    // shape constants + copy site but missing from the endpoint's schema is
+    // stripped at runtime with nothing to compile against — so this test is
+    // what pins it. The DETAIL path has its own boundary and its own matrix
+    // now, in `contest-speculation-wire-boundary.test.ts`; the two schemas
+    // share their field declarations but not their key sets, so neither
+    // file's coverage carries to the other.
     //
     // Every listable row is served in ONE page, so a mapper that copies the
     // wrong field has to survive all of them. A different input ties
@@ -546,12 +549,17 @@ describe('OspexClient API surface', () => {
   }
 
   it('contests.get REFUSES to mint the list-only gameId from an adversarial detail body', async () => {
-    // The detail path reuses the shared mapper on an unvalidated cast+copy
-    // body — the list-only `gameId` is attached on the list path AFTER the
-    // mapper, so even a detail body that carries the key cannot mint it.
-    // The fixture value is distinct from jsonoddsId, so this also catches
-    // a mapper deriving gameId FROM jsonoddsId. (The absent-input control
-    // is the `contests.get ... surfaces jsonoddsId` test above.)
+    // The list-only `gameId` is attached on the list path AFTER the shared
+    // mapper, so even a detail body that carries the key cannot mint it. The
+    // fixture value is distinct from jsonoddsId, so this also catches a
+    // mapper deriving gameId FROM jsonoddsId. (The absent-input control is
+    // the `contests.get ... surfaces jsonoddsId` test above.)
+    //
+    // Since the detail boundary landed there are two more layers behind this
+    // — the detail schema does not declare `gameId`, so zod strips it before
+    // the mapper runs, and `toContest`'s input type has no such property, so
+    // a copy added there does not compile. The property is now structural;
+    // this case is kept because it is the one that reads as the contract.
     const { fetch } = makeFetch(() => ({
       status: 200,
       body: {
