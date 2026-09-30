@@ -2,10 +2,11 @@
 
 TypeScript SDK and command-line interface for the [Ospex](https://ospex.org) protocol — a zero-vig peer-to-peer sports prediction protocol on Polygon. The SDK and CLI cover reads (contests, speculations, commitments, positions, leaderboard, odds, games), EIP-712 signed-commitment submission/match/cancel, on-chain cancel + bulk-cancel, contest creation and scoring, position settlement and claims, and live odds streaming over core-api Server-Sent Events.
 
-This repo is a Yarn 1 workspaces monorepo with two packages:
+This repo is a Yarn 1 workspaces monorepo with three packages:
 
 - [`@ospex/sdk`](./packages/sdk) — the public TypeScript SDK.
 - [`@ospex/cli`](./packages/cli) — the `ospex` binary, built on top of the SDK.
+- [`@ospex/rules`](./packages/rules) — builds and checks the two permissions an Ospex smart account signs so a worker can place bets for it. Independent of the SDK, and released on its own tag.
 
 > **Experimental software.** Ospex is experimental, ships without warranty, and involves financial risk. You control your own wallet and approvals; transactions are final. See [Disclaimers](#disclaimers) below before using on mainnet.
 
