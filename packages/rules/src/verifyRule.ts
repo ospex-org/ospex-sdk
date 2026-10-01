@@ -27,7 +27,7 @@ export interface VerifiedRule {
 
 export interface VerifyRuleContext {
   kind: RuleKind;
-  /** The unlocked worker key's address. */
+  /** The worker's address: the only delegate this check accepts. */
   worker: Address;
   environment: SmartAccountsEnvironment;
   nowSeconds: number;
@@ -82,14 +82,16 @@ const sameCaveats = (a: Delegation['caveats'], b: Delegation['caveats']) =>
 
 /**
  * Decides whether this worker may redeem a rule, before anything is sent:
- * right kind and chain, delegated to this worker, from the account the owner's
- * login derives, signed by that owner, inside its window, and with caveats
- * identical to what the page's builder makes for the same parameters. The last
- * check is what stops a rule that grants more than the builder would (another
- * target, a larger top-up, a missing expiry) even when the owner signed it.
+ * format ospex-rule/1, right kind and chain, delegated to this worker, from the
+ * account the owner's login derives, signed by that owner, inside its window,
+ * and with caveats identical to what this package's builder makes for the same
+ * parameters. The last check is what stops a rule that grants more than the
+ * builder would (another target, a larger top-up, a missing expiry) even when
+ * the owner signed it.
  */
 export async function verifyRule(rule: SignedRule, ctx: VerifyRuleContext): Promise<VerifiedRule> {
   const { environment } = ctx;
+  if (rule.format !== 'ospex-rule/1') throw new RuleRefused('the rule is not in the ospex-rule/1 format');
   if (rule.kind !== ctx.kind) throw new RuleRefused(`this is a ${rule.kind} rule; this command needs a ${ctx.kind} rule`);
   if (rule.chainId !== POLYGON_CHAIN_ID) throw new RuleRefused(`the rule is for chain ${rule.chainId}, not ${POLYGON_CHAIN_ID}`);
 

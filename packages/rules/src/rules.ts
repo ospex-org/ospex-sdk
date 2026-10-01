@@ -10,9 +10,11 @@ import {
 import { POLYGON_CHAIN_ID } from './protocol.js';
 import { recoverDelegationSigner } from './verifyDelegation.js';
 
-// A signed rule is what the page hands the worker: one delegation plus the
-// login signer that owns the account. It travels as text, so it is plain JSON
-// with every number as a hex string.
+// A signed rule is one delegation plus the login signer that owns the account.
+// It travels as text (serializeRule / parseRule), as plain JSON. `format` and
+// `kind` are strings and `chainId` is a JSON number; the owner, and every
+// address, byte string and number inside the delegation (caveats included),
+// are hex strings.
 
 export type RuleKind = 'top-up' | 'bet';
 
@@ -26,7 +28,7 @@ export interface SignedRule {
   delegation: Delegation;
 }
 
-/** What the page needs from a Kit smart account to sign a rule. */
+/** What signTopUpRule and signBetRule need from a Kit smart account. */
 export interface RuleSigningAccount {
   address: Address;
   environment: SmartAccountsEnvironment;
@@ -94,8 +96,8 @@ const isHexField = (v: unknown): v is Hex => typeof v === 'string' && isHex(v, {
 const isAddressField = (v: unknown): v is Address => typeof v === 'string' && isAddress(v, { strict: false });
 
 /**
- * Parses a rule's text and checks its SHAPE only: types and formats. Whether
- * the rule is one the worker may redeem is decided by the worker's verifier.
+ * Parses a rule's text and checks its SHAPE only: types and formats. Whether a
+ * worker may redeem the rule is decided by `verifyRule`.
  */
 export function parseRule(text: string): SignedRule {
   let raw: unknown;

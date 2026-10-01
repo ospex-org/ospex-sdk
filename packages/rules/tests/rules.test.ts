@@ -70,7 +70,7 @@ async function refused(rule: SignedRule, c: VerifyRuleContext, pattern: RegExp) 
   await assert.rejects(verifyRule(rule, c), (err: unknown) => err instanceof RuleRefused && pattern.test(err.message));
 }
 
-test('the rules the page signs verify for their worker, through the same text the Copy button carries', async () => {
+test('sign, serialize, parse, verify: both rules verify for their worker', async () => {
   const t = await verifyRule(parseRule(serializeRule(topUp)), ctx());
   assert.equal(t.account, account.address);
   assert.equal(t.amountUnits, AMOUNT);
@@ -92,6 +92,15 @@ test('a rule is refused for the wrong command, another worker, or another chain'
   await refused(bet, ctx({ kind: 'top-up' }), /needs a top-up rule/);
   await refused(topUp, ctx({ worker: stranger.address }), /not this worker/);
   await refused({ ...topUp, chainId: 1 }, ctx(), /chain 1/);
+});
+
+// The format tag is not signed, so the rules below are otherwise valid: only the
+// format check can refuse them.
+test('verifyRule refuses a rule whose format is not ospex-rule/1, without parseRule', async () => {
+  await refused({ ...topUp, format: 'ospex-rule/2' } as unknown as SignedRule, ctx(), /not in the ospex-rule\/1 format/);
+  const { format: _omit, ...noFormat } = topUp;
+  await refused(noFormat as unknown as SignedRule, ctx(), /not in the ospex-rule\/1 format/);
+  await assert.doesNotReject(verifyRule(topUp, ctx()));
 });
 
 test('a rule is refused when its account is not the one its owner derives', async () => {

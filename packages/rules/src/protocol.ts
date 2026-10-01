@@ -9,9 +9,11 @@ export const MATCHING_MODULE: Address = '0x46Af20B6307Aa0Ec13de10EF58a02c5F1b5C9
 /** The spender the smart account approves. That allowance is the spend cap. */
 export const POSITION_MODULE: Address = '0x3C71fdB8ABF41487a512440e5ce6490158C26e56';
 /**
- * Pulls the speculation-creation fee (first fill of a new market only). The
- * account's allowance to it stays 0, so the worker can only trade into markets
- * that already exist. Nothing in this package builds an approval to it.
+ * Pulls the speculation-creation fee, which maker and taker split, on the first
+ * fill of a new market only. This package builds no approval to it. It does not
+ * check what an account has approved to it before: an account whose allowance
+ * to it is zero, as a new account's is, cannot pay its share, so it can take
+ * bets only in markets that already exist.
  */
 export const TREASURY_MODULE: Address = '0x07f357e67cc9B48D029b1E4C9B7F45569a2eB85C';
 

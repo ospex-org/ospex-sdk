@@ -15,14 +15,18 @@ import {
 
 // The Kit reports each createDelegation / toMetaMaskSmartAccount call (function
 // and caveat names, chain id, an anonymous id) to MetaMask's analytics endpoint
-// unless Do Not Track is set. Nothing here needs it, so opt out wherever this
-// module loads: the page, the worker, the tests and the rehearsal.
+// unless it sees Do Not Track. In Kit 2.0.0 it checks once, at its first
+// reported call, and keeps that answer for the life of the process or page.
+// This package does not need the analytics, so importing it sets Do Not Track,
+// best-effort: process.env.DO_NOT_TRACK for the whole Node process, and
+// window.doNotTrack in a browser, unless that property is read-only. It has no
+// effect if a Kit call was reported before this module loaded.
 if (typeof process !== 'undefined' && process.env) process.env.DO_NOT_TRACK = '1';
 if (typeof window !== 'undefined') {
   try {
     (window as unknown as { doNotTrack: string }).doNotTrack = '1';
   } catch {
-    // A browser that defines it read-only already reports the user's choice.
+    // Read-only here: left as the browser set it.
   }
 }
 
@@ -30,8 +34,8 @@ if (typeof window !== 'undefined') {
 export const ANY_DELEGATE: Address = '0x0000000000000000000000000000000000000a11';
 
 /**
- * The delegate for the off-chain signing test. Nobody holds a key for this
- * address, so nothing signed for it can ever be redeemed.
+ * A placeholder delegate for tests: the 0x…dEaD burn address. A test fixture
+ * only; never sign a real rule to it.
  */
 export const TEST_DELEGATE: Address = '0x000000000000000000000000000000000000dEaD';
 
@@ -67,7 +71,7 @@ interface RuleParties {
   environment: SmartAccountsEnvironment;
   /** The smart account granting the permission. */
   from: Address;
-  /** The worker's session key: the only address that may redeem. */
+  /** The worker: the only address that may redeem. */
   to: Address;
   /** Unix seconds. Both bounds are required; the enforcer reads 0 as "no limit". */
   notBefore: number;

@@ -35,8 +35,16 @@ jobs:
       - name: Build CLI
         run: yarn workspace @ospex/cli build
 
+      - name: Build rules
+        run: yarn workspace @ospex/rules build
+
       - name: Typecheck
         run: yarn typecheck
+
+      # Reports but cannot fail the job: typecheck:tests is advisory (CLAUDE.md).
+      - name: Typecheck rules tests (advisory)
+        run: yarn workspace @ospex/rules typecheck:tests
+        continue-on-error: true
 
       - name: Test
         run: yarn test

@@ -3,8 +3,8 @@ import { USDC_DECIMALS } from './protocol.js';
 
 /**
  * A USDC amount typed by a person, to base units. Exact: digits with at most
- * six decimals, more than zero, and no more than the caller's cap. Used for
- * the page's top-up amount and the worker's bet size.
+ * six decimals, more than zero, and no more than the caller's cap: a top-up
+ * amount or a bet size, for example.
  */
 export function parseUsdc(text: string, capUnits: bigint): bigint {
   const t = text.trim();
