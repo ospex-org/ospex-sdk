@@ -71,7 +71,12 @@ interface RuleParties {
   environment: SmartAccountsEnvironment;
   /** The smart account granting the permission. */
   from: Address;
-  /** The worker: the only address that may redeem. */
+  /**
+   * The worker: the delegate the rule names. It can redeem the rule, as can an
+   * address it delegates the rule to, directly or through further delegations
+   * (any address, through an open delegation). Every such delegation keeps all
+   * of this rule's restrictions.
+   */
   to: Address;
   /** Unix seconds. Both bounds are required; the enforcer reads 0 as "no limit". */
   notBefore: number;
@@ -148,7 +153,8 @@ export function topUpCalldata(amountUnits: bigint): Hex {
 /**
  * The one-shot top-up rule: the delegate may call USDC.approve(PositionModule,
  * amount) with exactly that calldata, once, within the hour. The account then
- * holds that allowance, which is the spend cap.
+ * holds that allowance, which bounds its stakes; a new market's creation fee is
+ * drawn through TreasuryModule instead (see TREASURY_MODULE).
  *
  * Function-call scope (USDC, approve, value 0, exact calldata), plus
  * limited-calls 1 and the timestamp window. Builds only; nothing signs here.

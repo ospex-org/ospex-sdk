@@ -4,6 +4,8 @@ Builds and checks the two permissions an Ospex smart account signs so that a wor
 
 ## What each rule permits
 
+Each rule names one worker as its delegate. The worker can pass a rule on through its own delegations, which keep every restriction below (see `worker` under Signing).
+
 ### Top-up rule
 
 **Allows**
@@ -19,14 +21,14 @@ Builds and checks the two permissions an Ospex smart account signs so that a wor
 - Transferring USDC, placing a bet, or any other call.
 - A second call.
 
-**Timing:** the one hour is how long the worker has to deliver it (`signTopUpRule` signs a window from one minute before the signing time to one hour after). The allowance it sets does not expire with it: it stays, less what bets spend, until another approval replaces it.
+**Timing:** the one hour is how long the worker has to deliver it (`signTopUpRule` signs a window from one minute before the signing time to one hour after). The allowance it sets does not expire with it: it stays, less the stakes bets draw from it, until another approval replaces it.
 
 ### Bet rule
 
 **Allows**
 
 - Calls by the named worker to `MatchingModule.matchCommitment`, with no native value, as many as it likes while the rule is valid. Each call takes a maker's quote for the account, and the rule does not pin which quote or how large.
-- No per-bet or per-day limit. What bounds spending is the account's remaining allowance to PositionModule and its USDC balance.
+- No per-bet or per-day limit. What bounds stakes is the account's remaining allowance to PositionModule and its USDC balance. Separately, when the protocol's speculation-creation fee is above zero, a match that is the first fill of a new market also charges the taker's share of it (half, rounded up) through TreasuryModule. That share can only be collected from an account that has approved TreasuryModule for at least that amount; otherwise the match reverts. No rule in this package builds that approval.
 
 **Does not allow**
 
@@ -61,7 +63,7 @@ const text = serializeRule(topUp);
 
 - `account` is a Kit smart account, or anything with its `address`, `environment` and `signDelegation`.
 - `owner` is the EOA that owns the account. Signing refuses a signature that does not recover to it.
-- `worker` is the only address that may redeem the rule.
+- `worker` is the delegate the rule names. The rule can be redeemed by that address, or by an address the worker delegates it to, directly or through further delegations; if the worker signs an open delegation (`ANY_DELEGATE`), by any address. A downstream delegation carries every restriction of the rule and cannot widen it.
 - Amounts are USDC base units (6 decimals). `capUnits` has no default, and a missing or non-positive cap is refused.
 
 ## Checking

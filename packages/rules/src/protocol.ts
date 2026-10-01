@@ -6,14 +6,18 @@ export const USDC_DECIMALS = 6;
 // Addresses of record: the contracts repo's docs/DEPLOYMENT.md (current round).
 export const USDC: Address = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
 export const MATCHING_MODULE: Address = '0x46Af20B6307Aa0Ec13de10EF58a02c5F1b5C9559';
-/** The spender the smart account approves. That allowance is the spend cap. */
+/**
+ * The spender the smart account approves. That allowance bounds the account's
+ * stakes; a new market's creation fee is drawn through TreasuryModule instead.
+ */
 export const POSITION_MODULE: Address = '0x3C71fdB8ABF41487a512440e5ce6490158C26e56';
 /**
  * Pulls the speculation-creation fee, which maker and taker split, on the first
- * fill of a new market only. This package builds no approval to it. It does not
- * check what an account has approved to it before: an account whose allowance
- * to it is zero, as a new account's is, cannot pay its share, so it can take
- * bets only in markets that already exist.
+ * fill of a new market only, when that fee is above zero. This package builds no
+ * approval to it. It does not check what an account has approved to it before:
+ * while the fee is above zero, an account whose allowance to it is zero, as a
+ * new account's is, cannot pay its share, so it can take bets only in markets
+ * that already exist.
  */
 export const TREASURY_MODULE: Address = '0x07f357e67cc9B48D029b1E4C9B7F45569a2eB85C';
 
