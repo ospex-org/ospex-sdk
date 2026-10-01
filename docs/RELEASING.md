@@ -85,6 +85,23 @@ git push origin v<ver>
 - Update any other external pointers to the new version or the `/releases/latest` URL.
 - Announce as appropriate.
 
+## Releasing `@ospex/rules`
+
+`@ospex/rules` versions on its own, not in lockstep with the SDK and CLI. The page that asks an account to sign and the worker that redeems must pin the same version: the worker refuses any rule whose caveats differ from what its own copy of the builder makes.
+
+1. Bump `packages/rules/package.json`, add the version's section to [`packages/rules/CHANGELOG.md`](../packages/rules/CHANGELOG.md), and update the install URL in [`packages/rules/README.md`](../packages/rules/README.md). Merge.
+2. From a clean checkout of the merged commit:
+
+   ```sh
+   yarn install --frozen-lockfile
+   yarn workspace @ospex/rules clean
+   yarn workspace @ospex/rules build
+   yarn workspace @ospex/rules test
+   yarn workspace @ospex/rules pack --filename ospex-rules-<ver>.tgz
+   ```
+
+3. Tag `rules-v<ver>` and push it. Cut a GitHub Release on that tag, titled `@ospex/rules v<ver>`, with the CHANGELOG section as the body and `packages/rules/ospex-rules-<ver>.tgz` attached. **Do not mark it as the latest release**: `/releases/latest` must keep pointing at the SDK and CLI.
+
 ## If something goes wrong
 
 If a release ships with a critical bug:

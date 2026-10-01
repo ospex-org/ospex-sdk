@@ -6,6 +6,7 @@ Maintainer notes for the Ospex SDK + CLI monorepo. Public docs live in [`README.
 
 - `packages/sdk` — `@ospex/sdk`. Public TypeScript SDK. Reads, EIP-712 helpers, SSE odds + protocol streams.
 - `packages/cli` — `@ospex/cli`. `ospex` binary on top of the SDK.
+- `packages/rules` — `@ospex/rules`. Builds and checks the top-up and bet delegations an Ospex smart account grants a worker. Depends on the MetaMask Smart Accounts Kit and viem only, **never on `@ospex/sdk`** (a browser page imports it, and it must not pull in ethers). Its tests are `node:test` run by `tsx --test` over an explicit file list, so a new `*.test.ts` must be added to its `test` script or it never runs. Versioned and released separately from the SDK and CLI (see `docs/RELEASING.md`).
 
 Yarn 1 workspaces. Commands run from the root or scoped: `yarn workspace @ospex/sdk <cmd>`.
 
@@ -17,7 +18,7 @@ Yarn 1 workspaces. Commands run from the root or scoped: `yarn workspace @ospex/
 
 ## Distribution model
 
-**GitHub releases, not npm.** Each tagged release at `github.com/ospex-org/ospex-sdk/releases` attaches two tarballs (`ospex-sdk-<ver>.tgz` and `ospex-cli-<ver>.tgz`). The release runbook is in [`docs/RELEASING.md`](./docs/RELEASING.md). **CLI users install just the bundled `ospex-cli-<ver>.tgz` globally** (`npm install -g` / `yarn global add`) and run bare `ospex` — see `docs/QUICKSTART.md`. The `ospex-sdk-<ver>.tgz` is the unbundled library for programmatic consumers (e.g. the market-maker); CLI users don't need it.
+**GitHub releases, not npm.** Each tagged release at `github.com/ospex-org/ospex-sdk/releases` attaches two tarballs (`ospex-sdk-<ver>.tgz` and `ospex-cli-<ver>.tgz`). The release runbook is in [`docs/RELEASING.md`](./docs/RELEASING.md). **CLI users install just the bundled `ospex-cli-<ver>.tgz` globally** (`npm install -g` / `yarn global add`) and run bare `ospex` — see `docs/QUICKSTART.md`. The `ospex-sdk-<ver>.tgz` is the unbundled library for programmatic consumers (e.g. the market-maker); CLI users don't need it. `@ospex/rules` ships on its own tag, `rules-v<ver>`, as one tarball, `ospex-rules-<ver>.tgz`, and that release is never marked latest.
 
 Rationale: npm is overwhelmingly a developer-productivity ecosystem; a sports-betting CLI is consumer-entertainment with financial risk and doesn't share a natural audience there. If npm publish is ever added later it'd be a *secondary* channel; GitHub releases stays primary. See "Build & dependency gotchas" below for the implication on `@ospex/cli`'s package.json shape.
 
@@ -51,8 +52,9 @@ yarn workspace @ospex/sdk build              # SDK must build before CLI typeche
 yarn workspace @ospex/cli build
 yarn workspace @ospex/sdk test               # vitest, unit-only — no live infra
 yarn workspace @ospex/cli test
-yarn typecheck                               # both packages, src only
-yarn typecheck:tests                         # both packages, src + the whole tests/ tree
+yarn workspace @ospex/rules test             # node:test via tsx, unit-only — no live infra
+yarn typecheck                               # all three packages, src only
+yarn typecheck:tests                         # all three packages, src + the whole tests/ tree
 node packages/cli/dist/index.js <command>    # run CLI without linking
 ```
 
@@ -62,11 +64,11 @@ node packages/cli/dist/index.js <command>    # run CLI without linking
 
 **`yarn typecheck:tests` closes that.** It runs `tsc -p tsconfig.tests.json` in each workspace against `include: ["src", "tests"]`, extending `tsconfig.base.json` directly with **nothing relaxed** — same `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`. The CLI variant chains `yarn workspace @ospex/sdk build` first, exactly like its `typecheck`, because CLI tests resolve `@ospex/sdk` through `dist/index.d.ts`.
 
-What it covers: every `.ts` file under `packages/sdk/tests/` and `packages/cli/tests/`, **including `packages/sdk/tests/integration/`** — the gap this replaced. After a signature change, a green `typecheck:tests` is real evidence that no call site in the test tree went stale.
+What it covers: every `.ts` file under `packages/sdk/tests/`, `packages/cli/tests/` and `packages/rules/tests/`, **including `packages/sdk/tests/integration/`** — the gap this replaced. After a signature change, a green `typecheck:tests` is real evidence that no call site in the test tree went stale.
 
 What it does **not** cover, and deliberately so:
 
-- **It is advisory, not a gate.** It is not wired into `typecheck`, `build`, `test`, `prepare`, CI, or any hook. A type checker reports; it never blocks a build, a release, or a live run. Run it yourself when you've touched shared shapes.
+- **It is advisory, not a gate.** It is not wired into `typecheck`, `build`, `test`, `prepare`, or any hook. CI runs it for `@ospex/rules` only, as a step that reports but cannot fail the job (`continue-on-error`). A type checker reports; it never blocks a build, a release, or a live run. Run it yourself when you've touched shared shapes.
 - **It does not run the tests.** `tsc` only; `yarn test` is still what proves behaviour.
 - **Package-level config files are outside `include`** — `vitest.config.ts` and `packages/cli/scripts/*.mjs` are not typechecked by it.
 - **A green run is not proof the integration suite passes** — `tests/integration/onchain-cancel.test.ts` is gated behind `OSPEX_INTEGRATION=1` and still needs live infra to actually execute.
