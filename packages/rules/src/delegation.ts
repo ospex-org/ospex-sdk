@@ -54,7 +54,7 @@ export const TOP_UP_EXPIRY_SECONDS = 60 * 60;
 /**
  * Both rules start a minute in the past. TimestampEnforcer needs the block
  * time strictly after the lower bound, so a rule redeemed in the same second
- * it was signed, or read by a chain whose clock trails the browser's, would
+ * it was signed, or read by a chain whose clock trails the signer's, would
  * otherwise revert.
  */
 export const CLOCK_SKEW_SECONDS = 60;

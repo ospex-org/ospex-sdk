@@ -88,9 +88,9 @@ test('the text round trip is lossless', () => {
 });
 
 test('a rule is refused for the wrong command, another worker, or another chain', async () => {
-  await refused(topUp, ctx({ kind: 'bet' }), /needs a bet rule/);
-  await refused(bet, ctx({ kind: 'top-up' }), /needs a top-up rule/);
-  await refused(topUp, ctx({ worker: stranger.address }), /not this worker/);
+  await refused(topUp, ctx({ kind: 'bet' }), /is a top-up rule, expected a bet rule/);
+  await refused(bet, ctx({ kind: 'top-up' }), /is a bet rule, expected a top-up rule/);
+  await refused(topUp, ctx({ worker: stranger.address }), /expected the worker/);
   await refused({ ...topUp, chainId: 1 }, ctx(), /chain 1/);
 });
 
@@ -142,7 +142,7 @@ test('an owner-signed top-up above the cap is refused', async () => {
     scope: { type: ScopeType.FunctionCall, targets: [USDC], selectors: [APPROVE_SELECTOR], exactCalldata: { calldata: topUpCalldata(2_000_001n) } },
     caveats: [{ type: CaveatType.LimitedCalls, limit: 1 }, timeWindow],
   });
-  await refused(await ownerSigned('top-up', d), ctx(), /builder would not make this rule.*exceeds the cap/);
+  await refused(await ownerSigned('top-up', d), ctx(), /builder refuses this rule's parameters.*exceeds the cap/);
 });
 
 test('an owner-signed top-up that approves TreasuryModule is refused', async () => {
@@ -180,16 +180,16 @@ test('an owner-signed bet permission with no expiry, a second target, or a long 
     environment, from: account.address, to: worker, scope,
     caveats: [{ type: CaveatType.Timestamp, afterThreshold: NOW - 60, beforeThreshold: NOW + 91 * 86_400 }],
   });
-  await refused(await ownerSigned('bet', long), ctx({ kind: 'bet' }), /builder would not make this rule.*window exceeds/);
+  await refused(await ownerSigned('bet', long), ctx({ kind: 'bet' }), /builder refuses this rule's parameters.*window exceeds/);
 
   const same = createDelegation({ environment, from: account.address, to: worker, scope, caveats: [timeWindow] });
   await assert.doesNotReject(verifyRule(await ownerSigned('bet', same), ctx({ kind: 'bet' })));
 });
 
-test('the page refuses to hand over a rule that does not recover to the login signer', async () => {
+test('signing refuses a signature that does not recover to the owner', async () => {
   await assert.rejects(
     signBetRule({ account, owner: stranger.address, worker, nowSeconds: NOW }),
-    /not the login signer/,
+    /expected the owner/,
   );
 });
 

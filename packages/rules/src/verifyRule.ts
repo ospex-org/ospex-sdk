@@ -81,9 +81,9 @@ const sameCaveats = (a: Delegation['caveats'], b: Delegation['caveats']) =>
   );
 
 /**
- * Decides whether this worker may redeem a rule, before anything is sent:
- * format ospex-rule/1, right kind and chain, delegated to this worker, from the
- * account the owner's login derives, signed by that owner, inside its window,
+ * Decides whether `ctx.worker` may redeem a rule, before anything is sent:
+ * format ospex-rule/1, right kind and chain, delegated to that worker, from the
+ * account the owner derives, signed by that owner, inside its window,
  * and with caveats identical to what this package's builder makes for the same
  * parameters. The last check is what stops a rule that grants more than the
  * builder would (another target, a larger top-up, a missing expiry) even when
@@ -92,12 +92,12 @@ const sameCaveats = (a: Delegation['caveats'], b: Delegation['caveats']) =>
 export async function verifyRule(rule: SignedRule, ctx: VerifyRuleContext): Promise<VerifiedRule> {
   const { environment } = ctx;
   if (rule.format !== 'ospex-rule/1') throw new RuleRefused('the rule is not in the ospex-rule/1 format');
-  if (rule.kind !== ctx.kind) throw new RuleRefused(`this is a ${rule.kind} rule; this command needs a ${ctx.kind} rule`);
+  if (rule.kind !== ctx.kind) throw new RuleRefused(`the rule is a ${rule.kind} rule, expected a ${ctx.kind} rule`);
   if (rule.chainId !== POLYGON_CHAIN_ID) throw new RuleRefused(`the rule is for chain ${rule.chainId}, not ${POLYGON_CHAIN_ID}`);
 
   const d = rule.delegation;
   if (!isAddressEqual(d.delegate, ctx.worker)) {
-    throw new RuleRefused(`the rule delegates to ${d.delegate}, not this worker ${ctx.worker}`);
+    throw new RuleRefused(`the rule delegates to ${d.delegate}, expected the worker ${ctx.worker}`);
   }
   if (d.authority.toLowerCase() !== ROOT_AUTHORITY.toLowerCase()) throw new RuleRefused('the rule is not a root delegation');
 
@@ -135,17 +135,17 @@ export async function verifyRule(rule: SignedRule, ctx: VerifyRuleContext): Prom
     }
   } catch (err) {
     if (err instanceof RuleRefused) throw err;
-    throw new RuleRefused(`the page's builder would not make this rule: ${err instanceof Error ? err.message : String(err)}`);
+    throw new RuleRefused(`the builder refuses this rule's parameters: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (!sameCaveats(d.caveats, rebuilt.caveats)) {
-    throw new RuleRefused("the rule's caveats differ from what the page's builder makes for the same parameters");
+    throw new RuleRefused("the rule's caveats differ from what the builder makes for the same parameters");
   }
 
   if (ctx.nowSeconds <= notBefore) {
     throw new RuleRefused(`the rule is not valid until ${new Date(notBefore * 1000).toISOString()}`);
   }
   if (ctx.nowSeconds >= notAfter) {
-    throw new RuleRefused(`the rule expired at ${new Date(notAfter * 1000).toISOString()}; sign a new one on the page`);
+    throw new RuleRefused(`the rule expired at ${new Date(notAfter * 1000).toISOString()}`);
   }
 
   return {

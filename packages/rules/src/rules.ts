@@ -10,7 +10,7 @@ import {
 import { POLYGON_CHAIN_ID } from './protocol.js';
 import { recoverDelegationSigner } from './verifyDelegation.js';
 
-// A signed rule is one delegation plus the login signer that owns the account.
+// A signed rule is one delegation plus the EOA that owns the account.
 // It travels as text (serializeRule / parseRule), as plain JSON. `format` and
 // `kind` are strings and `chainId` is a JSON number; the owner, and every
 // address, byte string and number inside the delegation (caveats included),
@@ -22,7 +22,7 @@ export interface SignedRule {
   format: 'ospex-rule/1';
   kind: RuleKind;
   chainId: number;
-  /** The login signer (the embedded wallet's EOA) that owns the smart account. */
+  /** The EOA that owns the smart account. */
   owner: Address;
   /** The signed delegation. `delegator` is the smart account. */
   delegation: Delegation;
@@ -53,7 +53,7 @@ async function finish(kind: RuleKind, args: SignArgs, delegation: Omit<Delegatio
     delegationManager: args.account.environment.DelegationManager,
   });
   if (!isAddressEqual(recovered, args.owner)) {
-    throw new Error(`the signature recovers to ${recovered}, not the login signer ${args.owner}`);
+    throw new Error(`the signature recovers to ${recovered}, expected the owner ${args.owner}`);
   }
   return {
     format: 'ospex-rule/1',

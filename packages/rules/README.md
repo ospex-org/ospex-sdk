@@ -10,7 +10,7 @@ Builds and checks the two permissions an Ospex smart account signs so that a wor
 
 - One call by the named worker, with no native value: `USDC.approve(PositionModule, amount)`, with exactly the calldata the account signed.
 - That call **sets** the account's USDC allowance to PositionModule to `amount`. It does not add to an existing allowance, and it is not a transfer: no USDC moves.
-- `amount` is positive, at most the cap the signing application passes (`capUnits`), and, checked separately by `verifyRule`, at most the worker's cap.
+- `amount` is positive, at most the cap the signing application passes (`capUnits`), and, checked separately by `verifyRule`, at most the cap passed to it.
 
 **Does not allow**
 
@@ -38,7 +38,7 @@ Builds and checks the two permissions an Ospex smart account signs so that a wor
 
 ## The same code on both sides
 
-The page that asks the account to sign uses `signTopUpRule` and `signBetRule`. The worker that redeems uses `verifyRule`, which rebuilds each rule with the same builder and refuses it unless the caveats match byte for byte. A rule that grants more than the builder would make (another target, a larger top-up, a missing expiry) is therefore refused even when the owner signed it. **The page and the worker must pin the same version of this package.**
+The app that asks the account to sign uses `signTopUpRule` and `signBetRule`. The worker that redeems uses `verifyRule`, which rebuilds each rule with the same builder and refuses it unless the caveats match byte for byte. A rule that grants more than the builder would make (another target, a larger top-up, a missing expiry) is therefore refused even when the owner signed it. **The signing app and the worker must pin the same version of this package.**
 
 ## Install
 
@@ -60,7 +60,7 @@ const text = serializeRule(topUp);
 ```
 
 - `account` is a Kit smart account, or anything with its `address`, `environment` and `signDelegation`.
-- `owner` is the login signer that owns the account. Signing refuses a signature that does not recover to it.
+- `owner` is the EOA that owns the account. Signing refuses a signature that does not recover to it.
 - `worker` is the only address that may redeem the rule.
 - Amounts are USDC base units (6 decimals). `capUnits` has no default, and a missing or non-positive cap is refused.
 

@@ -27,7 +27,7 @@ export const matchingModuleAbi = parseAbi([
 ]);
 
 /**
- * The only method the worker's delegation permits. Derived from the ABI above
+ * The only method the bet rule permits. Derived from the ABI above
  * so the two cannot drift; tests pin it to the value the contracts repo's
  * build artifact reports.
  */
