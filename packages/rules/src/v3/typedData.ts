@@ -1,4 +1,5 @@
 import type { Address } from 'viem';
+import { checkAddress, checkChainId, type FunctionName } from './checks.js';
 import type { TypedDataDomain, TypedDataField } from './types.js';
 
 /** The order's type string, as the matching contract's ORDER_TYPEHASH hashes it. */
@@ -28,12 +29,30 @@ export const STOP_TYPES: { readonly OspexStop: readonly TypedDataField[] } = Obj
   OspexStop: Object.freeze([field('account', 'address'), field('orderHashes', 'bytes32[]')]),
 });
 
-/** The order's domain: name "Ospex", version "3", the chain, and the matching contract. */
+/**
+ * The order's domain: name "Ospex", version "3", the chain, and the matching
+ * contract, its address checksummed. The matching contract, not the relay.
+ */
 export function orderDomain(chainId: number, matching: Address): TypedDataDomain {
-  return { name: 'Ospex', version: '3', chainId, verifyingContract: matching };
+  return checkedOrderDomain('orderDomain', chainId, matching);
 }
 
-/** The stop's domain: name "Ospex Courier", version "1", the chain, and the relay. No nonce, no expiry. */
+/**
+ * The stop's domain: name "Ospex Courier", version "1", the chain, and the
+ * relay, its address checksummed. No nonce, no expiry.
+ */
 export function stopDomain(chainId: number, relay: Address): TypedDataDomain {
-  return { name: 'Ospex Courier', version: '1', chainId, verifyingContract: relay };
+  return checkedStopDomain('stopDomain', chainId, relay);
+}
+
+/** The order's domain, its inputs checked in the name of the function that asked. */
+export function checkedOrderDomain(fn: FunctionName, chainId: unknown, matching: unknown): TypedDataDomain {
+  const id = checkChainId(fn, chainId);
+  return { name: 'Ospex', version: '3', chainId: id, verifyingContract: checkAddress(fn, 'matching', matching) };
+}
+
+/** The stop's domain, its inputs checked in the name of the function that asked. */
+export function checkedStopDomain(fn: FunctionName, chainId: unknown, relay: unknown): TypedDataDomain {
+  const id = checkChainId(fn, chainId);
+  return { name: 'Ospex Courier', version: '1', chainId: id, verifyingContract: checkAddress(fn, 'relay', relay) };
 }
