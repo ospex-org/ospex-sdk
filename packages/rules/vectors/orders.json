@@ -1,0 +1,890 @@
+{
+  "provenance": {
+    "description": "Digests of the v3 order: EIP-712 typed data of the ten fields under the domain named \"Ospex\", version \"3\", the chain and the matching contract. Frozen once; never made by this package.",
+    "orderType": "OspexOrder(address account,uint256 gameId,address scorer,int32 lineTicks,uint8 positionType,uint16 oddsTick,uint256 riskAmount,uint256 nonce,uint256 expiry,uint256 minFill)",
+    "orderTypeHash": "0x9f84ebcb32dbe12642da2b9008bc0ec2e6332472ec69f27f13e8abebbb92934c",
+    "sources": {
+      "contract": "The matching contract's getOrderHash, called on the set the courier's test rig deploys on a local Anvil (chain 31337) from the contracts at baa1fc566cf13552d968fb738ccb8ca3d859666f, built offline with forge and solc 0.8.26. orderTypeHash is the same contract's ORDER_TYPEHASH, and orderType the string its source hashes.",
+      "reference": "ethers 6.17.0's typed-data encoder, for the base order under domains the contract cannot run: another chain, a relay address in the matching contract's place, and two domains that are not the order's (notTheOrdersDomain).",
+      "courier-frozen": "The courier's own frozen chain-137 order at 88f1b2601f42cb17ea23247a892a1c64695bd081, in its words \"derived outside this repository, with another toolchain's keccak256 and signer\", copied as text."
+    },
+    "contracts": {
+      "repository": "ospex-org/ospex-contracts-v2",
+      "commit": "baa1fc566cf13552d968fb738ccb8ca3d859666f",
+      "tree": "9cd2bcf1c95cdf94aa0d8f484844736b59528ed9"
+    },
+    "courier": {
+      "repository": "ospex-org/ospex-courier",
+      "commit": "88f1b2601f42cb17ea23247a892a1c64695bd081",
+      "tree": "ad5cf75bb5ec6ff6af8e84b01d2a21f31f24644c"
+    },
+    "tools": {
+      "forge": "1.6.0-nightly, commit 80ae59941ada986c49e05f2a8412c3fc1f9075d0",
+      "anvil": "1.6.0-nightly, commit 80ae59941ada986c49e05f2a8412c3fc1f9075d0",
+      "solc": "0.8.26+commit.8a97fa7a",
+      "node": "v22.14.0",
+      "ethers": "6.17.0, resolved from node_modules/ethers/lib.commonjs/index.js",
+      "ethersCurveLibrary": "@noble/curves 1.2.0"
+    },
+    "nonce": "nonceParts are the nonce's version, grant and order number; the nonce is version << 128 | grant << 96 | orderNumber, as the courier's test support packs it.",
+    "accounts": "Accounts are the fixture addresses of signatures.json, or literal addresses.",
+    "integers": "Every uint256 is a decimal string; lineTicks, positionType, oddsTick, grant and chainId are numbers."
+  },
+  "cases": [
+    {
+      "label": "base",
+      "source": "contract",
+      "note": "the base order: a negative legal line, grant 0, the account its own signer",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x619f999c18a06eeca7474509028eaa529476b9b497ec349e8b8b2b59c20cc519"
+    },
+    {
+      "label": "step account",
+      "source": "contract",
+      "note": "one legal step: account to another fixture address",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x38a95b8689e4a87FB9ceeBEdB159bcDFcdd343f3",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x02afe8be7e334be821832d79e9d6ecd939c36be73c233146fc69442922527836"
+    },
+    {
+      "label": "step gameId",
+      "source": "contract",
+      "note": "one legal step: gameId + 1",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "8",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0xe2a9af8959d76474616c31cb2d72cfab5af71057a1e8c8d7fd8b18143ed4acb6"
+    },
+    {
+      "label": "step scorer",
+      "source": "contract",
+      "note": "one legal step: scorer to another address",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C2",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0xc212d1b2a2007e5056285cbb686e9c729e4f3f5062b6d8fbfbeb817ac7b87de9"
+    },
+    {
+      "label": "step lineTicks",
+      "source": "contract",
+      "note": "one legal step: lineTicks + 1",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -34,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x8c78caddf9da048b03eee9cb49eed6e929bc7cbd8073c3f5faa174f5c46d9f01"
+    },
+    {
+      "label": "step positionType",
+      "source": "contract",
+      "note": "one legal step: positionType 0 to 1",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 1,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x4ae31e4378382d5113704bead263a3e43544f987298e5ed048c8cc0a5dab0c49"
+    },
+    {
+      "label": "step oddsTick",
+      "source": "contract",
+      "note": "one legal step: oddsTick + 1",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 192,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x2a61accf94a260d4b3801848df29330c8c2155b7e9d7cc7143dd46572ed5d2d8"
+    },
+    {
+      "label": "step riskAmount",
+      "source": "contract",
+      "note": "one legal step: riskAmount + 100",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25100",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x2ad106706bdb78c3b2943b7b4357006d9373eb3734acde4a1b03af42df86c349"
+    },
+    {
+      "label": "step nonce",
+      "source": "contract",
+      "note": "one legal step: nonce + 1",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "2",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "2"
+      },
+      "digest": "0x3a00e80d850523e3510ba7422043af8d99eae9e4e82cb1a2f7ce9b06d4916f96"
+    },
+    {
+      "label": "step expiry",
+      "source": "contract",
+      "note": "one legal step: expiry + 1",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000001",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0xd0819cabffb3cc8547f673251d624078dc49381e1857aaf86ce364a251f0fa35"
+    },
+    {
+      "label": "step minFill",
+      "source": "contract",
+      "note": "one legal step: minFill + 1, from a base with minFill below riskAmount",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "1"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0xb8f5a5e5b1ba76ba3b8759ff08f27f98e9d77eb22cda15d86b9eca79478f7d0a"
+    },
+    {
+      "label": "gameId 0",
+      "source": "contract",
+      "note": "bound: gameId at 0",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "0",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0xbb7183bd3677b9514d1febef1cf51f284c12094cf7ec00bd6563608f59621e5e"
+    },
+    {
+      "label": "gameId max",
+      "source": "contract",
+      "note": "bound: gameId at 2^256 - 1",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x47bd155896b72696ab69bc02cc283b71c468f0d4c8f0049dfe321d2d9a481a3d"
+    },
+    {
+      "label": "expiry 0",
+      "source": "contract",
+      "note": "bound: expiry at 0",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "0",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0xca89fe3389c5dd57452c6e494f38781db95b620999e1e5bb4ee8c4fe888d209d"
+    },
+    {
+      "label": "expiry max",
+      "source": "contract",
+      "note": "bound: expiry at 2^256 - 1",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0xfd0143004e1a660fd95ab2593a7715d9fffd8536d6e605de38b8eadd20fb1de0"
+    },
+    {
+      "label": "nonce 0",
+      "source": "contract",
+      "note": "bound: the nonce at 0",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "0",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "0"
+      },
+      "digest": "0xf4e6cd561b6b7c8b280aafec794589aa9a5aba4bc723f9aacaf7d8b0067d480c"
+    },
+    {
+      "label": "nonce max",
+      "source": "contract",
+      "note": "bound: the nonce at 2^256 - 1, every part at its maximum (a nonzero grant)",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "340282366920938463463374607431768211455",
+        "grant": 4294967295,
+        "orderNumber": "79228162514264337593543950335"
+      },
+      "digest": "0xeb50f50caa1640c0596e84fdd8ce9d32e4fb5983ad0c10859f7870480b2685be"
+    },
+    {
+      "label": "riskAmount 100",
+      "source": "contract",
+      "note": "bound: riskAmount at one lot",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "100",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0xd0cd4a586440761884aaef432305993ce9d745318b448378b24b261ee7464766"
+    },
+    {
+      "label": "riskAmount largest lot",
+      "source": "contract",
+      "note": "bound: riskAmount at 2^256 - 36, the largest whole lot",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "115792089237316195423570985008687907853269984665640564039457584007913129639900",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x8665adef411309869b97595ca3829e41f13637182f03468e92c16fbdfb0ad8b5"
+    },
+    {
+      "label": "minFill equal to riskAmount",
+      "source": "contract",
+      "note": "bound: minFill equal to the order's riskAmount",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "25000"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x5a5b68223c99f6792a80d5d1f980762b5ec10cfc68caaeb9f345c3697d3f82f4"
+    },
+    {
+      "label": "lineTicks -1000000",
+      "source": "contract",
+      "note": "bound: lineTicks at its lower bound",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -1000000,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x2fabd3286a7fd0f1256b9d50d98757d2a693f8f935ae194ee88ffd59fcf1211a"
+    },
+    {
+      "label": "lineTicks 0",
+      "source": "contract",
+      "note": "lineTicks at 0",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": 0,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x8ced6d733f6f12e2459d66af811e488ed9715ba20ecedc7b21ddbb3eff895a5a"
+    },
+    {
+      "label": "lineTicks 1000000",
+      "source": "contract",
+      "note": "bound: lineTicks at its upper bound",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": 1000000,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x934e3abf20f92521cb1b2ed8f1a6f97c1c664e9e2944cf6e772670cb94f147f7"
+    },
+    {
+      "label": "oddsTick 101",
+      "source": "contract",
+      "note": "bound: oddsTick at its lower bound",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 101,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x329cd071fae6bb9d3334db63b73f9c219fecab708e6b8db2c356de9ed0de3ca0"
+    },
+    {
+      "label": "oddsTick 10100",
+      "source": "contract",
+      "note": "bound: oddsTick at its upper bound",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 10100,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x5c9cd1c14a445780889fe87aab633768a627bd9df3f24bfbfb093b7d38c13e24"
+    },
+    {
+      "label": "the other side",
+      "source": "contract",
+      "note": "the other side of the base's line, at an asymmetric tick",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": 35,
+        "positionType": 1,
+        "oddsTick": 210,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0x53557b2e88fe6156ea5475740b7573c9f615669f536bbaf40908d9fc66e81115"
+    },
+    {
+      "label": "a grant's agent signs",
+      "source": "contract",
+      "note": "grant 3: signed by the grant's fixture agent, checked by recovery only",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "237684487542793012780631851017",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 3,
+        "orderNumber": "9"
+      },
+      "digest": "0x8a2ed525143ef6a7ab2c6aadbea7ad7440b819f2dabf07266acb2f7645071aab"
+    },
+    {
+      "label": "version and order number at their maximum, grant 0",
+      "source": "contract",
+      "note": "grant 0 with the version and the order number at their maximum",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "115792089237316195423570985008687907852929702298798853738508473738074905378815",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "nonceParts": {
+        "version": "340282366920938463463374607431768211455",
+        "grant": 0,
+        "orderNumber": "79228162514264337593543950335"
+      },
+      "digest": "0xe0543f2d68d976d9afd28fac9e94a831d9cb6a90dafeea6dcdb4411f22f79828"
+    },
+    {
+      "label": "large values",
+      "source": "contract",
+      "note": "uint256 values beyond JavaScript's safe integers, signed by its own account",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "order": {
+        "account": "0x38a95b8689e4a87FB9ceeBEdB159bcDFcdd343f3",
+        "gameId": "9007199254740993",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "1000000000000000000000000000000000000000000000000000000000000",
+        "nonce": "1",
+        "expiry": "18446744073709551616",
+        "minFill": "100000000000000000000000000000000000000000000000000000000000"
+      },
+      "nonceParts": {
+        "version": "0",
+        "grant": 0,
+        "orderNumber": "1"
+      },
+      "digest": "0xe00ec0de92fe80d6b7b74b3961bd0096bd7b8e0823f999bbe02fbf11eb76393d"
+    },
+    {
+      "label": "base, chain 137",
+      "source": "reference",
+      "note": "the base order on chain 137, with a literal matching address",
+      "chainId": 137,
+      "matching": "0x00000000000000000000000000000000C0550001",
+      "domain": {
+        "name": "Ospex",
+        "version": "3",
+        "chainId": 137,
+        "verifyingContract": "0x00000000000000000000000000000000C0550001"
+      },
+      "notTheOrdersDomain": false,
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "digest": "0xea96a47cc47374adfc0206e219f81dfc8db5b1e2ee24bbfc88c480b51e612f1a"
+    },
+    {
+      "label": "base, the relay as verifying contract",
+      "source": "reference",
+      "note": "the base order with a relay address in the matching contract's place",
+      "chainId": 31337,
+      "matching": "0x00000000000000000000000000000000C0550003",
+      "domain": {
+        "name": "Ospex",
+        "version": "3",
+        "chainId": 31337,
+        "verifyingContract": "0x00000000000000000000000000000000C0550003"
+      },
+      "notTheOrdersDomain": false,
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "digest": "0x9c42599d508840fb265a44d0178f4acfcda01da4fd4a0c9c6472582c745945bf"
+    },
+    {
+      "label": "base, the stop's name",
+      "source": "reference",
+      "note": "not the order's domain: the name \"Ospex Courier\"",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "domain": {
+        "name": "Ospex Courier",
+        "version": "3",
+        "chainId": 31337,
+        "verifyingContract": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853"
+      },
+      "notTheOrdersDomain": true,
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "digest": "0xab9dc9a7a2a13ef9a550e657b2edbe22de0c6c0365558f9c55274f0ada9fd9fe"
+    },
+    {
+      "label": "base, another version",
+      "source": "reference",
+      "note": "not the order's domain: the version \"1\"",
+      "chainId": 31337,
+      "matching": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "domain": {
+        "name": "Ospex",
+        "version": "1",
+        "chainId": 31337,
+        "verifyingContract": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853"
+      },
+      "notTheOrdersDomain": true,
+      "order": {
+        "account": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+        "gameId": "7",
+        "scorer": "0x00000000000000000000000000000000000005C1",
+        "lineTicks": -35,
+        "positionType": 0,
+        "oddsTick": 191,
+        "riskAmount": "25000",
+        "nonce": "1",
+        "expiry": "1900000000",
+        "minFill": "0"
+      },
+      "digest": "0xe9fd5aaf7648ce509daea9305f5e7aa56bc8f020dc4bda743779b0c25af5c9c0"
+    },
+    {
+      "label": "the courier's frozen order",
+      "source": "courier-frozen",
+      "note": "The courier's own frozen chain-137 order, copied as text. oldDigest is the digest of the same typed data without minFill: it is not a valid order's hash.",
+      "chainId": 137,
+      "matching": "0x00000000000000000000000000000000C0550001",
+      "order": {
+        "account": "0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7",
+        "gameId": "1",
+        "scorer": "0x00000000000000000000000000000000c0550002",
+        "lineTicks": 0,
+        "positionType": 0,
+        "oddsTick": 200,
+        "riskAmount": "10000",
+        "nonce": "7",
+        "expiry": "1900000000",
+        "minFill": "9900"
+      },
+      "digest": "0x9af8958f00563f5d9c4bd30f85953c0d0a67df62efffbccdfa9b4a7cbc3aaae0",
+      "typeHash": "0x9f84ebcb32dbe12642da2b9008bc0ec2e6332472ec69f27f13e8abebbb92934c",
+      "oldDigest": "0x428d170f2fc43ee0a5b21f7433a1a99bba76a4203d2985a47cbc3b5f83549219"
+    }
+  ]
+}
