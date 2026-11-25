@@ -24,10 +24,11 @@ const HALF_CURVE_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92
 const SIGNATURE = /^0x[0-9a-fA-F]{130}$/;
 
 /**
- * Signs an order under its own domain. The signature must recover to
- * `signer.address`; and for an order whose nonce has grant 0, `signer.address`
- * must also be the order's account. A nonzero grant is checked by the recovery
- * only.
+ * Signs an order under its own domain. For an order whose nonce has grant 0,
+ * `signer.address` must be the order's account: that is checked with the
+ * inputs, before the signer is called, so an order refused for its account is
+ * never handed to the signer. The signature must then recover to
+ * `signer.address`. A nonzero grant is checked by the recovery only.
  */
 export async function signOrder(
   order: OspexOrder,
@@ -40,9 +41,8 @@ export async function signOrder(
   const account = order.account;
   const { grant } = splitNonce(order.nonce);
   const declared: unknown = signer.address;
-  const signature = await signChecked('signOrder', args, digest, declared, signer);
   if (grant === 0 && !sameAddress(declared, account)) throw new OrderRefused('signOrder', 'account', account);
-  return signature;
+  return signChecked('signOrder', args, digest, declared, signer);
 }
 
 /**
