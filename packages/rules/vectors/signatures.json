@@ -33,7 +33,7 @@
     },
     "accounts": "Signers are fixture addresses, or the courier's frozen account.",
     "sources": {
-      "reference": "ethers 6.17.0, the SDK's locked version, a library this package does not use. The high-s twins are recovered by its curve library, since its recoverAddress refuses a high s.",
+      "reference": "ethers 6.17.0, the SDK's locked version, a library this package does not use. Its recoverAddress refuses an s whose top bit is set, as each high-s twin's is, so the twins are recovered by its curve library. The two cases with s one above the half-order, whose top bit is clear, were recovered by its recoverAddress given r, s and v apart; given the signature's 65 bytes, it recovers the same addresses.",
       "courier-frozen": "The courier's own frozen signatures at 88f1b2601f42cb17ea23247a892a1c64695bd081, copied as text."
     },
     "contracts": {
@@ -301,7 +301,7 @@
       "s": "57896044618658097711785492504343953926418782139537452191302581570759080747169",
       "v": 27,
       "recovered": "0xdB9E74ca07D67208Aede5B4a614E2399Bce5ED50",
-      "recoveredBy": "ethers 6.17.0 recoverAddress"
+      "recoveredBy": "ethers 6.17.0 recoverAddress, given r, s and v apart"
     },
     {
       "label": "s at the half-order, on one hash, chain 137, signed by ospex-rules fixture key 1",
@@ -331,7 +331,7 @@
       "s": "57896044618658097711785492504343953926418782139537452191302581570759080747169",
       "v": 27,
       "recovered": "0xe0A7503544134aDE9331Efc24c643C81a08FB2A5",
-      "recoveredBy": "ethers 6.17.0 recoverAddress"
+      "recoveredBy": "ethers 6.17.0 recoverAddress, given r, s and v apart"
     },
     {
       "label": "base, signed by ospex-rules fixture key 1, read as a stop",

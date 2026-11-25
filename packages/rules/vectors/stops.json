@@ -3,8 +3,13 @@
     "description": "Digests of the stop: EIP-712 typed data of the account and the order hashes, in the order given, under the domain named \"Ospex Courier\", version \"1\", the chain and the relay. Frozen once; never made by this package.",
     "stopType": "OspexStop(address account,bytes32[] orderHashes)",
     "sources": {
-      "courier": "The courier's own stopHash at 88f1b2601f42cb17ea23247a892a1c64695bd081, at chain 137 and at chain 31337, with literal relay addresses. The hashes a stop names are order digests from orders.json, or, for the stop of a hundred, keccak256 of \"ospex-rules fixture stop hash <n>\" for n from 1 to 100.",
+      "courier": "The courier's own stopHash at 88f1b2601f42cb17ea23247a892a1c64695bd081, at chain 137 and at chain 31337, with literal relay addresses. The hashes a stop names are order digests from orders.json, or, for the stop of a hundred, keccak256 of the UTF-8 bytes of \"ospex-rules fixture stop hash <n>\" for n from 1 to 100.",
       "courier-frozen": "The courier's own frozen chain-137 stop at 88f1b2601f42cb17ea23247a892a1c64695bd081, in its words \"derived outside this repository, with another toolchain's keccak256 and signer\", copied as text, with its three companion digests."
+    },
+    "contracts": {
+      "repository": "ospex-org/ospex-contracts-v2",
+      "commit": "baa1fc566cf13552d968fb738ccb8ca3d859666f",
+      "tree": "9cd2bcf1c95cdf94aa0d8f484844736b59528ed9"
     },
     "courier": {
       "repository": "ospex-org/ospex-courier",
@@ -12,8 +17,14 @@
       "tree": "ad5cf75bb5ec6ff6af8e84b01d2a21f31f24644c"
     },
     "tools": {
-      "node": "v22.14.0"
-    }
+      "forge": "1.6.0-nightly, commit 80ae59941ada986c49e05f2a8412c3fc1f9075d0",
+      "anvil": "1.6.0-nightly, commit 80ae59941ada986c49e05f2a8412c3fc1f9075d0",
+      "node": "v22.14.0",
+      "ethers": "6.17.0, resolved from node_modules/ethers/lib.commonjs/index.js",
+      "viem": "2.55.10, the courier's locked version, from its node_modules",
+      "tsx": "4.23.1, the courier's locked version, from its node_modules"
+    },
+    "toolsNote": "The Foundry and ethers versions identify the shared fixture-generation run; stop digests themselves were computed by the courier's stopHash."
   },
   "cases": [
     {

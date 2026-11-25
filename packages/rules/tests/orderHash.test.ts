@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { keccak256, toBytes } from 'viem';
 import { orderHash } from '../src/v3/hash.js';
-import { ORDER_TYPE, ORDER_TYPES, orderDomain } from '../src/v3/typedData.js';
+import { ORDER_TYPE, ORDER_TYPES, STOP_TYPES, orderDomain } from '../src/v3/typedData.js';
 import { orderCase, orders, parseType, toOrder, type WireOrder } from './vectors.js';
 
 // The order's hash, against digests the matching contract made with getOrderHash, the courier's own frozen order,
@@ -57,6 +57,16 @@ test("ORDER_TYPES, read as its ten name and type pairs in order, is the contract
     parsed.fields.map((f) => [f.name, f.type]),
   );
   assert.equal(ORDER_TYPE, orders.provenance.orderType);
+});
+
+test('ORDER_TYPES and STOP_TYPES are frozen: each object, its list of fields, and every field in it', () => {
+  for (const types of [ORDER_TYPES, STOP_TYPES]) {
+    assert.ok(Object.isFrozen(types));
+    for (const fields of Object.values(types)) {
+      assert.ok(Object.isFrozen(fields));
+      for (const f of fields) assert.ok(Object.isFrozen(f), f.name);
+    }
+  }
 });
 
 test("another chain, or a relay in the matching contract's place, gives the reference library's digest for that domain; a domain of another name or version is never the order's hash", () => {

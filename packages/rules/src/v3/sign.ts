@@ -38,8 +38,8 @@ export async function signOrder(
 ): Promise<Hex> {
   const args = orderTypedData('signOrder', order, chainId, matching);
   const digest = digestOf(args);
-  const account = order.account;
-  const { grant } = splitNonce(order.nonce);
+  const account = args.message['account'] as Address;
+  const { grant } = splitNonce(args.message['nonce'] as bigint);
   const declared: unknown = signer.address;
   if (grant === 0 && !sameAddress(declared, account)) throw new OrderRefused('signOrder', 'account', account);
   return signChecked('signOrder', args, digest, declared, signer);

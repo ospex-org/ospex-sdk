@@ -10,7 +10,8 @@ Adds the v3 order and the courier's stop. The top-up and bet rules do not change
 - The courier's stop: `STOP_TYPES`, `stopDomain` ("Ospex Courier", version "1", the chain and the relay) and `stopDigest`, over the account and the order hashes in the order given.
 - `packNonce` and `splitNonce`: the nonce's version (128 bits), grant (32 bits) and order number (96 bits).
 - `signOrder` and `signStop` hand the caller's signer (`TypedDataSigner`) the typed data once, and return only a 65-byte signature with `v` 27 or 28 and `s` in the lower half of the curve's order, that recovers to the signer's address. An order whose nonce has grant 0 must be signed by its own account; that is checked before the signer is called.
-- Every input is checked for shape and range before it is hashed or signed, and every refusal throws `OrderRefused`, naming the function, the field and the value. Live state (the account's version, a grant, the floor, the balance, an expiry still ahead) is not checked.
+- Every order, stop, nonce and domain field is checked for shape and range before it is hashed or signed, and every field or signature refusal raised by this package throws `OrderRefused`, naming the function, the field and the value. Live state (the account's version, a grant, the floor, the balance, an expiry still ahead) is not checked.
+- The signer must implement `TypedDataSigner`; a missing `signTypedData` method throws `TypeError`, and exceptions from that method propagate.
 - Frozen test vectors ship in the package, as `@ospex/rules/vectors/orders.json`, `stops.json` and `signatures.json`: order digests from the matching contract, stop digests from the courier, and signatures from a reference signer, each with its provenance.
 
 ## 0.1.0

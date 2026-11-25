@@ -34,6 +34,16 @@ function countingSigner(): TypedDataSigner & { count: number } {
   return counter;
 }
 
+/**
+ * More refusals of an address field: 42 characters with one not hex, and two values that are not strings (the
+ * address as a bigint, and none), each naming the value as the refusal gives it.
+ */
+const notAnAddress = (a: string): Array<[unknown, string]> => [
+  [`${a.slice(0, 41)}g`, `${a.slice(0, 41)}g`],
+  [BigInt(a), BigInt(a).toString()],
+  [undefined, 'undefined'],
+];
+
 /** Text of an address in one case throughout, or with one letter's case flipped so its checksum fails. */
 const lower = (a: string) => `0x${a.slice(2).toLowerCase()}`;
 const upper = (a: string) => `0x${a.slice(2).toUpperCase()}`;
@@ -65,7 +75,11 @@ const ORDER_ROWS: Row[] = [
   {
     field: 'riskAmount',
     accepted: [[100n, 'riskAmount 100'], [LARGEST_LOT, 'riskAmount largest lot']],
-    refusedValues: [[0n, '0'], [150n, '150'], [-100n, '-100'], [LARGEST_LOT + 100n, (LARGEST_LOT + 100n).toString()]],
+    refusedValues: [
+      [0n, '0'], [150n, '150'], [-100n, '-100'], [LARGEST_LOT + 100n, (LARGEST_LOT + 100n).toString()],
+      [99n, '99'], [101n, '101'],
+      [LARGEST_LOT + 1n, (LARGEST_LOT + 1n).toString()], [UINT256_MAX, UINT256_MAX.toString()], [2n ** 256n, (2n ** 256n).toString()],
+    ],
   },
   { field: 'minFill', accepted: [[0n, 'base'], [25_000n, 'minFill equal to riskAmount']], refusedValues: [[25_001n, '25001'], [-1n, '-1']] },
   {
@@ -78,12 +92,12 @@ const ORDER_ROWS: Row[] = [
   {
     field: 'account',
     accepted: [[lower(A), 'base'], [A, 'base'], [upper(A), 'base']],
-    refusedValues: [[badChecksum(A), badChecksum(A)], [A.slice(0, 41), A.slice(0, 41)], [`${A}0`, `${A}0`], [A.slice(2), A.slice(2)]],
+    refusedValues: [[badChecksum(A), badChecksum(A)], [A.slice(0, 41), A.slice(0, 41)], [`${A}0`, `${A}0`], [A.slice(2), A.slice(2)], ...notAnAddress(A)],
   },
   {
     field: 'scorer',
     accepted: [[lower(baseOrder.scorer), 'base'], [baseOrder.scorer, 'base'], [upper(baseOrder.scorer), 'base']],
-    refusedValues: [[badChecksum(OTHER_MIXED), badChecksum(OTHER_MIXED)], [baseOrder.scorer.slice(0, 41), baseOrder.scorer.slice(0, 41)], [`${baseOrder.scorer}0`, `${baseOrder.scorer}0`], [baseOrder.scorer.slice(2), baseOrder.scorer.slice(2)]],
+    refusedValues: [[badChecksum(OTHER_MIXED), badChecksum(OTHER_MIXED)], [baseOrder.scorer.slice(0, 41), baseOrder.scorer.slice(0, 41)], [`${baseOrder.scorer}0`, `${baseOrder.scorer}0`], [baseOrder.scorer.slice(2), baseOrder.scorer.slice(2)], ...notAnAddress(baseOrder.scorer)],
   },
   // the types: a number where a bigint is due, a bigint where a number is due, never coerced
   { field: 'gameId', accepted: [[7n, 'base']], refusedValues: [[7, '7']] },
@@ -127,6 +141,12 @@ test('an order that is not an object is refused before hashing, at its first fie
   assert.throws(() => orderHash(null as unknown as OspexOrder, base.chainId, base.matching), refused('orderHash', 'account', 'undefined'));
 });
 
+test('signOrder: an order that is not an object is refused at its first field, before the signer is called', async () => {
+  const signer = countingSigner();
+  await assert.rejects(signOrder(null as unknown as OspexOrder, base.chainId, base.matching, signer), refused('signOrder', 'account', 'undefined'));
+  assert.equal(signer.count, 0);
+});
+
 /** The chain id and the contract's address, for the four functions that take them. */
 const CHAIN_IDS: { accepted: number[]; refusedValues: Array<[unknown, string]> } = {
   accepted: [1, SAFE_MAX],
@@ -134,7 +154,7 @@ const CHAIN_IDS: { accepted: number[]; refusedValues: Array<[unknown, string]> }
 };
 const contractForms = (a: string) => ({
   accepted: [lower(a), a, upper(a)],
-  refusedValues: [[badChecksum(OTHER_MIXED), badChecksum(OTHER_MIXED)], [a.slice(0, 41), a.slice(0, 41)], [`${a}0`, `${a}0`], [a.slice(2), a.slice(2)]] as Array<[string, string]>,
+  refusedValues: [[badChecksum(OTHER_MIXED), badChecksum(OTHER_MIXED)], [a.slice(0, 41), a.slice(0, 41)], [`${a}0`, `${a}0`], [a.slice(2), a.slice(2)], ...notAnAddress(a)] as Array<[unknown, string]>,
 });
 
 test('orderHash and signOrder, the chain id and the matching contract at their bounds', async () => {
@@ -197,12 +217,15 @@ const STOP_ROWS: StopRow[] = [
   {
     field: 'account',
     accepted: [[lower(one.account), 'one hash, chain 137'], [one.account, 'one hash, chain 137'], [upper(one.account), 'one hash, chain 137']],
-    refusedValues: [[badChecksum(one.account), badChecksum(one.account)], [one.account.slice(0, 41), one.account.slice(0, 41)], [`${one.account}0`, `${one.account}0`], [one.account.slice(2), one.account.slice(2)]],
+    refusedValues: [[badChecksum(one.account), badChecksum(one.account)], [one.account.slice(0, 41), one.account.slice(0, 41)], [`${one.account}0`, `${one.account}0`], [one.account.slice(2), one.account.slice(2)], ...notAnAddress(one.account)],
   },
   {
     field: 'orderHashes',
-    accepted: [[one.orderHashes, 'one hash, chain 137'], [hundred.orderHashes, 'a hundred hashes, chain 137']],
-    refusedValues: [[[], '0'], [hundredAndOne, '101'], [[hash, hash], hash], [[hash, upperHash], upperHash], [[hash.slice(0, 65)], hash.slice(0, 65)], [hash, hash]],
+    accepted: [[one.orderHashes, 'one hash, chain 137'], [hundred.orderHashes, 'a hundred hashes, chain 137'], [[upperHash], 'one hash, chain 137']],
+    refusedValues: [
+      [[], '0'], [hundredAndOne, '101'], [[hash, hash], hash], [[hash, upperHash], upperHash], [[hash.slice(0, 65)], hash.slice(0, 65)], [hash, hash],
+      [[`${hash}0`], `${hash}0`], [[hash.slice(2)], hash.slice(2)], [[`0x${'z'.repeat(64)}`], `0x${'z'.repeat(64)}`], [[123], '123'],
+    ],
   },
   { field: 'chainId', accepted: [[137, 'one hash, chain 137'], [31337, 'one hash, chain 31337']], refusedValues: CHAIN_IDS.refusedValues },
   {

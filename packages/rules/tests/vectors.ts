@@ -124,6 +124,19 @@ export function fixtureSigner(label: string): TypedDataSigner {
   };
 }
 
+/** A signer wrapped to record what each call hands it. It signs what it is handed, as a wallet does. */
+export function recording(signer: TypedDataSigner): TypedDataSigner & { calls: TypedDataArgs[] } {
+  const calls: TypedDataArgs[] = [];
+  return {
+    address: signer.address,
+    calls,
+    signTypedData: (args) => {
+      calls.push(args);
+      return signer.signTypedData(args);
+    },
+  };
+}
+
 /** A stub signer: it declares an address, returns the given bytes, and records what each call hands it. */
 export function stubSigner(address: string, returns: string): TypedDataSigner & { calls: TypedDataArgs[] } {
   const calls: TypedDataArgs[] = [];
