@@ -1,7 +1,7 @@
 {
   "name": "@ospex/rules",
-  "version": "0.1.0",
-  "description": "Builds and checks the two permissions an Ospex account signs: the top-up rule and the bet rule.",
+  "version": "0.2.0",
+  "description": "Builds and checks the two permissions an Ospex account signs, the top-up rule and the bet rule; and hashes and signs the v3 order and the courier's stop, with frozen test vectors.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -11,10 +11,12 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./vectors/*.json": "./vectors/*.json"
   },
   "files": [
     "dist",
+    "vectors",
     "README.md",
     "LICENSE"
   ],
@@ -24,7 +26,7 @@
   "scripts": {
     "build": "tsc",
     "clean": "rimraf dist",
-    "test": "tsx --test tests/protocol.test.ts tests/delegation.test.ts tests/verifyDelegation.test.ts tests/topUp.test.ts tests/rules.test.ts tests/usdc.test.ts tests/mainnetTopUp.test.ts",
+    "test": "tsx --test tests/protocol.test.ts tests/delegation.test.ts tests/verifyDelegation.test.ts tests/topUp.test.ts tests/rules.test.ts tests/usdc.test.ts tests/mainnetTopUp.test.ts tests/orderHash.test.ts tests/stopDigest.test.ts tests/nonce.test.ts tests/inputChecks.test.ts tests/signers.test.ts tests/exports.test.ts",
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc -p tsconfig.tests.json"
   },

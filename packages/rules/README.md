@@ -1,6 +1,6 @@
 # @ospex/rules
 
-Builds and checks the two permissions an Ospex smart account signs so that a worker can place bets for it: a **top-up rule** and a **bet rule**. Both are [MetaMask Smart Accounts Kit](https://github.com/MetaMask/smart-accounts-kit) delegations on Polygon (chain 137), each to one named worker address. The package builds them, signs them through the account you pass in, and checks them. It never sends a transaction.
+Builds and checks the two permissions an Ospex smart account signs so that a worker can place bets for it: a **top-up rule** and a **bet rule**. Both are [MetaMask Smart Accounts Kit](https://github.com/MetaMask/smart-accounts-kit) delegations on Polygon (chain 137), each to one named worker address. The package builds them, signs them through the account you pass in, and checks them. It never sends a transaction. It also hashes and signs the v3 order and the courier's stop (below).
 
 ## What each rule permits
 
@@ -47,7 +47,7 @@ The app that asks the account to sign uses `signTopUpRule` and `signBetRule`. Th
 From the GitHub release (the package is not on npm):
 
 ```sh
-yarn add https://github.com/ospex-org/ospex-sdk/releases/download/rules-v0.1.0/ospex-rules-0.1.0.tgz
+yarn add https://github.com/ospex-org/ospex-sdk/releases/download/rules-v0.2.0/ospex-rules-0.2.0.tgz
 ```
 
 ## Signing
@@ -77,6 +77,45 @@ const verified = await verifyRule(parseRule(text), {
 ```
 
 `parseRule` checks the text's shape. `verifyRule` throws `RuleRefused` unless the rule is in the `ospex-rule/1` format, is the expected kind, is for chain 137, is delegated to `worker`, is a root delegation, comes from the account `accountFor(owner)` derives, is signed by `owner`, has caveats identical to what the builder makes for the same parameters (so a top-up above `capUnits` is refused), and `nowSeconds` falls inside its window.
+
+## The v3 order and the courier's stop
+
+The package also hashes and signs an order for the matching contract, and a stop for the courier. It decides no price or size, reads no chain, and signs no transaction.
+
+```ts
+import { orderHash, packNonce, signOrder, signStop, type OspexOrder } from '@ospex/rules';
+
+const order: OspexOrder = {
+  account, gameId, scorer, lineTicks: -35, positionType: 0, oddsTick: 191,
+  riskAmount: 25_000_000n, nonce: packNonce(version, 0, orderNumber), expiry, minFill: 0n,
+};
+const hash = orderHash(order, 137, matching);
+const signature = await signOrder(order, 137, matching, signer);
+const stop = await signStop(account, [hash], 137, relay, signer);
+```
+
+- `signer` is any `TypedDataSigner`: an `address`, and a `signTypedData(args)` that signs the EIP-712 typed data it is handed. The package reads no key and builds no signer.
+- **The order:** ten fields, as the matching contract hashes them, under the domain "Ospex", version "3", the chain and the matching contract. `orderHash` equals the contract's `getOrderHash`.
+- **The stop:** the account and the order hashes, in the order given, under the domain "Ospex Courier", version "1", the chain and the relay. The same hashes in another order are another digest.
+- **The nonce:** `packNonce(version, grant, orderNumber)` packs the account's version (128 bits), the grant (32 bits; 0 when the account signs for itself) and an order number (96 bits). `splitNonce` is its inverse.
+- **The signature:** `signOrder` and `signStop` call the signer once, and return only a 65-byte signature that recovers to `signer.address`, with `v` 27 or 28 (a `v` of 0 or 1 is rewritten) and `s` in the lower half of the curve's order (a higher `s` is refused, never flipped). For an order whose grant is 0, `signer.address` must also be the order's `account`, and that is checked before the signer is called. A nonzero grant is checked by the recovery only.
+- **The checks:** every order, stop, nonce and domain field is checked for shape and range before it is hashed or signed. The uint256 fields are bigints from 0 to 2^256 - 1; `riskAmount` is a positive multiple of 100, and `minFill` at most `riskAmount`; `lineTicks` is within 1,000,000 either side of 0, `positionType` 0 or 1, and `oddsTick` from 101 to 10,100; a chain id is a safe integer above 0; an address is in one case, or has a valid checksum; a stop names 1 to 100 hashes, none twice. A value of the wrong type is refused, never coerced. Every field or signature refusal raised by this package is an `OrderRefused`, with `functionName`, `field` and `value`.
+- The signer must implement `TypedDataSigner`; a missing `signTypedData` method throws `TypeError`, and exceptions from that method propagate.
+- **Not checked:** live state. Whether the nonce's version is the account's current one, whether a grant is live, the line's floor, the account's registration, its balance, and whether the expiry is still ahead are for the caller to read.
+
+### Test vectors
+
+The package ships the vectors its own tests read, so a consumer can test against the same bytes:
+
+```ts
+import orders from '@ospex/rules/vectors/orders.json' with { type: 'json' }; // Node 20.10 and later
+// or: createRequire(import.meta.url)('@ospex/rules/vectors/orders.json')
+```
+
+- `orders.json`: order digests made by the matching contract's `getOrderHash`, a reference library's digests under other domains, and the courier's own frozen order.
+- `stops.json`: stop digests made by the courier's own `stopHash`, and the courier's frozen stop.
+- `signatures.json`: signatures made by a reference signer (ethers 6) with public fixture keys, and the cases built from them: high-`s` twins, and `s` at the half-order and one above.
+- Each file is `{ "provenance": { … }, "cases": [ … ] }`, and every uint256 in it is a decimal string. The provenance names the commits and tools each case came from. Each fixture key is keccak256 of a public label: it holds nothing, and anyone can sign with it.
 
 ## Also exported
 

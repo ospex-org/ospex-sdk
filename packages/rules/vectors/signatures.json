@@ -1,0 +1,371 @@
+{
+  "provenance": {
+    "description": "Signatures of fixture orders and stops, and the stub cases built from them, frozen once; never made by this package.",
+    "reference": {
+      "library": "ethers",
+      "version": "6.17.0",
+      "resolved": "node_modules/ethers/lib.commonjs/index.js",
+      "lockVersion": "6.17.0",
+      "method": "Wallet.signTypedData, and recoverAddress for the stub tuples",
+      "curveLibrary": "@noble/curves 1.2.0"
+    },
+    "fixtureKeys": [
+      {
+        "label": "ospex-rules fixture key 1",
+        "address": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53"
+      },
+      {
+        "label": "ospex-rules fixture key 2",
+        "address": "0x38a95b8689e4a87FB9ceeBEdB159bcDFcdd343f3"
+      },
+      {
+        "label": "ospex-rules fixture key 3",
+        "address": "0xF69D50709618646D27C3969D38dD4c6d9585f250"
+      }
+    ],
+    "keyDerivation": "Each fixture key is keccak256 of its label's UTF-8 bytes. The keys are public by design and hold nothing; no key is written here.",
+    "halfOrder": "0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0",
+    "kinds": {
+      "order": "A fixture order of orders.json, signed: signs names its case, signer is the address the signature recovers to.",
+      "stop": "A fixture stop of stops.json, signed.",
+      "stub": "A signature built from another (of): its high-s twin (s replaced by the curve order minus s, v flipped), or r with s at the half-order or one above and v 27. recovered is the address it recovers to over digest.",
+      "crossed": "An order's signature recovered over a stop digest of the same account: another address."
+    },
+    "accounts": "Signers are fixture addresses, or the courier's frozen account.",
+    "sources": {
+      "reference": "ethers 6.17.0, the SDK's locked version, a library this package does not use. Its recoverAddress refuses an s whose top bit is set, as each high-s twin's is, so the twins are recovered by its curve library. The two cases with s one above the half-order, whose top bit is clear, were recovered by its recoverAddress given r, s and v apart; given the signature's 65 bytes, it recovers the same addresses.",
+      "courier-frozen": "The courier's own frozen signatures at 88f1b2601f42cb17ea23247a892a1c64695bd081, copied as text."
+    },
+    "contracts": {
+      "repository": "ospex-org/ospex-contracts-v2",
+      "commit": "baa1fc566cf13552d968fb738ccb8ca3d859666f",
+      "tree": "9cd2bcf1c95cdf94aa0d8f484844736b59528ed9"
+    },
+    "courier": {
+      "repository": "ospex-org/ospex-courier",
+      "commit": "88f1b2601f42cb17ea23247a892a1c64695bd081",
+      "tree": "ad5cf75bb5ec6ff6af8e84b01d2a21f31f24644c"
+    },
+    "tools": {
+      "forge": "1.6.0-nightly, commit 80ae59941ada986c49e05f2a8412c3fc1f9075d0",
+      "anvil": "1.6.0-nightly, commit 80ae59941ada986c49e05f2a8412c3fc1f9075d0",
+      "solc": "0.8.26+commit.8a97fa7a",
+      "node": "v22.14.0",
+      "ethers": "6.17.0, resolved from node_modules/ethers/lib.commonjs/index.js",
+      "ethersCurveLibrary": "@noble/curves 1.2.0"
+    }
+  },
+  "cases": [
+    {
+      "label": "base, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "order",
+      "signs": "base",
+      "purpose": "grant 0, signed by its own account",
+      "keyLabel": "ospex-rules fixture key 1",
+      "signer": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+      "digest": "0x619f999c18a06eeca7474509028eaa529476b9b497ec349e8b8b2b59c20cc519",
+      "signature": "0x274d479ea9a116887da75744f4c0df926ed4f396cac7ceb6310243682953d97d7614f020390f9943e3d17e0b66a9f1a369b32a7a96fcf16d39421d57399b1b861b"
+    },
+    {
+      "label": "base, signed by ospex-rules fixture key 2",
+      "source": "reference",
+      "kind": "order",
+      "signs": "base",
+      "purpose": "grant 0, signed by another key than the account and the declared signer",
+      "keyLabel": "ospex-rules fixture key 2",
+      "signer": "0x38a95b8689e4a87FB9ceeBEdB159bcDFcdd343f3",
+      "digest": "0x619f999c18a06eeca7474509028eaa529476b9b497ec349e8b8b2b59c20cc519",
+      "signature": "0x0019c77dd231c1a5deabcd2b4e16cf6949301fb537185d9350f01b6a783e79096cc9cea1dabd9aafd90876d19555826ad564b17fd37fde1a9288ebf8424e80db1c"
+    },
+    {
+      "label": "step account, signed by ospex-rules fixture key 2",
+      "source": "reference",
+      "kind": "order",
+      "signs": "step account",
+      "purpose": "grant 0, signed by its own account",
+      "keyLabel": "ospex-rules fixture key 2",
+      "signer": "0x38a95b8689e4a87FB9ceeBEdB159bcDFcdd343f3",
+      "digest": "0x02afe8be7e334be821832d79e9d6ecd939c36be73c233146fc69442922527836",
+      "signature": "0xb08e7868ced5fae9633095454f43f57408e808490f3d751810a1654322cb19912c92a2baea9b91c332d2d2e88edaaf1ae771648e5bc4329abd4f1dbed04e6d1a1c"
+    },
+    {
+      "label": "the other side, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "order",
+      "signs": "the other side",
+      "purpose": "grant 0, signed by its own account",
+      "keyLabel": "ospex-rules fixture key 1",
+      "signer": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+      "digest": "0x53557b2e88fe6156ea5475740b7573c9f615669f536bbaf40908d9fc66e81115",
+      "signature": "0x88817e90e969c3b42535e9f2f1f6ab01f764832d26b4c2ea48ee8643c8869ea114cb008306182f18c432283da5488f8f2edbf5834c537935c8e2cb0a21cadd341c"
+    },
+    {
+      "label": "a grant's agent signs, signed by ospex-rules fixture key 3",
+      "source": "reference",
+      "kind": "order",
+      "signs": "a grant's agent signs",
+      "purpose": "a nonzero grant, signed by the grant's agent",
+      "keyLabel": "ospex-rules fixture key 3",
+      "signer": "0xF69D50709618646D27C3969D38dD4c6d9585f250",
+      "digest": "0x8a2ed525143ef6a7ab2c6aadbea7ad7440b819f2dabf07266acb2f7645071aab",
+      "signature": "0xb9091cb01ee5e5bce416115527fc97fd8bf8c5f55a9c5f02176880b2ec58e30a2b3241425cf5b14ee294c85d9ba61741935719dcfefb05cc538fff17232d2a501b"
+    },
+    {
+      "label": "a grant's agent signs, signed by ospex-rules fixture key 2",
+      "source": "reference",
+      "kind": "order",
+      "signs": "a grant's agent signs",
+      "purpose": "a nonzero grant, signed by another key than the declared signer",
+      "keyLabel": "ospex-rules fixture key 2",
+      "signer": "0x38a95b8689e4a87FB9ceeBEdB159bcDFcdd343f3",
+      "digest": "0x8a2ed525143ef6a7ab2c6aadbea7ad7440b819f2dabf07266acb2f7645071aab",
+      "signature": "0x502f69f3b9c81602cb30869d42fb95b766a6ff46ab446cd01bd7d3155ecbe1fc5fb74f308a28deeff38d950b972d3c57acb8803abeea13fb125b7b02964cdc2d1c"
+    },
+    {
+      "label": "version and order number at their maximum, grant 0, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "order",
+      "signs": "version and order number at their maximum, grant 0",
+      "purpose": "grant 0, the version and order number at their maximum",
+      "keyLabel": "ospex-rules fixture key 1",
+      "signer": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+      "digest": "0xe0543f2d68d976d9afd28fac9e94a831d9cb6a90dafeea6dcdb4411f22f79828",
+      "signature": "0x33ba79efd9f35bab76ba00ca6783cd37312c5037617f9023696cd42d4808a311291d72f2616ee18f9916047437f71549931b3bcd6f35408d272f865f4acc9d261b"
+    },
+    {
+      "label": "large values, signed by ospex-rules fixture key 2",
+      "source": "reference",
+      "kind": "order",
+      "signs": "large values",
+      "purpose": "uint256 values beyond JavaScript's safe integers",
+      "keyLabel": "ospex-rules fixture key 2",
+      "signer": "0x38a95b8689e4a87FB9ceeBEdB159bcDFcdd343f3",
+      "digest": "0xe00ec0de92fe80d6b7b74b3961bd0096bd7b8e0823f999bbe02fbf11eb76393d",
+      "signature": "0x8060c3d1de4ec9449ad981e2bc155645067b718d00ccb999830d024cb02b20d62436531e9d49bd16713f0bad81865afcb87611cf233cb6fd8b2b0e871e87860b1c"
+    },
+    {
+      "label": "gameId max, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "order",
+      "signs": "gameId max",
+      "purpose": "gameId at 2^256 - 1",
+      "keyLabel": "ospex-rules fixture key 1",
+      "signer": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+      "digest": "0x47bd155896b72696ab69bc02cc283b71c468f0d4c8f0049dfe321d2d9a481a3d",
+      "signature": "0x8301166e712f7a6e84120427d1ebef073d9defac4d3af2afcd01c7eef82a7e231434ee13f9cdbd63bd1bcae732ce47cdeebe598a5013c9984e6b1ed00d7962901c"
+    },
+    {
+      "label": "nonce max, signed by ospex-rules fixture key 3",
+      "source": "reference",
+      "kind": "order",
+      "signs": "nonce max",
+      "purpose": "the nonce at 2^256 - 1: a nonzero grant",
+      "keyLabel": "ospex-rules fixture key 3",
+      "signer": "0xF69D50709618646D27C3969D38dD4c6d9585f250",
+      "digest": "0xeb50f50caa1640c0596e84fdd8ce9d32e4fb5983ad0c10859f7870480b2685be",
+      "signature": "0xd35516ef82741e6d295fc74eb7889b5e8a58cfacfa51a8c3eb64d6f7210ca5e23dbd42404b6a35b41bef4f5f4cec90e7d9bfc9a05156a9c3f97f5d97fcdd15d71c"
+    },
+    {
+      "label": "base, chain 137, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "order",
+      "signs": "base, chain 137",
+      "purpose": "grant 0 on chain 137, signed by its own account",
+      "keyLabel": "ospex-rules fixture key 1",
+      "signer": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+      "digest": "0xea96a47cc47374adfc0206e219f81dfc8db5b1e2ee24bbfc88c480b51e612f1a",
+      "signature": "0x8d317bb0dfc7caea56fc83763ab945d59f7ac6114a71bdd9014c678fd735614a5f8e7e681763aecda135271f28208db545cbd1c85b313112b5c2e5f7d691e1d41b"
+    },
+    {
+      "label": "one hash, chain 137, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "stop",
+      "signs": "one hash, chain 137",
+      "purpose": "a stop by its account",
+      "keyLabel": "ospex-rules fixture key 1",
+      "signer": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+      "digest": "0x9a15db6aec30c33d79fca9d1cad3e839c7df3d1a9fe9c89d4b3cc72ad9032cd1",
+      "signature": "0x5a330981bdc771d56831c54c5ddf4aa2014aaf0f7213196e8a858770acb0efcd2298452f4321173fe7d79733955a9cd3f8838b1ce000e1951d9cfaeb720d03081b"
+    },
+    {
+      "label": "one hash, chain 137, signed by ospex-rules fixture key 2",
+      "source": "reference",
+      "kind": "stop",
+      "signs": "one hash, chain 137",
+      "purpose": "a stop signed by another key than the declared signer",
+      "keyLabel": "ospex-rules fixture key 2",
+      "signer": "0x38a95b8689e4a87FB9ceeBEdB159bcDFcdd343f3",
+      "digest": "0x9a15db6aec30c33d79fca9d1cad3e839c7df3d1a9fe9c89d4b3cc72ad9032cd1",
+      "signature": "0xc89f2cbc6c7277582d9612dd72671c14147a9ce911f80fb3e877cb8b1fa3b5be4520a71700f5c321f14275bf591d4c01c5319e369c10a1cd65d622a53b5b95eb1c"
+    },
+    {
+      "label": "one hash, chain 137, signed by ospex-rules fixture key 3",
+      "source": "reference",
+      "kind": "stop",
+      "signs": "one hash, chain 137",
+      "purpose": "a stop of account A signed by its agent: checked by recovery only",
+      "keyLabel": "ospex-rules fixture key 3",
+      "signer": "0xF69D50709618646D27C3969D38dD4c6d9585f250",
+      "digest": "0x9a15db6aec30c33d79fca9d1cad3e839c7df3d1a9fe9c89d4b3cc72ad9032cd1",
+      "signature": "0xc6c13da3a2d6de36163f965ac73073b31ab5f016d54c61f83859bbb415453c8d4d59cb82624ff7a78aab4df0620fad669a38b252fc3f2c72f172da52e3c23d1c1c"
+    },
+    {
+      "label": "a hundred hashes, chain 31337, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "stop",
+      "signs": "a hundred hashes, chain 31337",
+      "purpose": "a stop of a hundred hashes",
+      "keyLabel": "ospex-rules fixture key 1",
+      "signer": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+      "digest": "0xd9ab80106fe22cdd07b2415f89a7832bb7e7bb180a59300504743a27e97fcc38",
+      "signature": "0xab2eb0218732948b8f0679f6ffbc5f9e1501fddf9a5a9d320e890be5af23b4d44a331a21d02b459feebaa8734a5159efb13db01a0b45bd6fe0286fe031b9c9a51c"
+    },
+    {
+      "label": "the same three, reordered, chain 137, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "stop",
+      "signs": "the same three, reordered, chain 137",
+      "purpose": "a stop of hashes in another order",
+      "keyLabel": "ospex-rules fixture key 1",
+      "signer": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+      "digest": "0xe1c134ae329f0e9b4bafae4ed2fc657fa376b3cf20a7beb7bc901eb080cae08d",
+      "signature": "0x0f431ce6d2f55baade720fca23fbefd4f19af26299d33087280024ce454407f74f4aa31233e6227ceceb7d960ca3bb6aeb7d564e2ba62bb9b3350824cccb958c1c"
+    },
+    {
+      "label": "account B, chain 31337, signed by ospex-rules fixture key 2",
+      "source": "reference",
+      "kind": "stop",
+      "signs": "account B, chain 31337",
+      "purpose": "another account's stop",
+      "keyLabel": "ospex-rules fixture key 2",
+      "signer": "0x38a95b8689e4a87FB9ceeBEdB159bcDFcdd343f3",
+      "digest": "0x3d68f098776b8d95bf4839754c6a2605cb6b627faa38299cf7df56ff57921f2a",
+      "signature": "0x6158de6a056c2a7673fb41812a14b4ec9edc7ba376dd0d09370bf92f64344ade0f90236c69ba8d7a6f13608cc0d79f23d846e36e2050636ef8eaf254a986f2a91b"
+    },
+    {
+      "label": "the high-s twin of base, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "stub",
+      "purpose": "a high-s twin",
+      "of": "base, signed by ospex-rules fixture key 1",
+      "signsKind": "order",
+      "signs": "base",
+      "digest": "0x619f999c18a06eeca7474509028eaa529476b9b497ec349e8b8b2b59c20cc519",
+      "signature": "0x274d479ea9a116887da75744f4c0df926ed4f396cac7ceb6310243682953d97d89eb0fdfc6f066bc1c2e81f499560e5b50fbb26c184baece86904135969b25bb1c",
+      "s": "62382178875344453269927219138333452178821485082079666289662913748002066343355",
+      "v": 28,
+      "recovered": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+      "recoveredBy": "@noble/curves 1.2.0 secp256k1, the curve library of ethers 6.17.0"
+    },
+    {
+      "label": "the high-s twin of one hash, chain 137, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "stub",
+      "purpose": "a high-s twin",
+      "of": "one hash, chain 137, signed by ospex-rules fixture key 1",
+      "signsKind": "stop",
+      "signs": "one hash, chain 137",
+      "digest": "0x9a15db6aec30c33d79fca9d1cad3e839c7df3d1a9fe9c89d4b3cc72ad9032cd1",
+      "signature": "0x5a330981bdc771d56831c54c5ddf4aa2014aaf0f7213196e8a858770acb0efcddd67bad0bcdee8c0182868cc6aa5632ac22b51c9cf47bea6a23563a15e293e391c",
+      "s": "100144414136953865580691487250791656211792599498975193433177897170189167443513",
+      "v": 28,
+      "recovered": "0x2A13666EB43302F5A8A3472FbcEE4F486e751B53",
+      "recoveredBy": "@noble/curves 1.2.0 secp256k1, the curve library of ethers 6.17.0"
+    },
+    {
+      "label": "s at the half-order, on a grant's agent signs, signed by ospex-rules fixture key 3",
+      "source": "reference",
+      "kind": "stub",
+      "purpose": "s at the half-order",
+      "of": "a grant's agent signs, signed by ospex-rules fixture key 3",
+      "signsKind": "order",
+      "signs": "a grant's agent signs",
+      "digest": "0x8a2ed525143ef6a7ab2c6aadbea7ad7440b819f2dabf07266acb2f7645071aab",
+      "signature": "0xb9091cb01ee5e5bce416115527fc97fd8bf8c5f55a9c5f02176880b2ec58e30a7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a01b",
+      "s": "57896044618658097711785492504343953926418782139537452191302581570759080747168",
+      "v": 27,
+      "recovered": "0x3e0BCB7C17880381883D8Bf8478cD1FD32320360",
+      "recoveredBy": "ethers 6.17.0 recoverAddress"
+    },
+    {
+      "label": "s one above the half-order, on a grant's agent signs, signed by ospex-rules fixture key 3",
+      "source": "reference",
+      "kind": "stub",
+      "purpose": "s one above the half-order",
+      "of": "a grant's agent signs, signed by ospex-rules fixture key 3",
+      "signsKind": "order",
+      "signs": "a grant's agent signs",
+      "digest": "0x8a2ed525143ef6a7ab2c6aadbea7ad7440b819f2dabf07266acb2f7645071aab",
+      "signature": "0xb9091cb01ee5e5bce416115527fc97fd8bf8c5f55a9c5f02176880b2ec58e30a7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a11b",
+      "s": "57896044618658097711785492504343953926418782139537452191302581570759080747169",
+      "v": 27,
+      "recovered": "0xdB9E74ca07D67208Aede5B4a614E2399Bce5ED50",
+      "recoveredBy": "ethers 6.17.0 recoverAddress, given r, s and v apart"
+    },
+    {
+      "label": "s at the half-order, on one hash, chain 137, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "stub",
+      "purpose": "s at the half-order",
+      "of": "one hash, chain 137, signed by ospex-rules fixture key 1",
+      "signsKind": "stop",
+      "signs": "one hash, chain 137",
+      "digest": "0x9a15db6aec30c33d79fca9d1cad3e839c7df3d1a9fe9c89d4b3cc72ad9032cd1",
+      "signature": "0x5a330981bdc771d56831c54c5ddf4aa2014aaf0f7213196e8a858770acb0efcd7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a01b",
+      "s": "57896044618658097711785492504343953926418782139537452191302581570759080747168",
+      "v": 27,
+      "recovered": "0xAFA9E6e05Ef4f23158f9041e6C887455716a1F4e",
+      "recoveredBy": "ethers 6.17.0 recoverAddress"
+    },
+    {
+      "label": "s one above the half-order, on one hash, chain 137, signed by ospex-rules fixture key 1",
+      "source": "reference",
+      "kind": "stub",
+      "purpose": "s one above the half-order",
+      "of": "one hash, chain 137, signed by ospex-rules fixture key 1",
+      "signsKind": "stop",
+      "signs": "one hash, chain 137",
+      "digest": "0x9a15db6aec30c33d79fca9d1cad3e839c7df3d1a9fe9c89d4b3cc72ad9032cd1",
+      "signature": "0x5a330981bdc771d56831c54c5ddf4aa2014aaf0f7213196e8a858770acb0efcd7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a11b",
+      "s": "57896044618658097711785492504343953926418782139537452191302581570759080747169",
+      "v": 27,
+      "recovered": "0xe0A7503544134aDE9331Efc24c643C81a08FB2A5",
+      "recoveredBy": "ethers 6.17.0 recoverAddress, given r, s and v apart"
+    },
+    {
+      "label": "base, signed by ospex-rules fixture key 1, read as a stop",
+      "source": "reference",
+      "kind": "crossed",
+      "purpose": "an order's signature read as a stop's, over the stop digest of the same account",
+      "of": "base, signed by ospex-rules fixture key 1",
+      "stop": "one hash, chain 137",
+      "digest": "0x9a15db6aec30c33d79fca9d1cad3e839c7df3d1a9fe9c89d4b3cc72ad9032cd1",
+      "signature": "0x274d479ea9a116887da75744f4c0df926ed4f396cac7ceb6310243682953d97d7614f020390f9943e3d17e0b66a9f1a369b32a7a96fcf16d39421d57399b1b861b",
+      "recovered": "0x2BEe04663cE5dd978fDbe718586BBB4FEbcf31Da",
+      "recoveredBy": "ethers 6.17.0 recoverAddress"
+    },
+    {
+      "label": "the courier's frozen order, its signature",
+      "source": "courier-frozen",
+      "kind": "order",
+      "signs": "the courier's frozen order",
+      "purpose": "the courier's frozen signature, made outside; its key is not known here",
+      "keyLabel": null,
+      "signer": "0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7",
+      "digest": "0x9af8958f00563f5d9c4bd30f85953c0d0a67df62efffbccdfa9b4a7cbc3aaae0",
+      "signature": "0x834021ff982e27711ee8f07cf27b2901be8b8c1c359688742df735c10973ed593fcae360612d264bd2a84d5ce07fe9a2a4f2cd25a52e8ab6c6ed79624d4a877d1b"
+    },
+    {
+      "label": "the courier's frozen stop, its signature",
+      "source": "courier-frozen",
+      "kind": "stop",
+      "signs": "the courier's frozen stop",
+      "purpose": "the courier's frozen signature, made outside; its key is not known here",
+      "keyLabel": null,
+      "signer": "0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7",
+      "digest": "0x87113a6336fa483a775793135563268f89e0253589be67a13665a147ad0cf361",
+      "signature": "0xe9053f0bd2dc91e05efd6476e35478548d318fb0a23ce61331700a96d747f05a5780266696107820ee05869e5068a884a321ea7b78716cc7ff7060b62032d7fc1b"
+    }
+  ]
+}
